@@ -1,4 +1,5 @@
-import { promises as fs, watch as fsWatch } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import { watch as fsWatch } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
@@ -101,41 +102,78 @@ export class LocalProcesses {
 
 export class LocalGit {
   constructor(processes, workspace) { this.processes = processes; this.workspace = workspace; }
-  async status(requested = '.') {
+
+  async #run(requested, args) {
     const cwd = await this.workspace.resolve(requested);
-    const result = await this.processes.exec('git', ['status', '--short', '--branch'], { cwd });
-    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'git status failed');
-    const [branch = '', ...changes] = result.stdout.trimEnd().split('\n');
+    const result = await this.processes.exec('git', args, { cwd });
+    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `git ${args[0]} failed`);
+    return result.stdout;
+  }
+
+  async status(requested = '.') {
+    const output = await this.#run(requested, ['status', '--short', '--branch']);
+    const [branch = '', ...changes] = output.trimEnd().split('\n');
     return { branch, changes: changes.filter(Boolean), clean: changes.every(x => !x) };
   }
-  async diff(requested = '.') {
-    const cwd = await this.workspace.resolve(requested);
-    const result = await this.processes.exec('git', ['diff', '--no-ext-diff'], { cwd });
-    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'git diff failed');
-    return result.stdout;
+
+  async diff(requested = '.', { staged = false } = {}) {
+    return this.#run(requested, ['diff', '--no-ext-diff', ...(staged ? ['--cached'] : [])]);
+  }
+
+  #checkPaths(files) {
+    if (!Array.isArray(files) || files.length === 0 || !files.every(f => typeof f === 'string' && f.length > 0 && !f.includes('\0'))) {
+      throw new TypeError('At least one valid file path is required');
+    }
+    return files;
+  }
+
+  async stage(files, requested = '.') {
+    await this.#run(requested, ['add', '--', ...this.#checkPaths(files)]);
+  }
+
+  async unstage(files, requested = '.') {
+    await this.#run(requested, ['restore', '--staged', '--', ...this.#checkPaths(files)]);
+  }
+
+  async commit(message, requested = '.') {
+    if (typeof message !== 'string' || !message.trim() || message.includes('\0')) throw new TypeError('Commit message required');
+    await this.#run(requested, ['commit', '-m', message]);
+    return (await this.#run(requested, ['rev-parse', 'HEAD'])).trim();
   }
 }
 
 export class LocalTerminal {
-  constructor({ shell } = {}) { this.shell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/sh'); }
+  constructor({ shell, ptyFactory } = {}) {
+    this.shell = shell || (process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/sh');
+    this.ptyFactory = ptyFactory;
+  }
+
   async open({ cwd = process.cwd(), cols = 100, rows = 28, env = {} } = {}) {
-    let mod;
-    try { mod = await import('node-pty'); }
-    catch { throw new Error('Interactive terminal requires node-pty. Install it in the local runtime package.'); }
-    const pty = mod.spawn(this.shell, [], { name: 'xterm-256color', cols, rows, cwd, env: { ...process.env, ...env } });
+    if (![cols, rows].every(n => Number.isSafeInteger(n) && n > 0 && n <= 1000)) {
+      throw new TypeError('Terminal dimensions must be integers between 1 and 1000');
+    }
+    const factory = this.ptyFactory ?? (await import('node-pty').catch(() => {
+      throw new Error('Interactive terminal requires node-pty. Install it in the local runtime package.');
+    }));
+    const pty = factory.spawn(this.shell, [], { name: 'xterm-256color', cols, rows, cwd, env: { ...process.env, ...env } });
     return {
       pid: pty.pid,
       onData: callback => pty.onData(callback),
       onExit: callback => pty.onExit(callback),
       write: data => pty.write(data),
-      resize: (nextCols, nextRows) => pty.resize(nextCols, nextRows),
+      resize: (nextCols, nextRows) => {
+        if (![nextCols, nextRows].every(n => Number.isSafeInteger(n) && n > 0 && n <= 1000)) {
+          throw new TypeError('Invalid terminal resize dimensions');
+        }
+        pty.resize(nextCols, nextRows);
+      },
       close: () => pty.kill()
     };
   }
 }
 
-export function createLocalRuntime({ root = process.cwd(), scope = 'unrestricted', shell } = {}) {
+export function createLocalRuntime({ root = process.cwd(), scope = 'unrestricted', shell, ptyFactory } = {}) {
   const workspace = new LocalWorkspace(root, { scope });
   const processes = new LocalProcesses({ cwd: root });
-  return { workspace, processes, git: new LocalGit(processes, workspace), terminal: new LocalTerminal({ shell }), platform: { type: 'local', os: os.platform() } };
+  return { workspace, processes, git: new LocalGit(processes, workspace), terminal: new LocalTerminal({ shell, ptyFactory }), platform: { type: 'local', os: os.platform() } };
 }
