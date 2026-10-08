@@ -1,0 +1,20 @@
+lockfileVersion: '9.0'
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+importers:
+  .: {}
+  packages/protocol: {}
+  packages/core: {}
+  packages/runtime-local: {}
+  packages/agent-core: {}
+  packages/agent-codex:
+    dependencies:
+      '@mooner/ade-agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+  packages/agent-claude:
+    dependencies:
+      '@mooner/ade-agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
