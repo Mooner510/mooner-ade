@@ -10,10 +10,13 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "build": "node scripts/verify.mjs",
-    "check": "node scripts/verify.mjs && node --test tests/*.test.mjs",
+    "check": "node scripts/verify.mjs && tsc --project tsconfig.contract.json && node --test tests/*.test.mjs",
     "smoke": "node apps/smoke/index.mjs"
   },
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
 }
