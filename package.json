@@ -1,0 +1,19 @@
+{
+  "name": "mooner-ade",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.27.1",
+  "engines": {
+    "node": ">=24.21.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/verify.mjs",
+    "check": "node scripts/verify.mjs && node --test tests/*.test.mjs",
+    "smoke": "node apps/smoke/index.mjs"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}
