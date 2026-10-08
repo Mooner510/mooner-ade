@@ -21,7 +21,7 @@ export declare class ApprovalBroker {
   request(input: { sessionId: string; tool: string; summary?: string; signal?: AbortSignal; onRequest(request: ApprovalRequest): void }): Promise<boolean>;
   decide(id: string, approved?: boolean): boolean;
 }
-export interface SequencedAgentEvent extends AgentEvent { sessionId: string; agent: string; sequence: number; timestamp: number; }
+export interface SequencedAgentEvent extends AgentEvent { schemaVersion: 1; sessionId: string; agent: string; sequence: number; timestamp: number; }
 export declare class AllowAllPolicy implements CapabilityPolicy { authorize(): Promise<boolean>; }
 export declare class DenyAllPolicy implements CapabilityPolicy { authorize(): Promise<boolean>; }
 export declare class AdeEngine {

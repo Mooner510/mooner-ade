@@ -1,6 +1,8 @@
-import { mkdir, readFile, rename, writeFile, open } from 'node:fs/promises';
+import { mkdir, readFile, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+
+const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 
 function requireId(value, kind) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) {
@@ -28,7 +30,6 @@ export class FileSessionStore {
   async #atomicSave(file, contents) {
     await mkdir(dirname(file), { recursive: true, mode: 0o700 });
     const temporary = `${file}.${randomUUID()}.tmp`;
-    let written = false;
     try {
       const handle = await open(temporary, 'wx', 0o600);
       try {
@@ -37,13 +38,9 @@ export class FileSessionStore {
       } finally {
         await handle.close();
       }
-      written = true;
       await rename(temporary, file);
     } finally {
-      if (written === false) {
-        const { unlink } = await import('node:fs/promises');
-        await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
-      }
+      await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
     }
   }
 
@@ -54,7 +51,8 @@ export class FileSessionStore {
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     const record = JSON.parse(contents);
     if (record.version !== 1 || !record.session || !Array.isArray(record.events) ||
-        record.session.id !== id) {
+        record.session.id !== id ||
+        record.events.some((event, index) => !event || event.sessionId !== id || event.sequence !== index + 1)) {
       throw new Error('Unsupported or malformed session record');
     }
     return record;
@@ -76,10 +74,10 @@ export class FileSessionStore {
       if (!event || typeof event !== 'object' || Array.isArray(event)) throw new TypeError('Event object required');
       const record = await this.load(id);
       if (!record) throw new Error('Session does not exist');
-      if (record.session.status === 'completed' || record.session.status === 'failed' ||
-          record.session.status === 'cancelled') throw new Error('Session is terminal');
+      if (TERMINAL.has(record.session.status)) throw new Error('Session is terminal');
       const sequence = record.events.length ? record.events.at(-1).sequence + 1 : 1;
-      const normalized = { ...event, sessionId: id, sequence, timestamp: Date.now() };
+      const timestamp = Number.isSafeInteger(event.timestamp) && event.timestamp > 0 ? event.timestamp : Date.now();
+      const normalized = { ...event, sessionId: id, sequence, timestamp };
       record.events.push(normalized);
       await this.#atomicSave(this.#file(id), serialize(record.session, record.events));
       return normalized;
@@ -93,6 +91,9 @@ export class FileSessionStore {
     return this.#enqueue(requireId(id, 'session'), async () => {
       const record = await this.load(id);
       if (!record) throw new Error('Session does not exist');
+      if (TERMINAL.has(record.session.status) && record.session.status !== status) {
+        throw new Error('Cannot transition terminal session');
+      }
       record.session = { ...record.session, status, updatedAt: Date.now() };
       await this.#atomicSave(this.#file(id), serialize(record.session, record.events));
       return record.session;

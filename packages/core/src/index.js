@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AGENT_EVENT_SCHEMA_VERSION } from '@mooner/ade-protocol';
 
 export class AllowAllPolicy {
   async authorize() { return true; }
@@ -152,8 +153,8 @@ export class AdeEngine {
     if (options.signal?.aborted) abort();
     const emit = (event) => {
       // Canonical identity always wins over untrusted adapter metadata.
-      const { sessionId: ignoredSession, agent: ignoredAgent, sequence: ignoredSequence, timestamp: ignoredTimestamp, ...rest } = event;
-      return { ...rest, sessionId: id, agent: agentId, sequence: ++session.eventCount, timestamp: Date.now() };
+      const { sessionId: ignoredSession, agent: ignoredAgent, schemaVersion: ignoredVersion, sequence: ignoredSequence, timestamp: ignoredTimestamp, ...rest } = event;
+      return { ...rest, schemaVersion: AGENT_EVENT_SCHEMA_VERSION, sessionId: id, agent: agentId, sequence: ++session.eventCount, timestamp: Date.now() };
     };
     try {
       yield emit({ kind: 'lifecycle', phase: 'started' });
