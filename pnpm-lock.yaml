@@ -14,7 +14,11 @@ importers:
 
   packages/protocol: {}
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@mooner/ade-protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/runtime-local: {}
 
@@ -34,7 +38,11 @@ importers:
 
   packages/session-store: {}
 
-  packages/session-runner: {}
+  packages/session-runner:
+    dependencies:
+      '@mooner/ade-protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
 packages:
 
