@@ -31,14 +31,14 @@ test('failed engine execution preserves failure events and terminal status', asy
   assert.equal((await runner.getSession(events[0].sessionId)).session.status,'failed');
   assert.equal(events.at(-1).phase,'failed');
 });
-test('early stream disposal does not record a false completed session', async t => {
+test('early stream disposal marks session interrupted immediately', async t => {
   const { runner } = await setup(t, {id:'partial',async *run(){yield {kind:'text',text:'started'};await new Promise(()=>{});}});
   const iter=runner.runAgent('partial','test');
   const first=await iter.next();
   assert.equal(first.value.sequence,1);
   await iter.return();
   const record=await runner.getSession(first.value.sessionId);
-  assert.equal(record.session.status,'running');
+  assert.equal(record.session.status,'interrupted');
   const recovered=await runner.recover(first.value.sessionId);
   assert.equal(recovered.session.status,'interrupted');
 });
