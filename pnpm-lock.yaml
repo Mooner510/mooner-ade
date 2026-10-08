@@ -32,6 +32,10 @@ importers:
         specifier: workspace:*
         version: link:../agent-core
 
+  packages/session-store: {}
+
+  packages/session-runner: {}
+
 packages:
 
   typescript@5.8.3:
