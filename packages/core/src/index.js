@@ -8,19 +8,57 @@ export class DenyAllPolicy {
   async authorize() { return false; }
 }
 
-/** Inject platform capabilities here. The core never imports fs, git, node-pty or a container manager. */
+/** Approval requests are denied by default. A trusted UI must explicitly decide each request. */
+export class ApprovalBroker {
+  #requests = new Map();
+  constructor({ timeoutMs = 120_000 } = {}) {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new TypeError('Invalid approval timeout');
+    this.timeoutMs = timeoutMs;
+  }
+
+  get pending() { return [...this.#requests.values()].map(({ settle, cleanup, ...metadata }) => ({ ...metadata })); }
+
+  request({ sessionId, tool, summary, signal, onRequest }) {
+    if (typeof sessionId !== 'string' || typeof tool !== 'string' || typeof onRequest !== 'function') {
+      throw new TypeError('Approval requires session, tool, and onRequest handler');
+    }
+    if (signal?.aborted) return Promise.reject(signal.reason || new Error('Approval cancelled'));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => settle(false, signal.reason || new Error('Approval cancelled'));
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); this.#requests.delete(id); };
+      const settle = (allowed, error) => { cleanup(); if (allowed) resolve(true); else reject(error || new Error('Approval denied')); };
+      const timer = setTimeout(() => settle(false, new Error('Approval timed out')), this.timeoutMs);
+      this.#requests.set(id, { id, sessionId, tool, summary: summary ?? '', requestedAt: Date.now(), settle, cleanup });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try { onRequest({ id, sessionId, tool, summary: summary ?? '' }); }
+      catch (error) { settle(false, error); }
+    });
+  }
+
+  decide(id, approved = false) {
+    const pending = this.#requests.get(id);
+    if (!pending) return false;
+    pending.settle(approved === true);
+    return true;
+  }
+}
+
+/** A host-agnostic engine. A policy gate is not an OS/container isolation boundary. */
 export class AdeEngine {
   #runtime;
   #policy;
   #agents = new Map();
   #sessions = new Map();
+  #approvals;
 
-  constructor({ runtime, policy = new DenyAllPolicy(), agents = [] }) {
-    if (!runtime || !runtime.workspace || !runtime.processes || !runtime.git || !runtime.terminal) {
+  constructor({ runtime, policy = new DenyAllPolicy(), agents = [], approvalBroker = new ApprovalBroker() }) {
+    if (!runtime?.workspace || !runtime?.processes || !runtime?.git || !runtime?.terminal) {
       throw new TypeError('Runtime must provide workspace, processes, git and terminal');
     }
     this.#runtime = runtime;
     this.#policy = policy;
+    this.#approvals = approvalBroker;
     for (const agent of agents) this.registerAgent(agent);
   }
 
@@ -33,11 +71,18 @@ export class AdeEngine {
   }
 
   get agents() { return [...this.#agents.keys()]; }
+  get approvalRequests() { return this.#approvals.pending; }
+
+  async decideApproval(id, approved = false) {
+    await this.#authorize('agent.approval.decide', { approvalId: id, approved });
+    return this.#approvals.decide(id, approved);
+  }
+
+  /** Detached snapshots: callers cannot mutate the engine's sessions. */
   get sessions() { return [...this.#sessions.values()].map(({ controller, ...session }) => ({ ...session })); }
 
   async #authorize(action, context) {
-    const allowed = await this.#policy.authorize(action, context);
-    if (allowed !== true) throw new Error(`Permission denied: ${action}`);
+    if (await this.#policy.authorize(action, context) !== true) throw new Error(`Permission denied: ${action}`);
   }
 
   async readFile(path) {
@@ -60,6 +105,26 @@ export class AdeEngine {
     return this.#runtime.git.status(path);
   }
 
+  async gitDiff(path = '.', options = {}) {
+    await this.#authorize('git.diff', { path, ...options });
+    return this.#runtime.git.diff(path, options);
+  }
+
+  async gitStage(files, path = '.') {
+    await this.#authorize('git.stage', { path, files });
+    return this.#runtime.git.stage(files, path);
+  }
+
+  async gitUnstage(files, path = '.') {
+    await this.#authorize('git.unstage', { path, files });
+    return this.#runtime.git.unstage(files, path);
+  }
+
+  async gitCommit(message, path = '.') {
+    await this.#authorize('git.commit', { path, message });
+    return this.#runtime.git.commit(message, path);
+  }
+
   async execute(file, args = [], options = {}) {
     await this.#authorize('process.exec', { file, args });
     return this.#runtime.processes.exec(file, args, options);
@@ -74,26 +139,49 @@ export class AdeEngine {
     const agent = this.#agents.get(agentId);
     if (!agent) throw new Error(`Unknown agent: ${agentId}`);
     if (typeof prompt !== 'string' || !prompt.trim()) throw new TypeError('Prompt must be non-empty');
-    await this.#authorize('agent.run', { agentId, cwd: options.cwd });
+    if (options.approvalMode === 'interactive' && agent.capabilities?.interactiveApprovals !== true) {
+      throw new Error(`${agentId} does not support interactive approvals; use an approval-capable transport`);
+    }
+    await this.#authorize('agent.run', { agentId, cwd: options.cwd, approvalMode: options.approvalMode });
     const id = randomUUID();
     const controller = new AbortController();
-    const session = { id, agentId, status: 'running', startedAt: Date.now(), controller };
+    const session = { id, agentId, status: 'running', startedAt: Date.now(), eventCount: 0, nativeThreadId: null, controller };
     this.#sessions.set(id, session);
     const abort = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
+    const emit = (event) => {
+      // Canonical identity always wins over untrusted adapter metadata.
+      const { sessionId: ignoredSession, agent: ignoredAgent, sequence: ignoredSequence, timestamp: ignoredTimestamp, ...rest } = event;
+      return { ...rest, sessionId: id, agent: agentId, sequence: ++session.eventCount, timestamp: Date.now() };
+    };
     try {
-      yield { kind: 'lifecycle', phase: 'started', sessionId: id, agent: agentId };
-      for await (const event of agent.run({ prompt, ...options, signal: controller.signal })) {
-        yield { sessionId: id, agent: agentId, ...event };
+      yield emit({ kind: 'lifecycle', phase: 'started' });
+      const requestApproval = (request) => {
+        if (options.approvalMode !== 'interactive' || agent.capabilities?.interactiveApprovals !== true) {
+          return Promise.reject(new Error('Interactive approval transport is unavailable'));
+        }
+        return this.#approvals.request({
+          sessionId: id, tool: request?.tool, summary: request?.summary,
+          signal: controller.signal, onRequest: options.onApprovalRequest
+        });
+      };
+      for await (const event of agent.run({ prompt, ...options, signal: controller.signal, requestApproval })) {
+        if (!event || typeof event !== 'object' || typeof event.kind !== 'string') throw new TypeError('Invalid agent event');
+        if (event.kind === 'session' && typeof event.threadId === 'string' && event.threadId) session.nativeThreadId = event.threadId;
+        yield emit(event);
       }
       session.status = controller.signal.aborted ? 'cancelled' : 'completed';
-      yield { kind: 'lifecycle', phase: session.status, sessionId: id, agent: agentId };
+      yield emit({ kind: 'lifecycle', phase: session.status });
     } catch (error) {
       session.status = controller.signal.aborted ? 'cancelled' : 'failed';
-      yield { kind: 'error', message: error.message, sessionId: id, agent: agentId };
-      yield { kind: 'lifecycle', phase: session.status, sessionId: id, agent: agentId };
+      yield emit({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+      yield emit({ kind: 'lifecycle', phase: session.status });
     } finally {
+      if (session.status === 'running') {
+        controller.abort(new Error('Agent stream closed by consumer'));
+        session.status = 'cancelled';
+      }
       session.finishedAt = Date.now();
       delete session.controller;
       options.signal?.removeEventListener('abort', abort);
@@ -102,7 +190,7 @@ export class AdeEngine {
 
   stopAgent(sessionId) {
     const session = this.#sessions.get(sessionId);
-    if (!session || session.status !== 'running') return false;
+    if (!session || session.status !== 'running' || !session.controller) return false;
     session.controller.abort(new Error('Stopped by user'));
     return true;
   }

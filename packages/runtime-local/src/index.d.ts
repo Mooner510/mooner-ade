@@ -16,7 +16,10 @@ export declare class LocalProcesses {
 export declare class LocalGit {
   constructor(processes: LocalProcesses, workspace: LocalWorkspace);
   status(path?: string): Promise<{ branch: string; changes: string[]; clean: boolean }>;
-  diff(path?: string): Promise<string>;
+  diff(path?: string, options?: { staged?: boolean }): Promise<string>;
+  stage(files: string[], path?: string): Promise<void>;
+  unstage(files: string[], path?: string): Promise<void>;
+  commit(message: string, path?: string): Promise<string>;
 }
 export interface PtySession {
   pid: number;
@@ -27,9 +30,9 @@ export interface PtySession {
   onExit(fn: (event: { exitCode: number; signal?: number }) => void): { dispose(): void };
 }
 export declare class LocalTerminal {
-  constructor(options?: { shell?: string });
+  constructor(options?: { shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } });
   open(options?: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string> }): Promise<PtySession>;
 }
-export declare function createLocalRuntime(options?: { root?: string; scope?: 'unrestricted' | 'root'; shell?: string }): {
+export declare function createLocalRuntime(options?: { root?: string; scope?: 'unrestricted' | 'root'; shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } }): {
   workspace: LocalWorkspace; processes: LocalProcesses; git: LocalGit; terminal: LocalTerminal; platform: { type: 'local'; os: string };
 };
