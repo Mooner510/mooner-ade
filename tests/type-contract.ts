@@ -11,3 +11,9 @@ for await (const event of engine.runAgent('codex', 'hello')) {
   const typed: AgentEvent = event;
   console.log(typed.kind);
 }
+// P1 public type API compilation contracts
+await engine.gitDiff('.', { staged: true });
+await engine.gitStage(['README.md']);
+await engine.gitUnstage(['README.md']);
+const nativeThreadId: string | null = engine.sessions[0]?.nativeThreadId ?? null;
+console.log(nativeThreadId);
