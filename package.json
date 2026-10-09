@@ -15,7 +15,8 @@
     "build": "node scripts/verify.mjs",
     "check": "node scripts/verify.mjs && tsc --project tsconfig.contract.json && node --test tests/*.test.mjs",
     "smoke": "node apps/smoke/index.mjs",
-    "test:live": "node scripts/live-agent-check.mjs"
+    "test:live": "node scripts/live-agent-check.mjs",
+    "e2e": "node scripts/e2e.mjs"
   },
   "workspaces": [
     "packages/*",

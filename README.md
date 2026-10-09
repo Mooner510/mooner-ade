@@ -87,6 +87,6 @@ A real interactive terminal requires an installed `node-pty` runtime dependency 
 
 **Framework M1/P1:** reusable core, local runtime, legacy CLI adapters, typed contracts, event protocol, durable sessions and recorded runner.
 
-**Local IDE implementation:** `apps/web` (React, CodeMirror, xterm) and `apps/local-server` (authenticated HTTP/WebSocket, server-owned runs, native approval transports, PTY, file/Git/worktree flows). Dependencies were installed by the user and the lockfile was regenerated. Type/syntax checks and the web build passed. Automatic tests, browser checks and real CLI/PTY acceptance remain unrun. Preview server, debugger, hosted multi-user and container isolation remain out of scope.
+**Local IDE implementation:** `apps/web` (React, Monaco, xterm) and `apps/local-server` (authenticated HTTP/WebSocket, server-owned runs, native approval transports, PTY, file/Git/worktree flows). Dependencies were installed by the user and the lockfile was regenerated. Type/syntax checks and the web build passed. `pnpm check` (73 tests) and the headless-Chrome smoke `pnpm e2e` pass; real Codex/Claude runs are verified opt-in with `ADE_LIVE_TEST=1 pnpm test:live`. Preview server, debugger, hosted multi-user and container isolation remain out of scope.
 
 See [architecture](docs/ARCHITECTURE.md), [webai porting boundaries](docs/PORTING.md) and [test matrix](docs/VERIFICATION.md).

@@ -9,7 +9,7 @@ import { Dropdown, ExplorerView, Modal, ScmView, SearchView, SettingsView, Trans
 import './style.css';
 
 type FileTab = { path: string; content: string; saved: string; revision: string; external?: boolean };
-type Conversation = { id: string; title: string; agentId: string; model?: string | null; effort?: string | null; closedAt?: number; cwd: string; branch?: string; activeRun?: string; runs: string[]; removed?: boolean };
+type Conversation = { id: string; title: string; agentId: string; model?: string | null; effort?: string | null; closedAt?: number; cwd: string; branch?: string; activeRun?: string; threadId?: string; runs: string[]; removed?: boolean };
 type AgentModel = { id: string; label: string; efforts: string[]; isDefault?: boolean };
 type AgentCatalog = { agentId: string; models: AgentModel[] };
 type Event = { sessionId: string; sequence: number; kind: string; text?: string; mode?: string; itemId?: string; [key: string]: any };
@@ -45,7 +45,7 @@ function App() {
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
   const [diffText, setDiffText] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState(''), [provider, setProvider] = useState('codex'), [mode, setMode] = useState('shared');
-  const [catalogs, setCatalogs] = useState<AgentCatalog[]>([]), [model, setModel] = useState(''), [effort, setEffort] = useState('');
+  const [catalogs, setCatalogs] = useState<AgentCatalog[]>([]), [model, setModel] = useState(''), [effort, setEffort] = useState(''), [fullAccess, setFullAccess] = useState(false);
   const [viewMode, setViewMode] = useState<'ade' | 'ide'>('ade');
   const [prompt, setPrompt] = useState(''), [events, setEvents] = useState<Record<string, Event[]>>({}), [sending, setSending] = useState(false);
   const [pane, setPane] = useState<Pane | null>(null), [editorPane, setEditorPane] = useState<Pane | null>(null), [panelPane, setPanelPane] = useState<Pane | null>(null), [focus, setFocus] = useState(''), [zoom, setZoom] = useState('');
@@ -493,12 +493,23 @@ function App() {
     await call('conversation/close', { conversationId: conversation.id });
     setConversationId(''); await refresh();
   }
+  const interrupted = Boolean(conversation?.threadId && !conversation.activeRun && !conversation.removed &&
+    project?.runs.filter(record => record.conversationId === conversationId).at(-1)?.status === 'interrupted');
+  async function resumeInterrupted() {
+    if (!conversation || sending) return;
+    setSending(true);
+    try {
+      await call('run/start', { conversationId, prompt: '서버가 재시작되어 중단된 작업이 있습니다. 중단된 지점부터 이어서 계속 진행해 주세요.', agentId: conversation.agentId,
+        model: conversation.model || null, effort: conversation.effort || null, fullAccess, workspaceMode: mode });
+      await refresh();
+    } finally { setSending(false); }
+  }
   async function submit() {
     if (!prompt.trim() || sending || (conversation?.agentId === provider && conversation.activeRun)) return;
     setSending(true);
     try {
       const result = await call<{ runId: string; conversationId: string }>('run/start', {
-        ...(conversation?.agentId === provider ? { conversationId } : {}), prompt, agentId: provider, model: model || null, effort: effort || null,
+        ...(conversation?.agentId === provider ? { conversationId } : {}), prompt, agentId: provider, model: model || null, effort: effort || null, fullAccess,
         workspaceMode: project?.multiRepo ? 'shared' : mode
       });
       setConversationId(result.conversationId); setPrompt(''); await refresh();
@@ -625,7 +636,8 @@ function App() {
       </article>)}
     </div>
     {unread && <button onClick={() => { atBottom.current = true; setUnread(false); chat.current?.scrollTo({ top: chat.current.scrollHeight }); }}>새 응답 · 최신으로 이동 ↓</button>}
-    <form className="composer" onSubmit={event => { event.preventDefault(); run(submit); }}><div className="composer-settings"><select aria-label="Agent" value={provider} onChange={event => { setProvider(event.target.value); setModel(''); setEffort(''); }}><option value="codex">Codex</option><option value="claude">Claude</option></select><select aria-label="모델" value={model} onChange={event => { setModel(event.target.value); setEffort(''); }}><option value="">기본 모델</option>{providerModels.map(item => <option key={item.id} value={item.id}>{item.label}{item.isDefault ? ' · 기본' : ''}</option>)}</select><select aria-label="Effort" value={effort} onChange={event => setEffort(event.target.value)}><option value="">기본 Effort</option>{(selectedModel?.efforts || []).map(value => <option key={value} value={value}>{value}</option>)}</select>{!project.multiRepo && <select aria-label="작업 경로" value={mode} onChange={event => setMode(event.target.value)}><option value="shared">공유 작업공간</option><option value="worktree">별도 worktree</option></select>}</div><label><textarea aria-label="메시지 입력" placeholder="무엇을 만들거나 수정할까요?" value={prompt} onChange={event => setPrompt(event.target.value)} disabled={Boolean(conversation?.removed) || Boolean(conversation?.activeRun && conversation.agentId === provider)} required /></label><div className="actions"><button disabled={!prompt.trim() || sending || Boolean(conversation?.removed) || Boolean(conversation?.activeRun && conversation.agentId === provider)}>{sending ? '시작 중…' : conversation?.agentId === provider ? '보내기' : '세션 시작'}</button><button type="button" disabled={!conversation?.activeRun} onClick={() => run(() => call('run/stop', { runId: conversation?.activeRun }))}>중지</button></div></form>
+    {interrupted && <div className="notice" role="status"><span>이전 실행이 중단되었습니다 (서버 재시작 등).</span> <button type="button" disabled={sending} onClick={() => run(resumeInterrupted)}>이어하기</button></div>}
+    <form className="composer" onSubmit={event => { event.preventDefault(); run(submit); }}><div className="composer-settings"><select aria-label="Agent" value={provider} onChange={event => { setProvider(event.target.value); setModel(''); setEffort(''); }}><option value="codex">Codex</option><option value="claude">Claude</option></select><select aria-label="모델" value={model} onChange={event => { setModel(event.target.value); setEffort(''); }}><option value="">기본 모델</option>{providerModels.map(item => <option key={item.id} value={item.id}>{item.label}{item.isDefault ? ' · 기본' : ''}</option>)}</select><select aria-label="Effort" value={effort} onChange={event => setEffort(event.target.value)}><option value="">기본 Effort</option>{(selectedModel?.efforts || []).map(value => <option key={value} value={value}>{value}</option>)}</select><label title="승인 없이 샌드박스 밖까지 실행합니다"><input type="checkbox" checked={fullAccess} onChange={event => setFullAccess(event.target.checked)} /> Full access</label>{!project.multiRepo && <select aria-label="작업 경로" value={mode} onChange={event => setMode(event.target.value)}><option value="shared">공유 작업공간</option><option value="worktree">별도 worktree</option></select>}</div><label><textarea aria-label="메시지 입력" placeholder="무엇을 만들거나 수정할까요?" value={prompt} onChange={event => setPrompt(event.target.value)} disabled={Boolean(conversation?.removed) || Boolean(conversation?.activeRun && conversation.agentId === provider)} required /></label><div className="actions"><button disabled={!prompt.trim() || sending || Boolean(conversation?.removed) || Boolean(conversation?.activeRun && conversation.agentId === provider)}>{sending ? '시작 중…' : conversation?.agentId === provider ? '보내기' : '세션 시작'}</button><button type="button" disabled={!conversation?.activeRun} onClick={() => run(() => call('run/stop', { runId: conversation?.activeRun }))}>중지</button></div></form>
   </section>;
   const sidebar = <aside className="sidebar" aria-label="사이드바">
     {!project.multiRepo && side !== 'ai' && side !== 'settings' && <label className="workspace-select">작업 경로<Dropdown label="작업 경로 선택" value={workspaceId} options={workspaceOptions} onChange={value => run(() => changeWorkspace(value))} /></label>}

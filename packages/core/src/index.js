@@ -188,6 +188,16 @@ export class AdeEngine {
       controller.abort(new Error('Agent run finished'));
       delete session.controller;
       options.signal?.removeEventListener('abort', abort);
+      this.#pruneFinished();
+    }
+  }
+
+  // A long-running server must not keep every finished session; the durable store has the history.
+  #pruneFinished(keep = 100) {
+    let finished = [...this.#sessions.values()].filter(item => item.finishedAt).length;
+    for (const [id, item] of this.#sessions) {
+      if (finished <= keep) break;
+      if (item.finishedAt) { this.#sessions.delete(id); finished--; }
     }
   }
 

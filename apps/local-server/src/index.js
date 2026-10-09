@@ -10,7 +10,7 @@ import { AdeEngine, AllowAllPolicy } from '@mooner/ade-core';
 import { createLocalRuntime } from '@mooner/ade-runtime-local';
 import { FileSessionStore } from '@mooner/ade-session-store';
 import { RecordedAgentRunner } from '@mooner/ade-session-runner';
-import { CodexAppAgent, ClaudeSdkAgent, CodexConnection, listClaudeModels } from './agents.js';
+import { CodexAppAgent, ClaudeSdkAgent, CodexConnection, listClaudeModels, claudeAccount } from './agents.js';
 import { fault, text, readText, saveText, serial, search, indexFiles, replaceInFile } from './files.js';
 import { createLspManager } from './lsp.js';
 import { validateUi } from './ui-state.js';
@@ -34,7 +34,14 @@ const registryWrite = serial();
 const clients = new Set();
 const lsp = createLspManager((id, message) => { const project = projects.get(id); if (project) broadcast(project, { type: 'lsp', message }); });
 const sessions = new Set();
-let bootstrap = randomBytes(32).toString('hex');
+// Reusable local token (0600) so a second browser or a cleared cookie can reconnect without restarting the server.
+const tokenFile = path.join(dataRoot, 'token');
+let bootstrap = (await fs.readFile(tokenFile, 'utf8').catch(() => '')).trim();
+if (!/^[a-f0-9]{64}$/.test(bootstrap)) {
+  bootstrap = randomBytes(32).toString('hex');
+  await fs.writeFile(tokenFile, bootstrap, { mode: 0o600 });
+}
+await fs.chmod(tokenFile, 0o600).catch(() => {});
 let origin;
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
@@ -176,18 +183,18 @@ async function readiness(project, providers = ['codex', 'claude']) {
   const result = {};
   for (const executable of providers) {
     try {
+      if (executable === 'claude') {
+        const account = await claudeAccount(project.root);
+        result.claude = { installed: true, authenticated: account.authenticated, version: `agent-sdk · ${account.label}`, message: account.authenticated ? '준비됨' : 'claude auth login 실행 후 다시 확인하세요.' };
+        continue;
+      }
       const version = await project.runtime.processes.exec(executable, ['--version'], { timeoutMs: 5000 });
       if (version.exitCode !== 0) throw new Error(`${executable} 실행 실패`);
       let authenticated = false;
-      if (executable === 'codex') {
-        const rpc = new CodexConnection(project.root);
-        try { await rpc.initialize(); authenticated = Boolean((await rpc.call('account/read')).account); }
-        finally { rpc.close(); }
-      } else {
-        const auth = await project.runtime.processes.exec('claude', ['auth', 'status', '--json'], { timeoutMs: 5000 });
-        authenticated = auth.exitCode === 0 && JSON.parse(auth.stdout).loggedIn === true;
-      }
-      result[executable] = { installed: true, authenticated, version: version.stdout.trim(), message: authenticated ? '준비됨' : `${executable} ${executable === 'codex' ? 'login' : 'auth login'} 실행 후 다시 확인하세요.` };
+      const rpc = new CodexConnection(project.root);
+      try { await rpc.initialize(); authenticated = Boolean((await rpc.call('account/read')).account); }
+      finally { rpc.close(); }
+      result[executable] = { installed: true, authenticated, version: version.stdout.trim(), message: authenticated ? '준비됨' : 'codex login 실행 후 다시 확인하세요.' };
     } catch (error) { result[executable] = { installed: false, authenticated: false, message: `${executable} 설치·버전·로그인을 확인하세요: ${error.message}` }; }
   }
   result.pty = { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' };
@@ -227,6 +234,7 @@ async function startRun(project, input) {
     const iterator = project.runner.runAgent(conversation.agentId, input.prompt, {
       cwd: project.multiRepo ? project.root : conversation.cwd, threadId: conversation.threadId, projectId: project.id,
       model: selectedModel || undefined, effort: selectedEffort || undefined,
+      fullAccess: input.fullAccess === true,
       conversationId: conversation.id, approvalMode: 'interactive',
       onApprovalRequest: () => broadcast(project, { type: 'approvals', approvals: project.engine.approvalRequests })
     });
@@ -528,7 +536,7 @@ const server = http.createServer(async (request, response) => {
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
           if (!bootstrap || input.token !== bootstrap) throw fault('UNAUTHORIZED', '서버에 표시된 접속 링크를 사용하세요.', 401);
-          const token = randomBytes(32).toString('hex'); sessions.add(token); bootstrap = null;
+          const token = randomBytes(32).toString('hex'); sessions.add(token);
           response.setHeader('Set-Cookie', `ade_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
         }
         value = {};

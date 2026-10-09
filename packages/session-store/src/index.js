@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, open, unlink, readdir } from 'node:fs/promises';
+import { mkdir, readFile, rename, open, unlink, readdir, truncate } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -11,13 +11,36 @@ function requireId(value, kind) {
   return value;
 }
 
-function serialize(session, events) {
+// Metadata lives in <id>.json (events only for legacy single-file records); new events append to <id>.events.jsonl.
+function serialize(session, events = []) {
   return JSON.stringify({ version: 1, session, events });
+}
+
+function parseEvents(text, id, firstSequence) {
+  const events = [];
+  let valid = 0;
+  for (let start = 0; start < text.length;) {
+    const end = text.indexOf('\n', start);
+    if (end === -1) break; // unterminated tail = torn write, dropped
+    let event;
+    try { event = JSON.parse(text.slice(start, end)); } catch { event = null; }
+    if (!event) {
+      if (text.slice(end + 1).trim()) throw new Error('Unsupported or malformed session record');
+      break;
+    }
+    if (event.sessionId !== id || event.sequence !== firstSequence + events.length) {
+      throw new Error('Unsupported or malformed session record');
+    }
+    events.push(event);
+    start = valid = end + 1;
+  }
+  return { events, valid: Buffer.byteLength(text.slice(0, valid)) };
 }
 
 export class FileSessionStore {
   #dir;
   #queues = new Map();
+  #tails = new Map(); // id -> { session, last } once the jsonl tail is verified in this process
   constructor(directory) {
     if (typeof directory !== 'string' || !directory.trim()) throw new TypeError('Session directory required');
     this.#dir = resolve(directory);
@@ -25,6 +48,10 @@ export class FileSessionStore {
 
   #file(id) {
     return join(this.#dir, `${requireId(id, 'session')}.json`);
+  }
+
+  #eventsFile(id) {
+    return join(this.#dir, `${requireId(id, 'session')}.events.jsonl`);
   }
 
   async #atomicSave(file, contents) {
@@ -55,7 +82,12 @@ export class FileSessionStore {
         record.events.some((event, index) => !event || event.sessionId !== id || event.sequence !== index + 1)) {
       throw new Error('Unsupported or malformed session record');
     }
-    return record;
+    const legacy = record.events;
+    let text = '';
+    try { text = await readFile(this.#eventsFile(id), 'utf8'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const tail = parseEvents(text, id, legacy.length + 1);
+    return { version: 1, session: record.session, events: [...legacy, ...tail.events], legacy, valid: tail.valid, size: Buffer.byteLength(text) };
   }
 
   async list() {
@@ -75,21 +107,32 @@ export class FileSessionStore {
       if (await this.load(id)) throw new Error('Session already exists');
       const state = { ...session, id, status: session.status || 'created' };
       await this.#atomicSave(this.#file(id), serialize(state, []));
-      return { version: 1, session: state, events: [] };
+      return { version: 1, session: state, events: [], legacy: [] };
     });
   }
 
   async append(id, event) {
     return this.#enqueue(requireId(id, 'session'), async () => {
       if (!event || typeof event !== 'object' || Array.isArray(event)) throw new TypeError('Event object required');
-      const record = await this.load(id);
-      if (!record) throw new Error('Session does not exist');
-      if (TERMINAL.has(record.session.status)) throw new Error('Session is terminal');
-      const sequence = record.events.length ? record.events.at(-1).sequence + 1 : 1;
+      let tail = this.#tails.get(id);
+      if (!tail) {
+        const record = await this.load(id);
+        if (!record) throw new Error('Session does not exist');
+        if (record.valid < record.size) await truncate(this.#eventsFile(id), record.valid);
+        tail = { session: record.session, last: record.events.length };
+        this.#tails.set(id, tail);
+      }
+      if (TERMINAL.has(tail.session.status)) throw new Error('Session is terminal');
       const timestamp = Number.isSafeInteger(event.timestamp) && event.timestamp > 0 ? event.timestamp : Date.now();
-      const normalized = { ...event, sessionId: id, sequence, timestamp };
-      record.events.push(normalized);
-      await this.#atomicSave(this.#file(id), serialize(record.session, record.events));
+      const normalized = { ...event, sessionId: id, sequence: tail.last + 1, timestamp };
+      const handle = await open(this.#eventsFile(id), 'a', 0o600);
+      try {
+        await handle.appendFile(`${JSON.stringify(normalized)}\n`, { encoding: 'utf8' });
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      tail.last = normalized.sequence;
       return normalized;
     });
   }
@@ -105,7 +148,9 @@ export class FileSessionStore {
         throw new Error('Cannot transition terminal session');
       }
       record.session = { ...record.session, status, updatedAt: Date.now() };
-      await this.#atomicSave(this.#file(id), serialize(record.session, record.events));
+      await this.#atomicSave(this.#file(id), serialize(record.session, record.legacy));
+      const tail = this.#tails.get(id);
+      if (tail) tail.session = record.session;
       return record.session;
     });
   }
@@ -123,7 +168,9 @@ export class FileSessionStore {
       if (!record) throw new Error('Session does not exist');
       if (record.session.status === 'running') {
         record.session = { ...record.session, status: 'interrupted', updatedAt: Date.now() };
-        await this.#atomicSave(this.#file(id), serialize(record.session, record.events));
+        await this.#atomicSave(this.#file(id), serialize(record.session, record.legacy));
+        const tail = this.#tails.get(id);
+        if (tail) tail.session = record.session;
       }
       return record;
     });

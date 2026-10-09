@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, appendFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileSessionStore } from '../packages/session-store/src/index.js';
@@ -53,4 +53,24 @@ test('records are owner-readable files', async t => {
   assert.deepEqual(files, ['f6.json']);
   const parsed = JSON.parse(await readFile(join(dir,'f6.json'),'utf8'));
   assert.equal(parsed.version, 1);
+});
+test('appends go to jsonl and a torn tail is dropped then truncated', async t => {
+  const { dir, store } = await fixture(t);
+  await store.create({ id: 'g7', status: 'running' });
+  await store.append('g7', { kind: 'text', text: 'a' });
+  await store.append('g7', { kind: 'text', text: 'b' });
+  await appendFile(join(dir, 'g7.events.jsonl'), '{"kind":"text","sess');
+  const reopened = new FileSessionStore(dir);
+  assert.equal((await reopened.replay('g7')).length, 2);
+  assert.equal((await reopened.append('g7', { kind: 'text', text: 'c' })).sequence, 3);
+  assert.deepEqual((await new FileSessionStore(dir).replay('g7')).map(e => e.text), ['a', 'b', 'c']);
+  assert.equal(JSON.parse(await readFile(join(dir, 'g7.json'), 'utf8')).events.length, 0);
+});
+test('reads legacy single-file records and keeps their events', async t => {
+  const { dir, store } = await fixture(t);
+  const legacy = { version: 1, session: { id: 'h8', status: 'running' }, events: [{ kind: 'text', sessionId: 'h8', sequence: 1, timestamp: 1 }] };
+  await writeFile(join(dir, 'h8.json'), JSON.stringify(legacy));
+  assert.equal((await store.append('h8', { kind: 'text' })).sequence, 2);
+  await store.setStatus('h8', 'completed');
+  assert.equal((await new FileSessionStore(dir).replay('h8')).length, 2);
 });
