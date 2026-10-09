@@ -69,6 +69,23 @@ test('files: search options, replace, folder rename/delete, index', async t => {
   await call('files/read', { path: '../escape' }, 400);
 });
 
+test('git: a repository-configured core.fsmonitor command never runs during status', async t => {
+  const { call, repo } = await boot(t);
+  const marker = join(repo, '..', `fsmonitor-ran-${process.pid}`);
+  await git(repo, 'config', 'core.fsmonitor', `touch ${marker}`);
+  await call('git/status');
+  await assert.rejects(stat(marker));
+});
+
+test('git: a repository hook never runs during ADE checkout', async t => {
+  const { call, repo } = await boot(t);
+  const marker = join(repo, '..', `hook-ran-${process.pid}`);
+  await git(repo, 'branch', 'other');
+  await writeFile(join(repo, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+  await call('git/checkout', { branch: 'other' });
+  await assert.rejects(stat(marker));
+});
+
 test('git: show, stage, discard, branches', async t => {
   const { call, repo } = await boot(t);
   await writeFile(join(repo, 'a.txt'), 'changed\n');
@@ -82,6 +99,11 @@ test('git: show, stage, discard, branches', async t => {
   await call('git/discard', { files: ['a.txt', 'new.txt'] });
   assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'hello world\nHello again\n');
   await assert.rejects(stat(join(repo, 'new.txt')));
+  // Regression: "." resolves to the project root and must never be discarded or removed.
+  await writeFile(join(repo, 'a.txt'), 'keep\n');
+  await call('git/discard', { files: ['.'] }, 400);
+  assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'keep\n');
+  await call('git/discard', { files: ['a.txt'] });
   assert.equal((await call('git/status')).changes.length, 0);
   await git(repo, 'branch', 'feature');
   assert.deepEqual((await call('git/branches')).branches.sort(), ['feature', 'main']);

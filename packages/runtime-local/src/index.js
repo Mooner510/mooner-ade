@@ -60,6 +60,15 @@ export class LocalWorkspace {
   }
 }
 
+// A cloned repository's core.fsmonitor is a command git runs on `git status`, and its .git/hooks run on checkout and
+// worktree add. ADE runs these commands itself and never needs either, so both are forced off through the environment
+// (command-scope config outranks the repo's .git/config). Hooks are off for ADE's git calls only, not for the user's shell.
+const GIT_TRUSTED_REPO_CONFIG = {
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false',
+  GIT_CONFIG_KEY_1: 'core.hooksPath', GIT_CONFIG_VALUE_1: '/dev/null',
+};
+
 export class LocalProcesses {
   constructor({ cwd = process.cwd() } = {}) { this.cwd = path.resolve(cwd); }
 
@@ -71,7 +80,9 @@ export class LocalProcesses {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new TypeError('Invalid timeout');
     if (signal?.aborted) throw signal.reason || new Error('Aborted');
     return new Promise((resolve, reject) => {
-      const child = spawn(file, args, { cwd, env: env ? { ...process.env, ...env } : process.env, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      const childEnv = { ...process.env, ...env };
+      if (file === 'git') Object.assign(childEnv, GIT_TRUSTED_REPO_CONFIG);
+      const child = spawn(file, args, { cwd, env: childEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '', stderr = '', bytes = 0, completed = false;
       const stop = (reason) => { child.kill('SIGTERM'); finish(reason); };
       const finish = (error, code) => {

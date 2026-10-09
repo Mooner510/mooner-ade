@@ -401,6 +401,7 @@ async function route(action, input, project) {
       if (!Array.isArray(input.files) || !input.files.length || input.files.length > 1000) throw fault('INVALID_INPUT', '파일을 선택하세요.');
       for (const file of input.files) {
         text(file); const target = await workspace.resolve(file);
+        if (target === workspace.root) throw fault('INVALID_INPUT', '프로젝트 루트는 되돌리거나 삭제할 수 없습니다.');
         const tracked = await runtime.processes.exec('git', ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', file]);
         if (tracked.exitCode === 0) {
           const result = await runtime.processes.exec('git', ['--literal-pathspecs', 'restore', '--source=HEAD', '--staged', '--worktree', '--', file]);
