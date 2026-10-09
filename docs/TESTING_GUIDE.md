@@ -20,8 +20,10 @@
 
 개발 중에 실행해서 통과를 확인한 것:
 
-- `pnpm check` 73/73 (타입 계약 포함)
-- `pnpm e2e` (헤드리스 Chrome: 인증, 프로젝트 열기, 탐색기, ADE/IDE 전환, AI 입력창)
+- `pnpm check` 76/76 (타입 계약 포함). 2026-10-09 재실행 결과. 보안 회귀 테스트 2개(fsmonitor, hooks)를 추가했다.
+- `pnpm e2e` (헤드리스 Chrome: 인증, 프로젝트 열기, 탐색기, ADE/IDE 전환, AI 입력창). 2026-10-09 foreground 재실행 통과.
+- `pnpm web:build` 통과 (2026-10-09)
+- 보안 검토와 수정 내역: [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (discard 루트 삭제, 신뢰하지 않은 저장소의 `core.fsmonitor`와 `.git/hooks` 실행을 수정하고 재현 가능한 회귀 테스트를 추가)
 - 실제 Codex(0.161)에 모델 호출 없이 `initialize`, `account/read`, `model/list`만 보내서 프로토콜 일치 확인
 - 실제 Claude SDK로 모델 호출 없이 `accountInfo()`와 모델 목록 확인
 
@@ -30,12 +32,13 @@
 - 실제 모델 호출을 포함한 `pnpm test:live` (사용량이 발생해서 실행하지 않았다)
 - 서버 재시작 후 이어하기 흐름, Full access 동작, 영속 토큰의 브라우저 동작
 - P2 완료 조건 5개 (6분할 그리드, 단축키, 레이아웃 영속, 병렬 worktree, macOS/Windows)
+- 정확한 Node 24.21.0 + pnpm 11.27.1 조합 (2026-10-09 머신은 Node 24.12.0이라 엔진 경고가 출력된다)
 
 ## 3. 자동 테스트
 
 ```sh
 pnpm install
-pnpm check            # verify + 타입 계약 + 전체 테스트 (73개)
+pnpm check            # verify + 타입 계약 + 전체 테스트 (76개)
 pnpm typecheck        # 서버 계약 + 웹 앱
 node --test tests/agents.test.mjs tests/p1-session-store.test.mjs tests/local-server.test.mjs
 ```
