@@ -87,3 +87,10 @@ test('terminal session cannot be silently downgraded to running', async t => {
   await store.setStatus('done', 'completed');
   await assert.rejects(store.setStatus('done', 'running'), /Cannot transition terminal session/);
 });
+
+test('shared v1 contract fixture parses (kept byte-identical with other consumers)', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const lines = (await readFile(new URL('./fixtures/agent-events.v1.jsonl', import.meta.url), 'utf8')).trim().split('\n');
+  const kinds = new Set(lines.map(line => parseAgentEvent(JSON.parse(line)).kind));
+  assert.deepEqual([...kinds].sort(), ['approval', 'error', 'lifecycle', 'progress', 'raw', 'result', 'session', 'text', 'tool', 'usage']);
+});

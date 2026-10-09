@@ -125,3 +125,24 @@ test('LSP frame parser handles split chunks and several messages per chunk', () 
   push(frame({ id: 3 }));
   assert.equal(seen.at(-1).id, 3);
 });
+
+test('access token persists across restarts and can be exchanged again', async t => {
+  const data = await mkdtemp(join(tmpdir(), 'ade-token-'));
+  t.after(() => rm(data, { recursive: true, force: true }));
+  const start = async () => {
+    const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit'] });
+    const line = await new Promise((resolve, reject) => { child.stdout.once('data', chunk => resolve(String(chunk))); child.once('exit', () => reject(new Error('server exited'))); });
+    const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);
+    const exchange = () => fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }) });
+    return { token, exchange, stop: async () => { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); } };
+  };
+  const first = await start();
+  assert.equal((await first.exchange()).status, 200);
+  assert.equal((await first.exchange()).status, 200); // second browser, same token
+  await first.stop();
+  const second = await start();
+  t.after(second.stop);
+  assert.equal(second.token, first.token);
+  assert.equal((await second.exchange()).status, 200);
+  assert.equal((await stat(join(data, 'token'))).mode & 0o077, 0);
+});

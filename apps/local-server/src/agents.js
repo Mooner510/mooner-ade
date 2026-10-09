@@ -30,11 +30,11 @@ async function approve(request, events, tool, data, signal) {
 }
 
 export class CodexConnection {
-  constructor(cwd) {
+  constructor(cwd, [command, ...args] = ['codex', 'app-server']) {
     this.pending = new Map();
     this.next = 0;
     this.events = channel();
-    this.child = spawn('codex', ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    this.child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child.stdin.on('error', error => this.fail(error));
     let buffer = '';
     this.child.stdout.setEncoding('utf8');
@@ -75,8 +75,13 @@ export class CodexConnection {
     this.send({ method: 'initialized' });
   }
   async listModels() {
-    const result = await this.call('model/list');
-    return (result.models || []).map(model => ({
+    const data = [];
+    for (let cursor = null, page = 0; page < 20; page++) { // model/list returns { data, nextCursor }
+      const result = await this.call('model/list', cursor ? { cursor } : {});
+      data.push(...(result.data || []));
+      if (!(cursor = result.nextCursor)) break;
+    }
+    return data.filter(model => !model.hidden).map(model => ({
       id: model.id,
       label: model.displayName || model.name || model.id,
       efforts: (model.supportedReasoningEfforts || []).map(item => typeof item === 'string' ? item : item.reasoningEffort),
@@ -99,8 +104,9 @@ export class CodexConnection {
 export class CodexAppAgent {
   id = 'codex';
   capabilities = { interactiveApprovals: true };
+  constructor({ command } = {}) { this.command = command; } // command: test seam for a fake app-server
   async *run(request) {
-    const rpc = new CodexConnection(request.cwd);
+    const rpc = new CodexConnection(request.cwd, this.command);
     const output = channel();
     const items = new Map();
     const approvals = new Map();
@@ -115,7 +121,7 @@ export class CodexAppAgent {
         const { thread } = await rpc.call(request.threadId ? 'thread/resume' : 'thread/start', {
           ...(request.threadId ? { threadId: request.threadId } : {}), cwd: request.cwd,
           ...(request.model ? { model: request.model } : {}),
-          approvalPolicy: 'untrusted', sandbox: 'workspaceWrite'
+          ...(request.fullAccess ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : { approvalPolicy: 'untrusted', sandbox: 'workspace-write' })
         });
         output.push({ kind: 'session', threadId: thread.id });
         await rpc.call('turn/start', { threadId: thread.id, input: [{ type: 'text', text: request.prompt }],
@@ -154,8 +160,9 @@ export class CodexAppAgent {
 export class ClaudeSdkAgent {
   id = 'claude';
   capabilities = { interactiveApprovals: true };
+  constructor({ query } = {}) { this.query = query; } // query: test seam for the SDK
   async *run(request) {
-    const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    const query = this.query || (await import('@anthropic-ai/claude-agent-sdk')).query;
     const controller = new AbortController();
     const abort = () => controller.abort();
     request.signal.addEventListener('abort', abort, { once: true });
@@ -166,7 +173,7 @@ export class ClaudeSdkAgent {
         for await (const message of query({ prompt: request.prompt, options: {
           cwd: request.cwd, resume: request.threadId || undefined,
           ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}),
-          abortController: controller, permissionMode: 'default', includePartialMessages: true,
+          abortController: controller, ...(request.fullAccess ? { permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true } : { permissionMode: 'default' }), includePartialMessages: true,
           canUseTool: async (tool, input, context) => await approve(request, output, tool, { input }, context?.signal)
             ? { behavior: 'allow', updatedInput: input }
             : { behavior: 'deny', message: '사용자가 거절했거나 승인 요청이 만료되었습니다.' }
@@ -190,5 +197,16 @@ export async function listClaudeModels(cwd) {
     const models = await client.supportedModels();
     return models.map(model => ({ id: model.value, label: model.displayName || model.value,
       efforts: model.supportsEffort ? (model.supportedEffortLevels || []) : [], isDefault: model.isDefault === true })).filter(model => model.id);
+  } finally { await client.close?.(); }
+}
+
+// Same binary and credentials the SDK will use for runs; initialize only, no model call.
+export async function claudeAccount(cwd) {
+  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const client = query({ prompt: '', options: { cwd } });
+  try {
+    const info = await client.accountInfo();
+    const authenticated = Boolean(info.email || info.apiKeySource || info.tokenSource || (info.apiProvider && info.apiProvider !== 'firstParty'));
+    return { authenticated, label: info.email || info.apiKeySource || info.apiProvider || 'unknown' };
   } finally { await client.close?.(); }
 }

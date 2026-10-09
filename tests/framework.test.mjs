@@ -182,3 +182,10 @@ test('CLI adapter constructors expose the expected IDs', () => {
   assert.equal(new CodexAgent().id, 'codex');
   assert.equal(new ClaudeAgent().id, 'claude');
 });
+
+test('engine keeps only the most recent finished sessions in memory', async () => {
+  const engine = new AdeEngine({ runtime: createLocalRuntime({ root: process.cwd() }), policy: new AllowAllPolicy(),
+    agents: [{ id: 'q', capabilities: {}, async *run() { yield { kind: 'text', text: 'x' }; } }] });
+  for (let i = 0; i < 105; i++) for await (const event of engine.runAgent('q', 'hi')) void event;
+  assert.equal(engine.sessions.length, 100);
+});
