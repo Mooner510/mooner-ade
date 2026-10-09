@@ -23,7 +23,9 @@ export class RecordedAgentRunner {
             throw new Error('Agent stream must begin with a session started event');
           }
           id = validated.sessionId;
-          await this.#store.create({ id, agentId, status: 'running', startedAt: validated.timestamp });
+          await this.#store.create({ id, agentId, status: 'running', startedAt: validated.timestamp,
+            prompt, cwd: options.cwd, conversationId: options.conversationId, projectId: options.projectId,
+            model: options.model || null, effort: options.effort || null });
         }
         if (validated.sessionId !== id || validated.agent !== agentId) {
           throw new Error('Session identity changed during stream');

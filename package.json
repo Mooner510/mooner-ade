@@ -8,6 +8,9 @@
     "node": ">=24.21.0"
   },
   "scripts": {
+    "start": "node apps/local-server/src/index.js",
+    "web:build": "pnpm --filter @mooner/ade-web build",
+    "typecheck": "tsc --project tsconfig.contract.json && pnpm --filter @mooner/ade-web typecheck",
     "test": "node --test tests/*.test.mjs",
     "build": "node scripts/verify.mjs",
     "check": "node scripts/verify.mjs && tsc --project tsconfig.contract.json && node --test tests/*.test.mjs",
@@ -15,7 +18,8 @@
     "test:live": "node scripts/live-agent-check.mjs"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "devDependencies": {
     "typescript": "5.8.3"

@@ -1,5 +1,7 @@
 # Verification scope
 
+`pnpm check` (contract typecheck, web typecheck, 62 Node tests) passes on Node 24.12.0 / pnpm 11.27.1 (macOS). The local IDE/ADE additionally passed a headless-Chrome run and server tests with a real PTY and a real typescript-language-server (see [LOCAL_IDE.md](LOCAL_IDE.md)). Real Codex/Claude acceptance, Windows/Linux and Node >=24.21.0 remain **unrun**. The list below describes the framework checkpoints.
+
 Included Node tests cover:
 
 - wire message validation and forward incompatibility rejection;

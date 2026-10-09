@@ -29,7 +29,7 @@ export function parseEnvelope(value) {
   return value;
 }
 
-const eventKinds = new Set(['lifecycle', 'session', 'text', 'tool', 'usage', 'result', 'error', 'raw', 'progress']);
+const eventKinds = new Set(['lifecycle', 'session', 'text', 'tool', 'usage', 'result', 'error', 'raw', 'progress', 'approval']);
 const lifecyclePhases = new Set(['started', 'completed', 'failed', 'cancelled']);
 
 /** Validate the host-owned event envelope while keeping CLI-specific extensions opaque. */
@@ -52,6 +52,8 @@ export function parseAgentEvent(value, { allowLegacy = false } = {}) {
   }
   if ((value.kind === 'lifecycle' && !lifecyclePhases.has(value.phase)) ||
       (value.kind === 'text' && typeof value.text !== 'string') ||
+      (value.kind === 'text' && value.mode !== undefined && !['append', 'replace'].includes(value.mode)) ||
+      (value.kind === 'approval' && (!['requested', 'approved', 'denied'].includes(value.phase) || typeof value.tool !== 'string')) ||
       (value.kind === 'error' && typeof value.message !== 'string')) {
     throw new AdeError('INVALID_AGENT_EVENT', 'Malformed ADE agent event payload');
   }

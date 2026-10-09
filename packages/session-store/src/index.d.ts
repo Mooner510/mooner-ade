@@ -20,6 +20,8 @@ export declare class FileSessionStore {
   constructor(directory: string);
   create(session: StoredSession): Promise<SessionRecord>;
   load(id: string): Promise<SessionRecord | null>;
+  list(): Promise<StoredSession[]>;
+  recoverAll(): Promise<SessionRecord[]>;
   append(id: string, event: Record<string, unknown>): Promise<StoredEvent>;
   setStatus(id: string, status: StoredSession['status']): Promise<StoredSession>;
   replay(id: string, options?: { afterSequence?: number }): Promise<StoredEvent[]>;

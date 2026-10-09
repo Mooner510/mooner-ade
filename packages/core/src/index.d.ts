@@ -1,6 +1,6 @@
 export interface CapabilityPolicy { authorize(action: string, context: Record<string, unknown>): Promise<boolean> | boolean; }
 export interface AgentEvent { kind: string; [key: string]: unknown; }
-export interface AgentRequest { prompt: string; cwd?: string; signal?: AbortSignal; threadId?: string; approvalMode?: 'interactive' | 'noninteractive'; onApprovalRequest?: (request: ApprovalRequest) => void; requestApproval?: (request: { tool: string; summary?: string }) => Promise<boolean>; [key: string]: unknown; }
+export interface AgentRequest { prompt: string; cwd?: string; signal?: AbortSignal; threadId?: string; approvalMode?: 'interactive' | 'noninteractive'; onApprovalRequest?: (request: ApprovalRequest) => void; requestApproval?: (request: { tool: string; summary?: string; signal?: AbortSignal; onRequest?: (request: ApprovalRequest) => void }) => Promise<boolean>; [key: string]: unknown; }
 export interface AgentAdapter { id: string; capabilities?: { interactiveApprovals: boolean }; run(request: AgentRequest): AsyncIterable<AgentEvent>; }
 export interface WorkspacePort { readFile(path: string): Promise<string>; writeFile(path: string, content: string): Promise<void>; listFiles(path?: string): Promise<unknown[]>; }
 export interface ProcessPort { exec(file: string, args?: string[], options?: object): Promise<unknown>; }
@@ -10,6 +10,10 @@ export interface GitPort {
   stage(files: string[], path?: string): Promise<void>;
   unstage(files: string[], path?: string): Promise<void>;
   commit(message: string, path?: string): Promise<string>;
+  worktrees?(): Promise<Record<string, string | boolean>[]>;
+  createWorktree?(target: string, branch: string): Promise<void>;
+  removeWorktree?(target: string): Promise<void>;
+  integrateWorktree?(branch: string): Promise<void>;
 }
 export interface TerminalPort { open(options?: object): Promise<unknown>; }
 export interface AdeRuntime { workspace: WorkspacePort; processes: ProcessPort; git: GitPort; terminal: TerminalPort; }

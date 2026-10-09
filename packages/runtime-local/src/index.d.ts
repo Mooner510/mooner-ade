@@ -20,6 +20,10 @@ export declare class LocalGit {
   stage(files: string[], path?: string): Promise<void>;
   unstage(files: string[], path?: string): Promise<void>;
   commit(message: string, path?: string): Promise<string>;
+  worktrees(): Promise<Record<string, string | boolean>[]>;
+  createWorktree(target: string, branch: string): Promise<void>;
+  removeWorktree(target: string): Promise<void>;
+  integrateWorktree(branch: string): Promise<void>;
 }
 export interface PtySession {
   pid: number;
