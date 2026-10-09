@@ -11,7 +11,7 @@
 
 `runAgent()` returns an async event stream. Each invocation gets an internal session UUID and an AbortController. `stopAgent(id)` aborts the controller and the subprocess adapter sends SIGTERM. Historical sessions record completed/failed/cancelled status. A native upstream thread ID is emitted in `session` events and can be supplied as `threadId` on a later call. These are **separate** identities: the ADE invocation ID is not the native provider thread ID.
 
-CLI-native noninteractive invocation does **not** support browser-rendered interactive permission prompting. Codex App Server and Claude Agent SDK are expected as a later agent transport implementation for full approvals. A browser UI must not pretend `tool` events imply an approval gate.
+CLI-native noninteractive invocation does **not** support browser-rendered interactive permission prompting. The local app adds separate Codex App Server and Claude Agent SDK transports in `apps/local-server/src/agents.js`; existing CLI package adapters remain unchanged. Only actual native permission requests create actionable approval UI. See [local IDE contracts and verification limits](LOCAL_IDE.md).
 
 ## Local-only behavior
 

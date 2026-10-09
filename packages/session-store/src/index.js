@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, open, unlink } from 'node:fs/promises';
+import { mkdir, readFile, rename, open, unlink, readdir } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -56,6 +56,16 @@ export class FileSessionStore {
       throw new Error('Unsupported or malformed session record');
     }
     return record;
+  }
+
+  async list() {
+    const files = await readdir(this.#dir).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+    const records = await Promise.all(files.filter(file => /^[a-zA-Z0-9_-]{1,128}\.json$/.test(file)).map(file => this.load(file.slice(0, -5))));
+    return records.filter(Boolean).map(record => record.session);
+  }
+
+  async recoverAll() {
+    return Promise.all((await this.list()).map(session => this.recover(session.id)));
   }
 
   async create(session) {

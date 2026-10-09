@@ -1,6 +1,6 @@
 # mooner-ade (무너에이드)
 
-**Local-first AI-native Development Environment.** This repository contains the reusable **ADE Framework**; the completed web IDE is a separate later milestone.
+**Local-first AI-native Development Environment.** Reusable **ADE Framework** packages and a local web IDE consumer. The new IDE implementation passes type/syntax checks and the web build; runtime verification remains pending; see [한국어 실행 안내와 검증 상태](docs/LOCAL_IDE.md).
 
 ## Boundaries
 
@@ -51,12 +51,13 @@ Canonical project toolchain: **Node 24.21.0** and **pnpm 11.27.1**. Package runt
 Run in the repository root:
 
 ```text
-pnpm install --frozen-lockfile
-pnpm check
-pnpm smoke
+pnpm install --no-frozen-lockfile
+pnpm typecheck
+pnpm web:build
+pnpm start
 ```
 
-`pnpm check` verifies all package imports and runs the Node test suite. The toolchain-pinned Gharp CI verification has **not** been run by this project bootstrap. The included CI caller delegates to `Mooner510/workflows` `project-checks.yml@v1`, not custom repository CI.
+The user installed the application dependencies and regenerated the lockfile. Fresh installations can use `--frozen-lockfile`. `pnpm typecheck` is static-only. `pnpm check` also runs automatic tests, so run it only when tests are authorized. The included CI caller delegates to `Mooner510/workflows` `project-checks.yml@v1`, not custom repository CI. After user installation, type checks, JavaScript syntax checks and the web build passed on Node 24.12.0 / pnpm 11.27.1. Tests and live acceptance remain unrun; the required Node version is 24.21.0 or newer.
 
 ## Example: local-only trusted consumer
 
@@ -84,8 +85,8 @@ A real interactive terminal requires an installed `node-pty` runtime dependency 
 
 ## Status / out-of-scope
 
-**Milestone M1 (this deliverable):** reusable core, portable ports, local runtime, two CLI JSONL adapters, typed public contracts, protocol, tests, docs. **Not the full ADE product.**
+**Framework M1/P1:** reusable core, local runtime, legacy CLI adapters, typed contracts, event protocol, durable sessions and recorded runner.
 
-Not implemented in M1: web editor, browser transport server (WebSocket/SSE), authentication UI, multi-pane terminal UI, live CLI permission interaction, Codex App Server integration, Claude Agent SDK integration, durable session persistence, search/indexer, preview server, debugger, production container adapter. These are explicit later milestones, not implied by the normalized events in the current CLI adapters.
+**Local IDE implementation:** `apps/web` (React, CodeMirror, xterm) and `apps/local-server` (authenticated HTTP/WebSocket, server-owned runs, native approval transports, PTY, file/Git/worktree flows). Dependencies were installed by the user and the lockfile was regenerated. Type/syntax checks and the web build passed. Automatic tests, browser checks and real CLI/PTY acceptance remain unrun. Preview server, debugger, hosted multi-user and container isolation remain out of scope.
 
 See [architecture](docs/ARCHITECTURE.md), [webai porting boundaries](docs/PORTING.md) and [test matrix](docs/VERIFICATION.md).

@@ -26,12 +26,13 @@ export interface AgentEventBase {
 export type AgentEventWire = AgentEventBase & (
   | { kind: 'lifecycle'; phase: 'started' | 'completed' | 'failed' | 'cancelled' }
   | { kind: 'session'; threadId?: string }
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; mode?: 'append' | 'replace'; itemId?: string }
   | { kind: 'tool'; tool?: string }
   | { kind: 'usage'; usage?: unknown }
   | { kind: 'result'; status?: string }
   | { kind: 'error'; message: string }
   | { kind: 'raw'; data?: unknown }
   | { kind: 'progress'; phase?: string }
+  | { kind: 'approval'; phase: 'requested' | 'approved' | 'denied'; approvalId?: string; tool: string; summary?: string }
 );
 export declare function parseAgentEvent(value: unknown, options?: { allowLegacy?: boolean }): AgentEventWire;

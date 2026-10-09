@@ -1,5 +1,7 @@
 # P2 UX specification — terminal grid and optional worktrees
 
+Implementation is now present in `apps/web` and `apps/local-server`. ADE panes now hold terminals and editor groups in one split tree (see [LOCAL_IDE.md](LOCAL_IDE.md)). Verified so far: a real PTY echoes input through the server (test), a terminal pane auto-opens and an editor pane can be added next to it in headless Chrome. Items 1–5 below are still **not** run end to end (the 2×3 grid, repeated Ctrl+D splitting, layout restore after reload, parallel worktree tasks, macOS/Windows shortcut interception). See [LOCAL_IDE.md](LOCAL_IDE.md).
+
 ## Intent
 
 The local ADE defaults to a **single shared working tree**, including when multiple Codex and Claude sessions run in parallel. It must not create a Git worktree without an explicit owner action. Because parallel edits to a single workspace can race, show file ownership/activity and warn when sessions edit overlapping files. Provide an opt-in per-task worktree mode, not a mandatory worktree pipeline or implicit merging process.

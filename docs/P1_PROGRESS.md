@@ -1,6 +1,6 @@
 # P1: portable runtime, approvals and integration test hardening
 
-This checkpoint extends the same shared framework consumed by the separate mooner-ade and webai applications. It does **not** implement or claim a browser IDE or isolated hosted runtime.
+This document records the original framework checkpoint. The subsequent local IDE implementation and its **unverified** acceptance status are tracked in [LOCAL_IDE.md](LOCAL_IDE.md). Hosted isolation remains out of scope.
 
 ## Implemented
 
@@ -24,7 +24,7 @@ This checkpoint extends the same shared framework consumed by the separate moone
 - Real Codex/Claude CLI authentication, login status, native session resume and live model invocation on a machine with those CLIs installed and signed in; match test adapters against actual current CLI versions.
 - True interactive tool approvals using Codex App Server and Claude Agent SDK or a similarly authenticated approval-aware native transport. Current CLI JSONL streams cannot accept host UI permission decisions.
 - `node-pty` native installation and real terminal E2E on supported macOS/Windows/Linux hosts.
-- Durable persisted/reconnectable sessions, formally versioned event payload union and backwards compatibility matrix.
+- Durable store and RecordedAgentRunner are implemented and connected to the local server; replay/restart/browser acceptance is pending. Legacy event reading is preserved, with additive approval/text-update contracts.
 - File searching/indexing, preview tasks, workspace save/move/remove operations, richer Git workflows and exhaustive runtime policy tests.
 
 ## Non-dev repository governance

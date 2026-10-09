@@ -140,6 +140,31 @@ export class LocalGit {
     await this.#run(requested, ['commit', '-m', message]);
     return (await this.#run(requested, ['rev-parse', 'HEAD'])).trim();
   }
+
+  async worktrees() {
+    const output = await this.#run('.', ['worktree', 'list', '--porcelain', '-z']);
+    return output.split('\0\0').filter(Boolean).map(block => Object.fromEntries(block.split('\0').filter(Boolean).map(line => {
+      const index = line.indexOf(' ');
+      return index < 0 ? [line, true] : [line.slice(0, index), line.slice(index + 1)];
+    })));
+  }
+
+  async createWorktree(target, branch) {
+    if (typeof target !== 'string' || !path.isAbsolute(target) || typeof branch !== 'string' || !/^ade\/[a-zA-Z0-9_-]+$/.test(branch)) throw new TypeError('Invalid worktree target or branch');
+    await this.#run('.', ['worktree', 'add', '-b', branch, '--', target]);
+  }
+
+  async removeWorktree(target) {
+    if (!(await this.worktrees()).some(tree => tree.worktree === target) || target === this.workspace.root) throw new Error('Unknown secondary worktree');
+    // Git refuses dirty worktrees; never force removal or delete their branch.
+    await this.#run('.', ['worktree', 'remove', '--', target]);
+  }
+
+  async integrateWorktree(branch) {
+    if (typeof branch !== 'string' || !/^ade\/[a-zA-Z0-9_-]+$/.test(branch)) throw new TypeError('Invalid task branch');
+    if (!(await this.status()).clean) throw new Error('Commit or stash target changes manually first');
+    await this.#run('.', ['merge', '--ff-only', '--', branch]);
+  }
 }
 
 export class LocalTerminal {

@@ -1,6 +1,10 @@
 packages:
   - 'packages/*'
+  - 'apps/*'
 
 blockExoticSubdeps: true
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
+allowBuilds:
+  esbuild: true
+  node-pty: true

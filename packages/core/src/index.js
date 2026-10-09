@@ -164,7 +164,8 @@ export class AdeEngine {
         }
         return this.#approvals.request({
           sessionId: id, tool: request?.tool, summary: request?.summary,
-          signal: controller.signal, onRequest: options.onApprovalRequest
+          signal: request?.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal,
+          onRequest: approval => { options.onApprovalRequest?.(approval); request?.onRequest?.(approval); }
         });
       };
       for await (const event of agent.run({ prompt, ...options, signal: controller.signal, requestApproval })) {
@@ -184,6 +185,7 @@ export class AdeEngine {
         session.status = 'cancelled';
       }
       session.finishedAt = Date.now();
+      controller.abort(new Error('Agent run finished'));
       delete session.controller;
       options.signal?.removeEventListener('abort', abort);
     }
