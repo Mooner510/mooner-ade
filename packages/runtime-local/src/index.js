@@ -173,16 +173,19 @@ export class LocalTerminal {
     this.ptyFactory = ptyFactory;
   }
 
-  async open({ cwd = process.cwd(), cols = 100, rows = 28, env = {} } = {}) {
+  // `meta` is opaque data a remote PTY host keeps next to the terminal so it can be recognised after a server restart.
+  async open({ cwd = process.cwd(), cols = 100, rows = 28, env = {}, meta } = {}) {
     if (![cols, rows].every(n => Number.isSafeInteger(n) && n > 0 && n <= 1000)) {
       throw new TypeError('Terminal dimensions must be integers between 1 and 1000');
     }
     const factory = this.ptyFactory ?? (await import('node-pty').catch(() => {
       throw new Error('Interactive terminal requires node-pty. Install it in the local runtime package.');
     }));
-    const pty = factory.spawn(this.shell, [], { name: 'xterm-256color', cols, rows, cwd, env: { ...process.env, ...env } });
+    const pty = await factory.spawn(this.shell, [], { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...process.env, ...env }, ...(meta && { meta }) });
     return {
       pid: pty.pid,
+      // Only a remote PTY can outlive this process; a local one is simply closed.
+      detach: () => (pty.detach ? pty.detach() : pty.kill()),
       onData: callback => pty.onData(callback),
       onExit: callback => pty.onExit(callback),
       write: data => pty.write(data),
