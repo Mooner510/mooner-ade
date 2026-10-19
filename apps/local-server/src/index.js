@@ -18,6 +18,7 @@ import { createLspManager } from './lsp.js';
 import { validateUi, validateAppState } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
+import { parseProcessTable, terminalProcesses } from './terminal-processes.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -182,7 +183,7 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   const terminal = { native, cwd, buffer: initial, sequence: initial ? 1 : 0, exited: false };
   project.terminals.set(id, terminal);
   native.onData(data => { terminal.buffer = (terminal.buffer + data).slice(-262144); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence }); });
-  native.onExit(event => { terminal.exited = true; broadcast(project, { type: 'terminal/exit', id, ...event }); });
+  native.onExit(event => { terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
   return terminal;
 }
 // Terminals that kept running in the pty-host while the previous server was replaced come back under their old ids.
@@ -425,6 +426,15 @@ function trimRecent(list) {
 }
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
+  if (action === 'recent/remove') {
+    const root = text(input.root, '프로젝트 경로');
+    return registryWrite(async () => {
+      const file = path.join(dataRoot, 'recent.json'), recent = await readJson(file, []);
+      const next = recent.filter(item => item.root !== root);
+      await writeJson(file, next);
+      return next;
+    });
+  }
   if (action === 'recent/pin') {
     return registryWrite(async () => {
       const file = path.join(dataRoot, 'recent.json'), recent = await readJson(file, []);
@@ -658,8 +668,8 @@ async function route(action, input, project) {
       return { id };
     }
     case 'terminal/close': {
-      const terminal = project.terminals.get(input.id); if (!terminal) throw fault('NOT_FOUND', '터미널이 없습니다.', 404);
-      terminal.native.close(); project.terminals.delete(input.id); return {};
+      const terminal = project.terminals.get(input.id);
+      terminal?.native.close(); project.terminals.delete(input.id); return {};
     }
     default: throw fault('NOT_FOUND', '지원하지 않는 작업입니다.', 404);
   }
@@ -752,6 +762,7 @@ wss.on('connection', socket => {
         }
         for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer, sequence: terminal.sequence, exited: terminal.exited });
         for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
+        for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
       } else if (message.type === 'unsubscribe') {
         socket.projects.delete(project.id);
       } else if (message.type === 'lsp/reset') {
@@ -761,7 +772,8 @@ wss.on('connection', socket => {
         lsp.send(project.id, project.root, message.message);
       } else if (socket.projects.has(project.id)) {
         const terminal = project.terminals.get(message.id);
-        if (!terminal || terminal.exited) throw fault('TERMINAL_EXITED', '터미널이 종료되었습니다.');
+        // Input and resize events can still arrive while the client removes an exited pane.
+        if (!terminal || terminal.exited) return;
         if (message.type === 'terminal/input') {
           if (typeof message.data !== 'string' || message.data.length > 16384) throw fault('INVALID_INPUT', '잘못된 터미널 입력입니다.');
           terminal.native.write(message.data);
@@ -797,26 +809,25 @@ timer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
 const processTable = () => new Promise(resolve => {
   const [file, args] = process.platform === 'win32'
-    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.Name)" }']]
-    : ['ps', ['-A', '-o', 'pid=,ppid=,comm=']];
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $(if ($_.CommandLine) { $_.CommandLine } else { $_.Name })" }']]
+    : ['ps', ['-A', '-o', 'pid=,ppid=,args=']];
   execFile(file, args, { windowsHide: true, timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => {
     if (error) return resolve(null);
-    resolve(out.split(/\r?\n/).map(line => /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line)).filter(Boolean).map(m => ({ pid: Number(m[1]), ppid: Number(m[2]), name: path.basename(m[3]).toLowerCase() })));
+    resolve(parseProcessTable(out));
   });
 });
-const isSsh = name => name === 'ssh' || name === 'ssh.exe';
 let sshPolling = false;
 const sshTimer = setInterval(async () => {
   if (sshPolling || ![...projects.values()].some(project => [...project.terminals.values()].some(terminal => !terminal.exited))) return;
   sshPolling = true;
   try {
     const table = await processTable(); if (!table) return;
-    const children = new Map(); for (const entry of table) children.set(entry.ppid, [...(children.get(entry.ppid) || []), entry]);
-    const hasSsh = pid => { const seen = new Set(), stack = [pid]; while (stack.length) { const next = stack.pop(); if (seen.has(next)) continue; seen.add(next); for (const child of children.get(next) || []) { if (isSsh(child.name)) return true; stack.push(child.pid); } } return false; };
+    const inspect = terminalProcesses(table);
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
       if (terminal.exited || !terminal.native.pid) continue;
-      const ssh = hasSsh(terminal.native.pid);
+      const { agent, ssh } = inspect(terminal.native.pid), changedSsh = ssh !== Boolean(terminal.ssh);
       if (ssh !== Boolean(terminal.ssh)) { terminal.ssh = ssh; broadcast(project, { type: 'terminal/ssh', id, ssh }); }
+      if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); }
     }
   } finally { sshPolling = false; }
 }, 3000);

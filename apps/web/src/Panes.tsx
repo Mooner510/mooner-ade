@@ -8,21 +8,15 @@ import { basename, findLeaf, isDiffTab, isLeaf, type Leaf, type Pane } from './a
 import { DiffView, EditorView, monoFont, type Reveal, type Settings } from './Editor';
 import { Icon, IconButton } from './Icon';
 import { FileIcon } from './FileIcon';
+import { ANSI, createBannerDetector, createQuestionTracker } from './terminal-agent';
+import type { Agent } from './terminal-agent';
+export type { Agent } from './terminal-agent';
 
-export type Agent = 'claude' | 'codex';
-// Agent CLIs announce themselves in the terminal title; a launcher-started one is remembered by the workspace.
-// Claude Code may title itself with only a status glyph (✳ idle, braille spinner while working) and the task text, without its name.
-export const detectAgent = (text = ''): Agent | undefined => /claude/i.test(text) || /^[✳⠀-⣿]\s/.test(text) ? 'claude' : /codex/i.test(text) ? 'codex' : undefined;
-// Codex never puts its name in the title, so its startup banner ("OpenAI Codex") is matched in the raw output as well.
-// Over ssh the banner arrives in arbitrary chunks, interleaved with escape codes: match on a rolling tail of the plain text.
-const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g;
-const detectBanner = (text: string): Agent | undefined => /OpenAI Codex/.test(text) ? 'codex' : /Claude Code v?\d/.test(text) ? 'claude' : undefined;
 // Terminal-generated reports: focus in/out (CSI I / O) and SGR mouse events.
 const REPORT = /^(?:\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm])+$/;
 export type AgentEventKind = 'done' | 'attention';
 // An agent that stays silent this long after working has finished, stopped, or is waiting for you.
-const AGENT_IDLE_MS = 5000, ECHO_MS = 1500, BELL_GAP_MS = 3000, MIN_WORK_MS = 3000;
-const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const AGENT_IDLE_MS = 5000, ECHO_MS = 1500, MIN_WORK_MS = 3000;
 export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
 export type EditorCtx = {
@@ -33,7 +27,7 @@ export type EditorCtx = {
   loadDiff(kind: string, path: string): Promise<{ original: string; modified: string }>;
 };
 type Props = {
-  pane: Pane; onLayout(pane: Pane): void; send(message: object): void; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; focus: string; zoom: string;
+  pane: Pane; onLayout(pane: Pane): void; send(message: object): void; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; focus: string; zoom: string;
   onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; editor: EditorCtx;
 };
 
@@ -50,10 +44,11 @@ function terminalTheme(element: Element = document.documentElement): ITheme {
 
 const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
 
-function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentWorking, ssh: sshSet, working: workingSet, attention, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'bus' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
-  const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id);
+function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'bus' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+  const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
+  const checkAgent = useRef<() => void>(() => {});
   const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), centerRef = useRef<() => void>(() => {});
-  const callbacks = useRef({ send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentWorking }); callbacks.current = { send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentWorking };
+  const callbacks = useRef({ send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => {
     const terminal = new Terminal({ fontSize: settings.terminalFontSize, fontFamily: fontStack(settings), lineHeight: settings.lineHeight, cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, allowProposedApi: true,
@@ -78,13 +73,33 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
     // The DOM renderer leaves gaps between rows (broken block-drawing art, e.g. the Claude Code mascot); WebGL draws those glyphs itself.
     try { const gl = new WebglAddon(); gl.onContextLoss(() => gl.dispose()); terminal.loadAddon(gl); } catch { /* no WebGL: keep the DOM renderer */ }
     terminal.onSelectionChange(() => { if (settingsRef.current.copyOnSelect && terminal.hasSelection()) void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); });
-    let sequence = 0, lastInput = 0, lastResize = 0, lastBell = 0, workStart = 0, working = false, tail = '', idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const detectBanner = createBannerDetector(), question = createQuestionTracker();
+    let sequence = 0, replays = 0, lastInput = 0, lastResize = 0, workStart = 0, working = false, asking = false, title = '', idleTimer: ReturnType<typeof setTimeout> | undefined;
     // Output while an agent runs means it is working; silence afterwards means it needs you. Echo of your own typing does not count,
     // nor does a redraw after a resize, output without visible text (cursor/title escapes), or a short burst that never looked like work.
-    const watchAgent = (data: string) => {
-      if (!callbacks.current.agentOf(id)) return;
+    const watchAgent = (data: string, replay = false) => {
+      if (!callbacks.current.agentOf(id)) {
+        if (working) callbacks.current.onAgentWorking(id, false);
+        if (asking) callbacks.current.onAgentResolved(id);
+        asking = false; question.reset(); working = false; clearTimeout(idleTimer); return;
+      }
       const now = Date.now();
-      if (data.replace(OSC, '').includes('\x07') && now - lastBell > BELL_GAP_MS) { lastBell = now; callbacks.current.onAgentEvent(id, 'attention'); }
+      const buffer = terminal.buffer.active;
+      const screen = Array.from({ length: terminal.rows }, (_, row) => {
+        const line = buffer.getLine(buffer.baseY + row);
+        return (line?.isWrapped ? '' : '\n') + (line?.translateToString(true) || '');
+      }).join('');
+      const pending = question.observe(screen, title);
+      if (pending !== asking) {
+        asking = pending;
+        if (asking) callbacks.current.onAgentEvent(id, 'attention');
+        else callbacks.current.onAgentResolved(id);
+      }
+      if (asking) {
+        if (working) callbacks.current.onAgentWorking(id, false);
+        working = false; clearTimeout(idleTimer); return;
+      }
+      if (replay) return;
       if (now - lastInput < ECHO_MS || now - lastResize < ECHO_MS) return;
       if (!data.replace(ANSI, '').replace(/[\x00-\x20]/g, '')) return;
       if (!working) { workStart = now; callbacks.current.onAgentWorking(id, true); }
@@ -92,17 +107,17 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
       idleTimer = setTimeout(() => {
         if (!working) return;
         working = false; callbacks.current.onAgentWorking(id, false);
-        if (Date.now() - AGENT_IDLE_MS - workStart >= MIN_WORK_MS) callbacks.current.onAgentEvent(id, 'done');
+        if (callbacks.current.agentOf(id) && Date.now() - AGENT_IDLE_MS - workStart >= MIN_WORK_MS) callbacks.current.onAgentEvent(id, 'done');
       }, AGENT_IDLE_MS);
     };
+    checkAgent.current = () => watchAgent('', true);
     const receive = (feed: TerminalFeed) => {
       const replay = Boolean(feed.reset);
-      if (feed.reset) { terminal.reset(); sequence = 0; tail = ''; }
+      if (feed.reset) { terminal.reset(); sequence = 0; }
       if (feed.sequence > sequence || feed.reset) {
-        terminal.write(feed.data); sequence = feed.sequence;
-        const plain = tail + feed.data.replace(ANSI, ''); tail = plain.slice(-32);
-        const agent = detectBanner(plain); if (agent) callbacks.current.onAgent(id, agent);
-        if (!replay) watchAgent(feed.data);
+        if (replay) replays++;
+        terminal.write(feed.data, () => { if (replay) replays--; watchAgent(feed.data, replay); }); sequence = feed.sequence;
+        const agent = detectBanner(feed.data, replay); if (agent) callbacks.current.onAgent(id, agent);
       }
       if (feed.exited) terminal.write('\r\n\x1b[2m[프로세스 종료]\x1b[0m\r\n');
     };
@@ -111,10 +126,14 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
     terminal.onData(data => {
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
       // They are not the user answering the agent, so they must not cancel the "working" state.
-      if (!REPORT.test(data)) { lastInput = Date.now(); if (working) callbacks.current.onAgentWorking(id, false); working = false; clearTimeout(idleTimer); }
+      if (!REPORT.test(data)) { question.input(data); lastInput = Date.now(); if (working) callbacks.current.onAgentWorking(id, false); working = false; clearTimeout(idleTimer); }
       callbacks.current.send({ type: 'terminal/input', id, data });
     });
-    terminal.onTitleChange(title => callbacks.current.onTitle(id, title));
+    terminal.onTitleChange(value => {
+      title = value; callbacks.current.onTitle(id, title);
+      // Some CLI versions animate only their OSC title while waiting for a response.
+      if (!replays && /^[⠀-⣿]\s/.test(title)) watchAgent(title);
+    });
     terminal.attachCustomKeyEventHandler(event => {
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
         if (event.type === 'keydown') { event.preventDefault(); callbacks.current.onSplit(id, event.shiftKey ? 'column' : 'row'); }
@@ -150,8 +169,9 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
     centerRef.current = center;
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; lastResize = Date.now(); fit.fit(); center(); requestAnimationFrame(center); callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows }); callbacks.current.onSize(id, terminal.cols, terminal.rows); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
-    return () => { pasteHost.removeEventListener('paste', pasteImage, true); clearTimeout(idleTimer); observer.disconnect(); bus.listeners.delete(id); terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { checkAgent.current = () => {}; pasteHost.removeEventListener('paste', pasteImage, true); clearTimeout(idleTimer); observer.disconnect(); bus.listeners.delete(id); terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
+  useEffect(() => { checkAgent.current(); }, [identity]);
   useEffect(() => {
     // Next frame: the App effect that switches `data-theme` runs after this child effect.
     const frame = requestAnimationFrame(() => {
@@ -169,7 +189,7 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
   const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle');
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
-      <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agentOf(id) || 'terminal'} size={12} /></span><span className="pane-label">{label}</span></span>
+      <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
         <IconButton icon="splitH" label="좌우 분할" keys="Ctrl+D" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" label="상하 분할" keys="Ctrl+Shift+D" onClick={() => onSplit(id, 'column')} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys="Ctrl+Shift+Enter" onClick={() => onZoom(id)} />

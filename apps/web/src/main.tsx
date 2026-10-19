@@ -61,13 +61,13 @@ function useHub(enabled: boolean) {
   return { hub, connection };
 }
 
-type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; health: Record<string, any>; error: string; onOpen(path: string): Promise<void>; onClone(url: string, parent: string): Promise<void>; onPin(root: string, pinned: boolean): void; onDismissError(): void; onHealth(): void };
-function PickerCard({ ready, recent, open, health, error, onOpen, onClone, onPin, onDismissError, onHealth }: PickerProps) {
+type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; error: string; onOpen(path: string): Promise<void>; onClone(url: string, parent: string): Promise<void>; onPin(root: string, pinned: boolean): void; onRemove(root: string): Promise<void>; onDismissError(): void };
+function PickerCard({ ready, recent, open, error, onOpen, onClone, onPin, onRemove, onDismissError }: PickerProps) {
   const [path, setPath] = useState(''), [cloning, setCloning] = useState(false), [url, setUrl] = useState(''), [parent, setParent] = useState(''), [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false), [removeError, setRemoveError] = useState('');
   useEffect(() => { if (cloning && !parent) void api<{ path: string }>('home').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [cloning, parent]);
   const desktop = (window as unknown as { adeDesktop?: { pickFolder(): Promise<string | null> } }).adeDesktop;
-  return <div className="welcome-card"><span className="brand">MOONER ADE</span><h1 id="picker-title">터미널과 에이전트,<br />한 창에서.</h1>
-    <p className="lead">프로젝트를 여러 개 열어 두고 오가며, 탭과 분할 pane으로 Claude Code · Codex를 돌리세요. 바뀐 코드는 오른쪽에서 바로 검토합니다.</p>
+  return <><div className="welcome-card"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
     {error && <div role="alert" className="error">{error}<button onClick={onDismissError}>닫기</button></div>}
     <form onSubmit={event => { event.preventDefault(); void onOpen(path); }}><input aria-label="프로젝트 절대 경로" value={path} onChange={event => setPath(event.target.value)} placeholder="C:\Users\me\project 또는 /Users/me/project" required />
       {desktop && <button type="button" disabled={!ready} onClick={() => void desktop.pickFolder().then(folder => { if (folder) { setPath(folder); return onOpen(folder); } })}>폴더 선택…</button>}<button className="primary" disabled={!ready}>열기</button></form>
@@ -80,16 +80,27 @@ function PickerCard({ ready, recent, open, health, error, onOpen, onClone, onPin
     <h2>최근 프로젝트</h2>
     {recent.length ? <div className="recent-list">{[...recent.filter(item => item.pinned), ...recent.filter(item => !item.pinned)].map(item => <div className={`recent ${item.pinned ? 'pinned' : ''}`} key={item.root}>
       <button type="button" className="recent-open" title={item.root} onClick={() => void onOpen(item.root)}><strong>{shortName(item.root)}{open.has(item.root) && <small className="open-mark"> · 열려 있음</small>}</strong><small>{item.root}</small></button>
-      <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '고정 해제' : '상단에 고정'} title={item.pinned ? '고정 해제' : '상단에 고정'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button></div>)}</div> : <p className="hint">아직 연 프로젝트가 없습니다.</p>}
-    <details className="health"><summary>준비 상태</summary>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button disabled={!ready} onClick={onHealth}>다시 확인</button></details>
-    {!ready && <p className="hint">서버 터미널에 표시된 접속 링크를 여세요.</p>}</div>;
+      <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '고정 해제' : '상단에 고정'} title={item.pinned ? '고정 해제' : '상단에 고정'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
+      <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => { setRemoveError(''); setRemoving(item.root); }}><Icon name="x" size={14} /></button></div>)}</div> : <p className="hint">아직 연 프로젝트가 없습니다.</p>}
+    {!ready && <p className="hint">서버 터미널에 표시된 접속 링크를 여세요.</p>}</div>
+    {removing && <Modal className="recent-remove-modal" labelledBy="recent-remove-title" onClose={() => { if (!deleting) setRemoving(''); }}>
+      <h2 id="recent-remove-title">최근 프로젝트에서 삭제할까요?</h2>
+      <p><strong>{shortName(removing)}</strong></p><p className="hint">{removing}</p>
+      <p>목록에서만 제거하며 실제 폴더와 파일, 열려 있는 프로젝트는 유지됩니다.</p>
+      {removeError && <p role="alert" className="error">{removeError}</p>}
+      <div className="actions"><button autoFocus disabled={deleting} onClick={() => setRemoving('')}>취소</button>
+        <button disabled={deleting} onClick={() => {
+          setDeleting(true); setRemoveError('');
+          void onRemove(removing).then(() => setRemoving('')).catch(cause => setRemoveError(cause instanceof Error ? cause.message : String(cause))).finally(() => setDeleting(false));
+        }}>{deleting ? '삭제 중…' : '삭제'}</button></div>
+    </Modal>}</>;
 }
 
 function Shell() {
   const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [error, setError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
   const [status, setStatus] = useState<Record<string, WorkspaceStatus>>({});
-  const [recent, setRecent] = useState<Recent[]>([]), [health, setHealth] = useState<Record<string, any>>({}), [picker, setPicker] = useState(false);
+  const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState(false), [system, setSystem] = useState<SystemInfo | null>(null);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display is a per-browser preference: expanded folders with tabs, or a narrow strip of initials.
@@ -121,7 +132,6 @@ function Shell() {
       if (!open.length && legacy) { open = [{ root: legacy, id: '' }]; active = legacy; }
       try { sessionStorage.removeItem('ade-project'); } catch { /* storage can be blocked */ }
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
-      if (!open.length) void api<Record<string, any>>('readiness').then(setHealth).catch(report);
     }).catch(report);
   }, [report]);
   // With nothing open (first launch, or the last project was closed) the home folder opens as a plain top-level workspace, so a terminal is always one step away.
@@ -251,7 +261,7 @@ function Shell() {
     { label: '다음/이전 프로젝트', keys: `${showKeys('mod+alt+]')} / ${showKeys('mod+alt+[')}` }, { label: '프로젝트 번호로 이동', keys: showKeys('mod+alt+1') + '…9' }, { label: '설정', keys: showKeys('mod+,') }
   ];
   const open = new Set(entries.map(entry => entry.root));
-  const picking: PickerProps = { ready, recent, open, health, error, onOpen: addProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onDismissError: () => setError(''), onHealth: () => void api<Record<string, any>>('readiness').then(setHealth).catch(report) };
+  const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
   if (!entries.length) return <main className="welcome"><PickerCard {...picking} /></main>;
 
   return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
@@ -264,12 +274,13 @@ function Shell() {
       <div className="folders" role="tree">
         {entries.map((entry, index) => {
           const item = status[entry.root] || idle, name = item.name || shortName(entry.root), selected = entry.root === current, open = !folded.has(entry.root);
+          const asking = item.tabs.some(tab => tab.asking);
           const owner = () => handles.current.get(entry.root);
           const hint = `${name}\n${entry.root}\n${showKeys(`mod+alt+${Math.min(index + 1, 9)}`)}`;
           if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''}`} title={hint}
             onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
-            {item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : item.unread && !selected && <i className="rail-dot" aria-label="새 출력" />}
+            {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : item.unread && !selected && <i className="rail-dot" aria-label="새 출력" />}
             {item.dirty > 0 && <i className="rail-dirty" aria-label="저장 안 됨" />}
             <button className="rail-close" aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={12} /></button>
           </div>;
@@ -279,7 +290,7 @@ function Shell() {
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name">{name}</span>
-              {item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}{item.unread && !selected && <i className="folder-dot" aria-label="새 출력" />}{item.dirty > 0 && <i className="folder-dirty" aria-label="저장 안 됨" title={`저장 안 된 파일 ${item.dirty}개`} />}
+              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}{item.unread && !selected && <i className="folder-dot" aria-label="새 출력" />}{item.dirty > 0 && <i className="folder-dirty" aria-label="저장 안 됨" title={`저장 안 된 파일 ${item.dirty}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
                 <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
@@ -289,11 +300,11 @@ function Shell() {
               {item.tabs.map(tab => {
                 const on = selected && tab.id === item.activeTab;
                 const select = () => { setActiveRoot(entry.root); owner()?.selectTab(tab.id); };
-                const row = <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={tab.attention ? 'done' : tab.working ? 'working' : undefined} title={`${tab.label} · 더블클릭으로 이름 바꾸기`}
+                const row = <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={tab.asking ? 'attention' : tab.attention ? 'done' : tab.working ? 'working' : undefined} title={`${tab.label} · 더블클릭으로 이름 바꾸기`}
                   onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}
                   onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   {tab.busy ? <i className="ptab-dot" aria-label="새 출력" /> : <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span>}<span className="folder-tab-label">{tab.label}</span>
-                  {tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
+                  {tab.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
                   <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>
                 </div>;
                 // Tabs can be dragged to reorder within their own project; a line shows where the tab will land.
@@ -326,14 +337,14 @@ function Shell() {
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${over}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
-                    {tab.panes.map(pane => <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''}`} data-agent={pane.agent} data-agent-state={pane.attention ? 'done' : pane.working ? 'working' : undefined} title={`${pane.label} — Shift+드래그: 이 터미널만 빼기`}
+                    {tab.panes.map(pane => <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''}`} data-agent={pane.agent} data-agent-state={pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined} title={`${pane.label} — Shift+드래그: 이 터미널만 빼기`}
                       draggable
                       // Plain drag bubbles up and moves the whole box; Shift+drag pulls just this terminal out of it.
                       onDragStart={event => { if (!event.shiftKey) return; event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane.id); setDrag({ root: entry.root, id: tab.id, pane: pane.id }); }}
                       onClick={() => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }}
                       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); } }}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>
-                      {pane.attention && <i className="attn-dot" aria-label="확인 필요" />}
+                      {pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />}
                       <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>)}
                   </ul>

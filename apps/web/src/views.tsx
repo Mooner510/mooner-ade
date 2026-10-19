@@ -9,7 +9,7 @@ export type GitState = { branch: string; changes: GitChange[]; additions: number
 export function Modal({ children, onClose, className = '', labelledBy = 'conflict-title' }: { children: ReactNode; onClose(): void; className?: string; labelledBy?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
-  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} onCancel={onClose}>{children}</dialog>;
+  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
 }
 export function Dropdown({ value, options, onChange, label, className = '' }: { value: string; options: { value: string; label: string }[]; onChange(value: string): void; label: string; className?: string }) {
   const root = useRef<HTMLDetailsElement>(null);

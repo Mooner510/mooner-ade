@@ -52,7 +52,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .welcome { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 600px at 80% -10%, var(--accent-soft), transparent), var(--bg); }
 .welcome::before { content: ''; position: fixed; inset: 0 0 auto 0; height: 40px; -webkit-app-region: drag; app-region: drag; }
 .welcome-card { width: min(640px, 100%); }
-.welcome h1 { font-size: 40px; line-height: 1.15; letter-spacing: -1.2px; margin: 12px 0; }
+.welcome-card .picker-title { font-size: 18px; line-height: 1.4; margin: 0 0 8px; }
 .lead { color: var(--muted); font-size: 15px; line-height: 1.6; }
 .welcome form { display: flex; gap: 8px; padding: 18px 0 8px; }
 .welcome form input { flex: 1; padding: 10px 12px; }
@@ -70,13 +70,16 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .recent-open strong small { overflow: visible; }
 .recent-pin { flex: none; padding: 4px 10px; color: var(--muted); opacity: .6; }
 .recent.pinned .recent-pin, .recent-pin:hover { color: var(--accent); opacity: 1; }
-.health { margin-top: 24px; color: var(--muted); }
-.health p { margin: 6px 0; }
+.recent-remove { flex: none; display: inline-grid; place-items: center; padding: 6px 10px; color: var(--muted); }
+.recent-remove:hover { color: var(--fg); }
+.recent-remove-modal { width: min(440px, 94vw); padding: 20px; overflow-wrap: anywhere; }
+.recent-remove-modal h2 { margin-top: 0; font-size: 16px; }
+.recent-remove-modal .actions { justify-content: flex-end; }
 
 /* shell */
 .app { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
 /* The tab bar doubles as the window title bar in the desktop shell (Window Controls Overlay). */
-.tabbar { height: 40px; flex-shrink: 0; flex-wrap: nowrap; gap: 6px; padding: 0 8px 0 max(8px, calc(env(titlebar-area-x, 0px) - var(--rail-w))); padding-right: max(8px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))); background: var(--bg); -webkit-app-region: drag; app-region: drag; }
+.tabbar { height: 40px; flex-shrink: 0; flex-wrap: nowrap; gap: 6px; padding: 0 8px 0 max(8px, calc(env(titlebar-area-x, var(--desktop-controls-width, 0px)) - var(--rail-w))); padding-right: max(8px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))); background: var(--bg); -webkit-app-region: drag; app-region: drag; }
 .tabbar button, .tabbar [role=tab] { -webkit-app-region: no-drag; app-region: no-drag; }
 .split-button { position: relative; display: inline-flex; align-items: center; -webkit-app-region: no-drag; app-region: no-drag; }
 .split-button .new-tab { padding: 0 10px; border-radius: 6px 0 0 6px; color: var(--fg); background: var(--raised); border: 1px solid var(--border); border-right: 0; }
@@ -135,7 +138,8 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .terminal-pane, .editor-group { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; transition: border-color .12s; }
 .terminal-pane { background: var(--term-bg); }
 .terminal-pane.focused, .editor-group.focused { border-color: var(--border-strong); box-shadow: 0 0 0 1px var(--accent-soft); }
-/* Agent terminals stay recognisable while unfocused: per-agent colour, pulsing while working, solid while waiting for you. */
+/* Completion is solid; unanswered questions pulse even in the focused terminal. */
+.terminal-pane[data-agent-state="attention"], .folder-tab[data-agent-state="attention"], .group-pane[data-agent-state="attention"] { --warn: var(--error); }
 .terminal-pane[data-agent="claude"] { --agent: #e08a5a; }
 .terminal-pane[data-agent="codex"] { --agent: #3ecfb2; }
 .terminal-pane[data-agent] .pane-mark { color: var(--agent); }
@@ -148,9 +152,14 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .terminal-pane[data-agent-state="done"], .terminal-pane[data-agent-state="attention"] { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
 .terminal-pane[data-agent-state="done"] .pane-mark, .terminal-pane[data-agent-state="attention"] .pane-mark { color: var(--warn); }
 .terminal-pane[data-agent-state="done"] .pane-label, .terminal-pane[data-agent-state="attention"] .pane-label { color: var(--warn); font-weight: 600; }
+.terminal-pane[data-agent-state="attention"], .terminal-pane[data-agent-state="attention"]:not(.focused) { border-color: var(--warn); }
+.terminal-pane[data-agent-state="attention"] .pane-label::after { content: " · 응답 필요"; }
 @keyframes agent-glow { 0%, 100% { box-shadow: 0 0 0 1px var(--agent), 0 0 4px color-mix(in srgb, var(--agent) 35%, transparent); } 50% { box-shadow: 0 0 0 2px var(--agent), 0 0 16px color-mix(in srgb, var(--agent) 75%, transparent); } }
 @keyframes agent-blink { 50% { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) { .terminal-pane[data-agent-state="working"], .terminal-pane[data-agent-state="working"] .pane-mark { animation: none; box-shadow: 0 0 0 2px var(--agent); } }
+.question-alert { flex: none; display: inline-flex; align-items: center; color: var(--error); animation: question-flash 1.8s linear infinite; }
+.rail-alert { position: absolute; top: -6px; left: -6px; border-radius: 4px; background: var(--bg); }
+@keyframes question-flash { 0%, 12%, 24%, 100% { opacity: 1; } 6%, 18% { opacity: .15; } }
+@media (prefers-reduced-motion: reduce) { .terminal-pane[data-agent-state="working"], .terminal-pane[data-agent-state="working"] .pane-mark { animation: none; box-shadow: 0 0 0 2px var(--agent); } .question-alert { animation: none; } }
 /* ssh: the whole terminal turns green. With Claude Code / Codex running inside, the frame and header are half green, half the agent's color. */
 .terminal-pane[data-ssh] {
   --ssh: #3fb950;
@@ -303,7 +312,7 @@ dialog::backdrop { background: #0009; }
 
 /* sidebar: each project is a folder holding its own tabs */
 .projects { position: relative; width: var(--rail-w); flex: none; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; min-height: 0; background: var(--bg); border-right: 1px solid var(--border); }
-.projects::before { content: ''; flex: none; height: max(env(titlebar-area-height, 0px), 8px); -webkit-app-region: drag; app-region: drag; }
+.projects::before { content: ''; flex: none; height: max(env(titlebar-area-height, 0px), var(--desktop-titlebar-height, 8px)); -webkit-app-region: drag; app-region: drag; }
 .projects-head { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 8px 6px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
 .shell.compact .projects-head { justify-content: center; padding: 0 0 6px; flex-direction: column; gap: 6px; }
 .icon-btn { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; flex: none; color: var(--muted); background: transparent; border-color: transparent; border-radius: 6px; }
@@ -435,17 +444,18 @@ body.resizing .xterm-host { pointer-events: none; }
 @media (max-width: 640px) { .settings { flex-direction: column; } .settings-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav h2, .settings-nav .spacer { display: none; } }
 .file-glyph { flex: none; display: block; object-fit: contain; }
 
-/* Sidebar rows mirror the terminal pane: agent colour, pulsing while working, solid warning while it waits for you. */
-.folder-tab[data-agent], .group-pane[data-agent] { --agent: #e08a5a; }
+/* Sidebar rows mirror working, completion and unanswered questions. */
+.folder-tab[data-agent="claude"], .group-pane[data-agent="claude"] { --agent: #e08a5a; }
 .folder-tab[data-agent="codex"], .group-pane[data-agent="codex"] { --agent: #3ecfb2; }
 .folder-tab[data-agent] .folder-tab-mark, .group-pane[data-agent] .folder-tab-mark { color: var(--agent); opacity: 1; }
 .folder-tab[data-agent-state="working"], .group-pane[data-agent-state="working"] { color: var(--agent); background: color-mix(in srgb, var(--agent) 14%, transparent); animation: side-glow 1.4s ease-in-out infinite; }
 .folder-tab[data-agent-state="working"] .folder-tab-label, .group-pane[data-agent-state="working"] .folder-tab-label { font-weight: 600; }
 .folder-tab[data-agent-state="working"] .folder-tab-label::after, .group-pane[data-agent-state="working"] .folder-tab-label::after { content: " · 작업 중"; font-weight: 400; opacity: .85; }
 .folder-tab[data-agent-state="working"] .folder-tab-mark, .group-pane[data-agent-state="working"] .folder-tab-mark { animation: agent-blink 1.4s ease-in-out infinite; }
-.folder-tab[data-agent-state="done"], .group-pane[data-agent-state="done"] { background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: inset 0 0 0 1px var(--warn); }
-.folder-tab[data-agent-state="done"] .folder-tab-mark, .group-pane[data-agent-state="done"] .folder-tab-mark { color: var(--warn); }
-.folder-tab[data-agent-state="done"] .folder-tab-label, .group-pane[data-agent-state="done"] .folder-tab-label { color: var(--warn); font-weight: 600; }
+.folder-tab:is([data-agent-state="done"], [data-agent-state="attention"]), .group-pane:is([data-agent-state="done"], [data-agent-state="attention"]) { background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: inset 0 0 0 1px var(--warn); }
+.folder-tab:is([data-agent-state="done"], [data-agent-state="attention"]) .folder-tab-mark, .group-pane:is([data-agent-state="done"], [data-agent-state="attention"]) .folder-tab-mark { color: var(--warn); }
+.folder-tab:is([data-agent-state="done"], [data-agent-state="attention"]) .folder-tab-label, .group-pane:is([data-agent-state="done"], [data-agent-state="attention"]) .folder-tab-label { color: var(--warn); font-weight: 600; }
+.folder-tab[data-agent-state="attention"] .folder-tab-label::after, .group-pane[data-agent-state="attention"] .folder-tab-label::after { content: " · 응답 필요"; font-weight: 400; }
 @keyframes side-glow { 0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent) 55%, transparent); } 50% { box-shadow: inset 0 0 0 1px var(--agent), 0 0 10px color-mix(in srgb, var(--agent) 55%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .folder-tab[data-agent-state="working"], .group-pane[data-agent-state="working"], .folder-tab[data-agent-state="working"] .folder-tab-mark, .group-pane[data-agent-state="working"] .folder-tab-mark { animation: none; box-shadow: inset 0 0 0 1px var(--agent); } }
 
