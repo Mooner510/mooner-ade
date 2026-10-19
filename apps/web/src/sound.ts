@@ -14,12 +14,12 @@ export type SoundId = keyof typeof sounds;
 export const soundIds = Object.keys(sounds) as SoundId[];
 export const isSoundId = (value: unknown): value is SoundId => typeof value === 'string' && value in sounds;
 
-// `volume` is 0–100. Audio can be blocked until the page has been interacted with, so failures are ignored.
+// `volume` is 0–200. Audio can be blocked until the page has been interacted with, so failures are ignored.
 export function playSound(id: string, volume: number) {
   const sound: Sound | undefined = isSoundId(id) ? sounds[id] : undefined;
   if (!sound || !sound.notes.length || volume <= 0) return;
   try {
-    const context = new AudioContext(), peak = 0.25 * Math.min(volume, 100) / 100;
+    const context = new AudioContext(), peak = 0.25 * Math.min(volume, 200) / 100;
     let end = 0;
     for (const [frequency, at, length] of sound.notes) {
       const osc = context.createOscillator(), gain = context.createGain(), start = context.currentTime + at, stop = start + length + sound.tail;
