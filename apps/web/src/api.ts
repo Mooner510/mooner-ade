@@ -8,7 +8,8 @@ export async function api<T = any>(action: string, input: object = {}): Promise<
   return value;
 }
 // A leaf is a terminal or an editor group; legacy saved layouts have `{ id }` only and mean terminal.
-export type Leaf = { id: string; kind?: 'terminal' | 'editor'; tabs?: string[]; active?: string; preview?: string };
+// A terminal leaf also remembers where it was opened and which agent CLI ran in it, so it can be reopened after the server restarts.
+export type Leaf = { id: string; kind?: 'terminal' | 'editor'; tabs?: string[]; active?: string; preview?: string; cwd?: string; agent?: 'claude' | 'codex' };
 export type Pane = Leaf | { direction: 'row' | 'column'; children: Pane[]; sizes: number[] };
 export const isLeaf = (pane: Pane): pane is Leaf => 'id' in pane;
 export const leafList = (pane: Pane | null): Leaf[] => !pane ? [] : isLeaf(pane) ? [pane] : pane.children.flatMap(leafList);

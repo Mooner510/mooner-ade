@@ -7,11 +7,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@material-symbols/font-400": "^0.48.0",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-unicode11": "0.8.0",
+    "@xterm/addon-webgl": "0.18.0",
     "@xterm/xterm": "^5.5.0",
+    "atom-material-icons": "^3.0.0",
+    "monaco-editor": "^0.52.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "monaco-editor": "^0.52.2"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",

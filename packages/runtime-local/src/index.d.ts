@@ -30,12 +30,14 @@ export interface PtySession {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;
+  /** Stop listening but keep the terminal alive when it lives in a separate PTY host; otherwise same as close(). */
+  detach(): void;
   onData(fn: (data: string) => void): { dispose(): void };
   onExit(fn: (event: { exitCode: number; signal?: number }) => void): { dispose(): void };
 }
 export declare class LocalTerminal {
   constructor(options?: { shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } });
-  open(options?: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string> }): Promise<PtySession>;
+  open(options?: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string>; meta?: object }): Promise<PtySession>;
 }
 export declare function createLocalRuntime(options?: { root?: string; scope?: 'unrestricted' | 'root'; shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } }): {
   workspace: LocalWorkspace; processes: LocalProcesses; git: LocalGit; terminal: LocalTerminal; platform: { type: 'local'; os: string };
