@@ -1,31 +1,20 @@
-# P2 UX specification — terminal grid and optional worktrees
+# 터미널 레이아웃과 worktree 수용 기준
 
-Implementation is now present in `apps/web` and `apps/local-server`. ADE panes now hold terminals and editor groups in one split tree (see [LOCAL_IDE.md](LOCAL_IDE.md)). Verified so far: a real PTY echoes input through the server (test), a terminal pane auto-opens and an editor pane can be added next to it in headless Chrome. Items 1–5 below are still **not** run end to end (the 2×3 grid, repeated Ctrl+D splitting, layout restore after reload, parallel worktree tasks, macOS/Windows shortcut interception). See [LOCAL_IDE.md](LOCAL_IDE.md).
+현재 구현은 터미널 탭·분할 트리·읽기 전용 Diff입니다. ADE/IDE 모드 전환은 제공하지 않습니다. 사용법은 [LOCAL_IDE](LOCAL_IDE.md), 실행 결과는 [VERIFICATION](VERIFICATION.md)이 기준입니다.
 
-## Intent
+## 현재 동작
 
-The local ADE defaults to a **single shared working tree**, including when multiple Codex and Claude sessions run in parallel. It must not create a Git worktree without an explicit owner action. Because parallel edits to a single workspace can race, show file ownership/activity and warn when sessions edit overlapping files. Provide an opt-in per-task worktree mode, not a mandatory worktree pipeline or implicit merging process.
+- 각 탭은 독립된 pane 트리를 가집니다. 좌우·상하 분할, 비율 조정, 균등화, 최대화, 2 × 3 프리셋을 제공합니다.
+- 일반 Ctrl 키는 터미널에 전달합니다. 분할은 도구 버튼·명령 팔레트를 사용합니다. 예전 Ctrl+D 분할 요구는 현재 입력 정책에서 폐기되었습니다.
+- 배치·포커스·폴더·에이전트 종류를 저장합니다. 새 앱 실행 시 새 셸을 열며 예전 셸 프로세스 생존을 보증하지 않습니다. 개발 모드의 별도 PTY 호스트만 서버 교체 중 프로세스를 유지합니다.
+- 공유 작업 경로가 기본이며 worktree 생성·통합·제거는 명시적 선택입니다. 자동 stash나 충돌 병합은 없습니다. 동일 경로에서 병렬 실행한 CLI끼리 파일 충돌을 자동 조정하지 않습니다.
 
-## Terminal layout
+## 수동 수용 기준
 
-The primary terminal view must support an iTerm-style nested split model, not a fixed array of windows. The user's habitual starting layout is **2 rows × 3 columns (6 PTY sessions)**, with independently active panes and persisted size/position metadata.
+1. 2 × 3 pane 각각의 입력·출력·크기 변경이 독립적으로 동작합니다.
+2. 터미널 단축키를 유지하면서 분할·포커스·탭 이동을 할 수 있습니다.
+3. 새로고침·앱 재시작 후 레이아웃을 복원하며 새 셸과 기존 PTY 재연결을 구분합니다.
+4. worktree 변경은 별도 경로에 남고 dirty 제거·분기된 통합은 거절됩니다.
+5. macOS/Windows/Linux의 실제 PTY·경로·단축키를 각각 확인합니다.
 
-- `Ctrl+D`: split the **focused pane left/right**, with the new pane to its right. A second invocation on the relevant pane yields three side-by-side columns of equal width. Horizontal column splits grow dynamically beyond 3.
-- `Ctrl+Shift+D`: split the **focused pane top/bottom**, with the new pane beneath it. Row splits also grow dynamically.
-- Allow mouse drag divider resizing, equalize panes, keyboard pane focus navigation, terminal close, and layout save/restore.
-- Keyboard shortcuts are captured only when the terminal has focus, and must prevent browser default behavior only in that context. Editor focus retains editor shortcuts.
-- Every pane owns an independent PTY session, cwd, scrollback, input stream and resize measurement. Pane switching must not detach or terminate a running process.
-- Provide **2 × 3 preset** and support creating it from nested splits. The preset must not implicitly start additional AI agents.
-- Persist pane tree separately from PTY process state. A saved pane tree cannot promise a native PTY process survives ADE application restart.
-
-## Parallel agent orchestration
-
-Each task chooses `workspaceMode: 'shared' | 'worktree'`, default `shared`. No unrequested checkout, branch creation, stashing or automatic merge. With explicit `worktree`, the IDE creates a task-scoped Git worktree, displays its branch and working path, offers diff review, and asks before removing or integrating it. Task state and terminal sessions remain separately identifiable, including when multiple tasks target the same files.
-
-## Definition of done (P2)
-
-1. UI integration test: build six independent PTY panes in a 2×3 grid, type and receive output separately.
-2. Shortcut E2E: repeated Ctrl+D splits the focused pane into balanced columns; Ctrl+Shift+D divides rows; editor focus unaffected.
-3. Pane resize/persistence E2E: save layout, restore ratios and focus, reattach only when actual PTY is available.
-4. Parallel tasks E2E: no worktree is created by default; opt-in worktree uses independent paths; no silent merges.
-5. macOS and Windows real-device acceptance tests for shortcut interception and PTY behavior.
+E2E가 검증하는 일부 흐름과 이 전체 수용 기준을 구분하세요. 구현되었다는 사실만으로 위 항목을 통과 처리하지 않습니다.

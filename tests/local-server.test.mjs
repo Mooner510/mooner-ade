@@ -13,7 +13,13 @@ const git = (cwd, ...args) => new Promise((resolve, reject) => spawn('git', args
 async function boot(t) {
   const data = await mkdtemp(join(tmpdir(), 'ade-data-')), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo-')));
   const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit'] });
-  t.after(async () => { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); await rm(data, { recursive: true, force: true }); await rm(repo, { recursive: true, force: true }); });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise(resolve => child.once('exit', resolve));
+      child.kill('SIGTERM'); await exited;
+    }
+    await rm(data, { recursive: true, force: true }); await rm(repo, { recursive: true, force: true });
+  });
   const line = await new Promise((resolve, reject) => { child.stdout.once('data', chunk => resolve(String(chunk))); child.once('exit', () => reject(new Error('server exited'))); });
   const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);
   const auth = await fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }) });
@@ -136,6 +142,17 @@ test('git: show, stage, discard, branches', async t => {
   await call('git/checkout', { branch: '--orphan' }, 400);
 });
 
+test('app has no commit endpoint and a rejected request preserves the index and HEAD', async t => {
+  const { call, repo } = await boot(t);
+  await writeFile(join(repo, 'a.txt'), 'staged change\n');
+  await call('git/stage', { files: ['a.txt'] });
+  const before = await call('git/status');
+  await call('git/commit', { message: 'must not commit' }, 404);
+  assert.deepEqual(await call('git/status'), before);
+  assert.equal((await call('git/show', { path: 'a.txt' })).content, 'hello world\nHello again\n');
+  assert.equal((await call('git/show', { path: 'a.txt', staged: true })).content, 'staged change\n');
+});
+
 test('websocket: terminal echo, resize validation, typescript language server', async t => {
   const { origin, cookie, call, projectId } = await boot(t);
   const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });
@@ -213,6 +230,44 @@ test('websocket: terminal agent processes survive replay, switch providers and c
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === null);
   await run('@openai/codex/bin', 'codex.js');
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'codex');
+  await call('terminal/close', { id });
+});
+
+test('terminal follow-up validates the live Claude process and output sequence, and acknowledges retries once', async t => {
+  const { origin, cookie, call, projectId, repo } = await boot(t);
+  if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } }), messages = [];
+  t.after(() => ws.close());
+  ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  const until = async predicate => {
+    const end = Date.now() + 10000;
+    while (Date.now() < end) { if (messages.some(predicate)) return; await new Promise(resolve => setTimeout(resolve, 25)); }
+    throw new Error('follow-up timeout');
+  };
+  const { id } = await call('terminal/open');
+  await until(message => message.type === 'terminal' && message.id === id);
+  const sequence = () => messages.filter(message => message.type === 'terminal' && message.id === id).at(-1).sequence;
+  const request = { id, prompt: '후속 요청\nsecond line', requestId: 'follow-up-test', sequence: sequence() };
+  assert.deepEqual(await call('terminal/follow-up', request), { accepted: false }); // Never type a queued command into the shell.
+  await call('terminal/follow-up', { ...request, prompt: '\x1b[201~\rcommand' }, 400);
+  const directory = join(repo, 'node_modules', '@anthropic-ai', 'claude-code');
+  await mkdir(directory, { recursive: true });
+  const script = join(directory, 'cli.js');
+  await writeFile(script, `process.stdin.setRawMode(true);
+    process.stdin.on('data', data => process.stdout.write('received:' + JSON.stringify(data.toString()) + '\\n'));
+    console.log('fake-claude-ready');`);
+  ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `"${process.execPath}" "${script}"\r` }));
+  await until(message => message.type === 'terminal' && message.data.includes('fake-claude-ready'));
+  assert.deepEqual(await call('terminal/follow-up', request), { accepted: false }); // Stale screen.
+  request.sequence = sequence();
+  assert.deepEqual(await call('terminal/follow-up', request), { accepted: true });
+  await until(message => message.type === 'terminal' && message.data.includes('received:'));
+  assert.deepEqual(await call('terminal/follow-up', request), { accepted: true }); // A lost HTTP reply must not submit twice.
+  const output = messages.filter(message => message.type === 'terminal').map(message => message.data).join('');
+  assert.equal(output.split('후속 요청').length - 1, 1);
+  assert.ok(output.includes('\\u001b[200~후속 요청\\nsecond line\\u001b[201~\\r'));
   await call('terminal/close', { id });
 });
 

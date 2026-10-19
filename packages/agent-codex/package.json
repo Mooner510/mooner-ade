@@ -1,1 +1,2 @@
-{"name":"@mooner/ade-agent-codex","version":"0.1.0","private":false,"type":"module","exports":{".":{"types":"./src/index.d.ts","default":"./src/index.js"}},"dependencies":{"@mooner/ade-agent-core":"workspace:*"}}
+{"name":"@mooner/ade-agent-codex",
+  "license": "GPL-3.0-only","version":"0.1.0","private":false,"type":"module","exports":{".":{"types":"./src/index.d.ts","default":"./src/index.js"}},"dependencies":{"@mooner/ade-agent-core":"workspace:*"}}

@@ -9,7 +9,7 @@ import { ReviewPanel } from './Review';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
-export type Hub = { subscribe(projectId: string, handler: (message: any) => void, cursors: () => Record<string, number>): () => void; send(message: object): void };
+export type Hub = { subscribe(projectId: string, handler: (message: any) => void, cursors: () => Record<string, number>): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string };
 export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean };
 export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean };
@@ -463,7 +463,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   useEffect(() => {
     if (!project?.id || !active) return;
     let checking = false;
-    const tick = async () => { if (checking) return; checking = true; try { await refreshGit(); } catch (cause) { report(cause); } finally { checking = false; } };
+    const tick = async () => { if (checking) return; checking = true; try { await Promise.all([refreshGit(), checkExternal()]); } catch (cause) { report(cause); } finally { checking = false; } };
     void tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
     return () => clearInterval(timer);
   }, [project?.id, workspaceId, gitRepositoryId, active, settings.diffRefresh]);
@@ -682,6 +682,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const live = new Set(project.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
   const paneProps = {
+    followUpInput: async (id: string, prompt: string, sequence: number, requestId: string) => (await call<{ accepted: boolean }>('terminal/follow-up', { id, prompt, sequence, requestId })).accepted,
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
     onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),

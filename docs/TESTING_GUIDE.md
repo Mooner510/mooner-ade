@@ -1,135 +1,52 @@
-# 테스트 가이드 (mooner-ade)
+# 테스트 실행 안내
 
-이 문서는 이번 실사용화 작업(append-only 세션 저장소, 에이전트 transport 수정, 로컬 편의 기능, E2E 스크립트)을 사람이 직접 검증하는 방법이다.
+현재 결과는 [VERIFICATION](VERIFICATION.md)에서 확인하세요. 모든 명령은 저장소 루트에서 실행합니다.
 
-## 1. 이번 작업의 변경 요약
-
-| 영역 | 내용 | 주요 파일 |
-|---|---|---|
-| 세션 저장소 | 이벤트마다 파일 전체를 다시 쓰던 방식을 `<id>.json`(메타) + `<id>.events.jsonl`(append + fsync)로 변경. 마지막 줄이 깨졌으면 무시 후 다음 append에서 잘라낸다. 기존 단일 json 기록도 읽는다. | `packages/session-store/src/index.js` |
-| Codex 버그 수정 | `thread/start`의 `sandbox`가 `workspaceWrite`로 전달되어 실제 Codex가 거부할 수 있었다 → `workspace-write`. 모델 목록은 `result.models`를 읽어 항상 비었다 → `result.data` + 페이지네이션 + `hidden` 제외. | `apps/local-server/src/agents.js` |
-| Claude readiness | PATH의 `claude`가 아니라 SDK가 실제로 쓰는 실행 파일과 계정(`accountInfo()`)으로 확인한다. 모델 호출은 없다. | `agents.js` (`claudeAccount`), `index.js` (`readiness`) |
-| Full access | 실행 단위 체크박스. Claude는 `bypassPermissions`, Codex는 `approvalPolicy:'never'`, `sandbox:'danger-full-access'`. 기본값은 꺼짐. | `agents.js`, `index.js`, `apps/web/src/main.tsx` |
-| 접속 토큰 | 1회용이던 토큰을 `<데이터 디렉터리>/token`(0600)에 영속 저장. 두 번째 브라우저나 쿠키 삭제 후에도 같은 URL로 재접속된다. | `apps/local-server/src/index.js` |
-| 엔진 메모리 | 종료된 세션은 최근 100개만 메모리에 유지. | `packages/core/src/index.js` |
-| 중단된 실행 이어하기 | 서버 재시작으로 `interrupted`가 된 대화에 "이어하기" 배너와 버튼. 저장된 `threadId`로 resume한다. | `apps/web/src/main.tsx` |
-| 테스트·스크립트 | `tests/agents.test.mjs`, `tests/fixtures/`, `scripts/e2e.mjs`, 재작성한 `scripts/live-agent-check.mjs` | |
-| 공유 이벤트 계약 | `tests/fixtures/agent-events.v1.jsonl`은 webai의 `internal/executorapi/testdata/`와 내용이 같아야 한다. 한쪽을 바꾸면 다른 쪽도 바꾼다. | |
-
-## 2. 검증 상태
-
-개발 중에 실행해서 통과를 확인한 것:
-
-- `pnpm check` 76/76 (타입 계약 포함). 2026-10-09 재실행 결과. 보안 회귀 테스트 2개(fsmonitor, hooks)를 추가했다.
-- `pnpm e2e` (헤드리스 Chrome: 인증, 프로젝트 열기, 탐색기, ADE/IDE 전환, AI 입력창). 2026-10-09 foreground 재실행 통과.
-- `pnpm web:build` 통과 (2026-10-09)
-- 보안 검토와 수정 내역: [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (discard 루트 삭제, 신뢰하지 않은 저장소의 `core.fsmonitor`와 `.git/hooks` 실행을 수정하고 재현 가능한 회귀 테스트를 추가)
-- 실제 Codex(0.161)에 모델 호출 없이 `initialize`, `account/read`, `model/list`만 보내서 프로토콜 일치 확인
-- 실제 Claude SDK로 모델 호출 없이 `accountInfo()`와 모델 목록 확인
-
-실행하지 않은 것 (아래 절차로 직접 확인):
-
-- 실제 모델 호출을 포함한 `pnpm test:live` (사용량이 발생해서 실행하지 않았다)
-- 서버 재시작 후 이어하기 흐름, Full access 동작, 영속 토큰의 브라우저 동작
-- P2 완료 조건 5개 (6분할 그리드, 단축키, 레이아웃 영속, 병렬 worktree, macOS/Windows)
-- 정확한 Node 24.21.0 + pnpm 11.27.1 조합 (2026-10-09 머신은 Node 24.12.0이라 엔진 경고가 출력된다)
-
-## 3. 자동 테스트
+## 설치와 자동 검사
 
 ```sh
-pnpm install
-pnpm check            # verify + 타입 계약 + 전체 테스트 (76개)
-pnpm typecheck        # 서버 계약 + 웹 앱
-node --test tests/agents.test.mjs tests/p1-session-store.test.mjs tests/local-server.test.mjs
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm check
+pnpm web:build
+pnpm smoke
+pnpm audit
 ```
 
-`pnpm check`에서 기대하는 새 테스트:
+`check`는 import 검사·패키지 타입 계약·Node 테스트입니다. 웹 타입 검사는 `typecheck` 또는 `web:build`로 별도 실행합니다. `pnpm build`는 웹을 빌드하지 않습니다. 테스트는 임시 저장소·데이터 폴더·가짜 제공자 transport를 사용하며 실제 모델을 호출하지 않습니다. 로컬 서버 테스트에는 실제 Git·PTY·TypeScript 언어 서버 호출이 포함됩니다.
 
-- `agents.test.mjs`: 가짜 `codex app-server`와 가짜 Claude `query`로 승인(허용·거절), resume, `fullAccess`, 로그인 없음 오류, 모델 목록 페이지네이션을 확인한다.
-- `p1-session-store.test.mjs`: 깨진 꼬리 줄 복구, 기존 단일 json 호환.
-- `local-server.test.mjs`: 재시작 후에도 같은 토큰으로 인증되고 토큰 파일 권한이 0600인지 확인한다.
-- `framework.test.mjs`: 종료된 세션 메모리 상한.
-- `p1-event-contract.test.mjs`: 공유 fixture가 모든 이벤트 종류를 포함하고 파싱되는지 확인한다.
+파일 감시 오류를 집중 확인하려면 `node --test tests/project-watch.test.mjs`를 실행합니다. 생성 실패, 비동기 EMFILE, 경로 배치 상한, 정상 종료 후 지연 이벤트 차단을 검증합니다. 커밋 제거 회귀 테스트는 `tests/local-server.test.mjs`에서 삭제한 API가 404를 반환하고 HEAD·index를 유지하는지 확인합니다.
 
-## 4. E2E (헤드리스 Chrome)
+## 브라우저 E2E
 
 ```sh
 pnpm web:build
-pnpm e2e              # Chrome 경로를 못 찾으면 CHROME_PATH=/path/to/chrome pnpm e2e
+pnpm e2e
+# Chrome을 찾지 못하면:
+CHROME_PATH=/path/to/chrome pnpm e2e
 ```
 
-기대 결과: `e2e: auth, project open, explorer, ADE/IDE switch and AI composer passed`. 임시 데이터 디렉터리와 저장소를 쓰므로 실제 데이터는 건드리지 않는다. 브라우저 콘솔 오류가 하나라도 있으면 실패한다.
+E2E는 임시 홈·프로젝트·앱 데이터·Chrome 프로필을 만들고 종료 시 정리합니다. 모델 호출 없이 접속 인증, 토큰 URL 제거, 프로젝트 열기, 실제 PTY의 입력과 파일 쓰기, Git Diff 렌더링, 탭 추가·새로고침 복원을 확인합니다. 같은 격리 Chrome에서 사이드바 네이티브 드래그 테스트도 실행합니다. 브라우저 예외·console.error가 있으면 실패합니다.
 
-빌드 후 `git status`에 `apps/web/dist` 외의 산출물이 남았는지 확인한다.
+`pnpm check`에서 사이드바 브라우저 테스트가 건너뛰어지는 것은 `ADE_TEST_CDP`가 없기 때문입니다. `pnpm e2e`가 Chrome을 시작하고 해당 테스트에 주소를 전달합니다. E2E가 없어진 ADE/IDE 전환이나 SDK 대화 UI를 검증한다고 해석하지 마세요.
 
-## 5. 실제 모델 호출 (opt-in, 사용량 발생)
+## 실제 모델 호출 — 사용량 발생
 
-사전 조건: `codex login`과 `claude auth login`이 되어 있어야 한다.
+공식 Codex/Claude CLI를 설치하고 `codex login`, `claude auth login`을 완료한 머신에서만 실행합니다.
 
 ```sh
 ADE_LIVE_TEST=1 pnpm test:live
 ```
 
-각 provider(Codex, Claude)에 대해 다음을 자동으로 확인한다.
+서버용 에이전트 transport의 실제 실행·승인·thread resume·full-access를 점검합니다. 이 검증은 UI의 터미널 CLI 흐름과 별개입니다. opt-in 없이 스크립트는 모델을 호출하지 않습니다. full-access는 CLI 보호를 생략하므로 격리된 임시 작업에서만 확인하세요.
 
-1. 기본 모드에서 임시 저장소에 파일을 쓰는 명령이 승인을 요구하고, 승인 후 파일이 생성된다.
-2. 같은 `threadId`로 resume하면 이전에 만든 파일 이름을 기억한다.
-3. `fullAccess`에서는 승인 요청이 0건이고 파일이 생성된다.
+## 수동 수용 검사
 
-기대 결과: `codex: live run, approval, resume and full-access passed`, `claude: ...` 두 줄. 실패하면 어느 단계인지 메시지에 나온다.
+- macOS/Windows/Linux에서 첫 설치, PTY, 경로, 창 종료와 단축키 확인
+- 실제 Claude/Codex CLI의 질문·승인·완료, SSH/tmux, follow-up 대기·취소·재연결 확인
+- 2 × 3 pane 각각의 입력·크기 변경, 여러 프로젝트에서 실행 유지 확인
+- worktree 병렬 작업, dirty 제거 거절, fast-forward 통합 확인
+- 서버 종료 후 interrupted 기록·만료 승인, 재사용 토큰과 레이아웃 복구 확인
+- 큰 저장소·오랜 이벤트 이력·감시 자원 고갈 시 응답성과 폴링 확인
 
-## 6. 수동 시나리오
-
-### 6.1 영속 토큰
-
-1. `pnpm start` 실행 후 출력된 `…/#token=…` URL로 접속한다.
-2. 같은 URL을 시크릿 창이나 다른 브라우저에서 열어 접속되는지 확인한다.
-3. 서버를 재시작해도 URL의 토큰이 같은지 확인한다 (`<데이터 디렉터리>/token`).
-4. `ls -l "<데이터 디렉터리>/token"`이 `-rw-------`인지 확인한다.
-5. 토큰을 바꾸고 싶으면 파일을 지우고 재시작한다.
-
-### 6.2 Full access
-
-1. 체크박스를 끈 상태로 Codex와 Claude에 파일 수정을 요청하면 승인 카드가 나타나야 한다.
-2. 체크박스를 켠 상태로 같은 요청을 하면 승인 없이 실행되어야 한다.
-3. 체크박스가 대화에 고정되지 않고 실행마다 적용되는지 확인한다 (켠 채 보내고, 끄고 다시 보내면 다시 승인을 묻는다).
-
-### 6.3 Claude/Codex 준비 상태와 모델 목록
-
-1. 설정 화면의 준비 상태에서 Claude가 `agent-sdk · <계정>`으로 표시되는지 확인한다.
-2. `claude auth logout` 후 새로고침하면 "claude auth login 실행 후 다시 확인하세요"가 표시되어야 한다. 확인 후 다시 로그인한다.
-3. Codex 모델 드롭다운에 모델과 Effort가 채워지는지 확인한다 (예전에는 비어 있었다).
-
-### 6.4 서버 재시작 후 이어하기
-
-1. 긴 작업(예: "프로젝트의 모든 파일을 읽고 요약해줘")을 시작한다.
-2. 실행 중에 서버를 종료(Ctrl+C)하고 다시 시작한다.
-3. 같은 대화를 열면 "이전 실행이 중단되었습니다" 배너와 "이어하기" 버튼이 보여야 한다. 대화 입력창은 사용 가능해야 한다.
-4. 이어하기를 누르면 같은 `threadId`로 resume되어 이전 맥락을 유지해야 한다.
-5. 이어하기 실행이 끝나면 배너가 사라진다.
-
-### 6.5 세션 저장소 파일 확인
-
-`<데이터 디렉터리>/<projectId>/runs/`에서 다음을 확인한다.
-
-- `<id>.json`은 메타(작은 파일)이고 `<id>.events.jsonl`에 이벤트가 한 줄씩 쌓인다.
-- 실행 중 `tail -f <id>.events.jsonl`로 이벤트가 실시간으로 추가되는지 본다.
-- 실행 중 서버를 `kill -9`한 뒤 재시작했을 때 해당 세션이 `interrupted`로 바뀌고 이전 이벤트가 그대로 재생되는지 확인한다.
-- 긴 대화(수천 개 이벤트)에서도 응답 지연이 늘어나지 않는지 확인한다 (예전에는 이벤트마다 전체를 다시 썼다).
-
-### 6.6 P2 완료 조건 (`docs/P2_UX_SPEC.md`)
-
-각 항목을 직접 확인하고 `docs/P2_UX_SPEC.md`의 완료 조건에 결과를 기록한다.
-
-1. 6분할(2×3) 프리셋에서 터미널 6개가 동시에 입출력되고, 창 크기를 줄여도 깨지지 않는다.
-2. Ctrl+D, Ctrl+Shift+D 분할과 이동·닫기 단축키가 동작한다.
-3. 레이아웃이 새로고침과 서버 재시작 후에도 유지된다.
-4. 별도 worktree 모드로 두 대화를 병렬 실행하고, 각각의 변경이 섞이지 않으며 정리(integrate/remove)가 된다.
-5. macOS에서 확인하고, 가능하면 Windows/Linux에서도 PTY와 경로 처리를 확인한다.
-
-## 7. 알려진 제한
-
-- 로컬 전용(127.0.0.1)이고 단일 사용자 전제다. 토큰 파일을 가진 사람은 누구나 접속할 수 있다.
-- Claude는 `query()`가 모든 설정 소스를 로드한다 (사용자·프로젝트 `.claude/settings.json`, CLAUDE.md). 로컬 단일 사용자에 맞는 동작이다. webai는 `settingSources: []`로 격리한다.
-- 서버를 재시작하면 대기 중이던 승인 요청은 만료되고 실행 중이던 대화는 `interrupted`가 된다. 이어하기는 같은 provider thread를 resume하는 것이지 실행 중인 프로세스를 되살리는 것이 아니다.
-- `ClaudeSdkAgent`/`CodexAppAgent`에 대한 실제 모델 호출 자동 테스트는 opt-in이다 (5절).
+이 항목들은 단위 테스트 통과만으로 완료 처리하지 않습니다.

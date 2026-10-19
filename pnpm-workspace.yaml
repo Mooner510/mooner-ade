@@ -5,6 +5,9 @@ packages:
 blockExoticSubdeps: true
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
+overrides:
+  # Only the published JSON/SVG assets are used; its YAML build tooling is unused.
+  'atom-material-icons@3.0.0>js-yaml': '-'
 allowBuilds:
   electron: true
   esbuild: true

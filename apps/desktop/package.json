@@ -1,11 +1,13 @@
 {
   "name": "@mooner/ade-desktop",
+  "license": "GPL-3.0-only",
+  "productName": "MoonerADE",
   "private": true,
   "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev"
+    "start": "node launch.mjs",
+    "dev": "node launch.mjs --dev"
   },
   "devDependencies": {
     "electron": "^44.0.0"

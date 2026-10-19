@@ -1,5 +1,6 @@
 {
   "name": "@mooner/ade-local-server",
+  "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,64 +1,137 @@
-/** Headless-Chrome smoke of the real server + built web UI (needs `pnpm web:build` and a local Chrome). */
+/** Real server + built terminal UI. Uses an isolated home, data directory and Chrome profile; no model calls. */
+import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, writeFile, readFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
-const CHROME = process.env.CHROME_PATH || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(existsSync);
-if (!CHROME) { console.error('Chrome not found; set CHROME_PATH'); process.exit(2); }
-if (!existsSync(new URL('../apps/web/dist/index.html', import.meta.url))) { console.error('Run `pnpm web:build` first'); process.exit(2); }
+const root = resolve(import.meta.dirname, '..');
+const chromePath = process.env.CHROME_PATH || [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
+  process.env.PROGRAMFILES && join(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
+  process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe')
+].filter(Boolean).find(existsSync);
+if (!chromePath) throw new Error('Chrome not found; set CHROME_PATH');
+if (!existsSync(join(root, 'apps/web/dist/index.html'))) throw new Error('Run pnpm web:build first');
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const cleanup = [];
+async function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+  try { await exited; } finally { clearTimeout(timer); }
+}
 async function main() {
-  const data = await mkdtemp(join(tmpdir(), 'ade-e2e-data-')), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-e2e-repo-'))), profile = await mkdtemp(join(tmpdir(), 'ade-e2e-chrome-'));
-  cleanup.push(() => rm(data, { recursive: true, force: true }), () => rm(repo, { recursive: true, force: true }), () => rm(profile, { recursive: true, force: true }));
-  const git = (...args) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@e2e', ...args], { cwd: repo, stdio: 'ignore' });
-  git('init', '-q', '-b', 'main'); await writeFile(join(repo, 'hello-e2e.txt'), 'hello\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
-
-  const server = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit'] });
-  cleanup.push(() => { server.kill('SIGTERM'); });
-  const line = await new Promise((resolve, reject) => { server.stdout.once('data', c => resolve(String(c))); server.once('exit', () => reject(new Error('server exited'))); });
-  const url = /(http:\/\/127\.0\.0\.1:\d+\/#token=\w+)/.exec(line)[1];
-
-  const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-  cleanup.push(() => { chrome.kill('SIGTERM'); });
+  const temp = await realpath(await mkdtemp(join(tmpdir(), 'ade-e2e-')));
+  cleanup.push(() => rm(temp, { recursive: true, force: true }));
+  const data = join(temp, 'data'), home = join(temp, 'home'), repo = join(temp, 'repo'), profile = join(temp, 'chrome');
+  for (const folder of [data, home, repo]) await mkdir(folder);
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  await writeFile(join(repo, 'hello-e2e.txt'), 'hello\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
+  const server = spawn(process.execPath, ['apps/local-server/src/index.js'], {
+    cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home, ADE_DEV: '0', ADE_PTY_ENDPOINT: '', ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit']
+  });
+  cleanup.push(() => stop(server));
+  const url = await new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(() => reject(new Error('server startup timeout')), 15000);
+    server.stdout.on('data', chunk => { output += chunk; const match = /http:\/\/127\.0\.0\.1:\d+\/#token=\w+/.exec(output); if (match) { clearTimeout(timer); resolve(match[0]); } });
+    server.once('error', error => { clearTimeout(timer); reject(error); });
+    server.once('exit', () => { clearTimeout(timer); reject(new Error('server exited before startup')); });
+  });
+  const chrome = spawn(chromePath, ['--headless=new', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+  cleanup.push(() => stop(chrome));
+  let chromeError;
+  chrome.once('error', error => { chromeError = error; });
   let port;
-  for (let i = 0; i < 100 && !port; i++) { await sleep(100); port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '')).split('\n')[0] || undefined; }
+  for (let i = 0; i < 100 && !port; i++) {
+    if (chromeError) throw chromeError;
+    await sleep(100); port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '')).split('\n')[0] || undefined;
+  }
   if (!port) throw new Error('Chrome DevTools port not available');
-  const target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(item => item.type === 'page');
+  const endpoint = `http://127.0.0.1:${port}`;
+  const target = (await (await fetch(`${endpoint}/json/list`)).json()).find(item => item.type === 'page');
   const socket = new WebSocket(target.webSocketDebuggerUrl);
+  cleanup.push(() => socket.close());
   await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
-  const problems = []; let id = 0; const waiting = new Map();
+  const problems = [], waiting = new Map(); let id = 0;
   socket.on('message', raw => {
     const message = JSON.parse(raw);
-    if (message.id && waiting.has(message.id)) { const { resolve, reject } = waiting.get(message.id); waiting.delete(message.id); message.error ? reject(new Error(message.error.message)) : resolve(message.result); }
-    else if (message.method === 'Runtime.exceptionThrown') problems.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
+    if (message.id && waiting.has(message.id)) {
+      const pending = waiting.get(message.id); waiting.delete(message.id); clearTimeout(pending.timer);
+      message.error ? pending.reject(new Error(message.error.message)) : pending.resolve(message.result);
+    } else if (message.method === 'Runtime.exceptionThrown') problems.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
     else if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') problems.push(message.params.args.map(a => a.value ?? a.description).join(' '));
   });
-  const send = (method, params = {}) => new Promise((resolve, reject) => { waiting.set(++id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })); });
-  const evaluate = async expression => (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.value;
-  const until = async (expression, what, ms = 15000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await evaluate(expression)) return; throw new Error(`timeout: ${what}`); };
-  await send('Runtime.enable'); await send('Page.enable');
-
-  await send('Page.navigate', { url });
-  await until(`Boolean(document.querySelector('form input'))`, 'project path form');
-  await evaluate(`(() => { const input = document.querySelector('form input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(repo)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.form.requestSubmit(); })()`);
-  await until(`document.body.innerText.includes('hello-e2e.txt')`, 'explorer lists repo files');
-  await until(`Boolean(document.querySelector('[aria-label="화면 모드"]'))`, 'view switch');
-  await evaluate(`[...document.querySelectorAll('[aria-label="화면 모드"] button')].find(b => b.textContent === 'IDE').click()`);
-  await until(`[...document.querySelectorAll('[aria-label="화면 모드"] button')].find(b => b.textContent === 'IDE').getAttribute('aria-pressed') === 'true'`, 'IDE mode');
-  await evaluate(`[...document.querySelectorAll('[aria-label="화면 모드"] button')].find(b => b.textContent === 'ADE').click()`);
-  await evaluate(`document.querySelector('[aria-label="AI 작업"]').click()`);
-  await until(`Boolean(document.querySelector('textarea[aria-label="메시지 입력"]'))`, 'AI composer');
-  if (problems.length) throw new Error(`browser errors:\n${problems.join('\n')}`);
-  console.log('e2e: auth, project open, explorer, ADE/IDE switch and AI composer passed');
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const key = ++id, timer = setTimeout(() => { waiting.delete(key); reject(new Error(`CDP timeout: ${method}`)); }, 15000);
+    waiting.set(key, { resolve, reject, timer }); socket.send(JSON.stringify({ id: key, method, params }));
+  });
+  cleanup.push(() => { for (const pending of waiting.values()) clearTimeout(pending.timer); });
+  const evaluate = async expression => {
+    const value = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    if (value.exceptionDetails) throw new Error(value.exceptionDetails.exception?.description || value.exceptionDetails.text);
+    return value.result.value;
+  };
+  const until = async (expression, what) => {
+    for (const end = Date.now() + 20000; Date.now() < end; await sleep(100)) {
+      try { if (await evaluate(`(async () => Boolean(await (${expression})))()`)) return; }
+      catch (error) { if (!/Inspected target navigated|Execution context was destroyed|Cannot find context/.test(error.message)) throw error; }
+    }
+    throw new Error(`timeout: ${what}`);
+  };
+  const visible = selector => `([...document.querySelectorAll(${JSON.stringify(selector)})].find(el => el.getClientRects().length))`;
+  await send('Runtime.enable'); await send('Page.enable'); await send('Page.navigate', { url });
+  await until(visible('[aria-label="프로젝트 열기"]'), 'authenticated shell');
+  await evaluate(`${visible('[aria-label="프로젝트 열기"]')}.click()`);
+  await until(visible('input[aria-label="프로젝트 절대 경로"]'), 'project picker');
+  await evaluate(`(() => { const input = document.querySelector('input[aria-label="프로젝트 절대 경로"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(repo)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.form.requestSubmit(); })()`);
+  await until(`Boolean(${visible('main.app .xterm-helper-textarea')}) && document.querySelector('main.app:not([hidden])').innerText.includes('repo')`, 'project terminal');
+  await until(`!location.hash`, 'token removed from URL');
+  await evaluate(`(async () => {
+    const recent = await (await fetch('/api/recent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const projectId = recent.find(item => item.root === ${JSON.stringify(repo)}).id;
+    window.e2eProjectId = projectId;
+    window.e2eTerminalOutput = '';
+    window.e2eSocket = new WebSocket(location.origin.replace('http', 'ws') + '/ws');
+    window.e2eSocket.onmessage = ({ data }) => { const message = JSON.parse(data); if (message.type === 'terminal' || message.type === 'terminal/replay') window.e2eTerminalOutput += message.data; };
+    await new Promise((resolve, reject) => { window.e2eSocket.onopen = resolve; window.e2eSocket.onerror = reject; });
+    window.e2eSocket.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  })()`);
+  const activeTerminal = 'main.app:not([hidden]) .xterm-helper-textarea';
+  await evaluate(`document.querySelector(${JSON.stringify(activeTerminal)}).focus()`);
+  const command = process.platform === 'win32' ? 'echo ade-e2e-42; Set-Content hello-e2e.txt changed-e2e' : "echo ade-e2e-42; printf 'changed-e2e\\n' > hello-e2e.txt";
+  await send('Input.insertText', { text: command });
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await until(`window.e2eTerminalOutput.includes('ade-e2e-42')`, 'PTY output');
+  for (let i = 0; i < 100 && !(await readFile(join(repo, 'hello-e2e.txt'), 'utf8')).includes('changed-e2e'); i++) await sleep(100);
+  assert.match(await readFile(join(repo, 'hello-e2e.txt'), 'utf8'), /changed-e2e/);
+  console.log('e2e: authenticated project and PTY file write passed');
+  await evaluate(`${visible('[aria-label="변경사항 Diff 패널"]')}.click()`);
+  await until(`Boolean(${visible('.review-file')}) && ${visible('.review-file')}.innerText.includes('hello-e2e.txt')`, 'Git changes panel');
+  await until(`Boolean(${visible('.monaco-diff-editor')})`, 'read-only diff');
+  console.log('e2e: read-only Git diff passed');
+  await evaluate(`${visible('button[aria-label="새 터미널 탭"]')}.click()`);
+  await until(`document.querySelector('main.app:not([hidden])').querySelectorAll('.tab-page').length === 2`, 'second terminal tab');
+  await until(`document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .xterm-helper-textarea')`, 'second terminal ready');
+  await until(`fetch('/api/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: window.e2eProjectId }) }).then(response => response.json()).then(state => state.ui.paneTabs?.length === 2)`, 'layout saved');
+  await send('Page.reload');
+  await until(`document.querySelector('main.app:not([hidden])')?.querySelectorAll('.tab-page').length === 2`, 'layout restored after reload');
+  assert.deepEqual(problems, [], `browser errors: ${problems.join('\n')}`);
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--test', 'tests/sidebar-drag.test.mjs'], { cwd: root, env: { ...process.env, ADE_TEST_CDP: endpoint }, stdio: 'inherit' });
+    child.once('error', reject); child.once('exit', code => code === 0 ? resolve() : reject(new Error(`sidebar browser test exited ${code}`)));
+  });
+  console.log('e2e: auth, project open, PTY input/file write, Git diff, tabs, reload and sidebar dragging passed');
 }
-
 let failed = false;
 try { await main(); } catch (error) { failed = true; console.error(`e2e: ${error.message}`); }
-for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => {});
-process.exit(failed ? 1 : 0);
+for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(error => { failed = true; console.error(`e2e cleanup: ${error.message}`); });
+process.exitCode = failed ? 1 : 0;

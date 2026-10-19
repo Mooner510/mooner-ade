@@ -42,7 +42,7 @@ function useHub(enabled: boolean) {
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'unsubscribe', projectId }));
       };
     },
-    send(message) { const socket = state.current.ws; if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); }
+    send(message) { const socket = state.current.ws; if (socket?.readyState !== WebSocket.OPEN) return false; socket.send(JSON.stringify(message)); return true; }
   }), []);
   useEffect(() => {
     if (!enabled) return;

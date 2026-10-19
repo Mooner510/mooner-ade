@@ -1,16 +1,7 @@
-# P1 Session integration checkpoint
+# RecordedAgentRunner 계약
 
-`RecordedAgentRunner` wires the existing `AdeEngine.runAgent()` stream to a persistent `FileSessionStore`. It records each event **before yielding it**, preserves the engine-owned session identity and checks monotonic event sequence. A terminal lifecycle event is written before the store status becomes terminal.
+`RecordedAgentRunner`는 `AdeEngine.runAgent()` 이벤트를 검증하고 **저장한 뒤** 소비자에게 전달합니다. engine의 sessionId·sequence·timestamp를 유지하며 terminal lifecycle 기록 후 세션 terminal 상태를 저장합니다.
 
-Consumers can replay with `runner.replay(sessionId, { afterSequence })` or recover an interrupted snapshot after restart.
+`runner.replay(sessionId, { afterSequence })`로 이력을 재생합니다. 소비자가 스트림을 일찍 종료하면 durable 기록은 즉시 interrupted로 바뀝니다. 서버 재시작 시 고아 running 기록도 interrupted로 복구합니다. 제공자 thread ID를 통한 새 실행과 이전 프로세스 재접속은 별개입니다.
 
-Safety limits: only one process should write a given session store directory; the store serializes writes **within a process** but does not implement cross-process database transactions or file locking. Closing a consumer stream early does not falsely label the work completed; call `recover` after restart to mark orphan sessions interrupted. Reattaching to the previous native model/PTY process remains unsupported. This wrapper does not turn a noninteractive CLI into an approval-aware transport.
-
-## P2 unchanged
-
-- Worktree opt-in only, default shared workspace.
-- Terminal design: iTerm-style Ctrl+D / Ctrl+Shift+D, 2 rows x 3 columns preset (see P2_UX_SPEC.md).
-
-## Validation
-
-Run `node --test tests/p1-recorded-runner.test.mjs`, then the canonical Node 24.21.0 / pnpm 11.27.1 PR checks. Live model authentication requires an actual owner-signed-in machine.
+동일 저장소 디렉터리는 단일 writer가 소유해야 합니다. 로컬 서버는 브라우저 연결과 독립적으로 실행을 소비합니다. 이 wrapper는 비대화형 CLI에 승인 기능을 추가하지 않습니다. [이벤트 계약](P1_EVENT_CONTRACT.md), [저장 계약](P1_SESSION_PROGRESS.md), [검증 상태](VERIFICATION.md)를 참고하세요.

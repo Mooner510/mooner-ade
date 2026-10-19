@@ -1,6 +1,6 @@
-# Porting the ADE framework to webai
+# Hosted consumer porting boundaries
 
-`webai` must consume versioned `@mooner/ade-*` packages; it must not run or depend on a mooner-ade daemon. Initially prefer a single repository subtree or artifact/package release, later distribute independently versioned packages when public contracts are stable.
+A hosted consumer (called `webai` in the framework contracts) must consume versioned `@mooner/ade-*` packages; it must not run or depend on a mooner-ade daemon. Initially prefer a single repository subtree or artifact/package release, later distribute independently versioned packages when public contracts are stable.
 
 ## Adapters webai must provide
 
@@ -23,3 +23,7 @@
 ## Contract test sequence
 
 The same `AdeEngine` tests must pass using a mock `ContainerRuntime`, then container integration should verify per-user isolation, credential segregation, path traversal attempts, cancellation, resource limit enforcement and runtime destruction. **Passing an in-memory mock is not proof of multitenant isolation.**
+
+## Current scope
+
+No hosted runtime is implemented or deployed by this repository. Local server cookie/token authentication and root path checks are for one trusted local user. The app does not expose a commit API; the independent framework Git port still includes policy-gated commit operations. See [ARCHITECTURE](ARCHITECTURE.md) and [VERIFICATION](VERIFICATION.md).
