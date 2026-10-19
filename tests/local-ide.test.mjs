@@ -7,7 +7,7 @@ import { LocalProcesses, LocalWorkspace } from '../packages/runtime-local/src/in
 import { FileSessionStore } from '../packages/session-store/src/index.js';
 import { readText, saveText, serial } from '../apps/local-server/src/files.js';
 import { parseAgentEvent } from '../packages/protocol/src/index.js';
-import { validateUi } from '../apps/local-server/src/ui-state.js';
+import { validateUi, validateAppState } from '../apps/local-server/src/ui-state.js';
 import { discoverRepositories } from '../apps/local-server/src/repositories.js';
 
 test('project discovery distinguishes a root repository from repositories below a non-repository root', async t => {
@@ -98,4 +98,36 @@ test('saved layout accepts typed editor groups and settings but rejects malforme
   assert.throws(() => validateUi({ ...state, settings: { theme: 'neon' } }), { code: 'INVALID_INPUT' });
   assert.throws(() => validateUi({ ...state, side: 'debug' }), { code: 'INVALID_INPUT' });
   assert.throws(() => validateUi({ ...state, widths: [1] }), { code: 'INVALID_INPUT' });
+});
+
+test('saved layout accepts Warp-style pane tabs and right panel state', () => {
+  const base = { activeFile: '', conversationId: '', workspaceId: '', focus: 't1', tabs: [], widths: [18, 52, 30], heights: [68, 32], pane: { id: 't1', kind: 'terminal' } };
+  const state = { ...base, activeTab: 'tab-1', rightVisible: true, rightTab: 'review', settings: { terminalFontSize: 14, dimInactivePanes: false },
+    paneTabs: [{ id: 'tab-1', pane: { id: 't1', kind: 'terminal' }, focus: 't1' }, { id: 'tab-2', title: 'agents', pane: { direction: 'row', sizes: [1, 1], children: [{ id: 't2', kind: 'terminal' }, { id: 'e1', kind: 'editor', tabs: ['a.ts'] }] } }, { id: 'tab-3', pane: null }] };
+  assert.equal(validateUi(state), state);
+  assert.throws(() => validateUi({ ...state, paneTabs: [state.paneTabs[0], state.paneTabs[0]] }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...state, paneTabs: [{ id: 'bad id', pane: null }] }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...state, paneTabs: [{ id: 'x', title: 7, pane: null }] }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...state, paneTabs: Array.from({ length: 17 }, (_, i) => ({ id: `t${i}`, pane: null })) }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...state, rightTab: 'problems' }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...state, settings: { terminalFontSize: 0 } }), { code: 'INVALID_INPUT' });
+});
+
+test('app settings accept terminal, sidebar and status bar preferences', () => {
+  const app = settings => ({ openProjects: [], activeProjectId: '', settings });
+  const good = { theme: 'dark', terminalFont: 'Cascadia Mono', lineHeight: 1.3, scrollback: 5000, cursorStyle: 'block', cursorBlink: false, copyOnSelect: true,
+    sidebarWidth: 300, statusItems: ['path', 'cpu', 'clock'], notifyDone: false, notifyApproval: true, diffRefresh: 5, soundDone: 'bell', soundAttention: 'alert', soundVolume: 40 };
+  assert.deepEqual(validateAppState(app(good)).settings, good);
+  for (const bad of [{ sidebarWidth: 100 }, { sidebarWidth: 600 }, { scrollback: 10 }, { lineHeight: 5 }, { cursorStyle: 'beam' }, { diffRefresh: 0 },
+    { statusItems: ['Not Valid'] }, { statusItems: 'cpu' }, { notifyDone: 'yes' }, { terminalFont: 7 }, { soundVolume: 101 }, { soundVolume: 1.5 }, { soundDone: 'Not Valid' }, { soundAttention: 3 }]) {
+    assert.throws(() => validateAppState(app(bad)), { code: 'INVALID_INPUT' }, JSON.stringify(bad));
+  }
+});
+
+test('saved layout keeps the folder and agent of terminals for reopening', () => {
+  const base = { activeFile: '', conversationId: '', workspaceId: '', focus: 't1', tabs: [], widths: [18, 52, 30], heights: [68, 32] };
+  const ok = { ...base, pane: { id: 't1', kind: 'terminal', cwd: '/work/app', agent: 'claude' } };
+  assert.equal(validateUi(ok), ok);
+  assert.throws(() => validateUi({ ...base, pane: { id: 't1', kind: 'terminal', agent: 'vim' } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => validateUi({ ...base, pane: { id: 't1', kind: 'terminal', cwd: 7 } }), { code: 'INVALID_INPUT' });
 });

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node apps/local-server/src/index.js",
+    "desktop": "pnpm web:build && pnpm --filter @mooner/ade-desktop start",
     "web:build": "pnpm --filter @mooner/ade-web build",
     "typecheck": "tsc --project tsconfig.contract.json && pnpm --filter @mooner/ade-web typecheck",
     "test": "node --test tests/*.test.mjs",
@@ -16,7 +17,7 @@
     "check": "node scripts/verify.mjs && tsc --project tsconfig.contract.json && node --test tests/*.test.mjs",
     "smoke": "node apps/smoke/index.mjs",
     "test:live": "node scripts/live-agent-check.mjs",
-    "e2e": "node scripts/e2e.mjs"
+    "desktop:dev": "pnpm --filter @mooner/ade-desktop dev"
   },
   "workspaces": [
     "packages/*",
@@ -25,4 +26,4 @@
   "devDependencies": {
     "typescript": "5.8.3"
   }
-}
+}

@@ -25,6 +25,8 @@ async function boot(t) {
     return value;
   };
   await git(repo, 'init', '-q', '-b', 'main');
+  // A global core.autocrlf (Windows default) would check files out with CRLF and make content assertions machine-dependent.
+  await git(repo, 'config', 'core.autocrlf', 'false');
   await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
   await writeFile(join(repo, 'a.txt'), 'hello world\nHello again\n');
   await mkdir(join(repo, 'src'));
@@ -129,13 +131,68 @@ test('websocket: terminal echo, resize validation, typescript language server', 
     ws.send(JSON.stringify({ type: 'terminal/resize', projectId, id, cols: 0, rows: 5 }));
     assert.equal((await until(message => message.type === 'error')).error.code, 'INVALID_INPUT');
     ws.send(JSON.stringify({ type: 'terminal/resize', projectId, id, cols: 100, rows: 30 }));
-    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: 'echo ade-$((20+22))\n' }));
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: process.platform === 'win32' ? 'echo ade-$(20+22)\r' : 'echo ade-$((20+22))\n' }));
     await until(message => message.type === 'terminal' && message.data.includes('ade-42'));
   } else t.diagnostic('node-pty unavailable; terminal checks skipped');
 
   ws.send(JSON.stringify({ type: 'lsp', projectId, message: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } } }));
   const reply = await until(message => message.type === 'lsp' && message.message.id === 1);
   assert.ok(reply.message.result.capabilities.completionProvider);
+});
+
+test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => {
+  const { origin, cookie, api, call, projectId, repo } = await boot(t);
+  const second = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo2-')));
+  // The server's directory watcher can still hold the folder on Windows; a leftover temp dir is harmless.
+  t.after(() => rm(second, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}));
+  await git(second, 'init', '-q', '-b', 'main');
+  await git(second, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  const other = await api('project/open', { path: second });
+  assert.notEqual(other.id, projectId);
+  assert.equal((await api('project/open', { path: repo })).id, projectId);
+
+  const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });
+  t.after(() => ws.close());
+  const messages = [];
+  ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  const until = async (predicate, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { const found = messages.find(predicate); if (found) return found; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error('timeout'); };
+  for (const id of [projectId, other.id]) ws.send(JSON.stringify({ type: 'subscribe', projectId: id, cursors: {} }));
+  await until(m => m.type === 'snapshot' && m.projectId === projectId);
+  await until(m => m.type === 'snapshot' && m.projectId === other.id);
+
+  // Messages are tagged with their own project and never leak across projects.
+  await api('conversation/create', { projectId: other.id, agentId: 'codex', workspaceMode: 'shared', title: 'x' });
+  await call('files/save', { path: 'n.txt', content: 'x', revision: null });
+  await until(m => m.type === 'file' && m.projectId === projectId && m.path === 'n.txt');
+  assert.ok(!messages.some(m => m.type === 'file' && m.projectId === other.id));
+
+  ws.send(JSON.stringify({ type: 'unsubscribe', projectId }));
+  await new Promise(resolve => setTimeout(resolve, 200));
+  messages.length = 0;
+  await call('files/save', { path: 'm.txt', content: 'y', revision: null });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.ok(!messages.some(m => m.type === 'file'));
+
+  const readiness = await api('readiness', { projectId: other.id });
+  if (readiness.pty.installed) {
+    await api('terminal/open', { projectId: other.id });
+    assert.equal((await api('project/close', { projectId: other.id }, 409)).error.code, 'PROJECT_BUSY');
+  }
+  await api('project/close', { projectId: other.id, force: true });
+  await api('snapshot', { projectId: other.id }, 404);
+  await call('snapshot'); // the other project is unaffected
+  assert.equal((await api('project/open', { path: second })).id, other.id); // lock was released, so it reopens
+
+  const state = { openProjects: [{ id: projectId, root: repo }, { id: other.id, root: second }], activeProjectId: other.id, settings: { theme: 'light' } };
+  await api('app/state', { state });
+  assert.deepEqual(await api('app/state'), { version: 1, ...state });
+  await api('app/state', { state: { ...state, activeProjectId: 'missing' } }, 400);
+
+  // The status bar reads host load; it needs no open project.
+  const system = await api('system/info');
+  assert.ok(system.cpu >= 0 && system.cpu <= 100 && system.cores > 0);
+  assert.ok(system.memory.total > 0 && system.memory.used > 0 && system.memory.used <= system.memory.total);
 });
 
 test('LSP frame parser handles split chunks and several messages per chunk', () => {
