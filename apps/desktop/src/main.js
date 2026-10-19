@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Keep the existing profile when changing the displayed product name.
+app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
+
 // The local server runs under the system Node (not Electron's), so node-pty keeps its normal Node ABI build.
 const serverEntry = path.resolve(import.meta.dirname, '../../local-server/src/index.js');
 const background = '#0c0d0f';
@@ -71,19 +74,26 @@ function watchServerSources() {
     clearTimeout(timer);
     timer = setTimeout(() => { restartQueue = restartQueue.then(restartServer).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`)); }, 400);
   };
-  for (const dir of dirs) try { fs.watch(dir, { recursive: true }, changed); } catch { /* no recursive watch here: restart the app manually */ }
+  const watchError = error => console.warn(`개발 모드 파일 감시 오류 (${error.code || 'WATCH_FAILED'}). 변경 반영은 앱을 직접 재시작하세요.`);
+  for (const dir of dirs) try {
+    const watcher = fs.watch(dir, { recursive: true }, changed);
+    watcher.on('error', error => { watcher.close(); watchError(error); });
+  } catch (error) { watchError(error); }
   let preloadTimer;
-  fs.watch(import.meta.dirname, (_event, name) => {
-    if (name !== 'preload.cjs') return;
-    clearTimeout(preloadTimer);
-    preloadTimer = setTimeout(() => {
-      restartQueue = restartQueue.then(() => {
-        if (quitting || !mainWindow) return;
-        console.log('[dev] preload 코드가 변경되어 창을 새로고침합니다 (터미널 유지)');
-        mainWindow.webContents.reloadIgnoringCache();
-      }).catch(error => dialog.showErrorBox('무너에이드', `창 새로고침 실패: ${error.message}`));
-    }, 400);
-  });
+  try {
+    const watcher = fs.watch(import.meta.dirname, (_event, name) => {
+      if (name !== 'preload.cjs') return;
+      clearTimeout(preloadTimer);
+      preloadTimer = setTimeout(() => {
+        restartQueue = restartQueue.then(() => {
+          if (quitting || !mainWindow) return;
+          console.log('[dev] preload 코드가 변경되어 창을 새로고침합니다 (터미널 유지)');
+          mainWindow.webContents.reloadIgnoringCache();
+        }).catch(error => dialog.showErrorBox('무너에이드', `창 새로고침 실패: ${error.message}`));
+      }, 400);
+    });
+    watcher.on('error', error => { watcher.close(); clearTimeout(preloadTimer); watchError(error); });
+  } catch (error) { watchError(error); }
 }
 async function restartServer() {
   if (quitting || !mainWindow) return;

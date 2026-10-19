@@ -1,5 +1,6 @@
 {
   "name": "mooner-ade",
+  "license": "GPL-3.0-only",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,6 +18,7 @@
     "check": "node scripts/verify.mjs && tsc --project tsconfig.contract.json && node --test tests/*.test.mjs",
     "smoke": "node apps/smoke/index.mjs",
     "test:live": "node scripts/live-agent-check.mjs",
+    "e2e": "node scripts/e2e.mjs",
     "desktop:dev": "pnpm --filter @mooner/ade-desktop dev"
   },
   "workspaces": [

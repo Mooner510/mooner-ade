@@ -19,6 +19,7 @@ import { validateUi, validateAppState } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
 import { parseProcessTable, terminalProcesses } from './terminal-processes.js';
+import { watchProjectFiles } from './project-watch.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -213,15 +214,7 @@ function closeProject(project, { force = false, detach = false } = {}) {
   });
 }
 function watchProject(project) {
-  let timer; const changed = new Set();
-  try {
-    return fsSync.watch(project.root, { recursive: true }, (_event, name) => {
-      if (!name || /(^|[\\/])(\.git|node_modules|dist|\.idea)([\\/]|$)/.test(name)) return;
-      changed.add(name.split(path.sep).join('/'));
-      clearTimeout(timer);
-      timer = setTimeout(() => { broadcast(project, { type: 'fs', paths: [...changed].slice(0, 200) }); changed.clear(); }, 150);
-    });
-  } catch { return null; } // ponytail: no recursive watch on this platform; clients keep polling.
+  return watchProjectFiles(project.root, paths => broadcast(project, { type: 'fs', paths }));
 }
 async function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ...project.state,
@@ -461,7 +454,7 @@ async function route(action, input, project) {
   }
   if (action === 'readiness') return readiness(project || { root: os.homedir(), runtime: createLocalRuntime({ root: os.homedir() }) });
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
-  const repo = ['git/status', 'git/diff', 'git/show', 'git/discard', 'git/branches', 'git/checkout', 'git/stage', 'git/unstage', 'git/commit', 'worktrees', 'git/worktree-setting', 'git/worktree/integrate'].includes(action)
+  const repo = ['git/status', 'git/diff', 'git/show', 'git/discard', 'git/branches', 'git/checkout', 'git/stage', 'git/unstage', 'worktrees', 'git/worktree-setting', 'git/worktree/integrate'].includes(action)
     ? selectedRepository(project, input) : null;
   const runtime = repo ? (action === 'git/worktree-setting' || action === 'git/worktree/integrate' ? repo.sourceRuntime : repositoryRuntime(project, repo)) : workspaceFor(project, input);
   const workspace = runtime.workspace;
@@ -593,7 +586,6 @@ async function route(action, input, project) {
       const result = await runtime.processes.exec('git', ['switch', branch, '--']);
       if (result.exitCode !== 0) throw new Error(result.stderr.trim() || '브랜치 전환 실패'); return {};
     });
-    case 'git/commit': return project.mutation(async () => ({ commit: await runtime.git.commit(text(input.message, '커밋 메시지')) }));
     case 'git/worktree-setting': return project.mutation(async () => {
       if (!repo || typeof input.enabled !== 'boolean') throw fault('INVALID_INPUT', '저장소 worktree 설정을 확인하세요.');
       if (input.enabled === repo.worktreeEnabled) return {};
@@ -665,7 +657,8 @@ async function route(action, input, project) {
         const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
         if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
         const id = randomUUID();
-        const native = await runtime.terminal.open({ cwd, meta: { projectId: project.id, id, cwd } });
+        // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
+        const native = await runtime.terminal.open({ cwd, env: { ConEmuANSI: 'ON', WT_SESSION: '' }, meta: { projectId: project.id, id, cwd } });
         registerTerminal(project, id, native, cwd);
         return { id };
       } finally { project.openingTerminals--; }
@@ -673,6 +666,21 @@ async function route(action, input, project) {
     case 'terminal/close': {
       const terminal = project.terminals.get(input.id);
       terminal?.native.close(); project.terminals.delete(input.id); return {};
+    }
+    case 'terminal/follow-up': {
+      const prompt = text(input.prompt, '후속 입력', 16000), requestId = text(input.requestId, '요청 ID', 100);
+      if (!prompt.trim() || /[\x00-\x08\x0b-\x1f\x7f]/.test(prompt) || !Number.isSafeInteger(input.sequence)) throw fault('INVALID_INPUT', '후속 입력을 확인하세요.');
+      const terminal = project.terminals.get(input.id);
+      if (!terminal || terminal.exited || !terminal.native.pid) return { accepted: false };
+      if (terminal.lastFollowUp === requestId) return { accepted: true };
+      const table = await processTable();
+      const agentProcess = table && terminalProcesses(table)(terminal.native.pid);
+      if (terminal.lastFollowUp === requestId) return { accepted: true };
+      // Recheck after ps: a CLI may have exited or redrawn its composer since the browser observed completion.
+      if (!agentProcess || agentProcess.agent !== 'claude' || agentProcess.ssh || terminal.exited || project.terminals.get(input.id) !== terminal || terminal.sequence !== input.sequence) return { accepted: false };
+      terminal.native.write(`\x1b[200~${prompt}\x1b[201~\r`);
+      terminal.lastFollowUp = requestId;
+      return { accepted: true };
     }
     default: throw fault('NOT_FOUND', '지원하지 않는 작업입니다.', 404);
   }
