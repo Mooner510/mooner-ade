@@ -2,7 +2,8 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo,
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { disposeModel, DiffView, type Reveal, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
-import { detectAgent, Panes, Splitter, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus, type TerminalFeed } from './Panes';
+import { Panes, Splitter, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
+import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
@@ -10,8 +11,8 @@ import { Dropdown, Modal, type Ask, type GitState } from './views';
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void, cursors: () => Record<string, number>): () => void; send(message: object): void };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string };
-export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; working: boolean; focused: boolean };
-export type TabInfo = { id: string; label: string; busy: boolean; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; working: boolean };
+export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean };
+export type TabInfo = { id: string; label: string; busy: boolean; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; unread: boolean; dirty: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
@@ -68,14 +69,15 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [paneTabs, setPaneTabs] = useState<PaneTab[]>([]), [activeTab, setActiveTab] = useState('');
   const [focus, setFocus] = useState(''), [zoom, setZoom] = useState('');
   const [titles, setTitles] = useState<Record<string, string>>({}), [busyTabs, setBusyTabs] = useState<Set<string>>(new Set());
+  const [processAgents, setProcessAgents] = useState<Record<string, Agent | null>>({});
   const [launched, setLaunched] = useState<Record<string, Agent>>({});
-  // Panes whose agent stopped or asked something while you were elsewhere; they carry a red dot until you look at them.
+  // Completion clears on focus; questions stay marked until the CLI accepts an answer.
   const [attention, setAttention] = useState<Record<string, AgentEventKind>>({});
   const [working, setWorking] = useState<Set<string>>(new Set());
   // Terminals whose shell currently runs an ssh client (reported by the server).
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
-  const agentOf = (id: string): Agent | undefined => detectAgent(titles[id]) || launched[id];
+  const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [widths, setWidths] = useState([18, 52, 30]), [heights] = useState([68, 32]);
   const [reveal, setReveal] = useState<Record<string, Reveal>>({}), [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
@@ -321,10 +323,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (!leaf) return '새 탭';
     return leafLabel(leaf, ids.map(id => titles[id]).find(Boolean));
   };
-  const needsYou = attention[focus] !== undefined;
+  const needsYou = attention[focus] === 'done';
   useEffect(() => {
     if (!active || !focus || !needsYou) return;
-    const clear = () => { if (document.hasFocus()) clearAttention(focus); };
+    const clear = () => { if (document.hasFocus()) setAttention(previous => { if (previous[focus] !== 'done') return previous; const { [focus]: _gone, ...rest } = previous; return rest; }); };
     clear(); window.addEventListener('focus', clear);
     return () => window.removeEventListener('focus', clear);
   }, [active, focus, activeTab, needsYou]);
@@ -332,8 +334,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
-    return { id: tab.id, label: tabLabel(tab), busy: busyTabs.has(tab.id), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), working: list.some(leaf => working.has(leaf.id)),
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind || 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
+    return { id: tab.id, label: tabLabel(tab), busy: busyTabs.has(tab.id), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)),
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind || 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, unread: outputUnread, dirty: tabs.filter(file => file.content !== file.saved).length, tabs: JSON.parse(tabInfo), activeTab });
@@ -342,7 +344,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   async function loadProject() {
     const state = await api<Snapshot>('project/open', { path: root });
     setRestoring(true);
-    refs.project.current = state; setProject(state); cursors.current = {}; bus.current.buffers.clear(); setTitles({}); setBusyTabs(new Set());
+    refs.project.current = state; setProject(state); cursors.current = {}; bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({}); setBusyTabs(new Set());
     const ui = state.ui || {};
     const nextRepoId = state.repositories.some(repo => repo.id === ui.gitRepositoryId) ? ui.gitRepositoryId : state.repositories[0]?.id || '';
     refs.repository.current = nextRepoId; setGitRepositoryId(nextRepoId);
@@ -425,9 +427,16 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
             }
           } else if (message.type === 'terminal/ssh') {
             setSshSet(previous => previous.has(message.id) === message.ssh ? previous : message.ssh ? new Set(previous).add(message.id) : new Set([...previous].filter(item => item !== message.id)));
+          } else if (message.type === 'terminal/agent') {
+            setProcessAgents(previous => previous[message.id] === message.agent ? previous : { ...previous, [message.id]: message.agent });
+            setSshSet(previous => message.ssh ? new Set(previous).add(message.id) : new Set([...previous].filter(item => item !== message.id)));
+            if (!message.agent && !message.ssh) {
+              clearAttention(message.id);
+              setWorking(previous => new Set([...previous].filter(item => item !== message.id)));
+              setLaunched(previous => { const next = { ...previous }; delete next[message.id]; return next; });
+            }
           } else if (message.type === 'terminal/exit') {
-            const value: TerminalFeed = { ...(bus.current.buffers.get(message.id) || { data: '', sequence: 0 }), exited: true };
-            bus.current.buffers.set(message.id, value); bus.current.listeners.get(message.id)?.({ data: '', sequence: value.sequence, exited: true });
+            removeTerminalPane(message.id);
             void refresh().catch(report);
           } else if (message.type === 'error') report(message.error.message);
     } catch (cause) { report(cause); }
@@ -441,8 +450,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // Terminal leaves are saved with their folder and agent; dead ones are reopened from these on the next start.
   const remember = (tree: Pane | null): Pane | null => leafList(tree).reduce<Pane | null>((next, leaf) => {
     if (leaf.kind === 'editor' || !next) return next;
-    const cwd = cwds[leaf.id] ?? leaf.cwd, agent = agentOf(leaf.id) ?? leaf.agent;
-    return mapLeaf(next, leaf.id, item => ({ ...item, ...(cwd ? { cwd } : {}), ...(agent ? { agent } : {}) }));
+    const cwd = cwds[leaf.id] ?? leaf.cwd, agent = agentOf(leaf.id);
+    return mapLeaf(next, leaf.id, item => ({ ...item, ...(cwd ? { cwd } : {}), agent }));
   }, tree);
   const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' ? '' : agentOf(leaf.id) ?? '').join(',');
   useEffect(() => {
@@ -505,12 +514,19 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     commitTabs(rest); delete refs.tabFocus.current[tabId];
     if (refs.activeTab.current === tabId) selectTab(rest[Math.min(index, rest.length - 1)].id);
   }
+  function removeTerminalPane(id: string) {
+    refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id);
+    const owner = tabOf(id);
+    if (owner) { commitTab(owner.id, compact(owner.pane && remove(owner.pane, id))); dropEmptyTab(owner.id); }
+    if (refs.focus.current === id) setFocusLeaf(leaves(activePane())[0] || '');
+    clearAttention(id);
+    setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+  }
   async function closeTerminal(id: string) {
     const info = refs.project.current?.terminals.find(terminal => terminal.id === id);
     if (info && !info.exited && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
     if (info) await call('terminal/close', { id });
-    const owner = tabOf(id);
-    if (owner) { commitTab(owner.id, compact(owner.pane && remove(owner.pane, id))); dropEmptyTab(owner.id); }
+    removeTerminalPane(id);
     await refresh();
   }
   async function closePaneTab(tabId: string) {
@@ -671,13 +687,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
   const paneProps = {
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
-    // Stay quiet while you are looking at that very terminal.
+    onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),
     onAgentEvent: (id: string, kind: AgentEventKind) => {
       const agent = agentOf(id), owner = refs.paneTabs.current.find(tab => leaves(tab.pane).includes(id)); if (!agent || !owner) return;
-      if (refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id) return;
+      const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
+      if (kind === 'done' && looking) return;
       setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
-      onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner) });
+      if (!looking) onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner) });
     }, focus, zoom, onFocus: setFocusLeaf, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
     onSplit: (id: string, direction: 'row' | 'column') => run(() => splitTerminal(id, direction)), onClose: (id: string) => run(() => closeTerminal(id)),
     onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),

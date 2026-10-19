@@ -72,6 +72,18 @@ function watchServerSources() {
     timer = setTimeout(() => { restartQueue = restartQueue.then(restartServer).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`)); }, 400);
   };
   for (const dir of dirs) try { fs.watch(dir, { recursive: true }, changed); } catch { /* no recursive watch here: restart the app manually */ }
+  let preloadTimer;
+  fs.watch(import.meta.dirname, (_event, name) => {
+    if (name !== 'preload.cjs') return;
+    clearTimeout(preloadTimer);
+    preloadTimer = setTimeout(() => {
+      restartQueue = restartQueue.then(() => {
+        if (quitting || !mainWindow) return;
+        console.log('[dev] preload 코드가 변경되어 창을 새로고침합니다 (터미널 유지)');
+        mainWindow.webContents.reloadIgnoringCache();
+      }).catch(error => dialog.showErrorBox('무너에이드', `창 새로고침 실패: ${error.message}`));
+    }, 400);
+  });
 }
 async function restartServer() {
   if (quitting || !mainWindow) return;

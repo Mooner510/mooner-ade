@@ -45,6 +45,28 @@ test('server requires auth and rejects foreign origins', async t => {
   assert.equal(foreign.status, 403);
 });
 
+test('recent: removal persists without deleting files or closing projects', async t => {
+  const { api, call, repo, projectId } = await boot(t);
+  const other = await api('project/open', { path: join(repo, 'src') });
+  const state = { openProjects: [{ id: projectId, root: repo }], activeProjectId: projectId, settings: null };
+  await api('app/state', { state });
+  await api('recent/pin', { root: repo, pinned: true });
+  const before = await api('recent');
+  for (const root of [undefined, '', 42]) await api('recent/remove', { root }, 400);
+  assert.deepEqual(await api('recent'), before);
+  const remaining = before.filter(item => item.root !== repo);
+  assert.deepEqual(await api('recent/remove', { root: repo }), remaining);
+  assert.deepEqual(await api('recent'), remaining);
+  assert.ok(remaining.some(item => item.id === other.id));
+  assert.equal((await call('files/read', { path: 'a.txt' })).content, 'hello world\nHello again\n');
+  assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'hello world\nHello again\n');
+  assert.deepEqual(await api('app/state'), { version: 1, ...state });
+  assert.deepEqual(await api('recent/remove', { root: repo }), remaining);
+  await api('project/close', { projectId });
+  await api('project/open', { path: repo });
+  assert.ok((await api('recent')).some(item => item.root === repo));
+});
+
 test('files: search options, replace, folder rename/delete, index', async t => {
   const { call, repo } = await boot(t);
   const { files } = await call('files/index');
@@ -133,11 +155,65 @@ test('websocket: terminal echo, resize validation, typescript language server', 
     ws.send(JSON.stringify({ type: 'terminal/resize', projectId, id, cols: 100, rows: 30 }));
     ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: process.platform === 'win32' ? 'echo ade-$(20+22)\r' : 'echo ade-$((20+22))\n' }));
     await until(message => message.type === 'terminal' && message.data.includes('ade-42'));
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: 'exit\r' }));
+    await until(message => message.type === 'terminal/exit' && message.id === id);
+    assert.ok(!(await call('snapshot')).terminals.some(terminal => terminal.id === id));
+    await call('terminal/close', { id });
+    const closed = await call('terminal/open');
+    await call('terminal/close', { id: closed.id });
+    await until(message => message.type === 'terminal/exit' && message.id === closed.id);
+    for (const terminalId of [id, closed.id]) {
+      ws.send(JSON.stringify({ type: 'terminal/input', projectId, id: terminalId, data: 'late input' }));
+      ws.send(JSON.stringify({ type: 'terminal/resize', projectId, id: terminalId, cols: 100, rows: 30 }));
+    }
   } else t.diagnostic('node-pty unavailable; terminal checks skipped');
 
   ws.send(JSON.stringify({ type: 'lsp', projectId, message: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } } }));
   const reply = await until(message => message.type === 'lsp' && message.message.id === 1);
+  assert.deepEqual(messages.filter(message => message.type === 'error').map(message => message.error.code), readiness.pty.installed ? ['INVALID_INPUT'] : []);
   assert.ok(reply.message.result.capabilities.completionProvider);
+});
+
+test('websocket: terminal agent processes survive replay, switch providers and clear on exit', async t => {
+  const { origin, cookie, call, projectId, repo } = await boot(t);
+  if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const connect = async () => {
+    const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } }), messages = [];
+    t.after(() => ws.close());
+    ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+    const until = async predicate => {
+      const end = Date.now() + 15000;
+      while (Date.now() < end) {
+        const found = messages.find(predicate); if (found) return found;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error('terminal agent event timeout');
+    };
+    return { ws, messages, until };
+  };
+  const { ws, messages, until } = await connect();
+  const { id } = await call('terminal/open');
+  await until(message => message.type === 'terminal' && message.id === id);
+  const run = async (folder, name) => {
+    const directory = join(repo, 'node_modules', folder);
+    await mkdir(directory, { recursive: true });
+    const script = join(directory, name);
+    await writeFile(script, 'setInterval(() => process.stdout.write("working\\n"), 300);');
+    messages.length = 0;
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `"${process.execPath}" "${script}"\r` }));
+  };
+  await run('@anthropic-ai/claude-code', 'cli.js');
+  await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'claude');
+  const replay = await connect();
+  await replay.until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'claude');
+  messages.length = 0;
+  ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: '\x03' }));
+  await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === null);
+  await run('@openai/codex/bin', 'codex.js');
+  await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'codex');
+  await call('terminal/close', { id });
 });
 
 test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => {
