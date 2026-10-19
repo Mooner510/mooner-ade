@@ -26,9 +26,9 @@ export function ReviewPanel(props: Props) {
   const { git, fail, refresh } = props;
   const [expanded, setExpanded] = useState<Set<string> | null>(null);
   const changes = git.changes, total = changes.length;
-  const isOpen = (path: string) => expanded ? expanded.has(path) : total <= 5;
+  const isOpen = (path: string) => expanded ? expanded.has(path) : changes[0]?.path === path;
   const toggle = (path: string) => setExpanded(previous => {
-    const next = new Set(previous ?? (total <= 5 ? changes.map(change => change.path) : []));
+    const next = new Set(previous ?? changes.slice(0, 1).map(change => change.path));
     if (!next.delete(path)) next.add(path); return next;
   });
   const guard = (operation: () => Promise<unknown>) => void operation().catch(fail);

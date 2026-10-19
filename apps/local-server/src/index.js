@@ -163,7 +163,7 @@ async function openProject(requested) {
         worktreePath: path.join(directory, 'worktrees', repo.id),
         branch: `ade/repo-${repo.id}`
       }));
-      const project = { id, root, directory, lockFile, runtime, engine, store, state, multiRepo: discovered.multiRepo, repositories, runner: new RecordedAgentRunner({ engine, store }), terminals: new Map(), jobs: new Map(), mutation: serial(), persist: serial() };
+      const project = { id, root, directory, lockFile, runtime, engine, store, state, multiRepo: discovered.multiRepo, repositories, runner: new RecordedAgentRunner({ engine, store }), terminals: new Map(), openingTerminals: 0, jobs: new Map(), mutation: serial(), persist: serial() };
       project.save = () => project.persist(() => writeJson(path.join(directory, 'state.json'), state));
       for (const repo of repositories) if (repo.worktreeEnabled) await repoWorktree(project, repo);
       await project.save();
@@ -658,14 +658,17 @@ async function route(action, input, project) {
       await project.save(); return {};
     });
     case 'terminal/open': {
-      if (project.terminals.size >= 32) throw fault('TERMINAL_LIMIT', '프로젝트당 최대 32개 터미널을 지원합니다.');
-      if ([...projects.values()].reduce((sum, item) => sum + item.terminals.size, 0) >= 128) throw fault('TERMINAL_LIMIT', '열린 프로젝트 전체에서 최대 128개 터미널을 지원합니다.');
-      const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
-      if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-      const id = randomUUID();
-      const native = await runtime.terminal.open({ cwd, meta: { projectId: project.id, id, cwd } });
-      registerTerminal(project, id, native, cwd);
-      return { id };
+      if (project.terminals.size + project.openingTerminals >= 32) throw fault('TERMINAL_LIMIT', '프로젝트당 최대 32개 터미널을 지원합니다.');
+      if ([...projects.values()].reduce((sum, item) => sum + item.terminals.size + item.openingTerminals, 0) >= 128) throw fault('TERMINAL_LIMIT', '열린 프로젝트 전체에서 최대 128개 터미널을 지원합니다.');
+      project.openingTerminals++;
+      try {
+        const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+        if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
+        const id = randomUUID();
+        const native = await runtime.terminal.open({ cwd, meta: { projectId: project.id, id, cwd } });
+        registerTerminal(project, id, native, cwd);
+        return { id };
+      } finally { project.openingTerminals--; }
     }
     case 'terminal/close': {
       const terminal = project.terminals.get(input.id);

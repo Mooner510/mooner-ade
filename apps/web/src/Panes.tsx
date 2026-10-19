@@ -27,7 +27,7 @@ export type EditorCtx = {
   loadDiff(kind: string, path: string): Promise<{ original: string; modified: string }>;
 };
 type Props = {
-  pane: Pane; onLayout(pane: Pane): void; send(message: object): void; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; focus: string; zoom: string;
+  pane: Pane; visible: boolean; onLayout(pane: Pane): void; send(message: object): void; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; focus: string; zoom: string;
   onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; editor: EditorCtx;
 };
 
@@ -44,10 +44,12 @@ function terminalTheme(element: Element = document.documentElement): ITheme {
 
 const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
 
-function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'bus' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+function TerminalPane({ id, send, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
   const checkAgent = useRef<() => void>(() => {});
-  const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), centerRef = useRef<() => void>(() => {});
+  const visibleRef = useRef(visible), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
+  visibleRef.current = visible;
+  const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {});
   const callbacks = useRef({ send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => {
@@ -70,11 +72,26 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
       });
     };
     const pasteHost = host.current!; pasteHost.addEventListener('paste', pasteImage, true);
-    // The DOM renderer leaves gaps between rows (broken block-drawing art, e.g. the Claude Code mascot); WebGL draws those glyphs itself.
-    try { const gl = new WebglAddon(); gl.onContextLoss(() => gl.dispose()); terminal.loadAddon(gl); } catch { /* no WebGL: keep the DOM renderer */ }
     terminal.onSelectionChange(() => { if (settingsRef.current.copyOnSelect && terminal.hasSelection()) void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); });
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
-    let sequence = 0, replays = 0, lastInput = 0, lastResize = 0, workStart = 0, working = false, asking = false, title = '', idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, lastInput = 0, lastResize = 0, workStart = 0, working = false, asking = false, title = '', idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const notifyResize = () => {
+      if (replays) { pendingResize = true; return; }
+      pendingResize = false;
+      if (refreshAfterReplay) {
+        refreshAfterReplay = false;
+        callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows === 1000 ? 999 : terminal.rows + 1 });
+      }
+      callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows });
+      callbacks.current.onSize(id, terminal.cols, terminal.rows);
+    };
+    notifyResizeRef.current = notifyResize;
+    scrollAfterReplay.current = () => {
+      if (!visibleRef.current) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (term.current === terminal && visibleRef.current) { terminal.scrollToBottom(); replayScroll.current = false; }
+      }));
+    };
     // Output while an agent runs means it is working; silence afterwards means it needs you. Echo of your own typing does not count,
     // nor does a redraw after a resize, output without visible text (cursor/title escapes), or a short burst that never looked like work.
     const watchAgent = (data: string, replay = false) => {
@@ -113,15 +130,20 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
     checkAgent.current = () => watchAgent('', true);
     const receive = (feed: TerminalFeed) => {
       const replay = Boolean(feed.reset);
-      if (feed.reset) { terminal.reset(); sequence = 0; }
+      if (feed.reset) { terminal.reset(); sequence = 0; refreshAfterReplay = true; replayScroll.current = true; }
       if (feed.sequence > sequence || feed.reset) {
         if (replay) replays++;
-        terminal.write(feed.data, () => { if (replay) replays--; watchAgent(feed.data, replay); }); sequence = feed.sequence;
+        terminal.write(feed.data, () => {
+          if (replay && !--replays) {
+            if (pendingResize || refreshAfterReplay) notifyResize();
+            scrollAfterReplay.current();
+          }
+          watchAgent(feed.data, replay);
+        }); sequence = feed.sequence;
         const agent = detectBanner(feed.data, replay); if (agent) callbacks.current.onAgent(id, agent);
       }
       if (feed.exited) terminal.write('\r\n\x1b[2m[프로세스 종료]\x1b[0m\r\n');
     };
-    const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
     bus.listeners.set(id, receive);
     terminal.onData(data => {
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
@@ -131,8 +153,6 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
     });
     terminal.onTitleChange(value => {
       title = value; callbacks.current.onTitle(id, title);
-      // Some CLI versions animate only their OSC title while waiting for a response.
-      if (!replays && /^[⠀-⣿]\s/.test(title)) watchAgent(title);
     });
     terminal.attachCustomKeyEventHandler(event => {
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
@@ -167,10 +187,23 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
       element.style.marginLeft = `${shift}px`; element.style.marginRight = `${-shift}px`;
     };
     centerRef.current = center;
-    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; lastResize = Date.now(); fit.fit(); center(); requestAnimationFrame(center); callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows }); callbacks.current.onSize(id, terminal.cols, terminal.rows); };
+    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; lastResize = Date.now(); fit.fit(); center(); requestAnimationFrame(center); notifyResize(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
-    return () => { checkAgent.current = () => {}; pasteHost.removeEventListener('paste', pasteImage, true); clearTimeout(idleTimer); observer.disconnect(); bus.listeners.delete(id); terminal.dispose(); term.current = null; fitRef.current = null; };
+    const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
+    return () => { checkAgent.current = () => {}; scrollAfterReplay.current = () => {}; pasteHost.removeEventListener('paste', pasteImage, true); clearTimeout(idleTimer); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
+  useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
+  useEffect(() => {
+    // Hidden workspaces still mount terminals, so reserve WebGL contexts for visible panes.
+    const terminal = term.current;
+    if (!visible || !terminal) return;
+    try {
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => { if (webglRef.current === gl) webglRef.current = null; gl.dispose(); });
+      terminal.loadAddon(gl); webglRef.current = gl;
+      return () => { if (webglRef.current === gl) webglRef.current = null; gl.dispose(); };
+    } catch { /* no WebGL: keep the DOM renderer */ }
+  }, [visible]);
   useEffect(() => { checkAgent.current(); }, [identity]);
   useEffect(() => {
     // Next frame: the App effect that switches `data-theme` runs after this child effect.
@@ -179,7 +212,7 @@ function TerminalPane({ id, send, bus, live, cwds, titles, agentOf, onAgent, onA
       terminal.options.theme = terminalTheme(host.current ?? undefined); terminal.options.fontSize = settings.terminalFontSize; terminal.options.fontFamily = fontStack(settings);
       terminal.options.lineHeight = settings.lineHeight; terminal.options.cursorBlink = settings.cursorBlink; terminal.options.cursorStyle = settings.cursorStyle; terminal.options.scrollback = settings.scrollback;
       if (!host.current?.clientWidth) return;
-      fitRef.current?.fit(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows }); callbacks.current.onSize(id, terminal.cols, terminal.rows);
+      fitRef.current?.fit(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); notifyResizeRef.current();
     });
     return () => cancelAnimationFrame(frame);
   }, [settings.theme, isSsh, settings.terminalFontSize, settings.terminalFont, settings.lineHeight, settings.cursorBlink, settings.cursorStyle, settings.scrollback]);

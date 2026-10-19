@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { defaultSettings, statusItemIds, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
-import { Modal } from './views';
+import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 
 type Section = 'appearance' | 'terminal' | 'status' | 'notify' | 'diff' | 'keys';
@@ -27,7 +27,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
   const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   const soundPicker = (title: string, hint: string, key: 'soundDone' | 'soundAttention') =>
-    <Row title={title} hint={hint}><select aria-label={title} value={settings[key]} onChange={event => { set(key, event.target.value); playSound(event.target.value, settings.soundVolume); }}>{soundIds.map(id => <option key={id} value={id}>{sounds[id].label}</option>)}</select>
+    <Row title={title} hint={hint}><Dropdown label={title} value={settings[key]} options={soundIds.map(id => ({ value: id, label: sounds[id].label }))} onChange={value => { set(key, value); playSound(value, settings.soundVolume); }} />
       <IconButton icon="bell" label={`${title} 미리 듣기`} onClick={() => playSound(settings[key], settings.soundVolume)} /></Row>;
   const shown = new Set(settings.statusItems);
   return <Modal className="settings-modal" labelledBy="settings-title" onClose={onClose}>
@@ -41,7 +41,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
       <div className="settings-body">
         <header><h3>{sections.find(item => item.id === section)?.label}</h3><IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} /></header>
         {section === 'appearance' && <>
-          <Row title="색 테마"><select value={settings.theme} onChange={event => set('theme', event.target.value as Settings['theme'])}><option value="dark">어둡게</option><option value="light">밝게</option></select></Row>
+          <Row title="색 테마"><Dropdown label="색 테마" value={settings.theme} options={[{ value: 'dark', label: '어둡게' }, { value: 'light', label: '밝게' }]} onChange={value => set('theme', value as Settings['theme'])} /></Row>
           <Row title="프로젝트 사이드바 너비" hint="사이드바 경계를 끌어서도 바꿀 수 있습니다. (160–480px)">{number('sidebarWidth', 160, 480)}</Row>
           <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다.">{toggle('dimInactivePanes')}</Row>
         </>}
@@ -50,7 +50,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="글꼴" hint="비우면 기본 모노스페이스 글꼴을 씁니다. 예: Cascadia Mono"><input type="text" value={settings.terminalFont} maxLength={200} placeholder="JetBrains Mono" onChange={event => set('terminalFont', event.target.value)} /></Row>
           <Row title="줄 높이">{number('lineHeight', 1, 2, 0.05)}</Row>
           <Row title="스크롤백 줄 수" hint="500–100,000">{number('scrollback', 500, 100000)}</Row>
-          <Row title="커서 모양"><select value={settings.cursorStyle} onChange={event => set('cursorStyle', event.target.value as Settings['cursorStyle'])}><option value="bar">막대</option><option value="block">블록</option><option value="underline">밑줄</option></select></Row>
+          <Row title="커서 모양"><Dropdown label="커서 모양" value={settings.cursorStyle} options={[{ value: 'bar', label: '막대' }, { value: 'block', label: '블록' }, { value: 'underline', label: '밑줄' }]} onChange={value => set('cursorStyle', value as Settings['cursorStyle'])} /></Row>
           <Row title="커서 깜빡임">{toggle('cursorBlink')}</Row>
           <Row title="선택하면 바로 복사">{toggle('copyOnSelect')}</Row>
         </>}
@@ -63,7 +63,8 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="승인·입력 요청" hint="터미널의 Claude Code·Codex가 벨(BEL)로 확인을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
           <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
           {settings.notifySound && <>
-            <Row title="소리 크기" hint="0–100"><input type="range" min={0} max={100} step={5} value={settings.soundVolume} aria-label="소리 크기" onChange={event => set('soundVolume', Number(event.target.value))} /><span className="range-value">{settings.soundVolume}</span></Row>
+            <Row title="소리 확장" hint="소리 크기를 최대 200%까지 조절합니다."><input type="checkbox" role="switch" aria-label="소리 확장" checked={settings.soundVolumeExtended} onChange={event => onChange({ ...settings, soundVolumeExtended: event.target.checked, soundVolume: event.target.checked ? settings.soundVolume : Math.min(settings.soundVolume, 100) })} /></Row>
+            <Row title="소리 크기" hint={settings.soundVolumeExtended ? '0–200%' : '0–100%'}><input type="range" min={0} max={settings.soundVolumeExtended ? 200 : 100} step={5} value={settings.soundVolume} aria-label="소리 크기" onChange={event => set('soundVolume', Number(event.target.value))} /><span className="range-value">{settings.soundVolume}%</span></Row>
             {soundPicker('완료 소리', '작업이 멈췄을 때 재생합니다.', 'soundDone')}
             {soundPicker('입력 요청 소리', '확인이 필요할 때 재생합니다.', 'soundAttention')}
           </>}

@@ -4,13 +4,13 @@ import type * as Monaco from 'monaco-editor';
 export type Settings = {
   theme: 'dark' | 'light'; fontSize: number; terminalFontSize: number; tabSize: number; wordWrap: boolean; minimap: boolean; dimInactivePanes: boolean; autoSave: 'off' | 'afterDelay';
   terminalFont: string; lineHeight: number; scrollback: number; cursorStyle: 'bar' | 'block' | 'underline'; cursorBlink: boolean; copyOnSelect: boolean;
-  sidebarWidth: number; statusItems: string[]; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; diffRefresh: number;
+  sidebarWidth: number; statusItems: string[]; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; soundVolumeExtended: boolean; diffRefresh: number;
 };
 export const statusItemIds = ['path', 'branch', 'changes', 'terminals', 'size', 'cpu', 'memory', 'clock'] as const;
 export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, tabSize: 2, wordWrap: true, minimap: false, dimInactivePanes: true, autoSave: 'off',
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
-  sidebarWidth: 252, statusItems: [...statusItemIds], notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'chime', soundAttention: 'alert', soundVolume: 60, diffRefresh: 3
+  sidebarWidth: 252, statusItems: [...statusItemIds], notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'chime', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3
 };
 export const monoFont = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';

@@ -5,13 +5,13 @@ function validateSettings(settings, invalid) {
   if (settings.theme !== undefined && !['dark', 'light'].includes(settings.theme)) invalid();
   if (settings.autoSave !== undefined && !['off', 'afterDelay'].includes(settings.autoSave)) invalid();
   for (const name of ['fontSize', 'tabSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
-  for (const name of ['wordWrap', 'minimap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'compactSidebar', 'ignoreWhitespace']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const name of ['wordWrap', 'minimap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'compactSidebar', 'ignoreWhitespace']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();
   if (settings.scrollback !== undefined && !(Number.isInteger(settings.scrollback) && settings.scrollback >= 500 && settings.scrollback <= 100000)) invalid();
   if (settings.lineHeight !== undefined && !(typeof settings.lineHeight === 'number' && settings.lineHeight >= 1 && settings.lineHeight <= 2)) invalid();
   if (settings.diffRefresh !== undefined && !(Number.isInteger(settings.diffRefresh) && settings.diffRefresh >= 1 && settings.diffRefresh <= 60)) invalid();
-  if (settings.soundVolume !== undefined && !(Number.isInteger(settings.soundVolume) && settings.soundVolume >= 0 && settings.soundVolume <= 100)) invalid();
+  if (settings.soundVolume !== undefined && !(Number.isInteger(settings.soundVolume) && settings.soundVolume >= 0 && settings.soundVolume <= (settings.soundVolumeExtended === true ? 200 : 100))) invalid();
   for (const name of ['soundDone', 'soundAttention']) if (settings[name] !== undefined && !(typeof settings[name] === 'string' && /^[a-z]{1,16}$/.test(settings[name]))) invalid();
   if (settings.terminalFont !== undefined && !(typeof settings.terminalFont === 'string' && settings.terminalFont.length <= 200)) invalid();
   if (settings.statusItems !== undefined && !(Array.isArray(settings.statusItems) && settings.statusItems.length <= 16 && settings.statusItems.every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();

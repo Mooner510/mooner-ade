@@ -12,7 +12,15 @@ import './style.css';
 
 type Entry = { root: string; id: string };
 type Recent = { id?: string; root: string; pinned?: boolean };
-const idle: WorkspaceStatus = { id: '', name: '', loaded: false, attention: 0, unread: false, dirty: 0, tabs: [], activeTab: '' };
+type TabDropMode = 'before' | 'after' | 'merge';
+function tabDropMode(event: React.DragEvent<Element>, sourceId: string, targetId: string): TabDropMode {
+  const box = event.currentTarget.getBoundingClientRect(), ratio = (event.clientY - box.top) / box.height;
+  if (sourceId === targetId) return ratio < 0.5 ? 'before' : 'after';
+  if (ratio < 0.25) return 'before';
+  if (ratio > 0.75) return 'after';
+  return 'merge';
+}
+const idle: WorkspaceStatus = { id: '', name: '', loaded: false, attention: 0, dirty: 0, tabs: [], activeTab: '' };
 const sameStatus = (a: WorkspaceStatus, b: WorkspaceStatus) => (Object.keys(a) as (keyof WorkspaceStatus)[]).every(key => key === 'tabs' ? JSON.stringify(a.tabs) === JSON.stringify(b.tabs) : a[key] === b[key]);
 // First and last character, so projects that start alike (app-web, app-api) stay distinguishable.
 const initials = (name: string) => (name.length > 1 ? name[0] + name[name.length - 1] : name).toUpperCase();
@@ -107,6 +115,18 @@ function Shell() {
   const [compact, setCompact] = useState(() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } });
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ root: string; id: string; pane?: string } | null>(null), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
+  const dragSource = useRef<{ root: string; id: string; pane?: string; blocked: boolean; pointerId: number } | null>(null);
+  useEffect(() => {
+    const reset = (event: PointerEvent) => {
+      const source = dragSource.current;
+      if (!source || source.pointerId !== event.pointerId) return;
+      dragSource.current = null;
+    };
+    window.addEventListener('pointerup', reset);
+    window.addEventListener('pointercancel', reset);
+    return () => { window.removeEventListener('pointerup', reset); window.removeEventListener('pointercancel', reset); };
+  }, []);
+  const [projectDrag, setProjectDrag] = useState(''), [projectDrop, setProjectDrop] = useState<{ root: string; after: boolean } | null>(null);
   useEffect(() => { try { localStorage.setItem('ade-sidebar-compact', compact ? '1' : '0'); } catch { /* storage can be blocked */ } }, [compact]);
   const { hub, connection } = useHub(ready);
   const entriesRef = useRef(entries); entriesRef.current = entries;
@@ -115,6 +135,13 @@ function Shell() {
   const globalSettings = useRef(false);
   const current = entries.some(entry => entry.root === activeRoot) ? activeRoot : entries[0]?.root ?? '';
   const commit = (next: Entry[]) => { entriesRef.current = next; setEntries(next); };
+  const moveProject = (root: string, targetRoot: string, after: boolean) => {
+    const list = entriesRef.current, from = list.findIndex(entry => entry.root === root), target = list.findIndex(entry => entry.root === targetRoot);
+    if (from < 0 || target < 0 || from === target) return;
+    const next = [...list], [entry] = next.splice(from, 1), index = next.findIndex(item => item.root === targetRoot);
+    next.splice(index + (after ? 1 : 0), 0, entry);
+    commit(next);
+  };
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
 
   // ---- boot: sign in, then reopen the projects that were open last time ----
@@ -262,7 +289,7 @@ function Shell() {
   ];
   const open = new Set(entries.map(entry => entry.root));
   const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
-  if (!entries.length) return <main className="welcome"><PickerCard {...picking} /></main>;
+  if (!entries.length) return booted && homeFailed.current ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
 
   return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
@@ -277,33 +304,45 @@ function Shell() {
           const asking = item.tabs.some(tab => tab.asking);
           const owner = () => handles.current.get(entry.root);
           const hint = `${name}\n${entry.root}\n${showKeys(`mod+alt+${Math.min(index + 1, 9)}`)}`;
-          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''}`} title={hint}
+          const projectDnd = {
+            draggable: true,
+            onDragStart: (event: React.DragEvent<HTMLElement>) => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
+            onDragEnd: () => { setProjectDrag(''); setProjectDrop(null); },
+            onDragOver: (event: React.DragEvent<HTMLElement>) => {
+              if (!projectDrag || projectDrag === entry.root) return;
+              event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+              const box = event.currentTarget.getBoundingClientRect(), after = event.clientY >= box.top + box.height / 2;
+              setProjectDrop(previous => previous?.root === entry.root && previous.after === after ? previous : { root: entry.root, after });
+            },
+            onDrop: (event: React.DragEvent<HTMLElement>) => { if (!projectDrag || projectDrag === entry.root) return; event.preventDefault(); event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); moveProject(projectDrag, entry.root, event.clientY >= box.top + box.height / 2); setProjectDrag(''); setProjectDrop(null); }
+          };
+          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectDnd}
             onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
-            {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : item.unread && !selected && <i className="rail-dot" aria-label="새 출력" />}
+            {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
             {item.dirty > 0 && <i className="rail-dirty" aria-label="저장 안 됨" />}
             <button className="rail-close" aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={12} /></button>
           </div>;
-          return <section key={entry.root} className={`folder ${selected ? 'active' : ''}`}>
-            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint}
+          return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`}>
+            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectDnd}
               onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name">{name}</span>
-              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}{item.unread && !selected && <i className="folder-dot" aria-label="새 출력" />}{item.dirty > 0 && <i className="folder-dirty" aria-label="저장 안 됨" title={`저장 안 된 파일 ${item.dirty}개`} />}
+              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}{item.dirty > 0 && <i className="folder-dirty" aria-label="저장 안 됨" title={`저장 안 된 파일 ${item.dirty}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
                 <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
-            {open && <ul className="folder-tabs" role="group">
+            {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
               {item.tabs.map(tab => {
                 const on = selected && tab.id === item.activeTab;
                 const select = () => { setActiveRoot(entry.root); owner()?.selectTab(tab.id); };
-                const row = <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={tab.asking ? 'attention' : tab.attention ? 'done' : tab.working ? 'working' : undefined} title={`${tab.label} · 더블클릭으로 이름 바꾸기`}
+                const row = <div role="treeitem" aria-selected={on} tabIndex={0} draggable className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={tab.asking ? 'attention' : tab.attention ? 'done' : tab.working ? 'working' : undefined} title={`${tab.label} · 더블클릭으로 이름 바꾸기`}
                   onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}
                   onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  {tab.busy ? <i className="ptab-dot" aria-label="새 출력" /> : <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span>}<span className="folder-tab-label">{tab.label}</span>
+                  <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span><span className="folder-tab-label">{tab.label}</span>
                   {tab.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
                   <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>
                 </div>;
@@ -311,23 +350,35 @@ function Shell() {
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, over = dropAt?.id === tab.id && drag?.root === entry.root ? `drop-${dropAt.mode}` : '';
                 const dnd = {
                   draggable: true,
-                  onDragStart: (event: React.DragEvent) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', tab.id); setDrag({ root: entry.root, id: tab.id }); },
-                  onDragEnd: () => { setDrag(null); setDropAt(null); },
+                  onDragStart: (event: React.DragEvent) => {
+                    const source = dragSource.current; dragSource.current = null;
+                    if (source?.blocked || (event.target instanceof Element && event.target.closest('button'))) {
+                      event.preventDefault();
+                      return;
+                    }
+                    const pane = source?.root === entry.root && source.id === tab.id ? source.pane : undefined;
+                    event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane || tab.id);
+                    if (!pane) event.dataTransfer.setDragImage(event.currentTarget as HTMLElement, 0, 0);
+                    setDrag({ root: entry.root, id: tab.id, ...(pane ? { pane } : {}) });
+                  },
+                  onDragEnd: () => {
+                    dragSource.current = null; setDrag(null); setDropAt(null);
+                  },
                   onDragOver: (event: React.DragEvent<HTMLLIElement>) => {
-                    // A dragged pane may be dropped on its own box (to pull it out), a whole tab may not.
-                    if (!drag || drag.root !== entry.root || (drag.id === tab.id && !drag.pane)) return;
+                    if (!drag || drag.root !== entry.root) return;
+                    if (drag.id === tab.id) { event.dataTransfer.dropEffect = 'none'; setDropAt(null); return; }
                     event.preventDefault(); event.dataTransfer.dropEffect = 'move';
                     // Edges reorder; the middle of a tab merges the dragged one into it.
-                    const box = event.currentTarget.getBoundingClientRect(), ratio = (event.clientY - box.top) / box.height;
-                    const mode = drag.id === tab.id ? (ratio < 0.5 ? 'before' : 'after') : ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'merge';
+                    const mode = tabDropMode(event, drag.id, tab.id);
                     setDropAt(previous => previous?.id === tab.id && previous.mode === mode ? previous : { id: tab.id, mode });
                   },
                   onDrop: (event: React.DragEvent) => {
                     event.preventDefault(); event.stopPropagation();
-                    if (drag && dropAt && drag.root === entry.root) {
-                      if (drag.pane) owner()?.movePane(drag.id, drag.pane, dropAt.id, dropAt.mode);
-                      else if (dropAt.mode === 'merge') owner()?.mergeTabs(drag.id, dropAt.id);
-                      else owner()?.moveTab(drag.id, dropAt.id, dropAt.mode === 'after');
+                    if (drag && drag.root === entry.root && drag.id !== tab.id) {
+                      const mode = tabDropMode(event, drag.id, tab.id);
+                      if (drag.pane) owner()?.movePane(drag.id, drag.pane, tab.id, mode);
+                      else if (mode === 'merge') owner()?.mergeTabs(drag.id, tab.id);
+                      else owner()?.moveTab(drag.id, tab.id, mode === 'after');
                     }
                     setDrag(null); setDropAt(null);
                   }
@@ -335,12 +386,17 @@ function Shell() {
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${over}`} {...dnd}>{row}</li>;
                 // A split tab is one box holding its terminals.
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${over}`} {...dnd}
+                  onPointerDownCapture={event => {
+                    if (event.button !== 0 || !event.isPrimary) return;
+                    const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('.group-pane') : null;
+                    const targetPaneId = pane?.dataset.paneId, paneId = event.shiftKey ? targetPaneId : undefined;
+                    dragSource.current = { root: entry.root, id: tab.id, ...(paneId ? { pane: paneId } : {}), blocked: event.target instanceof Element && !!event.target.closest('button'), pointerId: event.pointerId };
+                  }}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
-                    {tab.panes.map(pane => <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''}`} data-agent={pane.agent} data-agent-state={pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined} title={`${pane.label} — Shift+드래그: 이 터미널만 빼기`}
-                      draggable
-                      // Plain drag bubbles up and moves the whole box; Shift+drag pulls just this terminal out of it.
-                      onDragStart={event => { if (!event.shiftKey) return; event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane.id); setDrag({ root: entry.root, id: tab.id, pane: pane.id }); }}
+                    {tab.panes.map(pane => <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''}`} data-agent={pane.agent} data-agent-state={pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined} title={`${pane.label} — Shift+드래그: 탭 목록 빈 공간에 놓아 단독 탭으로 분리`}
+                      // Native drag hit-testing needs the row to be draggable before pointerdown, including its text and icons.
+                      draggable data-pane-id={pane.id}
                       onClick={() => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }}
                       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); } }}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>
@@ -350,6 +406,11 @@ function Shell() {
                   </ul>
                 </li>;
               })}
+              {drag?.root === entry.root && drag.pane && <li className="pane-drop-zone" role="presentation"
+                onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                onDrop={event => { event.preventDefault(); event.stopPropagation(); owner()?.movePane(drag.id, drag.pane!, undefined, 'after'); setDrag(null); setDropAt(null); }}>
+                여기에 놓으면 단독 탭으로 분리
+              </li>}
               {item.loaded && !item.tabs.length && <li className="folder-empty">탭 없음 — <button onClick={() => owner()?.newTab()}>새 터미널</button></li>}
             </ul>}
           </section>;

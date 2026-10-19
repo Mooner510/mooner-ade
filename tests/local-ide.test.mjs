@@ -118,8 +118,13 @@ test('app settings accept terminal, sidebar and status bar preferences', () => {
   const good = { theme: 'dark', terminalFont: 'Cascadia Mono', lineHeight: 1.3, scrollback: 5000, cursorStyle: 'block', cursorBlink: false, copyOnSelect: true,
     sidebarWidth: 300, statusItems: ['path', 'cpu', 'clock'], notifyDone: false, notifyApproval: true, diffRefresh: 5, soundDone: 'bell', soundAttention: 'alert', soundVolume: 40 };
   assert.deepEqual(validateAppState(app(good)).settings, good);
+  const extended = { ...good, soundVolumeExtended: true, soundVolume: 200 };
+  assert.deepEqual(validateAppState(app(extended)).settings, extended);
+  assert.equal(validateAppState(app({ soundVolumeExtended: false, soundVolume: 100 })).settings.soundVolume, 100);
   for (const bad of [{ sidebarWidth: 100 }, { sidebarWidth: 600 }, { scrollback: 10 }, { lineHeight: 5 }, { cursorStyle: 'beam' }, { diffRefresh: 0 },
-    { statusItems: ['Not Valid'] }, { statusItems: 'cpu' }, { notifyDone: 'yes' }, { terminalFont: 7 }, { soundVolume: 101 }, { soundVolume: 1.5 }, { soundDone: 'Not Valid' }, { soundAttention: 3 }]) {
+    { statusItems: ['Not Valid'] }, { statusItems: 'cpu' }, { notifyDone: 'yes' }, { terminalFont: 7 }, { soundVolume: 101 }, { soundVolume: 1.5 },
+    { soundVolumeExtended: 'yes' }, { soundVolumeExtended: false, soundVolume: 200 }, { soundVolumeExtended: true, soundVolume: 201 }, { soundVolumeExtended: true, soundVolume: -1 }, { soundVolumeExtended: true, soundVolume: 100.5 },
+    { soundDone: 'Not Valid' }, { soundAttention: 3 }]) {
     assert.throws(() => validateAppState(app(bad)), { code: 'INVALID_INPUT' }, JSON.stringify(bad));
   }
 });

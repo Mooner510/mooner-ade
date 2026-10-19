@@ -13,7 +13,27 @@ export function Modal({ children, onClose, className = '', labelledBy = 'conflic
 }
 export function Dropdown({ value, options, onChange, label, className = '' }: { value: string; options: { value: string; label: string }[]; onChange(value: string): void; label: string; className?: string }) {
   const root = useRef<HTMLDetailsElement>(null);
-  return <details className={`dropdown ${className}`} ref={root}><summary aria-label={label}>{options.find(option => option.value === value)?.label}<Icon name="chevronDown" size={14} /></summary><div role="listbox" aria-label={label}>{options.map(option => <button role="option" aria-selected={option.value === value} key={option.value} onClick={() => { onChange(option.value); root.current!.open = false; }}>{option.label}</button>)}</div></details>;
+  const close = () => { root.current!.open = false; root.current!.querySelector('summary')!.focus(); };
+  useEffect(() => {
+    const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) root.current!.open = false; };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, []);
+  return <details className={`dropdown ${className}`} ref={root}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.open = false; }}
+    onKeyDown={event => {
+      if (event.key === 'Escape' && root.current!.open) { event.preventDefault(); event.stopPropagation(); close(); }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const buttons = [...root.current!.querySelectorAll<HTMLButtonElement>('[role=option]')];
+      if (!buttons.length) return;
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const selected = Math.max(0, options.findIndex(option => option.value === value));
+      root.current!.open = true;
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? selected : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next].focus();
+    }}><summary aria-label={label} aria-haspopup="listbox"><span>{options.find(option => option.value === value)?.label}</span><Icon name="chevronDown" size={14} /></summary>
+    <div role="listbox" aria-label={label}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} key={option.value} onClick={() => { onChange(option.value); close(); }}><span>{option.label}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
 }
 
 export function Transcript({ events }: { events: { sequence: number; kind: string; text?: string; mode?: string; itemId?: string; [key: string]: any }[] }) {
