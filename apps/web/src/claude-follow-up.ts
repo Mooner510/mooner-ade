@@ -47,13 +47,14 @@ export function hasEmptyClaudeComposer(screen: string) {
 
 // Text typed in Claude's own composer, read back from the screen (rows between the prompt and its bottom border).
 // ponytail: Ink soft-wraps and Shift+Enter newlines look alike on screen, so rows are joined with a space.
+// The `/` and `@` suggestion list under the composer marks its selected row with `❯` too, but nothing closes it with a border.
 export function claudeComposerText(screen: string): string | undefined {
-  const prompt = [...screen.matchAll(/^[ \t]*❯[ \t]?(.*)$/gm)].at(-1);
-  if (!prompt) return;
-  const rows = [prompt[1].trim()];
-  for (const line of screen.slice(prompt.index! + prompt[0].length).split('\n').slice(1)) {
-    if (/^[ \t]*[─━]{3}/.test(line)) return rows.filter(Boolean).join(' ') || undefined;
-    rows.push(line.trim());
+  for (const prompt of [...screen.matchAll(/^[ \t]*❯[ \t]?(.*)$/gm)].reverse()) {
+    const rows = [prompt[1].trim()];
+    for (const line of screen.slice(prompt.index! + prompt[0].length).split('\n').slice(1)) {
+      if (/^[ \t]*[─━]{3}/.test(line)) return rows.filter(Boolean).join(' ') || undefined;
+      rows.push(line.trim());
+    }
   }
 }
 

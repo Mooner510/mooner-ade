@@ -56,8 +56,10 @@ function stopServer() {
   if (!server) return Promise.resolve();
   const child = server;
   return new Promise(resolve => {
-    const timer = setTimeout(() => { child.kill(); resolve(); }, 5000);
-    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    // Resolve only once the old process is gone: it still holds the Vite HMR port and project lock until then.
+    let forced;
+    const timer = setTimeout(() => { child.kill(); forced = setTimeout(resolve, 3000); }, 5000);
+    child.once('exit', () => { clearTimeout(timer); clearTimeout(forced); resolve(); });
     if (child.connected) child.send({ type: 'shutdown' }); else child.kill();
   });
 }

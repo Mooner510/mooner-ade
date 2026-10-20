@@ -49,7 +49,7 @@ const brands = {
 
 export type IconName = keyof typeof glyphs | keyof typeof brands;
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
-  if (name in brands) return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">{brands[name as keyof typeof brands]}</svg>;
+  if (name in brands) return <svg className={`icon brand-${name}`} width={size + 2} height={size + 2} viewBox="0 0 24 24" aria-hidden="true">{brands[name as keyof typeof brands]}</svg>;
   return <span className="icon material-symbols-outlined" style={{ fontSize: size + 2 }} aria-hidden="true">{glyphs[name as keyof typeof glyphs]}</span>;
 }
 

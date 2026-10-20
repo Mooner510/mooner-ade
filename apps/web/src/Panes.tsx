@@ -6,7 +6,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isDiffTab, isLeaf, type Leaf, type Pane } from './api';
 import { DiffView, EditorView, monoFont, type Reveal, type Settings } from './Editor';
-import { Icon, IconButton } from './Icon';
+import { Icon, IconButton, type IconName } from './Icon';
 import { FileIcon } from './FileIcon';
 import { ANSI, createBannerDetector, createQuestionTracker } from './terminal-agent';
 import type { Agent } from './terminal-agent';
@@ -28,8 +28,27 @@ export type EditorCtx = {
 type Props = {
   followUpInput(id: string, prompt: string, sequence: number, requestId: string): Promise<boolean>;
   pane: Pane; visible: boolean; onLayout(pane: Pane): void; send(message: object): boolean; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; focus: string; zoom: string;
-  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; editor: EditorCtx;
+  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; onLaunch(id: string, command: string): void; editor: EditorCtx;
 };
+
+export const launchers: { id: string; label: string; detail: string; command: string; icon: IconName }[] = [
+  { id: 'shell', label: '터미널', detail: '기본 셸', command: '', icon: 'terminal' },
+  { id: 'claude', label: 'Claude Code', detail: 'claude', command: 'claude', icon: 'claude' },
+  { id: 'codex', label: 'Codex', detail: 'codex', command: 'codex', icon: 'codex' }
+];
+// The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
+export function Launchers({ title, onLaunch, autoFocus }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean }) {
+  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
+}
+function LauncherPane({ id, focused, onFocus, onClose, onLaunch }: { id: string; focused: boolean; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
+  return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
+    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
+    <div className="pane-tools" role="toolbar" aria-label="새 창">
+      <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
+      <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
+    <Launchers autoFocus onLaunch={command => onLaunch(id, command)} />
+  </section>;
+}
 
 // xterm colors come from the CSS custom properties so the terminal follows the app theme.
 function terminalTheme(element: Element = document.documentElement): ITheme {
@@ -82,7 +101,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
     let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, working = false, asking = false, title = '';
     let status: TerminalFeed['status'], reportedState: string | undefined;
-    let bannerTail = '', followUpSupported = false, sendingFollowUp = false, writes = 0;
+    let bannerTail = '', followUpSupported = false, sendingFollowUp = false, writes = 0, retryTimer = 0;
     const queueId = crypto.randomUUID();
     const screenText = () => {
       const buffer = terminal.buffer.active;
@@ -97,10 +116,16 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       const next = followUp.current.next((followUpSupported || status?.agent === 'claude') && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
         && !question.observe(screen, title) && hasEmptyClaudeComposer(screen));
       if (next) {
-        sendingFollowUp = true;
-        void callbacks.current.followUpInput(id, next.text, sequence, `${queueId}:${next.id}`).then(accepted => {
-          if (accepted) followUp.current.sent(next.id); // otherwise the next flush retries
-        }).catch(() => {}).finally(() => { sendingFollowUp = false; refreshQueue(); });
+        sendingFollowUp = true; clearTimeout(retryTimer);
+        let accepted = false;
+        void callbacks.current.followUpInput(id, next.text, sequence, `${queueId}:${next.id}`).then(result => {
+          accepted = result; if (accepted) followUp.current.sent(next.id);
+        }).catch(() => {}).finally(() => {
+          sendingFollowUp = false; refreshQueue();
+          // The server rejects when output arrived during its slow process check, flushes are skipped while in flight,
+          // and an idle CLI may not write again for minutes, so retry on a timer instead of waiting for the next output.
+          if (!accepted) retryTimer = window.setTimeout(() => flushQueue.current(), 1000);
+        });
       }
     };
     const progress = terminal.parser.registerOscHandler(9, value => {
@@ -245,7 +270,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
-    return () => { checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { clearTimeout(retryTimer); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {
@@ -270,7 +295,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       fitRef.current?.fit(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); notifyResizeRef.current();
     });
     return () => cancelAnimationFrame(frame);
-  }, [settings.theme, isSsh, settings.terminalFontSize, settings.terminalFont, settings.lineHeight, settings.cursorBlink, settings.cursorStyle, settings.scrollback]);
+  }, [settings.theme, settings.terminalFontSize, settings.terminalFont, settings.lineHeight, settings.cursorBlink, settings.cursorStyle, settings.scrollback]);
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
@@ -365,6 +390,7 @@ function Tree(props: Props) {
   const { pane } = props;
   if (isLeaf(pane)) return pane.kind === 'editor'
     ? <EditorGroup leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} ctx={props.editor} onFocus={props.onFocus} onZoom={props.onZoom} />
+    : pane.kind === 'launcher' ? <LauncherPane id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
     : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
   return <Splitter equalOnClick direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
     {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}

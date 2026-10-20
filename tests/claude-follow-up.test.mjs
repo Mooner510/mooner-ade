@@ -92,6 +92,8 @@ test('composer text is read back from the prompt box, including wrapped rows', (
   assert.equal(claudeComposerText('log\n──────\n❯ 다음 작업\n──────\n? for shortcuts'), '다음 작업');
   assert.equal(claudeComposerText('──────\n❯ 첫 줄 내용\n  둘째 줄\n──────'), '첫 줄 내용 둘째 줄');
   for (const screen of ['──────\n❯ \n──────', '❯ 열린 박스', '$ ls']) assert.equal(claudeComposerText(screen), undefined);
+  // The suggestion list under the composer marks its selected row with the same `❯`.
+  assert.equal(claudeComposerText('──────\n❯ /he\n──────\n  ❯ /help     Show help and available commands\n    /theme    Change the theme\n'), '/he');
 });
 
 test('a queued follow-up can be edited in place but not into an invalid text', () => {

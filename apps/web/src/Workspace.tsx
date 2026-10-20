@@ -1,8 +1,8 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
+import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { disposeModel, DiffView, type Reveal, type Settings } from './Editor';
-import { Icon, IconButton, type IconName } from './Icon';
-import { Panes, Splitter, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
+import { Icon, IconButton } from './Icon';
+import { Launchers, launchers, Panes, Splitter, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
@@ -10,7 +10,7 @@ import { Dropdown, Modal, type Ask, type GitState } from './views';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void, cursors: () => Record<string, number>): () => void; send(message: object): boolean };
-export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string };
+export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
 export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean };
 export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; dirty: number; tabs: TabInfo[]; activeTab: string };
@@ -31,11 +31,6 @@ type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Re
 type PaneTab = { id: string; title?: string; pane: Pane | null; focus?: string };
 const emptyGit: GitState = { branch: '', changes: [], additions: 0, deletions: 0 };
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-const launchers: { id: string; label: string; detail: string; command: string; icon: IconName }[] = [
-  { id: 'shell', label: '터미널', detail: '기본 셸', command: '', icon: 'terminal' },
-  { id: 'claude', label: 'Claude Code', detail: 'claude', command: 'claude', icon: 'claude' },
-  { id: 'codex', label: 'Codex', detail: 'codex', command: 'codex', icon: 'codex' }
-];
 const formatBytes = (bytes: number) => bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}GB` : `${Math.round(bytes / 2 ** 20)}MB`;
 const shortPath = (path: string) => { const clean = path.replace(/\\/g, '/'), parts = clean.split('/').filter(Boolean); return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : clean; };
 function Clock() {
@@ -310,6 +305,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }));
   const leafLabel = (leaf: Leaf, fallbackTitle?: string) => {
     if (leaf.kind === 'editor') return leaf.active ? basename(leaf.active.split(':').pop() || leaf.active) : '편집기';
+    if (leaf.kind === 'launcher') return '새 창';
     const title = titles[leaf.id] || fallbackTitle, cwd = project?.terminals.find(terminal => terminal.id === leaf.id)?.cwd;
     // Windows shells title themselves with their executable path; show just the program name.
     const clean = title && /^[A-Za-z]:[\\/]|^\//.test(title) ? basename(title.replace(/\\/g, '/')).replace(/\.exe$/i, '') : title;
@@ -333,7 +329,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
     return { id: tab.id, label: tabLabel(tab), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)),
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind || 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, dirty: tabs.filter(file => file.content !== file.saved).length, tabs: JSON.parse(tabInfo), activeTab });
@@ -369,7 +365,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     // Terminals that died with the server are reopened in the same place; agents get their previous conversation resumed.
     const renamed = new Map<string, string>(), failed = new Set<string>();
     const revive = async (tree: Pane | null): Promise<Pane | null> => {
-      const dead = leafList(tree).filter(leaf => leaf.kind !== 'editor' && !live.has(leaf.id)).slice(0, 16);
+      const dead = leafList(tree).filter(leaf => isTerminal(leaf) && !live.has(leaf.id)).slice(0, 16);
       const reopened = await Promise.all(dead.map(async leaf => {
         try {
           const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id } : {};
@@ -381,8 +377,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       }));
       return reopened.reduce<Pane | null>((next, entry) => entry && next ? mapLeaf(next, entry[0], item => ({ ...item, id: entry[1] })) : next, tree);
     };
-    const revived: PaneTab[] = [];
-    for (const tab of saved) revived.push({ ...tab, pane: await revive(clean(tab.pane)), focus: tab.focus && renamed.get(tab.focus) || tab.focus });
+    const revived: PaneTab[] = await Promise.all(saved.map(async tab => {
+      const pane = await revive(clean(tab.pane));
+      return { ...tab, pane, focus: tab.focus && renamed.get(tab.focus) || tab.focus };
+    }));
     let nextTabs = revived.map(tab => ({ id: tab.id, title: tab.title, focus: tab.focus, pane: compact(pruneDead(tab.pane, new Set([...live, ...failed]))) })).filter(tab => tab.pane);
     const placed = new Set(nextTabs.flatMap(tab => leaves(tab.pane)));
     const orphans = [...live].filter(id => !placed.has(id));
@@ -448,13 +446,16 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }, [project?.id, hub]);
 
   // ---- persistence and background refresh ----
-  // Terminal leaves are saved with their folder and agent; dead ones are reopened from these on the next start.
+  // Terminal leaves are saved with their folder and agent; dead ones are reopened from these on the next start. Unchosen launchers are not saved.
+  // An agent running over ssh lives on the remote host, so it is not saved: reviving it would start the local CLI instead.
+  const savedAgent = (id: string) => sshSet.has(id) ? undefined : agentOf(id);
   const remember = (tree: Pane | null): Pane | null => leafList(tree).reduce<Pane | null>((next, leaf) => {
+    if (leaf.kind === 'launcher') return next && remove(next, leaf.id);
     if (leaf.kind === 'editor' || !next) return next;
-    const cwd = cwds[leaf.id] ?? leaf.cwd, agent = agentOf(leaf.id);
+    const cwd = cwds[leaf.id] ?? leaf.cwd, agent = savedAgent(leaf.id);
     return mapLeaf(next, leaf.id, item => ({ ...item, ...(cwd ? { cwd } : {}), agent }));
   }, tree);
-  const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' ? '' : agentOf(leaf.id) ?? '').join(',');
+  const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' ? '' : savedAgent(leaf.id) ?? '').join(',');
   useEffect(() => {
     if (!project?.id || restoring) return;
     const timer = setTimeout(() => {
@@ -498,10 +499,29 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(result.id);
     await refresh();
   }
-  const splitTerminal = (id: string, direction: 'row' | 'column', path?: string) => openTerminalLeaf(id, direction, path);
+  // A split first shows the launcher in the new pane; picking an entry turns it into that terminal.
+  function splitTerminal(id: string, direction: 'row' | 'column') {
+    const leaf: Leaf = { id: newId(), kind: 'launcher' }, current = activePane();
+    const anchor = leaves(current).includes(id) ? id : leaves(current)[0];
+    commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
+  }
+  async function fillLauncher(id: string, command: string) {
+    const agent = detectAgent(command);
+    const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent } : {});
+    if (command) {
+      refs.pending.current.set(result.id, result.command || command);
+      if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
+    }
+    const tree = treeOf(id);
+    if (tree) { commitFor(id, mapLeaf(tree, id, () => ({ id: result.id, kind: 'terminal' }))); setFocusLeaf(result.id); }
+    else await call('terminal/close', { id: result.id });
+    await refresh();
+  }
+  // A plain new tab opens empty, showing the launcher; a command or folder opens its terminal right away.
   async function newTab(command = '', path?: string) {
     const tab: PaneTab = { id: newId(), pane: null };
     commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom('');
+    if (!command && !path) { setFocusLeaf(''); return; }
     await openTerminalLeaf('', 'row', path, command);
   }
   async function launch(command: string, where: 'tab' | 'split') {
@@ -700,9 +720,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
       if (kind === 'done' && looking) return;
       setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
-      if (!looking) onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner) });
+      // Needing an answer is worth a sound even while you watch the pane; the popup is only for when you are away.
+      if (!looking || kind === 'attention') onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
     }, focus, zoom, onFocus: setFocusLeaf, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
-    onSplit: (id: string, direction: 'row' | 'column') => run(() => splitTerminal(id, direction)), onClose: (id: string) => run(() => closeTerminal(id)),
+    onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)),
     onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
@@ -715,7 +736,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
-      : <div className="empty-tab"><h2>빈 탭</h2><div className="launchers">{launchers.map(item => <button key={item.id} onClick={() => run(() => launch(item.command, 'split'))}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>}
+      : <Launchers title="새 탭" autoFocus onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   // The review panel floats over the terminals instead of taking a column, so opening it never shrinks them.
   const columns = [false, center, false];
