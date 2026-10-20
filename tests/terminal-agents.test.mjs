@@ -31,6 +31,21 @@ test('terminal processes detect native macOS CLIs, npm wrappers, exec and SSH wi
   assert.equal(terminalProcesses(table.filter(entry => entry.pid !== 11 && entry.pid !== 12))(10).agent, null);
 });
 
+test('ssh spawned by a local agent or git is a tool call, not an ssh terminal', () => {
+  const inspect = terminalProcesses(parseProcessTable(`
+    10 1 /bin/zsh
+    11 10 /Users/me/.local/bin/claude
+    12 11 /bin/zsh -c git fetch
+    13 12 git fetch
+    14 13 ssh git@github.com git-upload-pack repo
+    20 1 /bin/zsh
+    21 20 git push
+    22 21 ssh git@github.com git-receive-pack repo
+  `));
+  assert.deepEqual(inspect(10), { agent: 'claude', ssh: false });
+  assert.deepEqual(inspect(20), { agent: null, ssh: false });
+});
+
 test('process evidence wins over stale titles and launchers; exiting clears local agent identity', () => {
   assert.equal(resolveAgent('codex', 'claude', '✳ Claude migration', false), 'codex');
   assert.equal(resolveAgent('claude', 'codex', 'Codex', false), 'claude');

@@ -23,17 +23,21 @@ export function terminalProcesses(table) {
   for (const entry of table) children.set(entry.ppid, [...(children.get(entry.ppid) || []), entry]);
   return pid => {
     let agent = null, ssh = false;
-    const seen = new Set(), queue = [pid];
+    const seen = new Set(), queue = [pid], underAgent = new Set();
     for (let i = 0; i < queue.length; i++) {
       const next = queue[i]; if (seen.has(next)) continue; seen.add(next);
       // Include the root: a shell may exec the CLI and retain the PTY's original PID.
       const entry = byPid.get(next);
+      let isAgent = false;
       if (entry) {
-        const name = executable((entry.command.match(/^"[^"]*"|^\S+/) || [''])[0]);
-        ssh ||= name === 'ssh' || name === 'ssh.exe';
-        agent ||= agentCommand(entry.command);
+        const name = executable((entry.command.match(/^"[^"]*"|^\S+/) || [''])[0]), found = agentCommand(entry.command);
+        // An ssh below a local agent or git is a tool call (e.g. git over ssh), not the user's remote session.
+        const parent = byPid.get(entry.ppid), transport = underAgent.has(entry.ppid) || /^git(\.exe)?$/.test(executable((parent?.command.match(/^"[^"]*"|^\S+/) || [''])[0]));
+        if ((name === 'ssh' || name === 'ssh.exe') && !transport) ssh = true;
+        agent ||= found; isAgent = Boolean(found);
       }
-      for (const child of children.get(next) || []) queue.push(child.pid);
+      const nested = isAgent || underAgent.has(next);
+      for (const child of children.get(next) || []) { if (nested) underAgent.add(child.pid); queue.push(child.pid); }
     }
     return { agent, ssh };
   };

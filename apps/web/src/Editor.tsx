@@ -10,7 +10,7 @@ export const statusItemIds = ['path', 'branch', 'changes', 'terminals', 'size', 
 export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, tabSize: 2, wordWrap: true, minimap: false, dimInactivePanes: true, autoSave: 'off',
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
-  sidebarWidth: 252, statusItems: [...statusItemIds], notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'chime', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3
+  sidebarWidth: 252, statusItems: [...statusItemIds], notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3
 };
 export const monoFont = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';

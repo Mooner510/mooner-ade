@@ -43,6 +43,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .spacer { flex: 1; }
 .hint { color: var(--muted); padding: 8px 12px; margin: 0; }
 .empty { margin: auto; text-align: center; padding: 30px; color: var(--muted); }
+.error button { -webkit-app-region: no-drag; app-region: no-drag; }
 .error { background: #4a1a1d; color: #ffd7da; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; }
 .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .icon.material-symbols-outlined { width: auto; height: auto; line-height: 1; stroke: none; user-select: none; }
@@ -161,21 +162,11 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .rail-alert { position: absolute; top: -6px; left: -6px; border-radius: 4px; background: var(--bg); }
 @keyframes question-flash { 0%, 12%, 24%, 100% { opacity: 1; } 6%, 18% { opacity: .15; } }
 @media (prefers-reduced-motion: reduce) { .terminal-pane[data-agent-state="working"], .terminal-pane[data-agent-state="working"] .pane-mark { animation: none; box-shadow: 0 0 0 2px var(--agent); } .question-alert { animation: none; } }
-/* ssh: the whole terminal turns green. With Claude Code / Codex running inside, the frame and header are half green, half the agent's color. */
-.terminal-pane[data-ssh] {
-  --ssh: #3fb950;
-  --term-bg: #0e1c13; --term-fg: #d7efdc; --term-cursor: #3fb950; --term-selection: #3fb95040; --term-black: #14261a;
-  --term-green: #6fe08a; --term-bright-green: #9cf0b0; --term-bright-black: #5c7a65;
-  border-color: color-mix(in srgb, var(--ssh) 60%, var(--border));
-}
-:root[data-theme=light] .terminal-pane[data-ssh] { --ssh: #1a7f37; --term-bg: #edf7ef; --term-fg: #17301f; --term-cursor: #1a7f37; --term-selection: #1a7f3733; --term-black: #1f3a27; --term-green: #16692e; --term-bright-green: #2da44e; --term-bright-black: #54705c; }
-.terminal-pane[data-ssh] .pane-tools { background: color-mix(in srgb, var(--ssh) 20%, var(--term-bg)); border-bottom-color: var(--ssh); }
-.terminal-pane[data-ssh] .pane-mark, .terminal-pane[data-ssh].focused .pane-mark { color: var(--ssh); }
-.terminal-pane[data-ssh] .pane-label::before { content: "SSH · "; font-weight: 700; color: var(--ssh); }
-.terminal-pane[data-ssh][data-agent] .pane-tools { background: linear-gradient(90deg, color-mix(in srgb, var(--ssh) 28%, var(--term-bg)) 50%, color-mix(in srgb, var(--agent) 28%, var(--term-bg)) 50%); border-bottom-color: transparent; }
-.terminal-pane[data-ssh][data-agent] .pane-mark { color: var(--agent); }
-.terminal-pane[data-ssh][data-agent]::after { content: ''; position: absolute; inset: 0; z-index: 2; border-radius: inherit; padding: 2px; pointer-events: none; background: linear-gradient(90deg, var(--ssh) 50%, var(--agent) 50%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+/* ssh: only the header title glows neon green; the terminal itself keeps its normal colors. */
+.terminal-pane[data-ssh] { --ssh: #39ff6a; }
+:root[data-theme=light] .terminal-pane[data-ssh] { --ssh: #0f9d3a; }
+.terminal-pane[data-ssh] .pane-label { color: var(--ssh); font-weight: 600; text-shadow: 0 0 4px color-mix(in srgb, var(--ssh) 70%, transparent), 0 0 10px color-mix(in srgb, var(--ssh) 45%, transparent); }
+:root[data-theme=light] .terminal-pane[data-ssh] .pane-label { text-shadow: 0 0 6px color-mix(in srgb, var(--ssh) 35%, transparent); }
 .dim-inactive .terminal-pane:not(.focused) .xterm-host, .dim-inactive .editor-group:not(.focused) .editor { opacity: .55; transition: opacity .15s; }
 .xterm-host { box-sizing: content-box; flex: 1; min-height: 0; padding: 8px 10px 12px; overflow: hidden; }
 .xterm .xterm-viewport { scrollbar-width: thin; }
@@ -191,13 +182,14 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .pane-title { grid-column: 2; display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; max-width: 100%; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
 .pane-exited { display: flex; align-items: center; gap: 10px; padding: 6px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); background: var(--raised); }
 .terminal-pane.exited .xterm-host { opacity: .5; }
-.claude-follow-up { flex-shrink: 0; max-height: 45%; overflow: auto; border-top: 1px solid var(--border); padding: 8px 10px; background: var(--raised); font-size: 12px; }
+.claude-follow-up { flex-shrink: 0; max-height: 45%; overflow: auto; border-top: 1px solid var(--border); padding: 6px 10px; background: var(--raised); font-size: 12px; }
 .follow-up-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); }
-.claude-follow-up ol { margin: 6px 0; padding-left: 20px; }
-.claude-follow-up li { display: flex; align-items: start; gap: 8px; margin: 4px 0; }
-.claude-follow-up li span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60px; overflow: auto; }
+.claude-follow-up ol { margin: 2px 0 0; padding-left: 0; list-style: none; }
+.claude-follow-up li { display: flex; align-items: center; gap: 6px; margin: 0; }
+.claude-follow-up li > span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60px; line-height: 1.4; padding: 2px 0; overflow: auto; }
 .claude-follow-up li textarea { flex: 1; min-width: 0; width: auto; margin: 0; }
 .claude-follow-up button { flex-shrink: 0; }
+.claude-follow-up .icon-btn { width: 22px; height: 22px; }
 .claude-follow-up textarea { width: 100%; box-sizing: border-box; resize: vertical; margin: 6px 0; font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
 .tab-strip { background: var(--raised); flex-wrap: nowrap; gap: 0; flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .tabs { display: flex; flex: 1; overflow-x: auto; min-width: 0; scrollbar-width: none; }
@@ -212,11 +204,14 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 
 .dropdown { position: relative; }
-.dropdown summary { cursor: pointer; padding: 4px 8px; background: var(--input); border: 1px solid var(--border); border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; color: var(--fg); }
+/* Chrome skips painting closed <details> content via content-visibility, which leaves the fixed list blank after rapid toggles. */
+.dropdown::details-content { content-visibility: visible; }
+.dropdown:not([open]) > div { display: none; }
+.dropdown summary { cursor: pointer; user-select: none; padding: 4px 8px; background: var(--input); border: 1px solid var(--border); border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; color: var(--fg); }
 .dropdown summary::-webkit-details-marker { display: none; }
 .dropdown summary > .icon { color: var(--muted); flex: none; transition: transform .12s; }
 .dropdown[open] summary > .icon { transform: rotate(180deg); }
-.dropdown > div { position: absolute; z-index: 30; left: 0; right: 0; min-width: 200px; background: var(--overlay); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; max-height: 240px; overflow: auto; box-shadow: var(--shadow); }
+.dropdown > div { position: fixed; z-index: 1000; min-width: max(200px, var(--anchor-width, 0px)); max-width: calc(100vw - 16px); background: var(--overlay); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; max-height: 240px; overflow: auto; box-shadow: var(--shadow); }
 .dropdown > div button { text-align: left; border-radius: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dropdown > div button[aria-selected=true] { color: var(--accent); background: var(--selected); }
 
@@ -373,7 +368,9 @@ dialog::backdrop { background: #0009; }
 .ptab-close { width: 20px; height: 20px; padding: 0; display: none; place-items: center; flex: none; margin-left: auto; border-radius: 4px; color: var(--muted); }
 .ptab-close:hover { color: var(--fg); background: var(--hover); }
 .folder-tab:hover .ptab-close, .folder-tab:focus-within .ptab-close, .group-pane:hover .ptab-close, .group-pane:focus-within .ptab-close { display: grid; }
-.folder-tab > .attn-dot + .ptab-close, .group-pane > .attn-dot + .ptab-close { margin-left: 0; }
+.folder-tab > .question-alert, .group-pane > .question-alert { margin-left: auto; margin-right: 2px; }
+.folder-tab > .attn-dot + .ptab-close, .group-pane > .attn-dot + .ptab-close { margin-left: -9px; }
+.folder-tab > .question-alert + .ptab-close, .group-pane > .question-alert + .ptab-close { margin-left: -6px; }
 /* a tab split into several panes is drawn as one box that groups them */
 /* a split tab: one box that holds its terminals */
 .folder-group { display: flex; flex-direction: column; min-width: 0; padding: 6px; margin: 3px 0; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); }
@@ -418,8 +415,6 @@ body.resizing .xterm-host { pointer-events: none; }
 .rail-dot, .rail-dirty { position: absolute; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--bg); box-sizing: content-box; }
 .rail-dot.attn { left: -4px; top: -4px; background: var(--del); }
 .rail-dirty { right: -4px; bottom: -4px; background: var(--warn); }
-.rail-close { position: absolute; inset: auto -4px -4px auto; width: 16px; height: 16px; padding: 0; display: none; place-items: center; border-radius: 50%; background: var(--raised); color: var(--fg); border: 1px solid var(--border-strong); }
-.rail-item:hover .rail-close, .rail-item:focus-visible .rail-close { display: grid; }
 .rail-item:hover .rail-dirty { display: none; }
 
 /* status bar items */
@@ -437,6 +432,9 @@ body.resizing .xterm-host { pointer-events: none; }
 /* empty states */
 .empty-tab .launchers button { align-items: center; text-align: center; }
 .empty-tab .launchers button .icon { color: var(--accent); margin-bottom: 4px; }
+.launchers button:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 1px var(--accent-soft); }
+.launcher-pane { background: var(--surface); }
+.launcher-pane .empty-tab { padding: 16px; }
 .review-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .review-empty .icon { color: var(--add); }
 .review-toggle .icon { color: var(--muted); }
@@ -465,8 +463,7 @@ body.resizing .xterm-host { pointer-events: none; }
 .setting-control .dropdown summary { align-items: center; min-height: 32px; padding: 6px 10px; border-color: var(--border-strong); border-radius: 7px; transition: border-color .12s, background .12s; }
 .setting-control .dropdown summary:hover { background: var(--raised); }
 .setting-control .dropdown[open] summary { border-color: var(--accent); }
-.setting-control .dropdown > div { top: calc(100% + 5px); min-width: 100%; padding: 4px; gap: 2px; border-color: var(--border-strong); border-radius: 8px; }
-.setting-row:last-child .dropdown > div { top: auto; bottom: calc(100% + 5px); }
+.setting-control .dropdown > div { min-width: var(--anchor-width); padding: 4px; gap: 2px; border-color: var(--border-strong); border-radius: 8px; }
 .setting-control .dropdown > div button { padding: 7px 8px; border-radius: 4px; }
 .setting-control .dropdown > div button:focus-visible { background: var(--selected); outline: 1px solid var(--focus); }
 @media (prefers-reduced-motion: reduce) { .dropdown summary > .icon, .setting-control .dropdown summary { transition: none; } }
@@ -506,3 +503,8 @@ body.resizing .xterm-host { pointer-events: none; }
 
 .welcome-card button.link { background: none; border: 0; padding: 4px 0; margin: 6px 0; color: var(--muted, inherit); text-align: left; cursor: pointer; }
 .welcome-card button.link:hover { text-decoration: underline; }
+.icon.brand-claude { color: #e08a5a; }
+.icon.brand-codex { color: #10a37f; }
+.empty-tab .launchers button .icon.brand-claude { color: #e08a5a; }
+.empty-tab .launchers button .icon.brand-codex { color: #10a37f; }
+.terminal-pane[data-agent] .pane-mark .icon, .folder-tab[data-agent] .folder-tab-mark .icon, .group-pane[data-agent] .folder-tab-mark .icon { color: inherit; }

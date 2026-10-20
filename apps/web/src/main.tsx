@@ -208,7 +208,7 @@ function Shell() {
   // ---- background activity: a project you are not looking at can still need you ----
   // Terminal agents (Claude Code, Codex) that stopped or asked something: a notification plus a short sound, unless you are already watching.
   const onAgentAlert = useCallback((root: string, alert: AgentAlert) => {
-    const wanted = alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval;
+    const wanted = !alert.looking && (alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval);
     if (!wanted && !settings.notifySound) return;
     const project = statusRef.current[root]?.name || shortName(root), agent = alert.agent === 'claude' ? 'Claude Code' : 'Codex';
     const title = `${project} · ${agent} ${alert.kind === 'done' ? '작업 멈춤' : '입력 요청'}`;
@@ -321,7 +321,6 @@ function Shell() {
             <span className="rail-initial">{initials(name)}</span>
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
             {item.dirty > 0 && <i className="rail-dirty" aria-label="저장 안 됨" />}
-            <button className="rail-close" aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={12} /></button>
           </div>;
           return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`}>
             <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectDnd}

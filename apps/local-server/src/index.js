@@ -41,11 +41,15 @@ if (process.platform !== 'win32') {
 }
 // With ADE_PTY_ENDPOINT (desktop dev) terminals live in a separate pty-host process, so this server can restart without killing them.
 const ptyHost = process.env.ADE_PTY_ENDPOINT ? await connectPtyHost({ endpoint: process.env.ADE_PTY_ENDPOINT, token: process.env.ADE_PTY_TOKEN }).catch(error => { console.error(`pty-host 연결 실패, 서버 내부 PTY를 사용합니다: ${error.message}`); return null; }) : null;
+// Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
+delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN;
 const pty = ptyHost ? { spawn: ptyHost.factory.spawn } : await import('node-pty').catch(() => null);
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
 const projects = new Map();
-const opening = serial();
+// Opening and closing are serialized per project only, so restoring many projects at startup does not queue them behind each other.
+const openings = new Map();
+const opening = id => { if (!openings.has(id)) openings.set(id, serial()); return openings.get(id); };
 const registryWrite = serial();
 const clients = new Set();
 const lsp = createLspManager((id, message) => { const project = projects.get(id); if (project) broadcast(project, { type: 'lsp', message }); });
@@ -129,12 +133,12 @@ function repositoryRuntime(project, repo) {
 }
 
 async function openProject(requested) {
-  return opening(async () => {
-    const root = await fs.realpath(text(requested, '프로젝트 경로'));
-    if (!(await fs.stat(root)).isDirectory()) throw fault('INVALID_PROJECT', '폴더를 선택하세요.');
-    const runtime = createLocalRuntime({ root, scope: 'root', ptyFactory });
-    const discovered = await discoverRepositories(root, runtime.processes);
-    const id = !discovered.multiRepo && discovered.repositories[0] ? discovered.repositories[0].id : createHash('sha256').update(root).digest('hex');
+  const root = await fs.realpath(text(requested, '프로젝트 경로'));
+  if (!(await fs.stat(root)).isDirectory()) throw fault('INVALID_PROJECT', '폴더를 선택하세요.');
+  const runtime = createLocalRuntime({ root, scope: 'root', ptyFactory });
+  const discovered = await discoverRepositories(root, runtime.processes);
+  const id = !discovered.multiRepo && discovered.repositories[0] ? discovered.repositories[0].id : createHash('sha256').update(root).digest('hex');
+  return opening(id)(async () => {
     if (projects.has(id)) return projects.get(id);
     const directory = path.join(dataRoot, id);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -204,7 +208,7 @@ async function adoptTerminals(project) {
 // Releases everything a project holds. Without `force`, live agent runs or terminals make it refuse so work is not killed by accident.
 // `detach` (server shutdown) leaves pty-host terminals running for the next server instead of killing them.
 function closeProject(project, { force = false, detach = false } = {}) {
-  return opening(async () => {
+  return opening(project.id)(async () => {
     if (projects.get(project.id) !== project) return;
     const busyJobs = project.jobs.size, liveTerminals = [...project.terminals.values()].filter(terminal => !terminal.exited).length;
     if (!force && (busyJobs || liveTerminals)) throw fault('PROJECT_BUSY', `실행 중인 에이전트 ${busyJobs}개, 터미널 ${liveTerminals}개가 있습니다.`, 409, { jobs: busyJobs, terminals: liveTerminals });
@@ -667,7 +671,8 @@ async function route(action, input, project) {
         const sessionShell = await terminalSessionShell(project.directory, id, runtime.terminal.shell);
         const command = input.agent === undefined ? undefined : await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked);
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
-        const native = await runtime.terminal.open({ cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
+        // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
+        const native = await runtime.terminal.open({ cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
