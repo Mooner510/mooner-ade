@@ -11,6 +11,7 @@ app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop')
 // The local server runs under the system Node (not Electron's), so node-pty keeps its normal Node ABI build.
 const serverEntry = path.resolve(import.meta.dirname, '../../local-server/src/index.js');
 const background = '#0c0d0f';
+const iconPath = path.resolve(import.meta.dirname, '../assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 // `pnpm desktop:dev`: the server hosts a Vite dev server (HMR) instead of web/dist.
 const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1';
@@ -107,7 +108,7 @@ async function restartServer() {
 
 function createWindow(url) {
   const window = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title: '무너에이드', show: false,
+    width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title: '무너에이드', show: false, icon: iconPath,
     // The web UI's tab bar becomes the title bar; window controls overlay it on Windows/Linux.
     titleBarStyle: 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 13 } } : { titleBarOverlay: { color: background, symbolColor: '#8b9099', height: 40 } }),
     webPreferences: { preload: path.resolve(import.meta.dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false }
@@ -142,6 +143,7 @@ else {
   app.on('second-instance', () => { const [window] = BrowserWindow.getAllWindows(); if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
     installMenu();
+    if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
     try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }
   });
