@@ -37,7 +37,8 @@ export interface PtySession {
 }
 export declare class LocalTerminal {
   constructor(options?: { shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } });
-  open(options?: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string>; meta?: object }): Promise<PtySession>;
+  shell: string;
+  open(options?: { cwd?: string; cols?: number; rows?: number; env?: Record<string, string>; args?: string[]; meta?: object }): Promise<PtySession>;
 }
 export declare function createLocalRuntime(options?: { root?: string; scope?: 'unrestricted' | 'root'; shell?: string; ptyFactory?: { spawn(file: string, args: string[], options: object): unknown } }): {
   workspace: LocalWorkspace; processes: LocalProcesses; git: LocalGit; terminal: LocalTerminal; platform: { type: 'local'; os: string };

@@ -40,8 +40,80 @@ async function boot(t) {
   await git(repo, 'add', '.');
   await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'files');
   const project = await api('project/open', { path: repo });
-  return { origin, cookie, api, repo, projectId: project.id, call: (action, body, expected) => api(action, { projectId: project.id, ...body }, expected) };
+  return { origin, cookie, api, repo, data, projectId: project.id, call: (action, body, expected) => api(action, { projectId: project.id, ...body }, expected) };
 }
+
+test('terminal restore keeps concurrent provider sessions separate and sends legacy terminals to the picker', async t => {
+  const { call, data, projectId } = await boot(t);
+  if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const sessions = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+  for (const agent of ['claude', 'codex']) {
+    for (const sessionId of sessions) {
+      const original = await call('terminal/open', { agent });
+      const directory = join(data, projectId, 'terminal-sessions', original.id);
+      if (agent === 'claude') await writeFile(join(directory, 'session.json'), JSON.stringify({ agent, sessionId }));
+      else await writeFile(join(directory, 'codex-tui.log'), `2026-10-20T00:00:00Z  INFO session_loop{thread_id=${sessionId}}: codex_core::session: new\n`);
+      await call('terminal/close', { id: original.id });
+      const restored = await call('terminal/open', { agent, restoreId: original.id });
+      assert.match(restored.command, new RegExp(agent === 'claude' ? `^claude --resume ${sessionId}(?: |$)` : `^codex resume ${sessionId}(?: |$)`));
+      await call('terminal/close', { id: restored.id });
+    }
+    const legacy = await call('terminal/open', { agent, restoreId: 'old-terminal' });
+    assert.match(legacy.command, agent === 'claude' ? /^claude --resume(?: |$)/ : /^codex resume(?: |$)/);
+    assert.doesNotMatch(legacy.command, /--continue|--last/);
+    await call('terminal/close', { id: legacy.id });
+  }
+  await call('terminal/open', { agent: 'other' }, 400);
+  await call('terminal/open', { agent: 'claude', restoreId: '../escape' }, 400);
+  await call('terminal/open', { restoreId: 'old-terminal' }, 400);
+});
+
+test('manually typed CLIs record separate sessions through the real PTY startup functions', { skip: process.platform === 'win32' }, async t => {
+  const { call, repo, origin, cookie, projectId } = await boot(t);
+  if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const bin = join(repo, 'bin'), fixture = join(repo, 'session-cli.mjs');
+  await mkdir(bin);
+  await writeFile(fixture, `import {readFileSync,writeFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import path from 'node:path';
+const [agent, sessionId, ...args] = process.argv.slice(2);
+if (agent === 'claude') {
+  const settings = JSON.parse(readFileSync(args[args.indexOf('--settings') + 1], 'utf8'));
+  const result = spawnSync(settings.hooks.SessionStart[0].hooks[0].command, {shell:true,input:JSON.stringify({hook_event_name:'SessionStart',session_id:sessionId})});
+  if(result.status) throw new Error(String(result.stderr));
+} else {
+  const root = args[args.indexOf('-c') + 1].slice('log_dir='.length);
+  writeFileSync(path.join(root, 'codex-tui.log'), '2026-10-20T00:00:00Z  INFO session_loop{thread_id='+sessionId+'}: codex_core::session: new\\n');
+}
+console.log('session-ready-'+sessionId);
+setInterval(()=>{}, 1000);
+`);
+  const quote = value => `'${value.replaceAll("'", "'\"'\"'")}'`;
+  for (const agent of ['claude', 'codex']) await writeFile(join(bin, agent), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fixture)} ${agent} "$ADE_TEST_SESSION" "$@"\n`, { mode: 0o700 });
+  const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } }), messages = [];
+  t.after(() => ws.close());
+  ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  const until = async predicate => {
+    const end = Date.now() + 10000;
+    while (Date.now() < end) {
+      if (messages.some(predicate)) return;
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    throw new Error('manual CLI session timeout');
+  };
+  for (const agent of ['claude', 'codex']) for (const sessionId of ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']) {
+    const terminal = await call('terminal/open');
+    await until(message => message.type === 'terminal' && message.id === terminal.id);
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id: terminal.id, data: `export PATH=${quote(bin)}:"$PATH" ADE_TEST_SESSION=${sessionId}; ${agent}\r` }));
+    await until(message => message.type === 'terminal' && message.id === terminal.id && message.data.includes(`session-ready-${sessionId}`));
+    await call('terminal/close', { id: terminal.id });
+    const restored = await call('terminal/open', { agent, restoreId: terminal.id });
+    assert.match(restored.command, new RegExp(`${agent === 'claude' ? '--resume' : 'resume'} ${sessionId}(?: |$)`));
+    await call('terminal/close', { id: restored.id });
+  }
+});
 
 test('server requires auth and rejects foreign origins', async t => {
   const { origin } = await boot(t);
@@ -217,19 +289,37 @@ test('websocket: terminal agent processes survive replay, switch providers and c
     const directory = join(repo, 'node_modules', folder);
     await mkdir(directory, { recursive: true });
     const script = join(directory, name);
-    await writeFile(script, 'setInterval(() => process.stdout.write("working\\n"), 300);');
+    const app = folder.includes('claude-code') ? 'claude-code' : 'codex';
+    await writeFile(script, `process.stdin.setRawMode(true); process.stdin.resume();
+      process.stdout.write('\\x1b]7501;?\\x1b\\\\');
+      let started = false, input = '';
+      process.stdin.on('data', data => {
+        input += data;
+        if (input.includes('\\x03')) process.exit();
+        if (!started && input.includes('\\x1b]7501;?\\x1b\\\\')) {
+          started = true;
+          process.stdout.write('\\x1b]7501;state=working:app=${app}\\x1b\\\\');
+          process.stdout.write('redraw\\n'.repeat(40000));
+        }
+      });`);
     messages.length = 0;
     ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `"${process.execPath}" "${script}"\r` }));
   };
   await run('@anthropic-ai/claude-code', 'cli.js');
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'claude');
+  await until(message => message.type === 'terminal' && message.id === id && message.status?.state === 'working');
   const replay = await connect();
   await replay.until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'claude');
+  const restored = await replay.until(message => message.type === 'terminal/replay' && message.id === id);
+  assert.deepEqual(restored.status, { agent: 'claude', state: 'working' });
+  assert.ok(!restored.data.includes('7501;state=working'), 'state survives even when its report has scrolled out of the replay buffer');
   messages.length = 0;
   ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: '\x03' }));
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === null);
+  await until(message => message.type === 'terminal/status' && message.id === id && message.status === null);
   await run('@openai/codex/bin', 'codex.js');
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'codex');
+  await until(message => message.type === 'terminal' && message.id === id && message.status?.agent === 'codex' && message.status.state === 'working');
   await call('terminal/close', { id });
 });
 

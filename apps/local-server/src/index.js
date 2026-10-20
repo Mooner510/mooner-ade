@@ -19,7 +19,9 @@ import { validateUi, validateAppState } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
 import { parseProcessTable, terminalProcesses } from './terminal-processes.js';
+import { createTerminalStatus } from './terminal-status.js';
 import { watchProjectFiles } from './project-watch.js';
+import { terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -174,16 +176,20 @@ async function openProject(requested) {
         await writeJson(path.join(dataRoot, 'recent.json'), trimRecent([{ id, root, ...(previous?.pinned ? { pinned: true } : {}) }, ...recent.filter(item => item.id !== id)]));
       });
       project.watcher = watchProject(project);
-      projects.set(id, project);
+      // Adopt before registering: a snapshot taken in between would show live host terminals as dead and the UI would reopen/prune them.
       await adoptTerminals(project);
+      projects.set(id, project);
       return project;
     } catch (error) { await fs.unlink(lockFile); throw error; }
   });
 }
 function registerTerminal(project, id, native, cwd, initial = '') {
-  const terminal = { native, cwd, buffer: initial, sequence: initial ? 1 : 0, exited: false };
+  const status = createTerminalStatus(data => native.write(data));
+  status.feed(initial, true);
+  // Adopted terminals start above any sequence a browser saw from a previous server, or it would drop their replay as stale.
+  const terminal = { native, cwd, buffer: initial, sequence: initial ? Date.now() : 0, exited: false, status };
   project.terminals.set(id, terminal);
-  native.onData(data => { terminal.buffer = (terminal.buffer + data).slice(-262144); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence }); });
+  native.onData(data => { status.feed(data); terminal.buffer = (terminal.buffer + data).slice(-262144); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: status.status }); });
   native.onExit(event => { terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
   return terminal;
 }
@@ -657,10 +663,13 @@ async function route(action, input, project) {
         const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
         if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
         const id = randomUUID();
+        if (input.restoreId !== undefined && input.agent === undefined) throw fault('INVALID_INPUT', '복구할 에이전트를 지정하세요.');
+        const sessionShell = await terminalSessionShell(project.directory, id, runtime.terminal.shell);
+        const command = input.agent === undefined ? undefined : await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked);
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
-        const native = await runtime.terminal.open({ cwd, env: { ConEmuANSI: 'ON', WT_SESSION: '' }, meta: { projectId: project.id, id, cwd } });
+        const native = await runtime.terminal.open({ cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
         registerTerminal(project, id, native, cwd);
-        return { id };
+        return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
     }
     case 'terminal/close': {
@@ -771,7 +780,7 @@ wss.on('connection', socket => {
         for (const session of await project.store.list()) {
           for (const event of await project.runner.replay(session.id, { afterSequence: message.cursors?.[session.id] || 0 })) tagged({ type: 'event', event });
         }
-        for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer, sequence: terminal.sequence, exited: terminal.exited });
+        for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
         for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
         for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
       } else if (message.type === 'unsubscribe') {
@@ -837,6 +846,10 @@ const sshTimer = setInterval(async () => {
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
       if (terminal.exited || !terminal.native.pid) continue;
       const { agent, ssh } = inspect(terminal.native.pid), changedSsh = ssh !== Boolean(terminal.ssh);
+      if (terminal.agent && agent !== terminal.agent && !ssh && terminal.status.status?.agent !== agent) {
+        terminal.status.clear();
+        broadcast(project, { type: 'terminal/status', id, status: null });
+      }
       if (ssh !== Boolean(terminal.ssh)) { terminal.ssh = ssh; broadcast(project, { type: 'terminal/ssh', id, ssh }); }
       if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); }
     }

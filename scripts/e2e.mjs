@@ -114,6 +114,62 @@ async function main() {
   for (let i = 0; i < 100 && !(await readFile(join(repo, 'hello-e2e.txt'), 'utf8')).includes('changed-e2e'); i++) await sleep(100);
   assert.match(await readFile(join(repo, 'hello-e2e.txt'), 'utf8'), /changed-e2e/);
   console.log('e2e: authenticated project and PTY file write passed');
+  const enter = async () => {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  };
+  const viewport = 'document.querySelector("main.app:not([hidden]) .tab-page:not([hidden]) .xterm-viewport")';
+  await send('Input.insertText', { text: `"${process.execPath}" -e "for(let i=0;i<2000;i++) console.log('scroll-history-'+i)"` }); await enter();
+  await until(`(() => { const v = ${viewport}; return v && v.scrollHeight > v.clientHeight * 5; })()`, 'terminal scrollback');
+  const projectId = await evaluate('window.e2eReloadPending = true; window.e2eProjectId');
+  await send('Page.reload');
+  await until(`!window.e2eReloadPending && (() => { const v = ${viewport}; return v && v.scrollHeight > v.clientHeight * 5; })()`, 'scrollback restored after reload');
+  const bottomGap = `(() => { const v = ${viewport}; return v.scrollHeight - v.clientHeight - v.scrollTop; })()`;
+  assert.ok(await evaluate(bottomGap) <= 1, 'reload must show the bottom as soon as scrollback is ready');
+  await sleep(700);
+  assert.ok(await evaluate(bottomGap) <= 1, 'late layout must keep the restored terminal at the bottom');
+  await evaluate(`${viewport}.scrollTop = 0`);
+  await sleep(300);
+  assert.equal(await evaluate(`${viewport}.scrollTop`), 0, 'finished restoration must allow reading older output');
+  await evaluate(`${viewport}.scrollTop = ${viewport}.scrollHeight`);
+  await evaluate(`window.e2eProjectId = ${JSON.stringify(projectId)}`);
+  console.log('e2e: long scrollback reload starts at the bottom and preserves subsequent manual scrolling');
+  for (const [agent, folder, name, app] of [['claude', '@anthropic-ai/claude-code', 'cli.js', 'claude-code'], ['codex', '@openai/codex/bin', 'codex.js', 'codex']]) {
+    const directory = join(repo, 'node_modules', folder), script = join(directory, name);
+    await mkdir(directory, { recursive: true });
+    await writeFile(script, `process.stdin.setRawMode(true); process.stdin.resume();
+      const report = state => process.stdout.write('\\x1b]7501;state=' + state + ':app=${app}\\x1b\\\\');
+      let ready = false, input = '';
+      process.stdout.write('\\x1b]7501;?\\x1b\\\\');
+      process.stdin.on('data', data => {
+        input += data;
+        if (input.includes('\\x03')) process.exit();
+        if (!ready && input.includes('\\x1b]7501;?\\x1b\\\\')) { ready = true; input = ''; report('idle'); }
+        else if (ready) { for (const key of data.toString()) { const state = {w:'working', b:'blocked', d:'done', i:'idle'}[key]; if (state) report(state); } }
+      });
+      setInterval(() => process.stdout.write('\\rStatus redraw — ready for input\\x1b[K'), 200);`);
+    await evaluate(`document.querySelector(${JSON.stringify(activeTerminal)}).focus()`);
+    await send('Input.insertText', { text: `"${process.execPath}" "${script}"` }); await enter();
+    const pane = `main.app:not([hidden]) .terminal-pane[data-agent="${agent}"]`;
+    await until(`document.querySelector(${JSON.stringify(pane)})?.dataset.agentState === 'idle'`, `${agent} negotiated idle state`);
+    await evaluate(`window.e2eFalseWork = false; window.e2eStatusObserver = new MutationObserver(records => {
+      for (const record of records) if (record.oldValue === 'working' || record.target.dataset.agentState === 'working') window.e2eFalseWork = true;
+    }); window.e2eStatusObserver.observe(document.querySelector(${JSON.stringify(pane)}), { attributes: true, attributeFilter: ['data-agent-state'], attributeOldValue: true });`);
+    await sleep(700);
+    assert.equal(await evaluate('window.e2eStatusObserver.disconnect(); window.e2eFalseWork'), false, `${agent} idle redraw started work`);
+    await send('Input.insertText', { text: 'w' });
+    await until(`document.querySelector(${JSON.stringify(pane)})?.dataset.agentState === 'working'`, `${agent} working report without a spinner`);
+    await sleep(5200);
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(pane)}).dataset.agentState`), 'working', `${agent} work timed out`);
+    for (const [key, state] of [['b', 'attention'], ['w', 'working'], ['d', 'idle'], ['i', 'idle']]) {
+      await send('Input.insertText', { text: key });
+      await until(`document.querySelector(${JSON.stringify(pane)})?.dataset.agentState === ${JSON.stringify(state)}`, `${agent} ${state} report`);
+    }
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'c', code: 'KeyC', modifiers: 2, windowsVirtualKeyCode: 67 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'c', code: 'KeyC', modifiers: 2, windowsVirtualKeyCode: 67 });
+    await until(`!document.querySelector(${JSON.stringify(pane)})`, `${agent} cleared on process exit`);
+  }
+  console.log('e2e: Claude/Codex explicit status, idle redraws, long work, approvals and process exit passed');
   await evaluate(`${visible('[aria-label="변경사항 Diff 패널"]')}.click()`);
   await until(`Boolean(${visible('.review-file')}) && ${visible('.review-file')}.innerText.includes('hello-e2e.txt')`, 'Git changes panel');
   await until(`Boolean(${visible('.monaco-diff-editor')})`, 'read-only diff');

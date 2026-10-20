@@ -64,6 +64,7 @@ test('P1: terminal PTY port forwards keyboard, resize and lifecycle events', asy
   let killed = false;
   const ptyFactory = { spawn(shell, argv, options) {
     assert.equal(shell, '/bin/sh');
+    assert.deepEqual(argv, ['-i']);
     assert.equal(options.cwd, root);
     assert.equal(options.cols, 80);
     return {
@@ -73,7 +74,7 @@ test('P1: terminal PTY port forwards keyboard, resize and lifecycle events', asy
     };
   } };
   const engine = new AdeEngine({ runtime: createLocalRuntime({ root, shell: '/bin/sh', ptyFactory }), policy: new AllowAllPolicy() });
-  const pty = await engine.openTerminal({ cwd: root, cols: 80, rows: 24 });
+  const pty = await engine.openTerminal({ cwd: root, cols: 80, rows: 24, args: ['-i'] });
   pty.onData(text => outputs.push(text));
   pty.onExit(event => exits.push(event.exitCode));
   pty.write('pwd\r');
