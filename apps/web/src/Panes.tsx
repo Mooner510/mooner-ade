@@ -10,15 +10,13 @@ import { Icon, IconButton } from './Icon';
 import { FileIcon } from './FileIcon';
 import { ANSI, createBannerDetector, createQuestionTracker } from './terminal-agent';
 import type { Agent } from './terminal-agent';
-import { claudeDraftInput, claudePromptInput, createClaudeFollowUp, hasEmptyClaudeComposer, validClaudeDraft, claudeFollowUpVersion } from './claude-follow-up';
+import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
 export type { Agent } from './terminal-agent';
 
 // Terminal-generated reports: focus in/out (CSI I / O) and SGR mouse events.
 const REPORT = /^(?:\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm])+$/;
 export type AgentEventKind = 'done' | 'attention';
-// An agent that stays silent this long after working has finished, stopped, or is waiting for you.
-const AGENT_IDLE_MS = 5000, ECHO_MS = 1500, MIN_WORK_MS = 3000;
-export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean };
+export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error' } | null };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
 export type EditorCtx = {
   root: string; docs: { path: string; content: string; saved: string; external?: boolean }[]; settings: Settings; reveal: Record<string, Reveal>; gitVersion: number;
@@ -48,25 +46,16 @@ const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${sett
 
 function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
-  const followUp = useRef(createClaudeFollowUp()), draftRef = useRef(''), draftBox = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState(''), [queued, setQueued] = useState(followUp.current.items), [queuePaused, setQueuePaused] = useState(false);
+  const followUp = useRef(createClaudeFollowUp());
+  const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
+  editingRef.current = editing !== null;
+  const [queued, setQueued] = useState(followUp.current.items);
   const flushQueue = useRef<() => void>(() => {});
-  const editDraft = (value: string) => { draftRef.current = value; setDraft(value); };
-  const refreshQueue = () => { setQueued(followUp.current.items); setQueuePaused(followUp.current.paused); };
-  useEffect(() => { if (draft) draftBox.current?.focus(); }, [Boolean(draft)]);
+  const refreshQueue = () => setQueued(followUp.current.items);
   const checkAgent = useRef<() => void>(() => {});
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
   const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {});
-  const queueDraft = () => {
-    if (followUp.current.enqueue(draftRef.current)) { editDraft(''); refreshQueue(); term.current?.focus(); flushQueue.current(); }
-  };
-  const submitDraft = () => {
-    if (validClaudeDraft(draftRef.current) && send({ type: 'terminal/input', id, data: claudePromptInput(draftRef.current) })) {
-      followUp.current.submitted(); editDraft(''); term.current?.focus();
-    }
-  };
-  const draftActions = useRef({ queueDraft, submitDraft }); draftActions.current = { queueDraft, submitDraft };
   const callbacks = useRef({ send, followUpInput, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => {
@@ -91,7 +80,8 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     const pasteHost = host.current!; pasteHost.addEventListener('paste', pasteImage, true);
     terminal.onSelectionChange(() => { if (settingsRef.current.copyOnSelect && terminal.hasSelection()) void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); });
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
-    let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, lastInput = 0, lastResize = 0, workStart = 0, working = false, asking = false, title = '', idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, working = false, asking = false, title = '';
+    let status: TerminalFeed['status'], reportedState: string | undefined;
     let bannerTail = '', followUpSupported = false, sendingFollowUp = false, writes = 0;
     const queueId = crypto.randomUUID();
     const screenText = () => {
@@ -104,13 +94,13 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     flushQueue.current = () => {
       if (sendingFollowUp) return;
       const screen = screenText();
-      const next = followUp.current.next(followUpSupported && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !draftRef.current
+      const next = followUp.current.next((followUpSupported || status?.agent === 'claude') && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
         && !question.observe(screen, title) && hasEmptyClaudeComposer(screen));
       if (next) {
         sendingFollowUp = true;
         void callbacks.current.followUpInput(id, next.text, sequence, `${queueId}:${next.id}`).then(accepted => {
-          if (accepted) followUp.current.sent(next.id); else followUp.current.pause();
-        }).catch(() => followUp.current.pause()).finally(() => { sendingFollowUp = false; refreshQueue(); });
+          if (accepted) followUp.current.sent(next.id); // otherwise the next flush retries
+        }).catch(() => {}).finally(() => { sendingFollowUp = false; refreshQueue(); });
       }
     };
     const progress = terminal.parser.registerOscHandler(9, value => {
@@ -128,24 +118,30 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       callbacks.current.onSize(id, terminal.cols, terminal.rows);
     };
     notifyResizeRef.current = notifyResize;
+    let scrollFrame = 0;
     scrollAfterReplay.current = () => {
-      if (!visibleRef.current) return;
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (term.current === terminal && visibleRef.current) { terminal.scrollToBottom(); replayScroll.current = false; }
-      }));
+      cancelAnimationFrame(scrollFrame);
+      if (!replayScroll.current || replays || writes || !visibleRef.current || !host.current?.clientWidth || !host.current.clientHeight) return;
+      terminal.scrollToBottom();
+      // xterm builds the scroll area asynchronously; finish only when its viewport has caught up.
+      scrollFrame = requestAnimationFrame(() => {
+        if (term.current !== terminal || !visibleRef.current || replays || writes) return;
+        const viewport = terminal.element?.querySelector<HTMLElement>('.xterm-viewport'), buffer = terminal.buffer.active;
+        if (viewport && viewport.clientHeight > 0 && (buffer.baseY === 0 || viewport.scrollHeight > viewport.clientHeight)
+          && buffer.viewportY === buffer.baseY && Math.abs(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop) <= 1) replayScroll.current = false;
+        else scrollAfterReplay.current();
+      });
     };
-    // Output while an agent runs means it is working; silence afterwards means it needs you. Echo of your own typing does not count,
-    // nor does a redraw after a resize, output without visible text (cursor/title escapes), or a short burst that never looked like work.
-    const watchAgent = (data: string, replay = false) => {
+    // Turn state comes from the CLI's OSC 7501 reports, retained by the server across browser reconnects.
+    const watchAgent = (replay = false) => {
       if (!callbacks.current.agentOf(id)) {
         if (working) callbacks.current.onAgentWorking(id, false);
         if (asking) callbacks.current.onAgentResolved(id);
-        asking = false; question.reset(); working = false; clearTimeout(idleTimer);
+        asking = false; question.reset(); working = false; reportedState = undefined;
         followUp.current.reset(); refreshQueue(); return;
       }
-      const now = Date.now();
       const screen = screenText();
-      const pending = question.observe(screen, title);
+      const pending = status ? status.state === 'blocked' : question.observe(screen, title);
       if (pending !== asking) {
         asking = pending;
         if (asking) callbacks.current.onAgentEvent(id, 'attention');
@@ -153,23 +149,22 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       }
       if (asking) {
         if (working) callbacks.current.onAgentWorking(id, false);
-        working = false; clearTimeout(idleTimer); return;
+        working = false; reportedState = status?.state; return;
       }
-      if (replay) return;
-      if (now - lastInput < ECHO_MS || now - lastResize < ECHO_MS) return;
-      if (!data.replace(ANSI, '').replace(/[\x00-\x20]/g, '')) return;
-      if (!working) { workStart = now; callbacks.current.onAgentWorking(id, true); }
-      working = true; clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        if (!working) return;
-        working = false; callbacks.current.onAgentWorking(id, false);
-        if (callbacks.current.agentOf(id) && Date.now() - AGENT_IDLE_MS - workStart >= MIN_WORK_MS) callbacks.current.onAgentEvent(id, 'done');
-      }, AGENT_IDLE_MS);
+      const next = status?.state === 'working';
+      if (status?.agent === 'claude' && !sshRef.current && callbacks.current.agentOf(id) === 'claude') { followUp.current.turn(next); refreshQueue(); flushQueue.current(); }
+      if (next !== working) { working = next; callbacks.current.onAgentWorking(id, working); }
+      if (status?.state !== reportedState) {
+        reportedState = status?.state;
+        if (working) callbacks.current.onAgentResolved(id);
+        else if (!replay && (reportedState === 'done' || reportedState === 'error')) callbacks.current.onAgentEvent(id, 'done');
+      }
     };
-    checkAgent.current = () => { watchAgent('', true); if (sshRef.current || callbacks.current.agentOf(id) !== 'claude') { followUp.current.reset(); refreshQueue(); } };
+    checkAgent.current = () => { watchAgent(true); if (sshRef.current || callbacks.current.agentOf(id) !== 'claude') { followUp.current.reset(); refreshQueue(); } };
     const receive = (feed: TerminalFeed) => {
       const replay = Boolean(feed.reset);
-      if (feed.reset) { followUp.current.reset(); refreshQueue(); terminal.reset(); sequence = 0; refreshAfterReplay = true; replayScroll.current = true; }
+      if ('status' in feed) status = feed.status;
+      if (feed.reset) { if (working) callbacks.current.onAgentWorking(id, false); working = false; reportedState = undefined; followUp.current.reset(); refreshQueue(); terminal.reset(); sequence = 0; refreshAfterReplay = true; replayScroll.current = true; }
       if (feed.sequence > sequence || feed.reset) {
         const raw = (feed.reset ? '' : bannerTail) + feed.data;
         followUpSupported = claudeFollowUpVersion(raw.replace(ANSI, '')) ?? (feed.reset ? false : followUpSupported);
@@ -181,27 +176,22 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
           writes--;
           if (replay && !--replays) {
             if (pendingResize || refreshAfterReplay) notifyResize();
-            scrollAfterReplay.current();
           }
-          watchAgent(feed.data, replay);
+          if (!writes && replayScroll.current) scrollAfterReplay.current();
+          watchAgent(replay);
           if (!replay) flushQueue.current();
         });
         const agent = detectBanner(feed.data, replay); if (agent) callbacks.current.onAgent(id, agent);
-      }
+      } else if ('status' in feed) watchAgent(true);
       if (feed.exited) { followUp.current.reset(); refreshQueue(); terminal.write('\r\n\x1b[2m[프로세스 종료]\x1b[0m\r\n'); }
     };
     bus.listeners.set(id, receive);
     terminal.onData(data => {
-      if (!sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking && (followUp.current.working || draftRef.current)
-        && hasEmptyClaudeComposer(screenText())) {
-        const input = claudeDraftInput(data);
-        if (input !== undefined) { editDraft(draftRef.current + input); return; }
-      }
-      if (data === '\x1b' || data === '\x03') { followUp.current.pause(); refreshQueue(); }
+      // Esc/Ctrl+C interrupt the turn; the queue keeps going once the CLI reports it idle (4;0).
       if (data === '\r') followUp.current.submitted();
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
-      // They are not the user answering the agent, so they must not cancel the "working" state.
-      if (!REPORT.test(data)) { question.input(data); lastInput = Date.now(); if (working) callbacks.current.onAgentWorking(id, false); working = false; clearTimeout(idleTimer); }
+      // Typing and reports do not change the agent's turn state.
+      if (!REPORT.test(data)) question.input(data);
       callbacks.current.send({ type: 'terminal/input', id, data });
     });
     terminal.onTitleChange(value => {
@@ -213,11 +203,16 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         return false;
       }
       if (event.type !== 'keydown' || event.altKey || event.metaKey) return true;
-      // Paste can leave xterm focused after the draft opens; the same draft shortcuts still apply there.
-      if (draftRef.current && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking && !event.ctrlKey && !event.shiftKey && !event.isComposing
-        && (event.key === 'Tab' || event.key === 'Enter')) {
+      // Tab in Claude's composer is only for autocomplete (last word starts with / or @) and for queueing a follow-up while a turn runs.
+      // Everything else is swallowed: Claude would otherwise toggle thinking or accept a suggestion, which nobody asked for.
+      if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.isComposing && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking) {
+        const typed = claudeComposerText(screenText()), text = typed && !/^Try "/.test(typed) ? typed : undefined; // an empty composer shows a `Try "…"` hint
+        if (text && /(?:^|\s)[/@]\S*$/.test(text)) return true;
         event.preventDefault();
-        if (event.key === 'Tab') draftActions.current.queueDraft(); else draftActions.current.submitDraft();
+        if (text && followUp.current.working && !/\[(?:Pasted text|Image|\.\.\.Truncated)/.test(text) && followUp.current.enqueue(text)) {
+          callbacks.current.send({ type: 'terminal/input', id, data: '\x05' + '\x7f'.repeat(text.length + 8) });
+          refreshQueue();
+        }
         return false;
       }
       // xterm sends a bare CR for Shift+Enter; ESC+CR is the "newline without submit" sequence TUIs (Claude Code etc.) understand.
@@ -247,10 +242,10 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       element.style.marginLeft = `${shift}px`; element.style.marginRight = `${-shift}px`;
     };
     centerRef.current = center;
-    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; lastResize = Date.now(); fit.fit(); center(); requestAnimationFrame(center); notifyResize(); };
+    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
-    return () => { checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); clearTimeout(idleTimer); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {
@@ -288,25 +283,20 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys="Ctrl+Shift+Enter" onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
-    {(draft || queued.length > 0) && <div className="claude-follow-up">
-      {queued.length > 0 && <><div className="follow-up-heading" role="status">Follow-up {queued.length}개 · {queuePaused ? '자동 전송 일시정지' : '현재 작업 완료 후 순서대로 전송'}
-        {queuePaused && identity === 'claude' && !isSsh && !exited && <button onClick={() => { followUp.current.resume(); refreshQueue(); flushQueue.current(); }}>재개</button>}</div>
-        <ol>{queued.map(item => <li key={item.id}><span>{item.text}</span><button aria-label={`Follow-up 취소: ${item.text}`} onClick={() => { followUp.current.remove(item.id); refreshQueue(); }}>취소</button></li>)}</ol></>}
-      {draft && <><textarea ref={draftBox} aria-label="Claude Code 추가 입력" value={draft} rows={3} onChange={event => editDraft(event.target.value)}
-        onKeyDown={event => {
-          if (event.nativeEvent.isComposing || event.ctrlKey || event.altKey || event.metaKey) return;
-          if (event.key === 'Tab' && !event.shiftKey && identity === 'claude' && !isSsh && !exited) {
-            event.preventDefault(); event.stopPropagation();
-            queueDraft();
-          } else if (event.key === 'Enter' && !event.shiftKey && identity === 'claude' && !isSsh && !exited) {
-            event.preventDefault(); event.stopPropagation();
-            submitDraft();
-          } else if (event.key === 'Escape') {
-            event.preventDefault(); event.stopPropagation(); followUp.current.pause(); refreshQueue(); term.current?.focus();
-          }
-        }} />
-        {!validClaudeDraft(draft) && <div role="alert">공백 이외의 텍스트를 16,000자 이내로 입력하세요. 제어문자는 전송할 수 없습니다.</div>}
-        <div className="follow-up-heading">Enter 즉시 전달 · Tab 완료 후 전송 · Shift+Enter 줄바꿈 <button onClick={() => { editDraft(''); term.current?.focus(); flushQueue.current(); }}>입력 취소</button></div></>}
+    {queued.length > 0 && <div className="claude-follow-up">
+      <div className="follow-up-heading" role="status">Follow-up {queued.length}개 · 현재 작업 완료 후 순서대로 전송</div>
+      <ol>{queued.map(item => editing?.id === item.id
+        ? <li key={item.id}><textarea autoFocus rows={2} aria-label="Follow-up 수정" value={editing.text} onChange={event => setEditing({ id: item.id, text: event.target.value })}
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (followUp.current.edit(item.id, editing.text)) { setEditing(null); refreshQueue(); flushQueue.current(); } }
+            else if (event.key === 'Escape') { event.preventDefault(); setEditing(null); flushQueue.current(); }
+          }} />
+          <IconButton icon="check" label="수정 저장 (Enter)" onClick={() => { if (followUp.current.edit(item.id, editing.text)) { setEditing(null); refreshQueue(); flushQueue.current(); } }} />
+          <IconButton icon="x" label="수정 취소 (Esc)" onClick={() => { setEditing(null); flushQueue.current(); }} /></li>
+        : <li key={item.id}><span>{item.text}</span>
+          <IconButton icon="edit" label={`Follow-up 수정: ${item.text}`} onClick={() => setEditing({ id: item.id, text: item.text })} />
+          <IconButton icon="x" label={`Follow-up 취소: ${item.text}`} onClick={() => { followUp.current.remove(item.id); if (editing?.id === item.id) setEditing(null); refreshQueue(); }} /></li>)}</ol>
     </div>}
     {exited && <div className="pane-exited">프로세스가 종료되었습니다 <button onClick={() => onClose(id)}>pane 닫기</button></div>}
   </section>;

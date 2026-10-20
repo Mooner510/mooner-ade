@@ -367,22 +367,23 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     // Older layouts saved one `pane`; it becomes the first tab.
     const saved: PaneTab[] = Array.isArray(ui.paneTabs) && ui.paneTabs.length ? ui.paneTabs : ui.pane ? [{ id: newId(), pane: ui.pane }] : [];
     // Terminals that died with the server are reopened in the same place; agents get their previous conversation resumed.
-    const resume = { claude: 'claude --continue', codex: 'codex resume --last' } as const, renamed = new Map<string, string>();
+    const renamed = new Map<string, string>(), failed = new Set<string>();
     const revive = async (tree: Pane | null): Promise<Pane | null> => {
       const dead = leafList(tree).filter(leaf => leaf.kind !== 'editor' && !live.has(leaf.id)).slice(0, 16);
       const reopened = await Promise.all(dead.map(async leaf => {
         try {
-          const result = await call<{ id: string }>('terminal/open', leaf.cwd ? { path: leaf.cwd } : {}).catch(() => call<{ id: string }>('terminal/open'));
-          if (leaf.agent) { refs.pending.current.set(result.id, resume[leaf.agent]); setLaunched(previous => ({ ...previous, [result.id]: leaf.agent! })); }
+          const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id } : {};
+          const result = await call<{ id: string; command?: string }>('terminal/open', { ...agent, ...(leaf.cwd ? { path: leaf.cwd } : {}) }).catch(() => call<{ id: string; command?: string }>('terminal/open', agent));
+          if (result.command && leaf.agent) { refs.pending.current.set(result.id, result.command); setLaunched(previous => ({ ...previous, [result.id]: leaf.agent! })); }
           renamed.set(leaf.id, result.id); live.add(result.id);
           return [leaf.id, result.id] as const;
-        } catch (cause) { report(cause); return null; }
+        } catch (cause) { report(cause); failed.add(leaf.id); return null; }
       }));
       return reopened.reduce<Pane | null>((next, entry) => entry && next ? mapLeaf(next, entry[0], item => ({ ...item, id: entry[1] })) : next, tree);
     };
     const revived: PaneTab[] = [];
     for (const tab of saved) revived.push({ ...tab, pane: await revive(clean(tab.pane)), focus: tab.focus && renamed.get(tab.focus) || tab.focus });
-    let nextTabs = revived.map(tab => ({ id: tab.id, title: tab.title, focus: tab.focus, pane: compact(pruneDead(tab.pane, live)) })).filter(tab => tab.pane);
+    let nextTabs = revived.map(tab => ({ id: tab.id, title: tab.title, focus: tab.focus, pane: compact(pruneDead(tab.pane, new Set([...live, ...failed]))) })).filter(tab => tab.pane);
     const placed = new Set(nextTabs.flatMap(tab => leaves(tab.pane)));
     const orphans = [...live].filter(id => !placed.has(id));
     if (orphans.length) nextTabs.push({ id: newId(), title: undefined, focus: undefined, pane: orphans.length === 1 ? { id: orphans[0], kind: 'terminal' } : { direction: 'row', children: orphans.map(id => ({ id, kind: 'terminal' as const })), sizes: orphans.map(() => 1) } });
@@ -418,6 +419,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
               const command = refs.pending.current.get(message.id);
               if (command !== undefined) { refs.pending.current.delete(message.id); setTimeout(() => send({ type: 'terminal/input', id: message.id, data: `${command}\r` }), 150); }
             }
+          } else if (message.type === 'terminal/status') {
+            const previous = bus.current.buffers.get(message.id);
+            if (previous) {
+              bus.current.buffers.set(message.id, { ...previous, status: message.status });
+              bus.current.listeners.get(message.id)?.({ data: '', sequence: previous.sequence, status: message.status });
+            }
           } else if (message.type === 'terminal/ssh') {
             setSshSet(previous => previous.has(message.id) === message.ssh ? previous : message.ssh ? new Set(previous).add(message.id) : new Set([...previous].filter(item => item !== message.id)));
           } else if (message.type === 'terminal/agent') {
@@ -429,7 +436,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
               setLaunched(previous => { const next = { ...previous }; delete next[message.id]; return next; });
             }
           } else if (message.type === 'terminal/exit') {
-            removeTerminalPane(message.id);
+            // `lost`: the pty-host connection dropped, not the shell. Keep the pane so the saved layout survives and can be revived.
+            if (!message.lost) removeTerminalPane(message.id);
             void refresh().catch(report);
           } else if (message.type === 'error') report(message.error.message);
     } catch (cause) { report(cause); }
@@ -479,10 +487,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
 
   // ---- terminals ----
   async function openTerminalLeaf(anchorId: string, direction: 'row' | 'column' = 'row', path?: string, command = '') {
-    const result = await call<{ id: string }>('terminal/open', path ? { path } : {});
+    const agent = detectAgent(command);
+    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent } : {}) });
     if (command) {
-      refs.pending.current.set(result.id, command);
-      const agent = detectAgent(command); if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
+      refs.pending.current.set(result.id, result.command || command);
+      if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
     }
     const leaf: Leaf = { id: result.id, kind: 'terminal' }, current = activePane();
     const anchor = leaves(current).includes(anchorId) ? anchorId : leaves(current)[0];

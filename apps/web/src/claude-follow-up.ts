@@ -1,31 +1,37 @@
 // shortcut: relies on Claude's OSC 9;4 turn status and prompt layout, update when the CLI changes either contract.
 export function createClaudeFollowUp() {
-  let working = false, ready = false, paused = false;
+  // `awaiting`: state was lost (replay/reconnect), so the next idle report means "the turn already ended" even without having seen it run.
+  let working = false, ready = false, awaiting = false;
   const items: { id: number; text: string }[] = [];
   let sequence = 0;
+  const finish = () => { if (working) ready = true; working = false; };
   return {
     get working() { return working; },
-    get paused() { return paused; },
     get items() { return [...items]; },
     progress(value: string) {
       const match = /^4;([0-4])(?:;\d*)?$/.exec(value);
       if (!match) return;
+      awaiting = false;
       if (match[1] === '1' || match[1] === '3') { working = true; ready = false; }
-      else if (match[1] === '0') { if (working) ready = true; working = false; }
-      else { paused = true; ready = false; working = false; }
+      else finish(); // 0 = idle; 2/4 = error/paused: the turn is over either way
+    },
+    // Turn state from OSC 7501 (the CLI's own report); same semantics as progress 3 / 0 and safe to repeat.
+    turn(isWorking: boolean) {
+      if (isWorking) { working = true; ready = false; awaiting = false; }
+      else if (working) finish();
+      else if (awaiting && items.length) { ready = true; awaiting = false; }
     },
     enqueue(text: string) {
       if (!validClaudeDraft(text)) return false;
       items.push({ id: ++sequence, text });
       return true;
     },
+    edit(id: number, text: string) { const item = items.find(entry => entry.id === id); if (!item || !validClaudeDraft(text)) return false; item.text = text; return true; },
     remove(id: number) { const index = items.findIndex(item => item.id === id); if (index >= 0) items.splice(index, 1); },
-    pause() { paused = true; ready = false; },
-    reset() { working = false; ready = false; paused = items.length > 0; },
-    resume() { paused = false; },
-    submitted() { ready = false; working = false; },
+    reset() { working = false; ready = false; awaiting = true; },
+    submitted() { ready = false; working = false; awaiting = false; },
     next(allowed: boolean) {
-      if (!allowed || !ready || paused || !items.length) return;
+      if (!allowed || !ready || !items.length) return;
       return items[0];
     },
     sent(id: number) { if (items[0]?.id === id) { items.shift(); ready = false; } }
@@ -37,6 +43,18 @@ export function hasEmptyClaudeComposer(screen: string) {
   if (!prompt || prompt[1].trim()) return false;
   const below = screen.slice(prompt.index! + prompt[0].length);
   return /^\n[ \t\n]*[─━]{3}/.test(below);
+}
+
+// Text typed in Claude's own composer, read back from the screen (rows between the prompt and its bottom border).
+// ponytail: Ink soft-wraps and Shift+Enter newlines look alike on screen, so rows are joined with a space.
+export function claudeComposerText(screen: string): string | undefined {
+  const prompt = [...screen.matchAll(/^[ \t]*❯[ \t]?(.*)$/gm)].at(-1);
+  if (!prompt) return;
+  const rows = [prompt[1].trim()];
+  for (const line of screen.slice(prompt.index! + prompt[0].length).split('\n').slice(1)) {
+    if (/^[ \t]*[─━]{3}/.test(line)) return rows.filter(Boolean).join(' ') || undefined;
+    rows.push(line.trim());
+  }
 }
 
 export function claudeDraftInput(data: string): string | undefined {

@@ -51,7 +51,7 @@ export async function connectPtyHost({ endpoint, token }) {
   socket.on('close', () => {
     for (const waiting of replies.values()) waiting.reject(new Error('pty-host disconnected'));
     replies.clear();
-    for (const item of [...sessions.values()]) item.finish({ exitCode: -1 });
+    for (const item of [...sessions.values()]) item.finish({ exitCode: -1, lost: true });
     sessions.clear();
   });
   socket.on('error', () => {});

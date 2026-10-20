@@ -4,6 +4,7 @@ import type { MouseEvent, ReactNode } from 'react';
 const glyphs = {
   plus: 'add',
   x: 'close',
+  edit: 'edit',
   terminal: 'terminal',
   code: 'code',
   chevronDown: 'expand_more',
