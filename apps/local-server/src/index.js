@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLocalRuntime, LocalProcesses } from './runtime.js';
 import { codexAuthenticated } from './agents.js';
@@ -54,6 +54,7 @@ const clients = new Set();
 const sessions = new Set();
 // The app window exchanges this per-process token for a session cookie; it is never written to disk.
 const bootstrap = randomBytes(32).toString('hex');
+const bootstrapMatches = token => typeof token === 'string' && token.length === bootstrap.length && timingSafeEqual(Buffer.from(token), Buffer.from(bootstrap));
 // Earlier versions kept a reusable token for browser access.
 await fs.rm(path.join(dataRoot, 'token'), { force: true });
 let origin;
@@ -378,10 +379,10 @@ async function route(action, input, project) {
         const original = /[RC]/.test(status) ? entries[++index] : undefined;
         changes.push({ status, path: file, original });
       }
-      const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--numstat', 'HEAD']);
+      const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
       const stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--numstat'])).stdout,
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--cached', '--numstat'])).stdout
+        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
+        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
       ];
       let additions = 0, deletions = 0;
       const perFile = new Map();
@@ -517,7 +518,7 @@ const server = http.createServer(async (request, response) => {
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
-          if (input.token !== bootstrap) throw fault('UNAUTHORIZED', '앱을 다시 시작하세요.', 401);
+          if (!bootstrapMatches(input.token)) throw fault('UNAUTHORIZED', '앱을 다시 시작하세요.', 401);
           const token = randomBytes(32).toString('hex'); sessions.add(token);
           response.setHeader('Set-Cookie', `ade_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
         }

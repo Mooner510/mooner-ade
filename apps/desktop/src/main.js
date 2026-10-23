@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { checkForUpdate } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
 app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
@@ -108,6 +109,10 @@ async function restartServer() {
   finally { restarting = false; }
 }
 
+function sameOrigin(target) {
+  try { return new URL(target).origin === origin; } catch { return false; }
+}
+
 function createWindow(url) {
   const window = new BrowserWindow({
     width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title: '무너에이드', show: false, icon: iconPath,
@@ -117,10 +122,13 @@ function createWindow(url) {
   });
   window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:\/\//.test(target) && !target.startsWith(origin)) void shell.openExternal(target);
+    if (/^https?:\/\//.test(target) && !sameOrigin(target)) void shell.openExternal(target);
     return { action: 'deny' };
   });
-  window.webContents.on('will-navigate', (event, target) => { if (!target.startsWith(origin)) event.preventDefault(); });
+  // Compare parsed origins: a prefix check would let http://127.0.0.1:PORT@evil.example/ through.
+  const guard = (event, target) => { if (!sameOrigin(target)) event.preventDefault(); };
+  window.webContents.on('will-navigate', guard);
+  window.webContents.on('will-redirect', guard);
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
   void window.loadURL(url);
 }
@@ -148,7 +156,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
-    try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); }
+    try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); else setTimeout(() => checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow }).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`)), 5000); }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }
   });
   app.on('window-all-closed', () => app.quit());
