@@ -17,7 +17,7 @@ test('sidebar native mouse dragging and Shift clicks', { skip: !process.env.ADE_
       build.onResolve({ filter: /^\.\/(api|Editor|Settings|views|sound)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
       build.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: {
         './api': `export const basename = path => path.split('/').pop(); export async function api(name) { if (name === 'app/state') return { openProjects: [{root:'/fixture', id:'project'}], activeProjectId:'project' }; if (name === 'recent') return []; return {}; }`,
-        './Editor': `export const defaultSettings = { sidebarWidth:252, statusItems:[], theme:'dark' };`,
+        './Editor': `export const defaultSettings = { sidebarWidth:252, statusItems:[], theme:'dark' }; export const migrateSettings = saved => ({ ...defaultSettings, ...saved });`,
         './Settings': `export const SettingsModal = () => null;`,
         './views': `export const Modal = () => null;`,
         './sound': `export const playSound = () => {};`

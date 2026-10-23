@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { terminalAgentCommand, terminalSessionShell, readTerminalSession, recordClaudeSession, codexSession } from '../apps/local-server/src/terminal-sessions.js';
+import { terminalAgentCommand, terminalSessionShell, readTerminalSession, recordClaudeSession, codexSession, syncClaudeSession } from '../apps/local-server/src/terminal-sessions.js';
 
 const first = '11111111-1111-4111-8111-111111111111', second = '22222222-2222-4222-8222-222222222222';
 const start = id => `2026-10-20T06:39:17.163436Z  INFO session_loop{thread_id=${id}}: codex_core::session: new\n`;
@@ -102,8 +102,9 @@ test('direct shell commands keep user arguments and track separate terminals aft
     one = await terminalSessionShell(root, 'one', '/bin/zsh');
     two = await terminalSessionShell(root, 'two', '/bin/zsh');
   } finally { if (previous === undefined) delete process.env.ZDOTDIR; else process.env.ZDOTDIR = previous; }
+  // macOS login shells run path_helper, which reorders the test's PATH, so the login flag is dropped here.
   const run = prepared => new Promise((resolve, reject) => {
-    const child = spawn('/bin/zsh', [...prepared.args, '-ic', `claude 'a b'; codex resume ${first}; print -r -- "$ADE_TEST_ENV:$ADE_TEST_RC:$ZDOTDIR"`], { env: { ...process.env, ...prepared.env, PATH: `${bin}:${process.env.PATH}` } });
+    const child = spawn('/bin/zsh', [...prepared.args.filter(arg => arg !== '-l'), '-ic', `claude 'a b'; codex resume ${first}; print -r -- "$ADE_TEST_ENV:$ADE_TEST_RC:$ZDOTDIR"`], { env: { ...process.env, ...prepared.env, PATH: `${bin}:${process.env.PATH}` } });
     let output = '', errors = '';
     child.stdout.on('data', chunk => output += chunk);
     child.stderr.on('data', chunk => errors += chunk);
@@ -119,4 +120,22 @@ test('direct shell commands keep user arguments and track separate terminals aft
     assert.ok(output.includes(`loaded:loaded:${original}`));
   }
   assert.deepEqual(await terminalSessionShell(root, 'unknown', '/bin/custom-shell'), { args: [], env: {}, tracked: false });
+});
+
+test('a running Claude process ID is synced without relying on the hook', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ade-sync-')), config = path.join(root, 'cfg');
+  await mkdir(path.join(config, 'sessions'), { recursive: true });
+  const sessionId = '11111111-2222-4333-8444-555555555555';
+  await writeFile(path.join(config, 'sessions', '42.json'), JSON.stringify({ pid: 42, sessionId }));
+  assert.equal(await syncClaudeSession(root, 'term-a', 42, config), true);
+  assert.equal(await readTerminalSession(root, 'term-a', 'claude'), sessionId);
+  assert.equal(await syncClaudeSession(root, 'term-a', 42, config), false);
+  assert.equal(await syncClaudeSession(root, 'term-b', 43, config), false);
+});
+
+test('Cursor CLI starts plainly and restores through its session picker', async t => {
+  const root = await directory(t);
+  assert.equal(await terminalAgentCommand(root, 'one', 'cursor'), 'cursor-agent');
+  assert.equal(await terminalAgentCommand(root, 'restored', 'cursor', 'one'), 'cursor-agent --resume');
+  await assert.rejects(terminalAgentCommand(root, 'bad', 'gemini'), /잘못된 에이전트/);
 });

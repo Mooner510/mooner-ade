@@ -16,7 +16,7 @@ const chromePath = process.env.CHROME_PATH || [
   process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe')
 ].filter(Boolean).find(existsSync);
 if (!chromePath) throw new Error('Chrome not found; set CHROME_PATH');
-if (!existsSync(join(root, 'apps/web/dist/index.html'))) throw new Error('Run pnpm web:build first');
+if (!existsSync(join(root, 'apps/web/dist/index.html'))) throw new Error('Build the web UI first: pnpm --filter @mooner/ade-web build');
 
 const cleanup = [];
 async function stop(child) {
@@ -102,7 +102,7 @@ async function main() {
     window.e2eSocket = new WebSocket(location.origin.replace('http', 'ws') + '/ws');
     window.e2eSocket.onmessage = ({ data }) => { const message = JSON.parse(data); if (message.type === 'terminal' || message.type === 'terminal/replay') window.e2eTerminalOutput += message.data; };
     await new Promise((resolve, reject) => { window.e2eSocket.onopen = resolve; window.e2eSocket.onerror = reject; });
-    window.e2eSocket.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+    window.e2eSocket.send(JSON.stringify({ type: 'subscribe', projectId }));
   })()`);
   const activeTerminal = 'main.app:not([hidden]) .xterm-helper-textarea';
   await evaluate(`document.querySelector(${JSON.stringify(activeTerminal)}).focus()`);
@@ -176,6 +176,9 @@ async function main() {
   console.log('e2e: read-only Git diff passed');
   await evaluate(`${visible('button[aria-label="새 터미널 탭"]')}.click()`);
   await until(`document.querySelector('main.app:not([hidden])').querySelectorAll('.tab-page').length === 2`, 'second terminal tab');
+  // A new tab first shows the launcher; its first entry opens a plain shell.
+  await until(`document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .launchers button')`, 'new tab launcher');
+  await evaluate(`document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .launchers button').click()`);
   await until(`document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .xterm-helper-textarea')`, 'second terminal ready');
   await until(`fetch('/api/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: window.e2eProjectId }) }).then(response => response.json()).then(state => state.ui.paneTabs?.length === 2)`, 'layout saved');
   await send('Page.reload');

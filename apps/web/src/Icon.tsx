@@ -38,13 +38,15 @@ const glyphs = {
   check: 'check',
   externalLink: 'open_in_new',
   layers: 'layers',
-  info: 'info'
+  info: 'info',
+  grip: 'drag_indicator'
 } as const;
 
-// Agent CLIs: Claude Code's radial burst and Codex's hexagon with a prompt.
+// Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's isometric cube.
 const brands = {
   claude: <path d="M12 12 12 3M12 12l3.3-6.2M12 12l7.8-5.4M12 12l7.4-1M12 12l8.5 3.1M12 12l4.7 5.2M12 12l2.5 9.2M12 12l-2.1 7.7M12 12l-6.4 7.1M12 12l-7.1 2.6M12 12l-8.9-1.2M12 12 5.9 7.7M12 12 8 3.4" />,
-  codex: <><path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z" /><path d="m9 10 2.5 2L9 14M13 14.5h2.5" /></>
+  codex: <><path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z" /><path d="m9 10 2.5 2L9 14M13 14.5h2.5" /></>,
+  cursor: <path d="M12 2.5 20.5 7.25v9.5L12 21.5 3.5 16.75v-9.5zM3.5 7.25 12 12l8.5-4.75M12 12v9.5" />
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof glyphs | keyof typeof brands;

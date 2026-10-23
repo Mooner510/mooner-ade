@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { brandBundle, icon } from './brand.mjs';
 
 const require = createRequire(import.meta.url);
 let executable = require('electron');
@@ -16,16 +18,17 @@ if (process.platform === 'darwin') {
   const bundle = path.join(folder, `${productName}.app`);
   const plist = path.join(bundle, 'Contents/Info.plist');
   const ready = path.join(folder, '.ready');
+  const stamp = createHash('sha256').update(readFileSync(icon)).digest('hex');
   executable = path.join(bundle, 'Contents/MacOS/Electron');
-  if (!existsSync(ready)) {
+  if (!existsSync(ready) || readFileSync(ready, 'utf8') !== stamp) {
     mkdirSync(folder, { recursive: true });
+    // cpSync can't overwrite the framework symlinks of a stale bundle, so rebuild it from scratch.
+    rmSync(bundle, { recursive: true, force: true });
     cpSync(source, bundle, { recursive: true, verbatimSymlinks: true });
-    for (const key of ['CFBundleName', 'CFBundleDisplayName']) {
-      execFileSync('/usr/bin/plutil', ['-replace', key, '-string', productName, plist]);
-    }
+    brandBundle(bundle, productName);
     execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' });
     execFileSync('/usr/bin/codesign', ['--verify', '--deep', bundle], { stdio: 'inherit' });
-    writeFileSync(ready, '');
+    writeFileSync(ready, stamp);
   }
   const info = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' }));
   assert.equal(info.CFBundleName, productName);

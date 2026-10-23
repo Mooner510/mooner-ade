@@ -1,6 +1,7 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-contextBridge.exposeInMainWorld('adeDesktop', { pickFolder: () => ipcRenderer.invoke('ade:pick-folder') });
+// File.path was removed from Electron, so a dropped file's absolute path is only reachable through webUtils here.
+contextBridge.exposeInMainWorld('adeDesktop', { pickFolder: () => ipcRenderer.invoke('ade:pick-folder'), pathForFile: file => webUtils.getPathForFile(file) });
 
 // macOS traffic lights overlay the page without supplying titlebar-area CSS env values.
 if (process.platform === 'darwin') {

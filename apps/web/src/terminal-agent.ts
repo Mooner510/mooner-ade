@@ -1,7 +1,8 @@
-export type Agent = 'claude' | 'codex';
+export type Agent = 'claude' | 'codex' | 'cursor';
 
 // Task text and generic spinners can mention either provider; only a named title is evidence.
-export const detectAgent = (title = ''): Agent | undefined => /^\s*(?:[✳⠀-⣿]\s*)?claude(?: code)?\b/i.test(title) ? 'claude' : /^\s*(?:[✳⠀-⣿]\s*)?(?:OpenAI\s+)?codex\b/i.test(title) ? 'codex' : undefined;
+export const detectAgent = (title = ''): Agent | undefined => /^\s*(?:[✳⠀-⣿]\s*)?claude(?: code)?\b/i.test(title) ? 'claude' : /^\s*(?:[✳⠀-⣿]\s*)?(?:OpenAI\s+)?codex\b/i.test(title) ? 'codex'
+  : /^\s*(?:[✳⠀-⣿]\s*)?cursor[- ]agent\b/i.test(title) ? 'cursor' : undefined;
 export const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g;
 
 export function hasAgentQuestion(screen: string, title = ''): boolean {
