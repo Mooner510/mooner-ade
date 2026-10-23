@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { timingSafeEqual } from 'node:crypto';
+import { createTerminalBuffer } from './terminal-buffer.js';
 
 const endpoint = process.env.ADE_PTY_ENDPOINT, token = process.env.ADE_PTY_TOKEN;
 if (!endpoint || !token) { console.error('ADE_PTY_ENDPOINT / ADE_PTY_TOKEN are required'); process.exit(2); }
@@ -13,7 +14,6 @@ if (process.platform !== 'win32') {
   try { fs.chmodSync(path.join(path.dirname(createRequire(import.meta.url).resolve('node-pty/package.json')), 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'), 0o755); } catch { /* no prebuilt helper */ }
 }
 const pty = await import('node-pty');
-const BUFFER_LIMIT = 262144;
 const terminals = new Map(); // key -> { process, meta, buffer, owner }
 let owner = null; // the one connected server; a new connection replaces it and the terminals keep running
 
@@ -24,9 +24,9 @@ function spawnTerminal(socket, message) {
   const { key, file, args = [], options = {}, meta = {} } = message;
   if (typeof key !== 'string' || typeof file !== 'string' || terminals.has(key)) throw new Error('invalid spawn');
   const child = pty.spawn(file, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols: options.cols, rows: options.rows, cwd: options.cwd, env: options.env });
-  const entry = { process: child, meta, buffer: '', socket };
+  const entry = { process: child, meta, buffer: createTerminalBuffer(), socket };
   terminals.set(key, entry);
-  child.onData(data => { entry.buffer = (entry.buffer + data).slice(-BUFFER_LIMIT); if (entry.socket) reply(entry.socket, { ev: 'data', key, data }); });
+  child.onData(data => { entry.buffer.append(data); if (entry.socket) reply(entry.socket, { ev: 'data', key, data }); });
   child.onExit(event => { terminals.delete(key); if (entry.socket) reply(entry.socket, { ev: 'exit', key, exitCode: event.exitCode, signal: event.signal }); });
   return entry;
 }
@@ -39,7 +39,7 @@ function handle(socket, message) {
     // Replay and subscription happen in one step, so no output is lost or duplicated between them.
     case 'attach':
       if (!entry) return reply(socket, { re: req, ok: false });
-      entry.socket = socket; return reply(socket, { re: req, ok: true, pid: entry.process.pid, data: entry.buffer });
+      entry.socket = socket; return reply(socket, { re: req, ok: true, pid: entry.process.pid, data: entry.buffer.text });
     case 'detach': if (entry?.socket === socket) entry.socket = null; return;
     case 'write': return entry?.process.write(String(message.data));
     case 'resize': return entry?.process.resize(message.cols, message.rows);

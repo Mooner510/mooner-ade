@@ -12,14 +12,14 @@ app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop')
 const serverEntry = path.resolve(import.meta.dirname, '../../local-server/src/index.js');
 const background = '#0c0d0f';
 const iconPath = path.resolve(import.meta.dirname, '../assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
-// `pnpm desktop:dev`: the server hosts a Vite dev server (HMR) instead of web/dist.
+// `pnpm dev`: the server hosts a Vite dev server (HMR) instead of web/dist.
 const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1';
 let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null;
-const nodeBinary = process.env.ADE_NODE || 'node';
+const nodeBinary = process.env.ADE_NODE || (app.isPackaged ? path.resolve(import.meta.dirname, '../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node') : 'node');
 
 // Dev only: terminals live in their own process so the server can be replaced on every code change without killing them.
-// The host dies with this app (its IPC channel closes), so quitting `pnpm desktop:dev` always cleans it up.
+// The host dies with this app (its IPC channel closes), so quitting `pnpm dev` always cleans it up.
 function startPtyHost() {
   const token = randomBytes(32).toString('hex'), id = randomBytes(6).toString('hex');
   const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\mooner-ade-pty-${id}` : path.join(os.tmpdir(), `mooner-ade-pty-${id}.sock`);
@@ -34,17 +34,19 @@ function startPtyHost() {
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    server = spawn(nodeBinary, [serverEntry], { env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+    const child = server = spawn(nodeBinary, [serverEntry], { env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     let output = '';
-    server.stdout.on('data', chunk => {
+    child.stdout.on('data', chunk => {
       process.stdout.write(chunk);
       output += chunk;
       const match = /(http:\/\/127\.0\.0\.1:\d+)\/#token=([a-f0-9]+)/.exec(output);
       if (match && !origin) { origin = match[1]; resolve(`${match[1]}/#token=${match[2]}`); }
     });
-    server.stderr.on('data', chunk => process.stderr.write(chunk));
-    server.once('error', reject);
-    server.once('exit', code => {
+    child.stderr.on('data', chunk => process.stderr.write(chunk));
+    child.once('error', reject);
+    child.once('exit', code => {
+      // A replaced server exiting late must not be mistaken for the current one dying.
+      if (server !== child) return;
       server = null;
       if (!origin) reject(new Error(`로컬 서버가 시작되지 않았습니다 (exit ${code}).\n${output}`));
       else if (!quitting && !restarting) { dialog.showErrorBox('무너에이드', `로컬 서버가 종료되었습니다 (exit ${code}).`); app.quit(); }
@@ -52,15 +54,15 @@ function startServer() {
   });
 }
 
-// Graceful stop lets the server save state and release the project lock; force-kill after 5 s.
+// Graceful stop lets the server save state and release the project lock; SIGKILL after 5 s.
 function stopServer() {
   if (!server) return Promise.resolve();
   const child = server;
   return new Promise(resolve => {
-    // Resolve only once the old process is gone: it still holds the Vite HMR port and project lock until then.
-    let forced;
-    const timer = setTimeout(() => { child.kill(); forced = setTimeout(resolve, 3000); }, 5000);
-    child.once('exit', () => { clearTimeout(timer); clearTimeout(forced); resolve(); });
+    // Resolve only once the old process is gone: it still holds the Vite HMR port and project locks until then,
+    // and a new server started earlier fails to open those projects. SIGTERM would only re-enter its running shutdown.
+    const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
     if (child.connected) child.send({ type: 'shutdown' }); else child.kill();
   });
 }
@@ -69,7 +71,7 @@ function stopServer() {
 let restartQueue = Promise.resolve();
 function watchServerSources() {
   const root = path.resolve(import.meta.dirname, '../../..');
-  const dirs = [path.join(root, 'apps/local-server/src'), ...fs.readdirSync(path.join(root, 'packages')).map(name => path.join(root, 'packages', name, 'src'))].filter(dir => fs.existsSync(dir));
+  const dirs = [path.join(root, 'apps/local-server/src')];
   let timer;
   const changed = (_event, name) => {
     // The host is not reloaded (that would kill the terminals it protects); changing it needs a full restart of the app.
@@ -109,7 +111,7 @@ async function restartServer() {
 function createWindow(url) {
   const window = new BrowserWindow({
     width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title: '무너에이드', show: false, icon: iconPath,
-    // The web UI's tab bar becomes the title bar; window controls overlay it on Windows/Linux.
+    // The web UI's tab bar becomes the title bar; window controls overlay it on Windows.
     titleBarStyle: 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 13 } } : { titleBarOverlay: { color: background, symbolColor: '#8b9099', height: 40 } }),
     webPreferences: { preload: path.resolve(import.meta.dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false }
   });
@@ -138,8 +140,10 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' }]));
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
-else {
+if (!app.requestSingleInstanceLock()) {
+  console.error('무너에이드가 이미 실행 중입니다. 실행 중인 창을 앞으로 가져오고 종료합니다. (완전히 끄려면 앱을 종료한 뒤 다시 실행하세요)');
+  app.quit();
+} else {
   app.on('second-instance', () => { const [window] = BrowserWindow.getAllWindows(); if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
     installMenu();

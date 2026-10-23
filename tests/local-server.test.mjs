@@ -5,7 +5,6 @@ import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFrameParser, frame } from '../apps/local-server/src/lsp.js';
 
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 const git = (cwd, ...args) => new Promise((resolve, reject) => spawn('git', args, { cwd, stdio: 'ignore' }).on('exit', code => code ? reject(new Error(`git ${args}`)) : resolve()));
@@ -94,7 +93,7 @@ setInterval(()=>{}, 1000);
   t.after(() => ws.close());
   ws.on('message', raw => messages.push(JSON.parse(String(raw))));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  ws.send(JSON.stringify({ type: 'subscribe', projectId }));
   const until = async predicate => {
     const end = Date.now() + 10000;
     while (Date.now() < end) {
@@ -136,7 +135,6 @@ test('recent: removal persists without deleting files or closing projects', asyn
   assert.deepEqual(await api('recent/remove', { root: repo }), remaining);
   assert.deepEqual(await api('recent'), remaining);
   assert.ok(remaining.some(item => item.id === other.id));
-  assert.equal((await call('files/read', { path: 'a.txt' })).content, 'hello world\nHello again\n');
   assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'hello world\nHello again\n');
   assert.deepEqual(await api('app/state'), { version: 1, ...state });
   assert.deepEqual(await api('recent/remove', { root: repo }), remaining);
@@ -145,30 +143,9 @@ test('recent: removal persists without deleting files or closing projects', asyn
   assert.ok((await api('recent')).some(item => item.root === repo));
 });
 
-test('files: search options, replace, folder rename/delete, index', async t => {
-  const { call, repo } = await boot(t);
-  const { files } = await call('files/index');
-  assert.deepEqual(files.sort(), ['a.txt', 'src/b.ts']);
-  assert.equal((await call('files/search', { query: 'hello' })).hits.length, 2);
-  assert.equal((await call('files/search', { query: 'hello', caseSensitive: true })).hits.length, 1);
-  assert.equal((await call('files/search', { query: 'hell', wholeWord: true })).hits.length, 0);
-  assert.equal((await call('files/search', { query: 'x\\s=', regex: true })).hits[0].path, 'src/b.ts');
-  assert.equal((await call('files/search', { query: 'hello', include: 'src/**' })).hits.length, 0);
-  assert.equal((await call('files/search', { query: 'hello', exclude: '*.txt' })).hits.length, 0);
-  await call('files/search', { query: '(', regex: true }, 400);
-  const read = await call('files/read', { path: 'a.txt' });
-  await call('files/replace', { path: 'a.txt', revision: 'stale', query: 'hello', replacement: 'bye' }, 409);
-  const replaced = await call('files/replace', { path: 'a.txt', revision: read.revision, query: 'hello', replacement: 'bye' });
-  assert.equal(replaced.count, 2);
-  assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'bye world\nbye again\n');
-  await call('files/rename', { path: 'src', to: 'lib/deep' });
-  assert.ok((await stat(join(repo, 'lib/deep/b.ts'))).isFile());
-  await call('files/save', { path: 'other.txt', content: 'x', revision: null });
-  await call('files/rename', { path: 'other.txt', to: 'a.txt' }, 409);
-  await call('files/delete', { path: 'lib' });
-  await assert.rejects(stat(join(repo, 'lib')));
-  await call('files/delete', { path: '.' }, 400);
-  await call('files/read', { path: '../escape' }, 400);
+test('endpoints of removed features stay gone', async t => {
+  const { call } = await boot(t);
+  for (const action of ['files/read', 'files/save', 'files/search', 'git/discard', 'git/stage', 'git/commit', 'run/start', 'conversation/create', 'approval', 'agents/catalog']) await call(action, {}, 404);
 });
 
 test('git: a repository-configured core.fsmonitor command never runs during status', async t => {
@@ -188,25 +165,18 @@ test('git: a repository hook never runs during ADE checkout', async t => {
   await assert.rejects(stat(marker));
 });
 
-test('git: show, stage, discard, branches', async t => {
+test('git: status, show, branches, checkout', async t => {
   const { call, repo } = await boot(t);
   await writeFile(join(repo, 'a.txt'), 'changed\n');
   await writeFile(join(repo, 'new.txt'), 'brand new\n');
   const status = await call('git/status');
   assert.deepEqual(status.changes.map(change => change.status).sort(), [' M', '??']);
+  assert.equal(status.additions, 2);
   assert.equal((await call('git/show', { path: 'a.txt' })).content, 'hello world\nHello again\n');
   assert.equal((await call('git/show', { path: 'a.txt', working: true })).content, 'changed\n');
-  await call('git/stage', { files: ['a.txt'] });
+  await git(repo, 'add', 'a.txt');
   assert.equal((await call('git/show', { path: 'a.txt', staged: true })).content, 'changed\n');
-  await call('git/discard', { files: ['a.txt', 'new.txt'] });
-  assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'hello world\nHello again\n');
-  await assert.rejects(stat(join(repo, 'new.txt')));
-  // Regression: "." resolves to the project root and must never be discarded or removed.
-  await writeFile(join(repo, 'a.txt'), 'keep\n');
-  await call('git/discard', { files: ['.'] }, 400);
-  assert.equal(await readFile(join(repo, 'a.txt'), 'utf8'), 'keep\n');
-  await call('git/discard', { files: ['a.txt'] });
-  assert.equal((await call('git/status')).changes.length, 0);
+  await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'change');
   await git(repo, 'branch', 'feature');
   assert.deepEqual((await call('git/branches')).branches.sort(), ['feature', 'main']);
   await call('git/checkout', { branch: 'feature' });
@@ -214,25 +184,14 @@ test('git: show, stage, discard, branches', async t => {
   await call('git/checkout', { branch: '--orphan' }, 400);
 });
 
-test('app has no commit endpoint and a rejected request preserves the index and HEAD', async t => {
-  const { call, repo } = await boot(t);
-  await writeFile(join(repo, 'a.txt'), 'staged change\n');
-  await call('git/stage', { files: ['a.txt'] });
-  const before = await call('git/status');
-  await call('git/commit', { message: 'must not commit' }, 404);
-  assert.deepEqual(await call('git/status'), before);
-  assert.equal((await call('git/show', { path: 'a.txt' })).content, 'hello world\nHello again\n');
-  assert.equal((await call('git/show', { path: 'a.txt', staged: true })).content, 'staged change\n');
-});
-
-test('websocket: terminal echo, resize validation, typescript language server', async t => {
+test('websocket: terminal echo and resize validation', async t => {
   const { origin, cookie, call, projectId } = await boot(t);
   const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });
   t.after(() => ws.close());
   const messages = [];
   ws.on('message', raw => messages.push(JSON.parse(String(raw))));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  ws.send(JSON.stringify({ type: 'subscribe', projectId }));
   const until = async (predicate, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { const found = messages.find(predicate); if (found) return found; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error('timeout'); };
   await until(message => message.type === 'snapshot');
 
@@ -257,10 +216,7 @@ test('websocket: terminal echo, resize validation, typescript language server', 
     }
   } else t.diagnostic('node-pty unavailable; terminal checks skipped');
 
-  ws.send(JSON.stringify({ type: 'lsp', projectId, message: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { processId: null, rootUri: null, capabilities: {} } } }));
-  const reply = await until(message => message.type === 'lsp' && message.message.id === 1);
   assert.deepEqual(messages.filter(message => message.type === 'error').map(message => message.error.code), readiness.pty.installed ? ['INVALID_INPUT'] : []);
-  assert.ok(reply.message.result.capabilities.completionProvider);
 });
 
 test('websocket: terminal agent processes survive replay, switch providers and clear on exit', async t => {
@@ -271,7 +227,7 @@ test('websocket: terminal agent processes survive replay, switch providers and c
     t.after(() => ws.close());
     ws.on('message', raw => messages.push(JSON.parse(String(raw))));
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-    ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+    ws.send(JSON.stringify({ type: 'subscribe', projectId }));
     const until = async predicate => {
       const end = Date.now() + 15000;
       while (Date.now() < end) {
@@ -330,7 +286,7 @@ test('terminal follow-up validates the live Claude process and output sequence, 
   t.after(() => ws.close());
   ws.on('message', raw => messages.push(JSON.parse(String(raw))));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: {} }));
+  ws.send(JSON.stringify({ type: 'subscribe', projectId }));
   const until = async predicate => {
     const end = Date.now() + 10000;
     while (Date.now() < end) { if (messages.some(predicate)) return; await new Promise(resolve => setTimeout(resolve, 25)); }
@@ -378,22 +334,21 @@ test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => 
   ws.on('message', raw => messages.push(JSON.parse(String(raw))));
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
   const until = async (predicate, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { const found = messages.find(predicate); if (found) return found; await new Promise(resolve => setTimeout(resolve, 50)); } throw new Error('timeout'); };
-  for (const id of [projectId, other.id]) ws.send(JSON.stringify({ type: 'subscribe', projectId: id, cursors: {} }));
+  for (const id of [projectId, other.id]) ws.send(JSON.stringify({ type: 'subscribe', projectId: id }));
   await until(m => m.type === 'snapshot' && m.projectId === projectId);
   await until(m => m.type === 'snapshot' && m.projectId === other.id);
 
   // Messages are tagged with their own project and never leak across projects.
-  await api('conversation/create', { projectId: other.id, agentId: 'codex', workspaceMode: 'shared', title: 'x' });
-  await call('files/save', { path: 'n.txt', content: 'x', revision: null });
-  await until(m => m.type === 'file' && m.projectId === projectId && m.path === 'n.txt');
-  assert.ok(!messages.some(m => m.type === 'file' && m.projectId === other.id));
+  await writeFile(join(repo, 'n.txt'), 'x');
+  await until(m => m.type === 'fs' && m.projectId === projectId && m.paths.includes('n.txt'));
+  assert.ok(!messages.some(m => m.type === 'fs' && m.projectId === other.id));
 
   ws.send(JSON.stringify({ type: 'unsubscribe', projectId }));
   await new Promise(resolve => setTimeout(resolve, 200));
   messages.length = 0;
-  await call('files/save', { path: 'm.txt', content: 'y', revision: null });
-  await new Promise(resolve => setTimeout(resolve, 300));
-  assert.ok(!messages.some(m => m.type === 'file'));
+  await writeFile(join(repo, 'm.txt'), 'y');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.ok(!messages.some(m => m.type === 'fs'));
 
   const readiness = await api('readiness', { projectId: other.id });
   if (readiness.pty.installed) {
@@ -416,33 +371,25 @@ test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => 
   assert.ok(system.memory.total > 0 && system.memory.used > 0 && system.memory.used <= system.memory.total);
 });
 
-test('LSP frame parser handles split chunks and several messages per chunk', () => {
-  const seen = [], push = createFrameParser(message => seen.push(message));
-  const bytes = Buffer.concat([frame({ id: 1, text: '한글' }), frame({ id: 2 })]);
-  for (let i = 0; i < bytes.length; i += 7) push(bytes.subarray(i, i + 7));
-  assert.deepEqual(seen, [{ id: 1, text: '한글' }, { id: 2 }]);
-  push(Buffer.from('Content-Length: 99999999999\r\n\r\n')); // oversize header resets instead of buffering forever
-  push(frame({ id: 3 }));
-  assert.equal(seen.at(-1).id, 3);
-});
-
-test('access token persists across restarts and can be exchanged again', async t => {
+test('access token is per process, never stored, and can be exchanged again', async t => {
   const data = await mkdtemp(join(tmpdir(), 'ade-token-'));
   t.after(() => rm(data, { recursive: true, force: true }));
+  await writeFile(join(data, 'token'), 'a'.repeat(64)); // left by an older version
   const start = async () => {
     const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
     const line = await new Promise((resolve, reject) => { child.stdout.once('data', chunk => resolve(String(chunk))); child.once('exit', () => reject(new Error('server exited'))); });
     const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);
-    const exchange = () => fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }) });
+    const exchange = (value = token) => fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token: value }) });
     return { token, exchange, stop: async () => { child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); } };
   };
   const first = await start();
   assert.equal((await first.exchange()).status, 200);
-  assert.equal((await first.exchange()).status, 200); // second browser, same token
+  assert.equal((await first.exchange()).status, 200); // a window reload exchanges it again
   await first.stop();
   const second = await start();
   t.after(second.stop);
-  assert.equal(second.token, first.token);
+  assert.notEqual(second.token, first.token);
+  assert.equal((await second.exchange(first.token)).status, 401);
   assert.equal((await second.exchange()).status, 200);
-  assert.equal((await stat(join(data, 'token'))).mode & 0o077, 0);
+  await assert.rejects(stat(join(data, 'token')));
 });

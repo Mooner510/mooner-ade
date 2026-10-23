@@ -19,15 +19,23 @@ test('terminal processes detect native macOS CLIs, npm wrappers, exec and SSH wi
     52 50 node app.js codex
     60 1 /Users/me/.local/bin/codex
     70 1 "C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\node_modules\\@anthropic-ai\\claude-code\\cli.js"
+    80 1 /bin/zsh
+    81 80 /Users/me/.local/bin/cursor-agent --use-system-ca /Users/me/.local/share/cursor-agent/versions/2026.10.19-6bbf2c4/index.js
+    90 1 /bin/zsh
+    91 90 /Users/me/.local/bin/agent --use-system-ca /Users/me/.local/share/cursor-agent/versions/2026.10.19-6bbf2c4/index.js --resume
+    92 1 /usr/local/bin/agent --config cursor-agent.json index.js
   `);
   const inspect = terminalProcesses(table);
-  assert.deepEqual(inspect(10), { agent: 'claude', ssh: false });
-  assert.deepEqual(inspect(20), { agent: 'codex', ssh: false });
-  assert.deepEqual(inspect(30), { agent: 'claude', ssh: false });
-  assert.deepEqual(inspect(40), { agent: null, ssh: true });
-  assert.deepEqual(inspect(50), { agent: null, ssh: false });
-  assert.deepEqual(inspect(60), { agent: 'codex', ssh: false });
-  assert.deepEqual(inspect(70), { agent: 'claude', ssh: false });
+  assert.partialDeepStrictEqual(inspect(10), { agent: 'claude', ssh: false });
+  assert.partialDeepStrictEqual(inspect(20), { agent: 'codex', ssh: false });
+  assert.partialDeepStrictEqual(inspect(30), { agent: 'claude', ssh: false });
+  assert.partialDeepStrictEqual(inspect(40), { agent: null, ssh: true });
+  assert.partialDeepStrictEqual(inspect(50), { agent: null, ssh: false });
+  assert.partialDeepStrictEqual(inspect(60), { agent: 'codex', ssh: false });
+  assert.partialDeepStrictEqual(inspect(70), { agent: 'claude', ssh: false });
+  assert.partialDeepStrictEqual(inspect(80), { agent: 'cursor', agentPid: 81, ssh: false });
+  assert.partialDeepStrictEqual(inspect(90), { agent: 'cursor', agentPid: 91, ssh: false });
+  assert.equal(inspect(92).agent, null);
   assert.equal(terminalProcesses(table.filter(entry => entry.pid !== 11 && entry.pid !== 12))(10).agent, null);
 });
 
@@ -42,8 +50,8 @@ test('ssh spawned by a local agent or git is a tool call, not an ssh terminal', 
     21 20 git push
     22 21 ssh git@github.com git-receive-pack repo
   `));
-  assert.deepEqual(inspect(10), { agent: 'claude', ssh: false });
-  assert.deepEqual(inspect(20), { agent: null, ssh: false });
+  assert.partialDeepStrictEqual(inspect(10), { agent: 'claude', ssh: false });
+  assert.partialDeepStrictEqual(inspect(20), { agent: null, ssh: false });
 });
 
 test('process evidence wins over stale titles and launchers; exiting clears local agent identity', () => {
@@ -61,6 +69,11 @@ test('process evidence wins over stale titles and launchers; exiting clears loca
   assert.equal(detectAgent('OpenAI Codex'), 'codex');
   assert.equal(detectAgent('⠋ Codex'), 'codex');
   assert.equal(detectAgent('✳ OpenAI Codex'), 'codex');
+  assert.equal(detectAgent('Cursor Agent - ✅ Ready'), 'cursor');
+  assert.equal(detectAgent('cursor-agent'), 'cursor');
+  assert.equal(detectAgent('⠋ Fix cursor agent bug'), undefined);
+  assert.equal(detectAgent('/work/cursor'), undefined);
+  assert.equal(resolveAgent('cursor', 'claude', 'Claude Code', false), 'cursor');
 });
 
 test('banner detection handles split ANSI sequences and uses the last session in replay', () => {

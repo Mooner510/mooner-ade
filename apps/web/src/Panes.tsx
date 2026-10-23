@@ -4,10 +4,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
-import { basename, findLeaf, isDiffTab, isLeaf, type Leaf, type Pane } from './api';
-import { DiffView, EditorView, monoFont, type Reveal, type Settings } from './Editor';
+import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
+import { DiffView, monoFont, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
-import { FileIcon } from './FileIcon';
 import { ANSI, createBannerDetector, createQuestionTracker } from './terminal-agent';
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
@@ -19,10 +18,8 @@ export type AgentEventKind = 'done' | 'attention';
 export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error' } | null };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
 export type EditorCtx = {
-  root: string; docs: { path: string; content: string; saved: string; external?: boolean }[]; settings: Settings; reveal: Record<string, Reveal>; gitVersion: number;
-  onChange(path: string, value: string): void; onSave(): void; onCursor(line: number, column: number): void;
-  onSelectTab(group: string, path: string): void; onCloseTab(group: string, path: string): void; onPin(group: string, path: string): void;
-  onSplitEditor(group: string, direction: 'row' | 'column'): void; onCloseGroup(group: string): void;
+  settings: Settings; gitVersion: number;
+  onSelectTab(group: string, path: string): void; onCloseTab(group: string, path: string): void; onCloseGroup(group: string): void;
   loadDiff(kind: string, path: string): Promise<{ original: string; modified: string }>;
 };
 type Props = {
@@ -34,7 +31,8 @@ type Props = {
 export const launchers: { id: string; label: string; detail: string; command: string; icon: IconName }[] = [
   { id: 'shell', label: '터미널', detail: '기본 셸', command: '', icon: 'terminal' },
   { id: 'claude', label: 'Claude Code', detail: 'claude', command: 'claude', icon: 'claude' },
-  { id: 'codex', label: 'Codex', detail: 'codex', command: 'codex', icon: 'codex' }
+  { id: 'codex', label: 'Codex', detail: 'codex', command: 'codex', icon: 'codex' },
+  { id: 'cursor', label: 'Cursor CLI', detail: 'cursor-agent', command: 'cursor-agent', icon: 'cursor' }
 ];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
 export function Launchers({ title, onLaunch, autoFocus }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean }) {
@@ -97,11 +95,26 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       });
     };
     const pasteHost = host.current!; pasteHost.addEventListener('paste', pasteImage, true);
+    // Files dropped from the OS are typed as shell-quoted absolute paths, like Terminal.app; only the desktop shell can resolve them.
+    const pathForFile = (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
+    const quotePath = (path: string) => /Windows/.test(navigator.userAgent) ? (/[\s&()^%!,;=]/.test(path) ? `"${path}"` : path) : path.replace(/[\s'"\\$`!&|;()<>*?[\]{}#~^]/g, '\\$&');
+    const dragFiles = (event: DragEvent) => {
+      if (!pathForFile || !event.dataTransfer?.types.includes('Files')) return;
+      event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy';
+    };
+    const dropFiles = (event: DragEvent) => {
+      if (!pathForFile || !event.dataTransfer?.files.length) return;
+      event.preventDefault(); event.stopPropagation();
+      const paths = Array.from(event.dataTransfer.files, file => pathForFile(file)).filter(Boolean);
+      if (!paths.length) return;
+      terminal.paste(paths.map(quotePath).join(' ') + ' '); terminal.focus();
+    };
+    pasteHost.addEventListener('dragover', dragFiles); pasteHost.addEventListener('drop', dropFiles);
     terminal.onSelectionChange(() => { if (settingsRef.current.copyOnSelect && terminal.hasSelection()) void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); });
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
     let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, working = false, asking = false, title = '';
     let status: TerminalFeed['status'], reportedState: string | undefined;
-    let bannerTail = '', followUpSupported = false, sendingFollowUp = false, writes = 0, retryTimer = 0;
+    let bannerTail = '', followUpSupported = false, sendingFollowUp = false, writes = 0, retryTimer = 0, composedEnter = 0;
     const queueId = crypto.randomUUID();
     const screenText = () => {
       const buffer = terminal.buffer.active;
@@ -217,7 +230,14 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
       // Typing and reports do not change the agent's turn state.
       if (!REPORT.test(data)) question.input(data);
-      callbacks.current.send({ type: 'terminal/input', id, data });
+      // The server rejects input messages over 16384 chars, so a long paste goes out in ordered chunks.
+      // A chunk never ends on a high surrogate, which would turn into U+FFFD once split from its pair.
+      for (let start = 0; start < data.length;) {
+        let end = Math.min(start + 8192, data.length);
+        if (end < data.length && /[\ud800-\udbff]/.test(data[end - 1])) end--;
+        callbacks.current.send({ type: 'terminal/input', id, data: data.slice(start, end) });
+        start = end;
+      }
     });
     terminal.onTitleChange(value => {
       title = value; callbacks.current.onTitle(id, title);
@@ -228,6 +248,14 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         return false;
       }
       if (event.type !== 'keydown' || event.altKey || event.metaKey) return true;
+      // macOS IMEs (Korean etc.) report an Enter that ends a composition as a composing keydown followed by a plain Enter keydown,
+      // and xterm sends CR for both. The composing one only commits the text; the fallback covers an IME that skips the second keydown.
+      if (event.key === 'Enter' && event.isComposing) {
+        const data = event.shiftKey ? '\x1b\r' : '\r';
+        clearTimeout(composedEnter); composedEnter = window.setTimeout(() => event.shiftKey ? callbacks.current.send({ type: 'terminal/input', id, data }) : terminal.input(data), 100);
+        return false;
+      }
+      if (event.key === 'Enter') clearTimeout(composedEnter);
       // Tab in Claude's composer is only for autocomplete (last word starts with / or @) and for queueing a follow-up while a turn runs.
       // Everything else is swallowed: Claude would otherwise toggle thinking or accept a suggestion, which nobody asked for.
       if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.isComposing && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking) {
@@ -241,8 +269,9 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         return false;
       }
       // xterm sends a bare CR for Shift+Enter; ESC+CR is the "newline without submit" sequence TUIs (Claude Code etc.) understand.
+      // Sent on the next tick: xterm flushes a just-ended IME composition from a setTimeout(0), and the newline must come after that text.
       if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey) {
-        event.preventDefault(); callbacks.current.send({ type: 'terminal/input', id, data: '\x1b\r' }); return false;
+        event.preventDefault(); setTimeout(() => callbacks.current.send({ type: 'terminal/input', id, data: '\x1b\r' })); return false;
       }
       // Ctrl+C copies only while text is selected (otherwise it stays SIGINT); Ctrl+Shift+C always copies.
       if (event.ctrlKey && event.code === 'KeyC' && (event.shiftKey || terminal.hasSelection())) {
@@ -270,7 +299,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
-    return () => { clearTimeout(retryTimer); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {
@@ -335,20 +364,17 @@ function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
   return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} /> : <div className="empty">불러오는 중…</div>;
 }
 
+// An editor pane holds diff tabs opened from the review panel (`diff:<kind>:<path>`).
 function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Leaf; focused: boolean; zoomed: boolean; ctx: EditorCtx; onFocus(id: string): void; onZoom(id: string): void }) {
   const tabs = leaf.tabs || [], active = leaf.active && tabs.includes(leaf.active) ? leaf.active : tabs[0] || '';
-  const doc = ctx.docs.find(item => item.path === active);
-  const label = (path: string) => isDiffTab(path) ? `${basename(path.split(':').slice(2).join(':'))} (${path.split(':')[1] === 'staged' ? '스테이지됨' : '변경'})` : basename(path);
+  const label = (path: string) => `${basename(path.split(':').slice(2).join(':'))} (${path.split(':')[1] === 'staged' ? '스테이지됨' : '변경'})`;
   return <section className={`editor-group ${focused ? 'focused' : ''}`} onMouseDownCapture={() => onFocus(leaf.id)}>
-    <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(path => {
-      const dirty = ctx.docs.some(item => item.path === path && item.content !== item.saved);
-      return <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''} ${leaf.preview === path ? 'preview' : ''} ${dirty ? 'dirty' : ''}`}
-        onClick={() => ctx.onSelectTab(leaf.id, path)} onDoubleClick={() => ctx.onPin(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
-        {isDiffTab(path) ? <Icon name="diff" size={13} /> : <FileIcon name={basename(path)} size={14} />}<span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>;
-    })}</div>
+    <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(path =>
+      <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''}`}
+        onClick={() => ctx.onSelectTab(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
+        <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
       <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
-    {active && isDiffTab(active) ? <DiffTab key={active} spec={active} ctx={ctx} />
-      : doc ? <EditorView group={leaf.id} root={ctx.root} path={doc.path} value={doc.content} settings={ctx.settings} onChange={ctx.onChange} onSave={ctx.onSave} onCursor={ctx.onCursor} onFocus={() => onFocus(leaf.id)} reveal={ctx.reveal[leaf.id]} />
+    {active ? <DiffTab key={active} spec={active} ctx={ctx} />
       : <div className="empty"><h2>열린 diff가 없습니다</h2><p>오른쪽 변경사항 패널에서 파일을 선택하세요.</p></div>}
   </section>;
 }

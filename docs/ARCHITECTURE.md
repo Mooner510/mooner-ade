@@ -1,35 +1,25 @@
-# ADE 아키텍처와 계약
+# ADE 아키텍처
 
-## 애플리케이션
+무너에이드는 macOS·Windows용 Electron 데스크톱 앱입니다. 별도 웹 배포판은 없으며, 웹 UI는 앱 창 안에서만 동작합니다.
 
-- `apps/desktop`: 격리된 Electron 렌더러와 폴더 선택 preload. 시스템 Node로 서버를 실행하며 종료 시 IPC로 정리를 요청합니다. 개발 모드에서만 별도 PTY 호스트가 서버 재시작 사이의 터미널을 유지합니다.
-- `apps/web`: 터미널 탭·분할과 읽기 전용 Diff 중심 React UI. 하나의 WebSocket으로 여러 프로젝트를 구독하며 메시지의 `projectId`로 분배합니다. 현재 일반 편집기·검색·커밋 UI는 없습니다.
-- `apps/local-server`: 루프백 인증, 프로젝트 잠금, 파일·Git·PTY·LSP API, 서버 소유 에이전트 실행과 영속화. 앱에서 커밋하는 API는 없습니다.
+## 구성
 
-## 재사용 패키지
+- `apps/desktop`: Electron 메인 프로세스와 격리된 렌더러, 폴더 선택 preload. 시스템 Node(패키지 앱은 번들한 Node)로 로컬 서버를 실행하고, 종료 시 IPC로 정리를 요청합니다. `pnpm dev`에서만 별도 PTY 호스트가 서버 재시작 사이의 터미널을 유지합니다.
+- `apps/web`: 앱 창에 표시하는 React UI. 터미널 탭·분할과 읽기 전용 Git Diff가 중심입니다. 하나의 WebSocket으로 여러 프로젝트를 구독하며 메시지의 `projectId`로 분배합니다. 파일 편집·검색·커밋 UI는 없습니다.
+- `apps/local-server`: 루프백 인증, 프로젝트 잠금, Git 상태·Diff·브랜치·저장소 worktree API, PTY와 터미널 세션 복구, 사용량·WakaTime 연동. `runtime.js`가 프로젝트 루트로 제한한 경로 검사, argv 기반 프로세스 실행, Git, PTY 포트를 제공합니다. 앱에서 커밋하는 API는 없습니다.
 
-| 패키지 | 책임 |
-|---|---|
-| `ade-core` | 정책 검사, 에이전트 등록·수명주기·취소, 승인 브로커 |
-| `ade-protocol` | wire envelope와 버전이 있는 에이전트 이벤트 검증 |
-| `ade-runtime-local` | 호스트 파일·argv 프로세스·Git·주입 가능한 PTY 포트 |
-| `ade-agent-core` | 크기 제한이 있는 UTF-8 JSONL 파싱·CLI 프로세스 처리 |
-| `ade-agent-codex` / `ade-agent-claude` | 비대화형 CLI 이벤트 정규화 |
-| `ade-session-store` | 단일 writer용 메타 JSON + append-only JSONL 이벤트 |
-| `ade-session-runner` | 이벤트를 저장한 후 소비자에게 전달하고 terminal 상태 반영 |
+## 에이전트
 
-core는 로컬 파일 시스템·브라우저·컨테이너를 직접 import하지 않습니다. `AllowAllPolicy`는 신뢰하는 로컬 사용자를 위한 선택이며 기본 거절 정책과 구분합니다. 공개 패키지 API는 `0.1.0` 단계입니다.
+Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승인은 CLI 자체 화면을 따르며, 서버는 CLI가 보내는 OSC 7501 상태 보고와 프로세스 트리로 작업 상태·SSH 여부·세션 ID를 추적합니다. 서버가 직접 모델을 호출하는 경로는 없습니다. 준비 상태 확인만 `claude auth status`와 `codex app-server`의 계정 조회를 사용합니다.
 
-## 에이전트와 복구
+## 인증과 연결
 
-터미널의 CLI 실행과 서버의 SDK 실행은 별개입니다. 터미널에서는 CLI 자체 승인 화면을 사용합니다. 서버의 `CodexAppAgent`와 `ClaudeSdkAgent`는 네이티브 요청을 승인 브로커에 연결하지만 현재 UI에는 SDK 대화 패널이 없습니다. 재사용 JSONL CLI adapters는 브라우저의 대화형 승인을 지원하지 않습니다.
-
-ADE 실행 ID와 제공자 thread ID는 별개입니다. 서버가 이벤트를 소비하므로 브라우저 연결 해제는 실행 종료가 아닙니다. 서버 재시작 후 running 기록은 interrupted로 바뀌며, 저장된 thread ID를 이용한 새 실행은 예전 OS 프로세스 재접속을 뜻하지 않습니다.
+서버는 `127.0.0.1`의 임의 포트에 바인딩하고, 실행할 때마다 새 접속 토큰을 만들어 stdout으로 앱에 알립니다. 토큰은 디스크에 저장하지 않습니다. 앱 창은 URL 해시의 토큰을 HttpOnly·SameSite=Strict 세션 쿠키로 교환한 뒤 주소에서 지웁니다. API는 동일 출처 JSON POST만, WebSocket은 Host·Origin·쿠키가 맞는 요청만 받습니다.
 
 ## 로컬 경계
 
-`LocalWorkspace`의 기본 범위는 unrestricted입니다. 앱의 root 범위 경로 검사는 traversal·symlink를 방어하지만 악성 프로세스에 대한 OS sandbox가 아닙니다. PTY는 사용자 셸과 동일한 권한입니다. 로컬 서버는 Git fsmonitor와 hooks를 비활성화하며 터미널에서 실행한 Git에는 적용하지 않습니다.
+경로 검사는 traversal·symlink를 막지만 악성 프로세스에 대한 OS sandbox가 아닙니다. PTY는 사용자 셸과 같은 권한입니다. 로컬 서버가 실행하는 Git은 저장소의 fsmonitor와 hooks를 끄며, 터미널에서 실행한 Git에는 적용하지 않습니다.
 
-파일 감시는 최적화입니다. 생성 실패·실행 중 오류가 나면 감시기를 닫고 Git/열린 파일 폴링을 유지합니다. 종료 시 지연 알림과 수집한 경로도 정리합니다. 폴링은 현재 표시 중인 프로젝트에 적용되며 전환 시 즉시 확인합니다.
+파일 감시는 최적화입니다. 생성 실패나 실행 중 오류가 나면 감시기를 닫고 Git 폴링을 유지합니다. 폴링은 현재 표시 중인 프로젝트에만 적용되며 전환 시 즉시 확인합니다.
 
-검증은 [VERIFICATION](VERIFICATION.md), 호스팅 경계는 [PORTING](PORTING.md)을 참고하세요.
+검증 상태는 [VERIFICATION](VERIFICATION.md), 보안 검토는 [SECURITY_REVIEW](SECURITY_REVIEW.md)를 참고하세요.

@@ -1,19 +1,19 @@
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
-import { disposeModel, DiffView, type Reveal, type Settings } from './Editor';
+import { statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton } from './Icon';
-import { Launchers, launchers, Panes, Splitter, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
+import { Launchers, launchers, Panes, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
-import { Dropdown, Modal, type Ask, type GitState } from './views';
+import { Dropdown, type Ask, type GitState } from './views';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
-export type Hub = { subscribe(projectId: string, handler: (message: any) => void, cursors: () => Record<string, number>): () => void; send(message: object): boolean };
+export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
 export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean };
 export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean };
-export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; dirty: number; tabs: TabInfo[]; activeTab: string };
+export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
@@ -23,10 +23,8 @@ type WorkspaceProps = {
   onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onAddProject(): void; onOpenSettings(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
-type FileTab = { path: string; content: string; saved: string; revision: string; external?: boolean };
-type Conversation = { id: string; title: string; agentId: string; model?: string | null; effort?: string | null; closedAt?: number; cwd: string; branch?: string; activeRun?: string; runs: string[]; removed?: boolean };
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
-type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Repository[]; conversations: Conversation[]; terminals: { id: string; exited: boolean; cwd?: string }[]; ui: any };
+type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Repository[]; terminals: { id: string; exited: boolean; cwd?: string }[]; ui: any };
 // A Warp-style tab: one pane tree of terminals (and editor panes opened next to them).
 type PaneTab = { id: string; title?: string; pane: Pane | null; focus?: string };
 const emptyGit: GitState = { branch: '', changes: [], additions: 0, deletions: 0 };
@@ -37,6 +35,58 @@ function Clock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 15000); return () => clearInterval(timer); }, []);
   return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>;
+}
+// "1 hr 29 mins" → "1h 29m"; the full text stays in the tooltip.
+const compactDuration = (text: string) => text.replace(/\s*hrs?\b/g, 'h').replace(/\s*mins?\b/g, 'm').replace(/\s*secs?\b/g, 's');
+function WakaTimeStat() {
+  const [status, setStatus] = useState<{ today: string; lastSent: number; lastError: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    // The server refreshes today's total at most once a minute, so polling faster would show nothing new.
+    const load = () => api<{ today: string; lastSent: number; lastError: string | null }>('wakatime/status').then(value => { if (live) setStatus(value); }, () => {});
+    void load(); const timer = setInterval(load, 60000);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
+  if (!status) return null;
+  const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
+  return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? `\n${status.lastError}` : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
+}
+type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
+type Usage = { provider: 'claude' | 'codex'; windows: UsageWindow[]; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
+const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
+const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex' };
+const usageNames = { claude: 'Claude Code', codex: 'Codex' };
+const untilReset = (at: number) => {
+  const minutes = Math.max(0, Math.round((at - Date.now()) / 60000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
+  return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
+};
+// The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
+function UsageStat({ provider, colors, projectId, active }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean }) {
+  const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
+  const load = useCallback((force = false) => {
+    setLoading(force);
+    return api<Usage>('usage/status', { provider, force, projectId }).then(setUsage, () => {}).finally(() => setLoading(false));
+  }, [provider, projectId]);
+  useEffect(() => {
+    // Hidden projects keep their last reading; switching back refreshes it, since its agent may have changed accounts.
+    if (!active) return;
+    let live = true;
+    const tick = () => { if (live) void load(); };
+    tick(); const timer = setInterval(tick, 120000);
+    return () => { live = false; clearInterval(timer); };
+  }, [load, active]);
+  if (!usage) return null;
+  const main = ['session', 'weekly'].map(key => usage.windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[];
+  const peak = Math.max(0, ...usage.windows.map(item => item.percent));
+  const lines = usage.windows.map(item => `${item.label}: ${item.percent}%${item.resetsAt ? ` · ${untilReset(item.resetsAt)} 후 초기화 (${new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })})` : ''}`);
+  const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
+  const account = `계정: ${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
+  const title = [`${usageNames[provider]} 사용량${usage.plan ? ` · ${usage.plan}` : ''}`, account, ...lines, from, usage.error, usage.note, '클릭: 새로고침'].filter(Boolean).join('\n');
+  const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
+  return <button className={`stat usage ${level} ${usage.error && !main.length ? 'warn' : ''}`} title={title} aria-label={title} aria-busy={loading} onClick={() => void load(true)}>
+    <Icon name={provider} size={13} />
+    {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? { '--usage-hue': usageHue(item.percent) } as CSSProperties : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+  </button>;
 }
 export const showKeys = (keys: string) => keys.split('+').map(part => ({ mod: mac ? '⌘' : 'Ctrl', ctrl: mac ? '⌃' : 'Ctrl', shift: mac ? '⇧' : 'Shift', alt: mac ? '⌥' : 'Alt' } as Record<string, string>)[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
 function keyOf(event: KeyboardEvent) {
@@ -52,15 +102,12 @@ function matches(keys: string, event: KeyboardEvent) {
 }
 export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, system, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onAgentAlert }, handleRef) {
   const [error, setError] = useState('');
-  const [project, setProject] = useState<Snapshot | null>(null);
+  const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
-  const [treeVersion, setTreeVersion] = useState(0), [gitVersion, setGitVersion] = useState(0);
-  const [tabs, setTabs] = useState<FileTab[]>([]);
-  const [conflict, setConflict] = useState<{ path: string; content: string; revision: string } | null>(null);
+  const [gitVersion, setGitVersion] = useState(0);
   const [rightVisible, setRightVisible] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
-  const [diffText, setDiffText] = useState<string | null>(null);
   const [paneTabs, setPaneTabs] = useState<PaneTab[]>([]), [activeTab, setActiveTab] = useState('');
   const [focus, setFocus] = useState(''), [zoom, setZoom] = useState('');
   const [titles, setTitles] = useState<Record<string, string>>({});
@@ -73,27 +120,22 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
-  const [widths, setWidths] = useState([18, 52, 30]), [heights] = useState([68, 32]);
-  const [reveal, setReveal] = useState<Record<string, Reveal>>({}), [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
-  const [workspaceId, setWorkspaceId] = useState(''), [restoring, setRestoring] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const refs = {
-    workspace: useRef(''), repository: useRef(''), tabs: useRef(tabs), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
-    project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), checking: useRef(false), quickKey: useRef(0),
+    repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
+    project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
     tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {})
   };
   refs.active.current = active;
-  refs.workspace.current = workspaceId; refs.repository.current = gitRepositoryId; refs.tabs.current = tabs; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
+  refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
   refs.focus.current = focus; refs.project.current = project;
-  const cursors = useRef<Record<string, number>>({});
   const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map() });
-  const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(/^(files\/|git\/|terminal\/open)/.test(action) && refs.workspace.current ? { conversationId: refs.workspace.current } : {}), ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
+  const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
   const run = (operation: () => Promise<unknown>) => { setError(''); void operation().catch(report); };
   const refresh = useCallback(async () => { const state = await call<Snapshot>('snapshot'); setProject(state); return state; }, [call]);
   const send = useCallback((message: object) => hub.send({ ...message, projectId: refs.project.current?.id }), [hub]);
-  // Models are keyed by the server's real path, which may differ from the path the user typed.
-  const rootOf = () => refs.project.current?.root ?? root;
   const ask = useMemo<Ask>(() => ({
     input: (title, initial) => new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'input', title, initial, resolve } })),
     confirm: async message => (await new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'pick', title: message, items: [{ id: 'yes', label: '확인' }, { id: 'no', label: '취소' }], resolve } }))) === 'yes'
@@ -108,9 +150,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const commitPane = (next: Pane | null) => commitTab(refs.activeTab.current, next);
   const treeOf = (id: string) => tabOf(id)?.pane ?? null;
   const commitFor = (id: string, next: Pane | null) => commitTab(tabOf(id)?.id ?? refs.activeTab.current, next);
-  const trees = () => refs.paneTabs.current.map(tab => tab.pane);
   const focusedLeaf = (): Leaf | undefined => [findLeaf(activePane(), refs.focus.current), findLeaf(activePane(), refs.lastEditor.current)].find(leaf => leaf?.kind === 'editor');
-  const activePath = () => { const leaf = focusedLeaf(); return leaf?.active && !isDiffTab(leaf.active) ? leaf.active : ''; };
   const setFocusLeaf = (id: string) => {
     setFocus(id); refs.focus.current = id;
     const owner = tabOf(id); if (owner) refs.tabFocus.current[owner.id] = id;
@@ -122,121 +162,33 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const remembered = refs.tabFocus.current[id];
     setFocusLeaf(findLeaf(tab.pane, remembered || '') ? remembered : leaves(tab.pane)[0] || '');
   }
-  const nextReveal = (id: string, value: Omit<Reveal, 'nonce'> = {}) => setReveal(previous => ({ ...previous, [id]: { ...value, nonce: Math.random() } }));
   // Empty editor panes disappear.
   function compact(tree: Pane | null): Pane | null {
     let next = tree;
     for (const leaf of leafList(tree)) if (leaf.kind === 'editor' && !(leaf.tabs || []).length) next = next && remove(next, leaf.id);
     return next;
   }
-  const isDirty = (path: string) => refs.tabs.current.some(tab => tab.path === path && tab.content !== tab.saved);
-  function addTab(leaf: Leaf, path: string, preview: boolean): Leaf {
-    const list = leaf.tabs || [];
-    if (list.includes(path)) return { ...leaf, active: path, preview: preview || leaf.preview !== path ? leaf.preview : undefined };
-    const base = preview && leaf.preview && list.includes(leaf.preview) && !isDirty(leaf.preview) ? list.filter(item => item !== leaf.preview) : list;
-    return { ...leaf, tabs: [...base, path], active: path, preview: preview ? path : leaf.preview && base.includes(leaf.preview) ? leaf.preview : undefined };
-  }
-  function placeTab(path: string, { preview = false, line, column, length }: { preview?: boolean; line?: number; column?: number; length?: number } = {}) {
+  // A diff opens in the focused (or first) diff pane, or in a new one beside the focused terminal.
+  function openDiff(path: string) {
     const tree = activePane();
     const current = focusedLeaf(), target = (current && findLeaf(tree, current.id)) || leafList(tree).find(leaf => leaf.kind === 'editor');
     let id: string;
-    if (target) { id = target.id; commitPane(mapLeaf(tree!, id, leaf => addTab(leaf, path, preview))); }
+    if (target) { id = target.id; commitPane(mapLeaf(tree!, id, leaf => ({ ...leaf, tabs: (leaf.tabs || []).includes(path) ? leaf.tabs : [...(leaf.tabs || []), path], active: path }))); }
     else {
-      const leaf = editorLeaf([path], path); id = leaf.id; leaf.preview = preview ? path : undefined;
+      const leaf = editorLeaf([path], path); id = leaf.id;
       const anchor = findLeaf(tree, refs.focus.current) || leafList(tree)[0];
       commitPane(!tree || !anchor ? leaf : split(tree, anchor.id, leaf, 'row'));
     }
-    setFocusLeaf(id); nextReveal(id, { line, column, length });
+    setFocusLeaf(id);
   }
-  async function openFile(path: string, options: { preview?: boolean; line?: number; column?: number; length?: number } = {}) {
-    if (!isDiffTab(path) && !refs.tabs.current.some(tab => tab.path === path)) {
-      if (refs.tabs.current.length >= 30) throw new Error('열린 파일을 닫은 후 다시 여세요. 최대 30개 파일을 복원합니다.');
-      const value = await call<{ content: string; revision: string }>('files/read', { path });
-      setTabs(previous => previous.some(tab => tab.path === path) ? previous : [...previous, { path, ...value, saved: value.content }]);
-    }
-    placeTab(path, options);
-  }
-  const openAt = (path: string, line: number, column: number, length = 0) => run(() => openFile(path, { line, column, length }));
-  const mapEditors = (change: (leaf: Leaf) => Leaf) => {
-    let changed = false;
-    const next = refs.paneTabs.current.map(tab => {
-      let tree = tab.pane; for (const leaf of leafList(tab.pane)) if (leaf.kind === 'editor') tree = tree && mapLeaf(tree, leaf.id, change);
-      if (tree === tab.pane) return tab; changed = true; return { ...tab, pane: tree };
-    });
-    if (changed) commitTabs(next);
-  };
-  const compactAll = () => commitTabs(refs.paneTabs.current.map(tab => ({ ...tab, pane: compact(tab.pane) })));
-  async function closeTab(groupId: string, path: string) {
+  function closeTab(groupId: string, path: string) {
     const leaf = findLeaf(treeOf(groupId), groupId); if (!leaf) return;
-    const elsewhere = trees().flatMap(leafList).some(other => other.id !== groupId && other.kind === 'editor' && (other.tabs || []).includes(path));
-    const doc = refs.tabs.current.find(tab => tab.path === path);
-    if (!elsewhere && doc && doc.content !== doc.saved && !(await ask.confirm(`${path}의 저장하지 않은 변경을 버릴까요?`))) return;
     const list = leaf.tabs || [], index = list.indexOf(path), rest = list.filter(item => item !== path);
-    const updated = mapLeaf(treeOf(groupId)!, groupId, item => ({ ...item, tabs: rest, active: item.active === path ? rest[index] ?? rest[index - 1] ?? '' : item.active, preview: item.preview === path ? undefined : item.preview }));
-    commitFor(groupId, compact(updated));
-    if (!elsewhere && doc) { setTabs(previous => previous.filter(tab => tab.path !== path)); disposeModel(rootOf(), path); }
+    commitFor(groupId, compact(mapLeaf(treeOf(groupId)!, groupId, item => ({ ...item, tabs: rest, active: item.active === path ? rest[index] ?? rest[index - 1] ?? '' : item.active }))));
   }
-  async function closeGroup(groupId: string) {
-    const leaf = findLeaf(treeOf(groupId), groupId); if (!leaf) return;
-    for (const path of [...(leaf.tabs || [])]) await closeTab(groupId, path);
-    const still = findLeaf(treeOf(groupId), groupId);
-    if (still) commitFor(groupId, remove(treeOf(groupId)!, groupId));
+  function closeGroup(groupId: string) {
+    if (findLeaf(treeOf(groupId), groupId)) commitFor(groupId, remove(treeOf(groupId)!, groupId));
   }
-  function splitEditor(groupId: string, direction: 'row' | 'column') {
-    const tree = treeOf(groupId), leaf = findLeaf(tree, groupId); if (!tree || !leaf) return;
-    const copy = editorLeaf(leaf.active && !isDiffTab(leaf.active) ? [leaf.active] : [], leaf.active);
-    commitFor(groupId, split(tree, groupId, copy, direction)); setFocusLeaf(copy.id); nextReveal(copy.id);
-  }
-  function dropPaths(matchPath: (path: string) => boolean) {
-    mapEditors(leaf => { const list = (leaf.tabs || []).filter(path => !matchPath(path)); return list.length === (leaf.tabs || []).length ? leaf : { ...leaf, tabs: list, active: list.includes(leaf.active || '') ? leaf.active : list[0] || '' }; });
-    compactAll();
-    for (const tab of refs.tabs.current) if (matchPath(tab.path)) disposeModel(rootOf(), tab.path);
-    setTabs(previous => previous.filter(tab => !matchPath(tab.path)));
-  }
-  function renamePaths(from: string, to: string) {
-    const rename = (path: string) => path === from ? to : path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
-    mapEditors(leaf => ({ ...leaf, tabs: (leaf.tabs || []).map(rename), active: rename(leaf.active || ''), preview: leaf.preview && rename(leaf.preview) }));
-    for (const tab of refs.tabs.current) if (rename(tab.path) !== tab.path) disposeModel(rootOf(), tab.path);
-    setTabs(previous => previous.map(tab => ({ ...tab, path: rename(tab.path) })));
-  }
-
-  // ---- documents ----
-  const onDocChange = useCallback((path: string, value: string) => {
-    setTabs(previous => previous.some(tab => tab.path === path && tab.content !== value) ? previous.map(tab => tab.path === path ? { ...tab, content: value } : tab) : previous);
-    mapEditors(leaf => leaf.preview === path ? { ...leaf, preview: undefined } : leaf);
-  }, []);
-  async function saveFile(path = activePath(), revision?: string) {
-    const file = refs.tabs.current.find(tab => tab.path === path); if (!file) return;
-    try {
-      const value = await call<{ content: string; revision: string }>('files/save', { path, content: file.content, revision: revision ?? file.revision });
-      setTabs(previous => previous.map(tab => tab.path === path ? { ...tab, saved: value.content, revision: value.revision, external: false } : tab));
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.code === 'REVISION_CONFLICT' && cause.details) setConflict({ path, ...cause.details });
-      else throw cause;
-    }
-  }
-  async function checkExternal() {
-    if (refs.checking.current) return; refs.checking.current = true;
-    const projectId = refs.project.current?.id, conversationId = refs.workspace.current;
-    try {
-      for (const file of refs.tabs.current) {
-        const current = await api<{ content: string; revision: string }>('files/read', { projectId, conversationId, path: file.path }).catch(() => null);
-        if (!current) continue;
-        if (refs.project.current?.id !== projectId || refs.workspace.current !== conversationId) break;
-        const latest = refs.tabs.current.find(tab => tab.path === file.path);
-        if (!latest || current.revision === latest.revision) continue;
-        if (current.content === latest.saved) setTabs(previous => previous.map(tab => tab.path === file.path ? { ...tab, revision: current.revision } : tab));
-        else if (latest.content === latest.saved) setTabs(previous => previous.map(tab => tab.path === file.path ? { ...tab, content: current.content, saved: current.content, revision: current.revision, external: false } : tab));
-        else setTabs(previous => previous.map(tab => tab.path === file.path ? { ...tab, external: true } : tab));
-      }
-    } finally { refs.checking.current = false; }
-  }
-  const reloadPaths = async (paths: string[]) => {
-    for (const path of paths) {
-      const current = await call<{ content: string; revision: string }>('files/read', { path }).catch(() => null);
-      if (current) setTabs(previous => previous.map(tab => tab.path === path ? { ...tab, ...current, saved: current.content, external: false } : tab));
-    }
-  };
   async function refreshGit() {
     const state = refs.project.current;
     if (!state || !state.repositories.length || (state.multiRepo && !state.repositories.some(repo => repo.id === refs.repository.current))) { setGit(emptyGit); return; }
@@ -248,10 +200,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // Each open project is its own mounted Workspace, so opening happens once per mount; switching projects never reloads one.
   useEffect(() => {
     if (refs.started.current) return; refs.started.current = true;
-    void loadProject().catch(cause => onFailed(root, cause));
+    open();
   }, []);
-  // Closing a project frees its editor models; the server side is released by `project/close`.
-  useEffect(() => () => { for (const tab of refs.tabs.current) disposeModel(rootOf(), tab.path); }, []);
+  // A failed open keeps the project in the list with a retry instead of dropping it; a server restart mid-open is the usual cause.
+  function open() {
+    setOpenError('');
+    void loadProject().catch(cause => { setOpenError(cause instanceof Error ? cause.message : String(cause)); onFailed(root, cause); });
+  }
   useImperativeHandle(handleRef, () => ({
     selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
     // Reordering only changes the list order; the saved layout follows it.
@@ -289,8 +244,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     },
     selectPane: (tabId, paneId) => { selectTab(tabId); setFocusLeaf(paneId); }, closeTab: id => run(() => closePaneTab(id)), newTab: () => run(() => newTab()), renameTab: id => run(() => renamePaneTab(id)), launcher: () => run(() => pickLauncher('tab')),
     async requestClose() {
-      const dirty = refs.tabs.current.filter(file => file.content !== file.saved).length;
-      if (dirty && !(await ask.confirm(`저장하지 않은 파일 ${dirty}개가 있습니다. 프로젝트를 닫을까요?`))) return false;
       const projectId = refs.project.current?.id; if (!projectId) return true;
       try { await api('project/close', { projectId }); }
       catch (cause) {
@@ -332,31 +285,23 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
   }));
   useEffect(() => {
-    onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, dirty: tabs.filter(file => file.content !== file.saved).length, tabs: JSON.parse(tabInfo), activeTab });
-  }, [root, project?.id, project?.root, attentionCount, tabs, tabInfo, activeTab]);
+    onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, tabs: JSON.parse(tabInfo), activeTab });
+  }, [root, project?.id, project?.root, attentionCount, tabInfo, activeTab]);
 
   async function loadProject() {
     const state = await api<Snapshot>('project/open', { path: root });
     setRestoring(true);
-    refs.project.current = state; setProject(state); cursors.current = {}; bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({});
+    refs.project.current = state; setProject(state); bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({});
     const ui = state.ui || {};
     const nextRepoId = state.repositories.some(repo => repo.id === ui.gitRepositoryId) ? ui.gitRepositoryId : state.repositories[0]?.id || '';
     refs.repository.current = nextRepoId; setGitRepositoryId(nextRepoId);
-    const restoredWorkspace = !state.multiRepo && state.conversations.some(c => c.id === ui.workspaceId && !c.removed) ? ui.workspaceId : '';
-    refs.workspace.current = restoredWorkspace; setWorkspaceId(restoredWorkspace);
-    setDiffText(null); setZoom('');
+    setZoom('');
     // Settings used to live in each project's layout; the shell adopts them once and keeps its own copy from then on.
     if (ui.settings) onLegacySettings(ui.settings);
     setRightVisible(ui.rightVisible ?? false);
-    setWidths(ui.widths?.length === 3 ? ui.widths : [18, 52, 30]);
-    const restored = await Promise.all((ui.tabs || []).slice(0, 30).map(async (file: any): Promise<FileTab | null> => {
-      try {
-        const current = await api<{ content: string; revision: string }>('files/read', { projectId: state.id, conversationId: restoredWorkspace, path: file.path });
-        return { path: file.path, ...current, revision: file.draft !== undefined && file.revision ? file.revision : current.revision, saved: current.content, content: file.draft ?? current.content, external: file.revision && file.revision !== current.revision && file.draft !== undefined };
-      } catch (cause) { report(cause); return typeof file.draft === 'string' ? { path: file.path, content: file.draft, saved: '', revision: file.revision, external: true } : null; }
-    })).then(files => files.filter((file): file is FileTab => file !== null));
-    const known = new Set(restored.map(tab => tab.path)), clean = (tree: Pane | null): Pane | null => {
-      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(path => known.has(path) || isDiffTab(path)); return { ...item, tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
+    // Older versions could also open plain files in editor panes; only diff tabs are kept.
+    const clean = (tree: Pane | null): Pane | null => {
+      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(isDiffTab); return { id: item.id, kind: 'editor', tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
       return next;
     };
     const live = new Set(state.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
@@ -394,8 +339,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     setFocusLeaf(findLeaf(active.pane, focused) ? focused : refs.tabFocus.current[active.id] && findLeaf(active.pane, refs.tabFocus.current[active.id]) ? refs.tabFocus.current[active.id] : leaves(active.pane)[0] || '');
     const lastEditor = leafList(active.pane).find(leaf => leaf.kind === 'editor');
     if (lastEditor) refs.lastEditor.current = lastEditor.id;
-    setTabs(restored); setRestoring(false);
-    setTreeVersion(value => value + 1);
+    setRestoring(false);
     void call<Record<string, any>>('readiness').then(setHealth).catch(report);
     if (!leafList(active.pane).some(leaf => leaf.kind !== 'editor')) await openTerminalLeaf('').catch(report);
   }
@@ -413,7 +357,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
             } else if (!previous || message.sequence > previous.sequence) {
               bus.current.buffers.set(message.id, { ...message, data: ((previous?.data || '') + message.data).slice(-262144) });
               bus.current.listeners.get(message.id)?.(message);
-              // A launcher command (claude, codex) is typed once the shell has printed its first output.
+              // A launcher command (claude, codex, cursor-agent) is typed once the shell has printed its first output.
               const command = refs.pending.current.get(message.id);
               if (command !== undefined) { refs.pending.current.delete(message.id); setTimeout(() => send({ type: 'terminal/input', id: message.id, data: `${command}\r` }), 150); }
             }
@@ -442,7 +386,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   useEffect(() => {
     if (!project?.id) return;
-    return hub.subscribe(project.id, message => refs.onMessage.current(message), () => cursors.current);
+    return hub.subscribe(project.id, message => refs.onMessage.current(message));
   }, [project?.id, hub]);
 
   // ---- persistence and background refresh ----
@@ -460,30 +404,18 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (!project?.id || restoring) return;
     const timer = setTimeout(() => {
       const savedTabs = paneTabs.map(tab => ({ id: tab.id, pane: remember(tab.pane), ...(tab.title ? { title: tab.title } : {}), ...(refs.tabFocus.current[tab.id] ? { focus: refs.tabFocus.current[tab.id] } : {}) }));
-      void call('ui', { ui: { tabs: tabs.map(file => ({ path: file.path, revision: file.revision, ...(file.content !== file.saved ? { draft: file.content } : {}) })), activeFile: activePath(), conversationId: '', workspaceId, gitRepositoryId, pane: activePane(), paneTabs: savedTabs, activeTab, focus, widths, heights, side: 'files', sideVisible: false, rightVisible } }).catch(report);
+      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible } }).catch(report);
     }, 400);
     return () => clearTimeout(timer);
-  }, [project?.id, tabs, workspaceId, gitRepositoryId, restoring, paneTabs, activeTab, focus, widths, heights, rightVisible, agentKey, call, report]);
-  useEffect(() => {
-    const handler = (event: BeforeUnloadEvent) => { if (refs.tabs.current.some(file => file.content !== file.saved)) { event.preventDefault(); event.returnValue = ''; } };
-    window.addEventListener('beforeunload', handler); return () => window.removeEventListener('beforeunload', handler);
-  }, []);
+  }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, rightVisible, agentKey, call, report]);
   // Polling only runs for the project being shown; coming back to a project refreshes it immediately.
   useEffect(() => {
     if (!project?.id || !active) return;
     let checking = false;
-    const tick = async () => { if (checking) return; checking = true; try { await Promise.all([refreshGit(), checkExternal()]); } catch (cause) { report(cause); } finally { checking = false; } };
+    const tick = async () => { if (checking) return; checking = true; try { await refreshGit(); } catch (cause) { report(cause); } finally { checking = false; } };
     void tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
     return () => clearInterval(timer);
-  }, [project?.id, workspaceId, gitRepositoryId, active, settings.diffRefresh]);
-  useEffect(() => { // documents no pane shows any more are closed, unless they hold unsaved edits
-    if (restoring) return;
-    const shown = new Set(paneTabs.flatMap(tab => leafList(tab.pane)).flatMap(leaf => leaf.kind === 'editor' ? leaf.tabs || [] : []));
-    const drop = refs.tabs.current.filter(tab => !shown.has(tab.path) && tab.content === tab.saved);
-    if (!drop.length) return;
-    drop.forEach(tab => disposeModel(rootOf(), tab.path));
-    setTabs(previous => previous.filter(tab => !drop.some(item => item.path === tab.path)));
-  }, [paneTabs, restoring]);
+  }, [project?.id, gitRepositoryId, active, settings.diffRefresh]);
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
 
   // ---- terminals ----
@@ -554,8 +486,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   async function closePaneTab(tabId: string) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
-    const dirty = leafList(tab.pane).flatMap(leaf => leaf.tabs || []).filter(isDirty);
-    if ((running.length || dirty.length) && !(await ask.confirm(`이 탭을 닫을까요?${running.length ? ` 실행 중인 터미널 ${running.length}개가 종료됩니다.` : ''}${dirty.length ? ` 저장하지 않은 파일 ${dirty.length}개의 변경을 버립니다.` : ''}`))) return;
+    if (running.length && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); await refresh(); await openTerminalLeaf(''); return; }
     commitTab(tabId, null); dropEmptyTab(tabId); await refresh();
@@ -598,14 +529,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
 
   // ---- workspace / git ----
-  async function changeWorkspace(next: string) {
-    if (refs.tabs.current.some(file => file.content !== file.saved) && !(await ask.confirm('미저장 편집을 버리고 작업 경로를 바꿀까요?'))) return;
-    for (const tab of refs.tabs.current) disposeModel(rootOf(), tab.path);
-    refs.workspace.current = next; setWorkspaceId(next); setTabs([]);
-    mapEditors(leaf => ({ ...leaf, tabs: [], active: '', preview: undefined }));
-    compactAll();
-    setTreeVersion(value => value + 1); await refreshGit();
-  }
   const selectGitRepository = (id: string) => {
     refs.repository.current = id; setGitRepositoryId(id);
     if (refs.project.current?.multiRepo && id) void call('git/status', { repositoryId: id }).then(setGit).catch(report); else setGit(emptyGit);
@@ -622,24 +545,17 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const { branches } = await call<{ branches: string[] }>('git/branches');
     const choice = await pick('브랜치 전환', branches.map(name => ({ id: name, label: name, detail: name === git.branch ? '현재' : '' })));
     if (!choice || choice === git.branch) return;
-    await call('git/checkout', { branch: choice }); await refreshGit(); setTreeVersion(value => value + 1);
+    await call('git/checkout', { branch: choice }); await refreshGit();
   }
 
   // ---- quick input / commands ----
-  async function openQuick(initial = '') {
-    const files: string[] = [];
-    const commands = refs.commands.current.filter(command => !command.hidden).map(command => ({ id: `cmd:${command.id}`, label: command.label, keys: command.keys && showKeys(command.keys) }));
-    const choice = await new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'files', files, initial, commands, resolve } }));
-    if (!choice) return;
-    if (choice.startsWith('cmd:')) await refs.commands.current.find(command => command.id === choice.slice(4))?.run();
+  async function openPalette() {
+    const items = refs.commands.current.filter(command => !command.hidden).map(command => ({ id: command.id, label: command.label, keys: command.keys && showKeys(command.keys) }));
+    const choice = await pick('명령 팔레트', items);
+    if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
   const showReview = () => { setRightVisible(true); run(refreshGit); };
   const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
-  async function pickWorkspace() {
-    const options = [{ id: '', label: '기본 프로젝트', detail: project?.root || '' }, ...(project?.conversations || []).filter(c => c.branch && !c.removed).map(c => ({ id: c.id, label: c.title, detail: c.branch || '' }))];
-    const choice = await pick('작업 경로', options.map(option => ({ ...option, detail: option.id === workspaceId ? `현재 · ${option.detail}` : option.detail })));
-    if (choice !== null && choice !== workspaceId) await changeWorkspace(choice);
-  }
   async function pickLauncher(where: 'tab' | 'split') {
     const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
@@ -650,8 +566,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'newTab2', label: '새 탭', keys: 'alt+t', hidden: true, run: () => newTab() },
     { id: 'newClaude', label: '새 탭에서 Claude Code 실행', run: () => launch('claude', 'tab') },
     { id: 'newCodex', label: '새 탭에서 Codex 실행', run: () => launch('codex', 'tab') },
+    { id: 'newCursor', label: '새 탭에서 Cursor CLI 실행', run: () => launch('cursor-agent', 'tab') },
     { id: 'splitClaude', label: '오른쪽 pane에서 Claude Code 실행', run: () => launch('claude', 'split') },
     { id: 'splitCodex', label: '오른쪽 pane에서 Codex 실행', run: () => launch('codex', 'split') },
+    { id: 'splitCursor', label: '오른쪽 pane에서 Cursor CLI 실행', run: () => launch('cursor-agent', 'split') },
     { id: 'launcher', label: '새 탭에서 실행…', keys: 'mod+shift+n', run: () => pickLauncher('tab') },
     { id: 'closeTab', label: '탭 닫기', keys: 'mod+shift+w', run: () => closePaneTab(refs.activeTab.current) },
     { id: 'renameTab', label: '탭 이름 바꾸기…', run: () => renamePaneTab(refs.activeTab.current) },
@@ -671,10 +589,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'focusNext2', label: '다음 pane으로 이동', keys: 'alt+arrowdown', hidden: true, run: () => moveFocus(1) },
     { id: 'focusPrev2', label: '이전 pane으로 이동', keys: 'alt+arrowup', hidden: true, run: () => moveFocus(-1) },
     { id: 'review', label: '변경사항(Diff) 패널 전환', keys: 'mod+shift+g', run: toggleReview },
-    { id: 'palette', label: '명령 팔레트', keys: 'mod+shift+p', hidden: true, run: () => openQuick('>') },
-    { id: 'palette2', label: '명령 팔레트(F1)', keys: 'f1', hidden: true, run: () => openQuick('>') },
+    { id: 'palette', label: '명령 팔레트', keys: 'mod+shift+p', hidden: true, run: openPalette },
+    { id: 'palette2', label: '명령 팔레트(F1)', keys: 'f1', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', run: switchBranch },
-    { id: 'workspace', label: '작업 경로 전환…', run: pickWorkspace },
     { id: 'theme', label: '색 테마 전환', run: () => setSettings(previous => ({ ...previous, theme: previous.theme === 'dark' ? 'light' : 'dark' })) },
     ...projectCommands
   ];
@@ -696,17 +613,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // ---- render ----
   const errorBanner = error && <div role="alert" className="error">{error}<button onClick={() => setError('')}>닫기</button></div>;
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
-  if (!project) return <main className="app loading" hidden={!active}>{errorBanner}{quickDialog}</main>;
+  if (!project) return <main className="app loading" hidden={!active}>{errorBanner}{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
   const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 변경을 기본 저장소에 fast-forward 통합할까요?`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
-  const dirtyPaths = new Set(tabs.filter(tab => tab.content !== tab.saved).map(tab => tab.path));
   const editorCtx: EditorCtx = {
-    root: project.root, docs: tabs, settings, reveal, gitVersion, loadDiff,
-    onChange: onDocChange, onSave: () => run(() => saveFile()), onCursor: (line, column) => setCursor({ line, column }),
-    onSelectTab: (group, path) => { commitFor(group, mapLeaf(treeOf(group)!, group, leaf => ({ ...leaf, active: path }))); setFocusLeaf(group); nextReveal(group); },
-    onCloseTab: (group, path) => run(() => closeTab(group, path)), onPin: (group, path) => commitFor(group, mapLeaf(treeOf(group)!, group, leaf => leaf.preview === path ? { ...leaf, preview: undefined } : leaf)),
-    onSplitEditor: splitEditor, onCloseGroup: group => run(() => closeGroup(group))
+    settings, gitVersion, loadDiff,
+    onSelectTab: (group, path) => { commitFor(group, mapLeaf(treeOf(group)!, group, leaf => ({ ...leaf, active: path }))); setFocusLeaf(group); },
+    onCloseTab: closeTab, onCloseGroup: closeGroup
   };
   const live = new Set(project.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
@@ -729,59 +643,54 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   const rightPanel = <aside className="right-panel" aria-label="오른쪽 패널">
     <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
-      openDiffTab={path => run(() => openFile(`diff:all:${path}`))} switchBranch={() => run(switchBranch)}
+      openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
       hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} />
   </aside>;
   const shown = (id: string) => settings.statusItems.includes(id);
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
+  const layout = statusLayout(settings);
+  const statusNodes: Record<string, ReactNode> = {
+    connection: <span className={`conn ${connection === '연결됨' ? 'ok' : ''}`} title={connection}><Icon name="wifi" size={13} /></span>,
+    path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
+    branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
+    changes: <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>,
+    terminals: <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{liveTerminals}</span>,
+    size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
+    cpu: system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>,
+    memory: system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>,
+    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} />,
+    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} />,
+    wakatime: settings.wakatime && <WakaTimeStat />,
+    clock: <Clock />,
+    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness')))}>다시 확인</button></div></details>,
+    openproject: <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
+  };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
       : <Launchers title="새 탭" autoFocus onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
-  // The review panel floats over the terminals instead of taking a column, so opening it never shrinks them.
-  const columns = [false, center, false];
-  const sizeIndex = columns.map((column, index) => column ? index : -1).filter(index => index >= 0);
-  const workspaceLabel = workspaceId ? project.conversations.find(c => c.id === workspaceId)?.branch || '작업 경로' : basename(project.root.replace(/\\/g, '/'));
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar">
       <div className="split-button">
         <button className="bar-button new-tab" title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
-        <button className="bar-button caret" title="Claude Code · Codex로 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><Icon name="chevronDown" size={14} /></button>
+        <button className="bar-button caret" title="Claude Code · Codex · Cursor CLI로 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><Icon name="chevronDown" size={14} /></button>
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)} />
           <div className="menu" role="menu">{launchers.map(item => <button role="menuitem" key={item.id} onClick={() => { setMenuOpen(false); run(() => launch(item.command, 'tab')); }}><Icon name={item.icon} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></button>)}</div></>}
       </div>
       <span className="drag-space" />
-      <button className="palette-button" onClick={() => run(() => openQuick('>'))} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
+      <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
       <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={onOpenSettings} />
     </header>
     {errorBanner}
-    {/* Always a Splitter, so the center keeps its key and terminals stay mounted when side panels toggle. */}
-    <div className="workbench"><Splitter direction="row" keys={sizeIndex.map(index => ['side', 'center', 'right'][index])} sizes={sizeIndex.map(index => widths[index])} onSizes={sizes => setWidths(previous => previous.map((value, index) => sizeIndex.includes(index) ? sizes[sizeIndex.indexOf(index)] : value))}>{columns.filter(Boolean) as ReactNode[]}</Splitter>{rightVisible && rightPanel}</div>
+    {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
+    <div className="workbench">{center}{rightVisible && rightPanel}</div>
     <footer className="statusbar">
-      <div className="status-left">
-      <span className={`conn ${connection === '연결됨' ? 'ok' : ''}`} title={connection}><Icon name="wifi" size={13} /></span>
-      {shown('path') && <button title={`${project.root}\n클릭: 작업 경로 전환`} onClick={() => run(pickWorkspace)}><Icon name={workspaceId ? 'layers' : 'folder'} size={13} />{workspaceId ? workspaceLabel : shortPath(project.root)}</button>}
-      {shown('branch') && <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>}
-      {shown('changes') && <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>}
-      </div>
-      <div className="status-right">
-      {shown('terminals') && <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{liveTerminals}</span>}
-      {shown('size') && termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>}
-      {shown('cpu') && system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>}
-      {shown('memory') && system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>}
-      {shown('clock') && <Clock />}
-      <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness')))}>다시 확인</button></div></details>
-      <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
-      </div>
+      <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
     {quickDialog}
-    {diffText !== null && <Modal className="diff-modal" labelledBy="diff-title" onClose={() => setDiffText(null)}><section><header><h2 id="diff-title">변경 비교</h2><button onClick={() => setDiffText(null)}>닫기</button></header><pre className="diff-popup">{diffText || '변경이 없습니다.'}</pre></section></Modal>}
-    {conflict && <Modal className="conflict-modal" onClose={() => setConflict(null)}><section className="conflict"><h2 id="conflict-title">저장 충돌 · {conflict.path}</h2><p>디스크의 파일이 바뀌었습니다. 왼쪽이 현재 디스크, 오른쪽이 내 편집입니다.</p>
-      <div className="conflict-diff"><DiffView original={conflict.content} modified={tabs.find(file => file.path === conflict.path)?.content || ''} path={conflict.path} settings={settings} /></div>
-      <div className="actions"><button autoFocus onClick={() => { const { path, revision } = conflict; setConflict(null); run(() => saveFile(path, revision)); }}>내 편집으로 덮어쓰기</button>
-        <button onClick={() => { const { path, content, revision } = conflict; setTabs(previous => previous.map(file => file.path === path ? { ...file, content, saved: content, revision, external: false } : file)); setConflict(null); }}>디스크 내용으로 되돌리기</button><button onClick={() => setConflict(null)}>닫기</button></div></section></Modal>}
   </main>;
 }));
 

@@ -49,7 +49,9 @@ export async function readTerminalSession(directory, id, agent) {
 }
 
 export async function terminalAgentCommand(directory, id, agent, restoreId, shellTracksSessions = false) {
-  if (!['claude', 'codex'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+  if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+  // shortcut: Cursor CLI has no per-run hook or log option to learn its chat ID, so a restore opens its picker.
+  if (agent === 'cursor') return restoreId === undefined ? 'cursor-agent' : 'cursor-agent --resume';
   const root = folder(directory, id);
   const sessionId = restoreId === undefined ? undefined : await readTerminalSession(directory, restoreId, agent);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -97,11 +99,28 @@ export async function terminalSessionShell(directory, id, shell) {
     const original = process.env.ZDOTDIR || os.homedir();
     await fs.writeFile(path.join(root, '.zshenv'), `${process.env.ZDOTDIR === undefined ? 'unset ZDOTDIR' : `export ZDOTDIR=${quote(original, false)}`}\n[ ! -r ${quote(path.join(original, '.zshenv'), false)} ] || . ${quote(path.join(original, '.zshenv'), false)}\nADE_SESSION_ZDOTDIR=\${ZDOTDIR-$HOME}\nexport ZDOTDIR=${quote(root, false)}\n`);
     await fs.writeFile(path.join(root, '.zshrc'), `export ZDOTDIR="$ADE_SESSION_ZDOTDIR"\nunset ADE_SESSION_ZDOTDIR\n[ ! -r "$ZDOTDIR/.zshrc" ] || . "$ZDOTDIR/.zshrc"\n${functions}\n`);
-    return { args: [], env: { ZDOTDIR: root }, tracked: true };
+    // A Finder-launched app has no login environment (Homebrew PATH, zsh plugins), so macOS terminals run as login shells like Terminal.app.
+    const login = process.platform === 'darwin';
+    if (login) await fs.writeFile(path.join(root, '.zprofile'), `[ ! -r "$ADE_SESSION_ZDOTDIR/.zprofile" ] || . "$ADE_SESSION_ZDOTDIR/.zprofile"\n`);
+    return { args: login ? ['-l'] : [], env: { ZDOTDIR: root }, tracked: true };
   }
   const original = name === 'bash' ? path.join(os.homedir(), '.bashrc') : process.env.ENV;
   await fs.writeFile(init, `${original ? `[ ! -r ${quote(original, false)} ] || . ${quote(original, false)}\n` : ''}${functions}\n`);
   return name === 'bash' ? { args: ['--rcfile', init], env: {}, tracked: true } : { args: [], env: { ENV: init }, tracked: true };
+}
+
+// Claude keeps the live conversation ID of each running process in <config>/sessions/<pid>.json, so a terminal's ID
+// stays exact even when the SessionStart hook never ran (e.g. a terminal that predates the hook).
+export async function syncClaudeSession(directory, id, pid, configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')) {
+  let live;
+  try { live = JSON.parse(await fs.readFile(path.join(configDir, 'sessions', `${pid}.json`), 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return false; throw error; }
+  if (live?.pid !== pid || !uuid.test(live.sessionId)) return false;
+  if (await readTerminalSession(directory, id, 'claude') === live.sessionId) return false;
+  const root = folder(directory, id);
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  await recordClaudeSession(path.join(root, 'session.json'), { hook_event_name: 'SessionStart', session_id: live.sessionId });
+  return true;
 }
 
 export async function recordClaudeSession(file, event) {

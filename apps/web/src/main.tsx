@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename } from './api';
-import { defaultSettings, type Settings } from './Editor';
+import { defaultSettings, migrateSettings, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton } from './Icon';
 import { SettingsModal } from './Settings';
@@ -20,7 +20,7 @@ function tabDropMode(event: React.DragEvent<Element>, sourceId: string, targetId
   if (ratio > 0.75) return 'after';
   return 'merge';
 }
-const idle: WorkspaceStatus = { id: '', name: '', loaded: false, attention: 0, dirty: 0, tabs: [], activeTab: '' };
+const idle: WorkspaceStatus = { id: '', name: '', loaded: false, attention: 0, tabs: [], activeTab: '' };
 const sameStatus = (a: WorkspaceStatus, b: WorkspaceStatus) => (Object.keys(a) as (keyof WorkspaceStatus)[]).every(key => key === 'tabs' ? JSON.stringify(a.tabs) === JSON.stringify(b.tabs) : a[key] === b[key]);
 // First and last character, so projects that start alike (app-web, app-api) stay distinguishable.
 const initials = (name: string) => (name.length > 1 ? name[0] + name[name.length - 1] : name).toUpperCase();
@@ -29,14 +29,14 @@ const shortName = (root: string) => basename(root.replace(/\\/g, '/'));
 // One websocket serves every open project. Each project subscribes by id and only receives messages tagged with it.
 function useHub(enabled: boolean) {
   const [connection, setConnection] = useState('연결 대기');
-  const state = useRef({ ws: null as WebSocket | null, subs: new Map<string, { handler: (message: any) => void; cursors: () => Record<string, number> }>() });
+  const state = useRef({ ws: null as WebSocket | null, subs: new Map<string, (message: any) => void>() });
   const hub = useMemo<Hub>(() => ({
-    subscribe(projectId, handler, cursors) {
+    subscribe(projectId, handler) {
       const { subs, ws } = state.current;
-      subs.set(projectId, { handler, cursors });
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: cursors() }));
+      subs.set(projectId, handler);
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'subscribe', projectId }));
       return () => {
-        if (subs.get(projectId)?.handler !== handler) return;
+        if (subs.get(projectId) !== handler) return;
         subs.delete(projectId);
         const socket = state.current.ws;
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'unsubscribe', projectId }));
@@ -48,18 +48,18 @@ function useHub(enabled: boolean) {
     if (!enabled) return;
     let stopped = false, retry: ReturnType<typeof setTimeout>;
     function connect() {
-      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`); state.current.ws = ws;
+      const ws = new WebSocket(`ws://${location.host}/ws`); state.current.ws = ws;
       ws.onopen = () => {
         setConnection('연결됨');
-        for (const [projectId, sub] of state.current.subs) ws.send(JSON.stringify({ type: 'subscribe', projectId, cursors: sub.cursors() }));
+        for (const projectId of state.current.subs.keys()) ws.send(JSON.stringify({ type: 'subscribe', projectId }));
       };
       ws.onmessage = event => {
         if (stopped) return;
         let message: any;
         try { message = JSON.parse(event.data); } catch { return; }
         // Errors that name no project are shown by every project; everything else goes to its owner.
-        if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.handler(message);
-        else for (const sub of state.current.subs.values()) sub.handler(message);
+        if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.(message);
+        else for (const handler of state.current.subs.values()) handler(message);
       };
       ws.onclose = () => { setConnection('연결 끊김 · 재연결 중'); if (!stopped) retry = setTimeout(connect, 1500); };
     }
@@ -152,12 +152,8 @@ function Shell() {
       const [saved, list] = await Promise.all([api<{ openProjects: Entry[]; activeProjectId: string; settings: Settings | null }>('app/state'), api<Recent[]>('recent')]);
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
-      if (saved.settings) setSettings({ ...defaultSettings, ...saved.settings });
-      let open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
-      // Before multi-project support the single open project was remembered per tab.
-      const legacy = sessionStorage.getItem('ade-project');
-      if (!open.length && legacy) { open = [{ root: legacy, id: '' }]; active = legacy; }
-      try { sessionStorage.removeItem('ade-project'); } catch { /* storage can be blocked */ }
+      if (saved.settings) setSettings(migrateSettings(saved.settings));
+      const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(report);
   }, [report]);
@@ -193,7 +189,7 @@ function Shell() {
 
   const onLegacySettings = useCallback((legacy: Partial<Settings>) => {
     if (globalSettings.current) return;
-    globalSettings.current = true; setSettings({ ...defaultSettings, ...legacy });
+    globalSettings.current = true; setSettings(migrateSettings(legacy));
   }, []);
   const onStatus = useCallback((root: string, next: WorkspaceStatus) => {
     setStatus(all => all[root] && sameStatus(all[root], next) ? all : { ...all, [root]: next });
@@ -201,16 +197,18 @@ function Shell() {
     if (mine && next.id && mine.id !== next.id) commit(entriesRef.current.map(entry => entry.root === root ? { ...entry, id: next.id } : entry));
   }, []);
   const onFailed = useCallback((root: string, cause: unknown) => {
-    if (root === homeRoot.current) homeFailed.current = true; // fall back to the project picker instead of retrying forever
+    // Only the home fallback is dropped (the project picker takes over); real projects stay listed and show a retry.
+    if (root !== homeRoot.current) return;
+    homeFailed.current = true;
     report(cause); commit(entriesRef.current.filter(entry => entry.root !== root));
   }, [report]);
 
   // ---- background activity: a project you are not looking at can still need you ----
-  // Terminal agents (Claude Code, Codex) that stopped or asked something: a notification plus a short sound, unless you are already watching.
+  // Terminal agents (Claude Code, Codex, Cursor CLI) that stopped or asked something: a notification plus a short sound, unless you are already watching.
   const onAgentAlert = useCallback((root: string, alert: AgentAlert) => {
     const wanted = !alert.looking && (alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval);
     if (!wanted && !settings.notifySound) return;
-    const project = statusRef.current[root]?.name || shortName(root), agent = alert.agent === 'claude' ? 'Claude Code' : 'Codex';
+    const project = statusRef.current[root]?.name || shortName(root), agent = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' }[alert.agent];
     const title = `${project} · ${agent} ${alert.kind === 'done' ? '작업 멈춤' : '입력 요청'}`;
     if (wanted && 'Notification' in window) {
       if (Notification.permission === 'default') void Notification.requestPermission();
@@ -320,7 +318,6 @@ function Shell() {
             onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
-            {item.dirty > 0 && <i className="rail-dirty" aria-label="저장 안 됨" />}
           </div>;
           return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`}>
             <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectDnd}
@@ -328,7 +325,7 @@ function Shell() {
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name">{name}</span>
-              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}{item.dirty > 0 && <i className="folder-dirty" aria-label="저장 안 됨" title={`저장 안 된 파일 ${item.dirty}개`} />}
+              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
                 <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>

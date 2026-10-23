@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Watching is only an accelerator: Git polling and open-file revision checks remain active in the UI.
+// Watching is only an accelerator: the UI keeps polling Git status.
 export function watchProjectFiles(root, notify) {
   let watcher, timer, closed = false;
   const changed = new Set();

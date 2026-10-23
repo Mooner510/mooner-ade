@@ -10,6 +10,9 @@ export function parseProcessTable(output) {
 function agentCommand(command) {
   const args = command.match(/"[^"]*"|'[^']*'|\S+/g) || [], name = executable(args[0] || '');
   if (/^(claude|codex)(\.exe)?$/.test(name)) return name.split('.')[0];
+  // Cursor's launcher execs its bundled node with argv[0] kept as `cursor-agent` or the `agent` alias.
+  if (/^cursor-agent(\.exe)?$/.test(name)) return 'cursor';
+  if (name === 'agent' && args.slice(1, 3).some(arg => /(?:^|\/)cursor-agent\/versions\/[^/]+\/index\.js$/.test(arg.replace(/^['"]|['"]$/g, '').replaceAll('\\', '/')))) return 'cursor';
   // npm installations run the CLI script through node; prompt arguments are never agent evidence.
   if (!/^(node|nodejs|bun)(\.exe)?$/.test(name)) return null;
   const script = (args[1] || '').replace(/^['"]|['"]$/g, '').replaceAll('\\', '/');
@@ -22,7 +25,7 @@ export function terminalProcesses(table) {
   const children = new Map(), byPid = new Map(table.map(entry => [entry.pid, entry]));
   for (const entry of table) children.set(entry.ppid, [...(children.get(entry.ppid) || []), entry]);
   return pid => {
-    let agent = null, ssh = false;
+    let agent = null, agentPid = null, ssh = false;
     const seen = new Set(), queue = [pid], underAgent = new Set();
     for (let i = 0; i < queue.length; i++) {
       const next = queue[i]; if (seen.has(next)) continue; seen.add(next);
@@ -34,11 +37,12 @@ export function terminalProcesses(table) {
         // An ssh below a local agent or git is a tool call (e.g. git over ssh), not the user's remote session.
         const parent = byPid.get(entry.ppid), transport = underAgent.has(entry.ppid) || /^git(\.exe)?$/.test(executable((parent?.command.match(/^"[^"]*"|^\S+/) || [''])[0]));
         if ((name === 'ssh' || name === 'ssh.exe') && !transport) ssh = true;
-        agent ||= found; isAgent = Boolean(found);
+        if (!agent && found) { agent = found; agentPid = entry.pid; }
+        isAgent = Boolean(found);
       }
       const nested = isAgent || underAgent.has(next);
       for (const child of children.get(next) || []) { if (nested) underAgent.add(child.pid); queue.push(child.pid); }
     }
-    return { agent, ssh };
+    return { agent, agentPid, ssh };
   };
 }

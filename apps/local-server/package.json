@@ -3,19 +3,8 @@
   "license": "GPL-3.0-only",
   "private": true,
   "type": "module",
-  "scripts": {
-    "start": "node src/index.js"
-  },
   "dependencies": {
-    "@mooner/ade-core": "workspace:*",
-    "@mooner/ade-runtime-local": "workspace:*",
-    "@mooner/ade-session-store": "workspace:*",
-    "@mooner/ade-session-runner": "workspace:*",
-    "@mooner/ade-agent-claude": "workspace:*",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.0",
     "node-pty": "^1.1.0",
-    "ws": "^8.18.3",
-    "typescript-language-server": "^5.0.0",
-    "typescript": "5.8.3"
+    "ws": "^8.18.3"
   }
 }
