@@ -34,11 +34,27 @@ export class LocalWorkspace {
 // A cloned repository's core.fsmonitor is a command git runs on `git status`, and its .git/hooks run on checkout and
 // worktree add. ADE runs these commands itself and never needs either, so both are forced off through the environment
 // (command-scope config outranks the repo's .git/config). Hooks are off for ADE's git calls only, not for the user's shell.
-const GIT_TRUSTED_REPO_CONFIG = {
-  GIT_CONFIG_COUNT: '2',
-  GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: 'false',
-  GIT_CONFIG_KEY_1: 'core.hooksPath', GIT_CONFIG_VALUE_1: '/dev/null',
-};
+const GIT_TRUSTED_REPO_CONFIG = [['core.fsmonitor', 'false'], ['core.hooksPath', '/dev/null']];
+
+// The repository's own config can also name filter commands (clean/smudge/process) that git runs while diffing,
+// stashing or checking files out. Those are blanked for ADE's git calls; the user's global/system ones (git-lfs) keep working.
+// diff textconv/external drivers are skipped with --no-textconv/--no-ext-diff at the diff call sites instead.
+function repositoryFilters(cwd, env) {
+  return new Promise(resolve => {
+    const child = spawn('git', ['config', '--show-scope', '--get-regexp', '^filter\\..+\\.(clean|smudge|process)$'], { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.once('error', () => resolve([]));
+    child.once('close', () => resolve(output.split('\n').map(line => line.split(/\s+/)).filter(([scope, key]) => key && scope !== 'system' && scope !== 'global').map(([, key]) => key)));
+  });
+}
+
+async function gitEnv(cwd, env) {
+  const overrides = [...GIT_TRUSTED_REPO_CONFIG, ...(await repositoryFilters(cwd, env)).map(key => [key, ''])];
+  const result = { ...env, GIT_CONFIG_COUNT: String(overrides.length) };
+  overrides.forEach(([key, value], index) => { result[`GIT_CONFIG_KEY_${index}`] = key; result[`GIT_CONFIG_VALUE_${index}`] = value; });
+  return result;
+}
 
 export class LocalProcesses {
   constructor({ cwd = process.cwd() } = {}) { this.cwd = path.resolve(cwd); }
@@ -49,9 +65,9 @@ export class LocalProcesses {
     }
     if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new TypeError('Invalid output limit');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new TypeError('Invalid timeout');
+    let childEnv = { ...process.env, ...env };
+    if (file === 'git') childEnv = await gitEnv(cwd, childEnv);
     return new Promise((resolve, reject) => {
-      const childEnv = { ...process.env, ...env };
-      if (file === 'git') Object.assign(childEnv, GIT_TRUSTED_REPO_CONFIG);
       const child = spawn(file, args, { cwd, env: childEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '', stderr = '', bytes = 0, completed = false;
       const stop = (reason) => { child.kill('SIGTERM'); finish(reason); };
