@@ -7,4 +7,6 @@ coverage/
 !.env.example
 .DS_Store
 *.log
-.claude-accountwakatime.txt
+.claude-account/
+wakatime.txt
+*.stackdump

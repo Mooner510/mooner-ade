@@ -165,6 +165,20 @@ test('git: a repository hook never runs during ADE checkout', async t => {
   await assert.rejects(stat(marker));
 });
 
+test('git: repository-configured filter and diff commands never run during status, show or checkout', async t => {
+  const { call, repo } = await boot(t);
+  const marker = join(repo, '..', `filter-ran-${process.pid}`);
+  for (const key of ['filter.y.clean', 'filter.y.smudge', 'filter.y.process', 'diff.y.textconv', 'diff.y.command']) await git(repo, 'config', key, `touch ${marker}`);
+  await writeFile(join(repo, '.gitattributes'), '* filter=y diff=y\n');
+  await git(repo, 'branch', 'other');
+  await writeFile(join(repo, 'a.txt'), 'changed\n');
+  await call('git/status');
+  await call('git/show', { path: 'a.txt' });
+  await writeFile(join(repo, 'a.txt'), 'hello world\nHello again\n');
+  await call('git/checkout', { branch: 'other' });
+  await assert.rejects(stat(marker));
+});
+
 test('git: status, show, branches, checkout', async t => {
   const { call, repo } = await boot(t);
   await writeFile(join(repo, 'a.txt'), 'changed\n');
