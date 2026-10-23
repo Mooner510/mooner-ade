@@ -17,7 +17,10 @@ const iconPath = path.resolve(import.meta.dirname, '../assets', process.platform
 const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1';
 let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null;
-const nodeBinary = process.env.ADE_NODE || (app.isPackaged ? path.resolve(import.meta.dirname, '../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node') : 'node');
+// The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
+// bundled runtime/, so fall back to the system Node instead of failing with ENOENT.
+const bundledNode = path.resolve(import.meta.dirname, '../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
+const nodeBinary = process.env.ADE_NODE || (app.isPackaged && fs.existsSync(bundledNode) ? bundledNode : 'node');
 
 // Dev only: terminals live in their own process so the server can be replaced on every code change without killing them.
 // The host dies with this app (its IPC channel closes), so quitting `pnpm dev` always cleans it up.

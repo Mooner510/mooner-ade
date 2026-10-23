@@ -20,8 +20,8 @@ const newer = (a, b) => {
 // Only a packaged copy (exe + resources/app) updates itself; `pnpm dev` / `pnpm start` run from the source tree.
 const portable = () => process.platform === 'win32' && path.basename(path.dirname(app.getAppPath())) === 'resources';
 
-const run = (file, args) => new Promise((resolve, reject) => {
-  const child = spawn(file, args, { stdio: 'ignore', windowsHide: true });
+const run = (file, args, env = {}) => new Promise((resolve, reject) => {
+  const child = spawn(file, args, { env: { ...process.env, ...env }, stdio: 'ignore', windowsHide: true });
   child.once('error', reject);
   child.once('exit', code => code === 0 ? resolve() : reject(new Error(`${path.basename(file)} exit ${code}`)));
 });
@@ -68,7 +68,11 @@ export async function checkForUpdate({ repo, asset, window }) {
     if (!folder || !fs.existsSync(path.join(source, path.basename(process.execPath)))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
     const script = path.join(work, 'apply.ps1');
     fs.writeFileSync(script, APPLY);
-    spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, path.dirname(process.execPath), process.execPath], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    // Electron keeps its processes in a Windows job object that is torn down with the app, killing even a detached
+    // child. Win32_Process.Create starts the helper from the WMI service instead, outside that job.
+    const command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, path.dirname(process.execPath), process.execPath]
+      .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
+    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
     app.quit();
   } catch (error) {
     fs.rmSync(work, { recursive: true, force: true });
