@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { checkForUpdate } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
 app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
@@ -155,7 +156,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
-    try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); }
+    try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); else setTimeout(() => checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow }).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`)), 5000); }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }
   });
   app.on('window-all-closed', () => app.quit());
