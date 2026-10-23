@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { brandBundle } from './brand.mjs';
+import { flipFuses, FuseV1Options, FuseVersion } from '@electron/fuses';
+import { brandBundle, brandExe } from './brand.mjs';
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
 assert.ok(nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 21), 'Node.js 24.21.0 or newer is required');
@@ -28,6 +29,7 @@ try {
   cpSync(path.join(import.meta.dirname, 'assets'), path.join(stage, 'apps/desktop/assets'), { recursive: true });
   cpSync(path.join(root, 'apps/local-server/src'), path.join(stage, 'apps/local-server/src'), { recursive: true });
   cpSync(path.join(root, 'apps/web/dist'), path.join(stage, 'apps/web/dist'), { recursive: true });
+  cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
   cpSync(path.join(deployment, 'node_modules'), path.join(stage, 'apps/local-server/node_modules'), { recursive: true, verbatimSymlinks: true });
   writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'mooner-ade', version: JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version, type: 'module', main: 'apps/desktop/src/main.js' }));
 
@@ -46,7 +48,16 @@ try {
     const exe = path.join(bundle, `${productName}.exe`);
     const electronExe = path.join(bundle, 'electron.exe');
     if (existsSync(electronExe)) await import('node:fs/promises').then(({ rename }) => rename(electronExe, exe));
+    brandExe(exe, productName, JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version);
   }
+  // Keep the shipped binary from doubling as a Node runner via ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect.
+  // The local server runs on the bundled runtime/node, so the app itself never needs these.
+  await flipFuses(process.platform === 'darwin' ? path.join(dist, `${productName}.app`) : path.join(dist, `${productName}-win32-${process.arch}`, `${productName}.exe`), {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+  });
 
   rmSync(path.join(resources, 'app'), { recursive: true, force: true });
   mkdirSync(resources, { recursive: true });

@@ -48,7 +48,10 @@ if (process.platform === 'darwin') {
   assert.ok(existsSync(executable));
 }
 
-const child = spawn(executable, [import.meta.dirname, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: false });
+// The renamed executable makes Electron report app.isPackaged, so point the server at the Node running this launcher
+// instead of the bundled runtime/ that only exists in packaged builds.
+const env = { ...process.env, ADE_NODE: process.env.ADE_NODE || process.execPath };
+const child = spawn(executable, [import.meta.dirname, ...process.argv.slice(2)], { env, stdio: 'inherit', windowsHide: false });
 child.once('error', error => { console.error(error); process.exitCode = 1; });
 child.once('exit', code => process.exit(code ?? 1));
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) process.on(signal, () => child.kill(signal));

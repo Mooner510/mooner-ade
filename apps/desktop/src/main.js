@@ -108,6 +108,10 @@ async function restartServer() {
   finally { restarting = false; }
 }
 
+function sameOrigin(target) {
+  try { return new URL(target).origin === origin; } catch { return false; }
+}
+
 function createWindow(url) {
   const window = new BrowserWindow({
     width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title: '무너에이드', show: false, icon: iconPath,
@@ -117,10 +121,13 @@ function createWindow(url) {
   });
   window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (/^https?:\/\//.test(target) && !target.startsWith(origin)) void shell.openExternal(target);
+    if (/^https?:\/\//.test(target) && !sameOrigin(target)) void shell.openExternal(target);
     return { action: 'deny' };
   });
-  window.webContents.on('will-navigate', (event, target) => { if (!target.startsWith(origin)) event.preventDefault(); });
+  // Compare parsed origins: a prefix check would let http://127.0.0.1:PORT@evil.example/ through.
+  const guard = (event, target) => { if (!sameOrigin(target)) event.preventDefault(); };
+  window.webContents.on('will-navigate', guard);
+  window.webContents.on('will-redirect', guard);
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
   void window.loadURL(url);
 }
