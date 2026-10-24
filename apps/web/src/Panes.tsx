@@ -14,6 +14,9 @@ export type { Agent } from './terminal-agent';
 
 // Terminal-generated reports: focus in/out (CSI I / O) and SGR mouse events.
 const REPORT = /^(?:\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm])+$/;
+// xterm's answers to terminal queries (device attributes, cursor position, status, modes, OSC/DCS reports). Replayed
+// output still holds the queries the shell made long ago, so answers produced while replaying would land as typed text.
+const QUERY_REPLY = /^(?:\x1b\[[?>=]?[\d;]*(?:c|R|n|\$y|t)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/;
 export type AgentEventKind = 'done' | 'attention';
 export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error' } | null };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
@@ -225,6 +228,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     };
     bus.listeners.set(id, receive);
     terminal.onData(data => {
+      if (replays && QUERY_REPLY.test(data)) return;
       // Esc/Ctrl+C interrupt the turn; the queue keeps going once the CLI reports it idle (4;0).
       if (data === '\r') followUp.current.submitted();
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
