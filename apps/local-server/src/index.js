@@ -46,7 +46,8 @@ if (process.platform !== 'win32') {
 // With ADE_PTY_ENDPOINT (`pnpm dev`) terminals live in a separate pty-host process, so this server can restart without killing them.
 const ptyHost = process.env.ADE_PTY_ENDPOINT ? await connectPtyHost({ endpoint: process.env.ADE_PTY_ENDPOINT, token: process.env.ADE_PTY_TOKEN }).catch(error => { console.error(`pty-host 연결 실패, 서버 내부 PTY를 사용합니다: ${error.message}`); return null; }) : null;
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
-delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN;
+// ADE_DEV likewise: an app launched from such a terminal would start in dev mode and look for Vite.
+delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV;
 // Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
 for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
 const pty = ptyHost ? { spawn: ptyHost.factory.spawn } : await import('node-pty').catch(() => null);

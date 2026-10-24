@@ -18,7 +18,8 @@ const background = '#0c0d0f';
 const iconPath = path.resolve(import.meta.dirname, '../assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 // `pnpm dev`: the server hosts a Vite dev server (HMR) instead of web/dist.
 const dev = process.argv.includes('--dev');
-if (dev) process.env.ADE_DEV = '1';
+// Cleared otherwise: started from a terminal of a `pnpm dev` app, the packaged app would inherit it and look for Vite.
+if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null;
 // The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
 // bundled runtime/, so fall back to the system Node instead of failing with ENOENT.
