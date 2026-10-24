@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
@@ -16,7 +17,7 @@ test('Claude logins come from the keychain on macOS and the credentials file els
   assert.deepEqual(await readClaudeLogin({ env: {}, platform: 'darwin', readSecret: async () => secret, readFile: async () => { throw new Error('unused'); } }), { token: 'tok', expiresAt: 5, plan: 'max' });
   const files = [];
   assert.deepEqual(await readClaudeLogin({ env: {}, platform: 'linux', home: '/h', readFile: async file => { files.push(file); return secret; } }), { token: 'tok', expiresAt: 5, plan: 'max' });
-  assert.deepEqual(files, ['/h/.claude/.credentials.json']);
+  assert.deepEqual(files, [path.join('/h', '.claude', '.credentials.json')]);
   assert.equal(await readClaudeLogin({ env: {}, platform: 'darwin', readSecret: async () => '{bad', readFile: async () => { throw new Error('none'); } }), null);
 });
 
@@ -83,7 +84,7 @@ test('ps -E output yields the last value of a variable, spaces included', () => 
 });
 
 test('a project resolves to its running agent account, then its .envrc, then the server environment', async () => {
-  const files = new Set(['/acc-b/sessions/42.json']);
+  const files = new Set([path.join('/acc-b', 'sessions', '42.json')]);
   const make = (overrides = {}) => createAccountResolver({ env: { CLAUDE_CONFIG_DIR: '/acc-a' }, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => null, exists: async file => files.has(file), ...overrides });
   const project = terminals => ({ root: '/p', terminals: new Map(terminals.map((terminal, index) => [String(index), terminal])) });
   assert.deepEqual(await make()('claude', null), { dir: '/acc-a', from: 'server' });
@@ -91,7 +92,7 @@ test('a project resolves to its running agent account, then its .envrc, then the
   assert.deepEqual(await make({ exec: async () => '/acc-b' })('claude', project([])), { dir: '/acc-b', from: 'direnv' });
   // macOS hides the environment, so the session PID file names the folder.
   assert.deepEqual(await make({ exec: async () => '/acc-b' })('claude', project([{ agent: 'claude', agentPid: 42 }])), { dir: '/acc-b', from: 'process' });
-  files.add('/h/.claude/sessions/7.json');
+  files.add(path.join('/h', '.claude', 'sessions', '7.json'));
   assert.deepEqual(await make()('claude', project([{ agent: 'codex', agentPid: 42 }, { agent: 'claude', agentPid: 7 }])), { dir: '', from: 'process' });
   // Where the environment is readable it wins outright.
   assert.deepEqual(await make({ platform: 'linux', readVariable: async () => '/acc-c' })('codex', project([{ agent: 'codex', agentPid: 9 }])), { dir: '/acc-c', from: 'process' });
@@ -113,7 +114,7 @@ test('each account folder gets its own cached reading', async () => {
 });
 
 test('session sync gets the folder of the Claude process itself, cached per PID', async () => {
-  const files = new Set(['/acc-b/sessions/42.json']);
+  const files = new Set([path.join('/acc-b', 'sessions', '42.json')]);
   let reads = 0;
   const accounts = createAccountResolver({ env: {}, platform: 'darwin', home: '/h', readVariable: async () => { reads++; return ''; }, direnv: async () => '/bin/direnv', exec: async () => '/acc-b', exists: async file => files.has(file) });
   assert.equal(await accounts.agentFolder('claude', 42, '/p'), '/acc-b');
@@ -122,5 +123,5 @@ test('session sync gets the folder of the Claude process itself, cached per PID'
   // Not found yet (the CLI has not written its file): fall back to what the project would give it.
   assert.equal(await accounts.agentFolder('claude', 43, '/p'), '/acc-b');
   const plain = createAccountResolver({ env: {}, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => null, exists: async () => false });
-  assert.equal(await plain.agentFolder('claude', 1, '/p'), '/h/.claude');
+  assert.equal(await plain.agentFolder('claude', 1, '/p'), path.join('/h', '.claude'));
 });
