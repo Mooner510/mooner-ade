@@ -3,7 +3,10 @@ export type Agent = 'claude' | 'codex' | 'cursor';
 // Task text and generic spinners can mention either provider; only a named title is evidence.
 export const detectAgent = (title = ''): Agent | undefined => /^\s*(?:[✳⠀-⣿]\s*)?claude(?: code)?\b/i.test(title) ? 'claude' : /^\s*(?:[✳⠀-⣿]\s*)?(?:OpenAI\s+)?codex\b/i.test(title) ? 'codex'
   : /^\s*(?:[✳⠀-⣿]\s*)?cursor[- ]agent\b/i.test(title) ? 'cursor' : undefined;
-export const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g;
+// Agent CLIs animate a spinner glyph in front of their title while they work. Only the rest names the pane: passing every frame on
+// re-rendered the whole workspace and sidebar several times a second per working agent.
+export const stableTitle = (title: string) => title.replace(/^\s*[✳⠀-⣿]\s*/, '');
+export const ANSI =/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g;
 
 export function hasAgentQuestion(screen: string, title = ''): boolean {
   // Match CLI controls, rather than question marks in an agent's ordinary answer.
@@ -31,9 +34,10 @@ export function createQuestionTracker() {
   };
 }
 
-export function resolveAgent(process: Agent | null | undefined, remembered: Agent | undefined, title: string | undefined, ssh: boolean): Agent | undefined {
-  if (process) return process;
-  if (process === null && !ssh) return undefined;
+// The server's answer (`process`) wins once it has one: the process table locally, the terminal output over ssh.
+// Titles and the launcher only fill the gap before its first report.
+export function resolveAgent(process: Agent | null | undefined, remembered: Agent | undefined, title: string | undefined): Agent | undefined {
+  if (process !== undefined) return process ?? undefined;
   return detectAgent(title) || remembered;
 }
 

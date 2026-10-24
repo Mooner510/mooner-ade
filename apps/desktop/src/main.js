@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -20,6 +20,8 @@ const iconPath = path.resolve(import.meta.dirname, '../assets', process.platform
 const dev = process.argv.includes('--dev');
 // Cleared otherwise: started from a terminal of a `pnpm dev` app, the packaged app would inherit it and look for Vite.
 if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
+// A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
+if (dev) delete process.env.NODE_ENV;
 let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null;
 // The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
 // bundled runtime/, so fall back to the system Node instead of failing with ENOENT.
@@ -114,16 +116,27 @@ async function restartServer() {
   try {
     // Leave the old page first: once the new dev server is up, its Vite HMR client reloads the page against the dead origin,
     // which aborts the load below (ERR_ABORTED) and leaves an error page.
+    loadGeneration++;
     await mainWindow.loadURL('about:blank').catch(() => {});
     await stopServer(); origin = ''; const url = await startServer();
-    if (mainWindow) await load(mainWindow, url);
+    // Not awaited: the server is up, so loading the page can no longer fail the restart, and retries must not hold up the queue.
+    if (mainWindow) void load(mainWindow, url);
   } finally { restarting = false; }
 }
-// A navigation the page starts on its own aborts loadURL with ERR_ABORTED although nothing is wrong; load again.
+// loadURL rejects whenever the page doesn't finish loading, e.g. ERR_ABORTED (-3) when the page navigates itself meanwhile (Vite's
+// reload after a dev server start). For an aborted document load Electron leaves `code` (the description) empty, so no error is
+// matched by name: while this server runs, every failure is retried. A newer load, a restart or a dead server ends the retries.
+let loadGeneration = 0;
 async function load(window, url) {
-  for (let attempt = 1; ; attempt++) {
+  const generation = ++loadGeneration;
+  const current = () => generation === loadGeneration && !quitting && !window.isDestroyed() && sameOrigin(url);
+  for (let attempt = 1; current(); attempt++) {
     try { return await window.loadURL(url); }
-    catch (error) { if (error.code !== 'ERR_ABORTED' || attempt >= 3 || window.isDestroyed()) throw error; }
+    catch (error) {
+      if (!current()) return;
+      console.warn(`창 불러오기 실패, 다시 시도합니다 (${attempt}): ${error.message}`);
+      await new Promise(resolve => setTimeout(resolve, Math.min(250 * attempt, 5000)));
+    }
   }
 }
 // A server that dies on its own is started again instead of closing the app (outside `pnpm dev` its terminals die with it).
@@ -166,10 +179,10 @@ function createWindow(url) {
     rendererCrashes = [...rendererCrashes.filter(time => now - time < 60_000), now];
     console.warn(`화면 프로세스 종료 (${details.reason}, exit ${details.exitCode})`);
     if (rendererCrashes.length > 3) { dialog.showErrorBox('무너에이드', `화면 프로세스가 계속 종료됩니다 (${details.reason}). 열린 패널 수를 줄인 뒤 다시 실행하세요.`); return; }
-    if (origin && !window.isDestroyed()) load(window, `${origin}/`).catch(error => console.warn(`창 다시 불러오기 실패: ${error.message}`));
+    if (origin && !window.isDestroyed()) void load(window, `${origin}/`);
   });
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
-  load(window, url).catch(error => console.warn(`창 불러오기 실패: ${error.message}`));
+  void load(window, url);
 }
 
 ipcMain.handle('ade:pick-folder', async event => {
@@ -177,6 +190,7 @@ ipcMain.handle('ade:pick-folder', async event => {
   const result = await dialog.showOpenDialog(owner, { title: '프로젝트 폴더 선택', properties: ['openDirectory'] });
   return result.canceled ? null : result.filePaths[0];
 });
+ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });
 
 function installMenu() {
   if (process.platform !== 'darwin') {

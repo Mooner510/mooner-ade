@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LocalProcesses, LocalWorkspace } from '../apps/local-server/src/runtime.js';
+import { LocalProcesses, LocalTerminal, LocalWorkspace } from '../apps/local-server/src/runtime.js';
 import { readText, serial } from '../apps/local-server/src/files.js';
 import { validateUi, validateAppState } from '../apps/local-server/src/ui-state.js';
 import { discoverRepositories } from '../apps/local-server/src/repositories.js';
@@ -124,4 +124,15 @@ test('process execution uses argv without a shell and enforces timeout and outpu
   assert.deepEqual([result.exitCode, result.stdout], [0, 'hello; echo hacked']);
   await assert.rejects(processes.exec(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 100 }), /timed out/);
   await assert.rejects(processes.exec(process.execPath, ['-e', "process.stdout.write('x'.repeat(200))"], { maxOutputBytes: 20 }), /limit/);
+});
+
+test('terminals keep the NODE_ENV the server started with, not the one its dev-mode Vite sets later', async () => {
+  const started = process.env.NODE_ENV, spawned = [];
+  const terminal = new LocalTerminal({ ptyFactory: { spawn: (_file, _args, options) => { spawned.push(options.env); return { pid: 1, onData() {}, onExit() {}, kill() {} }; } } });
+  process.env.NODE_ENV = 'development'; process.env.NO_COLOR = '1';
+  try { await terminal.open({ cwd: process.cwd(), env: { EXTRA: 'yes' } }); }
+  finally { if (started === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = started; delete process.env.NO_COLOR; }
+  assert.equal(spawned[0].NODE_ENV, started);
+  assert.equal(spawned[0].NO_COLOR, undefined);
+  assert.equal(spawned[0].EXTRA, 'yes');
 });
