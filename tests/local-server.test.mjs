@@ -202,6 +202,18 @@ test('git: status, show, branches, checkout', async t => {
   await call('git/checkout', { branch: '--orphan' }, 400);
 });
 
+test('git: line counts follow further edits to a file that is already modified', async t => {
+  const { call, repo } = await boot(t);
+  await writeFile(join(repo, 'a.txt'), 'changed\n');
+  assert.equal((await call('git/status')).additions, 1);
+  // Same porcelain status (" M a.txt"); only the file watcher tells the server the counts are stale.
+  await writeFile(join(repo, 'a.txt'), 'changed\nmore\nlines\n');
+  const end = Date.now() + 5000;
+  let status;
+  do { await new Promise(resolve => setTimeout(resolve, 200)); status = await call('git/status'); } while (status.additions !== 3 && Date.now() < end);
+  assert.equal(status.additions, 3);
+});
+
 test('websocket: terminal echo and resize validation', async t => {
   const { origin, cookie, call, projectId } = await boot(t);
   const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });

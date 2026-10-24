@@ -167,7 +167,7 @@ async function openProject(requested) {
         worktreePath: path.join(directory, 'worktrees', repo.id),
         branch: `ade/repo-${repo.id}`
       }));
-      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, mutation: serial(), persist: serial() };
+      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map() };
       project.save = () => project.persist(() => writeJson(path.join(directory, 'state.json'), state));
       for (const repo of repositories) if (repo.worktreeEnabled) await repoWorktree(project, repo);
       await project.save();
@@ -219,7 +219,7 @@ function closeProject(project, { force = false, detach = false } = {}) {
   });
 }
 function watchProject(project) {
-  return watchProjectFiles(project.root, paths => broadcast(project, { type: 'fs', paths }));
+  return watchProjectFiles(project.root, paths => { project.fsVersion++; broadcast(project, { type: 'fs', paths }); });
 }
 function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ui: project.state.ui,
@@ -266,8 +266,20 @@ async function readiness(root) {
       result[executable] = { installed: true, authenticated, version: version.stdout.trim(), message: authenticated ? '준비됨' : `${executable} ${executable === 'codex' ? 'login' : 'auth login'} 실행 후 다시 확인하세요.` };
     } catch (error) { result[executable] = { installed: true, authenticated: false, version: version.stdout.trim(), message: `${executable} 로그인 상태를 확인하지 못했습니다: ${error.message}` }; }
   }
-  result.pty = { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' };
   return result;
+}
+// Each check starts the agent CLIs (several Node processes) and every project used to run it when it opened, so one reading
+// is shared by all projects for a while; the "다시 확인" button forces a fresh one.
+const READINESS_TTL = 10 * 60_000;
+let agentReadiness = null;
+async function cachedReadiness(root, force) {
+  if (force || !agentReadiness || (agentReadiness.done && Date.now() - agentReadiness.at > READINESS_TTL)) {
+    const entry = { at: Date.now(), done: false, value: readiness(root) };
+    agentReadiness = entry;
+    entry.value.then(() => { entry.done = true; entry.at = Date.now(); }, () => { if (agentReadiness === entry) agentReadiness = null; });
+  }
+  const result = await agentReadiness.value;
+  return { ...result, pty: { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' } };
 }
 
 // `git status --short --branch` yields "## main...origin/main"; the UI and the integrate check need the bare name.
@@ -374,7 +386,7 @@ async function route(action, input, project) {
     await closeProject(project, { force: input.force === true });
     return {};
   }
-  if (action === 'readiness') return readiness(project?.root || os.homedir());
+  if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
   const runtime = repo ? (action === 'git/worktree-setting' || action === 'git/worktree/integrate' ? repo.sourceRuntime : repositoryRuntime(project, repo)) : project.runtime;
@@ -386,6 +398,7 @@ async function route(action, input, project) {
     }
     case 'git/status': {
       // This runs on every refresh, so the branch comes from the status header instead of separate git calls.
+      const fsVersion = project.fsVersion;
       const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z', '--branch']);
       if (output.exitCode !== 0) throw new Error(output.stderr);
       const entries = output.stdout.split('\0'), changes = [];
@@ -397,11 +410,20 @@ async function route(action, input, project) {
         const original = /[RC]/.test(status) ? entries[++index] : undefined;
         changes.push({ status, path: file, original });
       }
-      const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
-      const stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
-      ];
+      // Line counts change only with the working tree (which the project watcher sees) or with what status reports, so while
+      // neither changed a recent count is reused and an idle poll costs one git process instead of two (or three).
+      // A worktree lives outside the watched project folder, so its counts are always read again.
+      const cached = project.gitStats.get(workspace.root);
+      let stats;
+      if (!repo?.worktreeEnabled && project.watcher?.watching && cached?.status === output.stdout && cached.fsVersion === fsVersion && Date.now() - cached.at < 30_000) stats = cached.stats;
+      else {
+        const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
+        stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
+          (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
+          (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
+        ];
+        project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats });
+      }
       let additions = 0, deletions = 0;
       const perFile = new Map();
       for (const line of stats.join('\n').split('\n')) {
@@ -659,7 +681,7 @@ const sshTimer = setInterval(async () => {
       terminal.agentPid = !ssh && agentPid || null;
       if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); }
     }
-  } finally { sshPolling = false; }
+  } catch (error) { console.warn(`터미널 프로세스 확인 실패: ${error.message}`); } finally { sshPolling = false; }
 }, 3000);
 sshTimer.unref();
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
@@ -673,5 +695,8 @@ async function shutdown() {
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
 process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void shutdown());
+// Every terminal lives in this process (outside `pnpm dev`), so one stray error in a callback must not end all of them.
+process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
+process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
 process.on('message', message => { if (message?.type === 'shutdown') void shutdown().finally(() => process.exit(0)); });

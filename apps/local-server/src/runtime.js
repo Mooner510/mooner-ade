@@ -52,8 +52,23 @@ function repositoryFilters(cwd, env) {
 // Ref and branch queries never read file contents, so they skip the filter probe (itself a git process).
 const NO_CONTENT = new Set(['rev-parse', 'branch', 'for-each-ref', 'show-ref']);
 
+// The probe answer is reused while the repository's .git/config is unchanged (by mtime and size), for at most a minute so a
+// change in an included config file or a worktree's shared config is still picked up. Polling Git every few seconds would
+// otherwise start a second git process for every git call.
+const FILTER_TTL = 60_000;
+const filterCache = new Map();
+async function cachedFilters(cwd, env) {
+  const stamp = await fs.stat(path.join(cwd, '.git', 'config')).then(stat => `${stat.mtimeMs}:${stat.size}`, () => '');
+  const hit = filterCache.get(cwd);
+  if (hit && hit.stamp === stamp && Date.now() - hit.at < FILTER_TTL) return hit.filters;
+  const filters = repositoryFilters(cwd, env);
+  filterCache.set(cwd, { stamp, at: Date.now(), filters });
+  if (filterCache.size > 64) filterCache.delete(filterCache.keys().next().value);
+  return filters;
+}
+
 async function gitEnv(cwd, env, args) {
-  const filters = NO_CONTENT.has(args[0]) ? [] : await repositoryFilters(cwd, env);
+  const filters = NO_CONTENT.has(args[0]) ? [] : await cachedFilters(cwd, env);
   const overrides = [...GIT_TRUSTED_REPO_CONFIG, ...filters.map(key => [key, ''])];
   const result = { ...env, GIT_CONFIG_COUNT: String(overrides.length) };
   overrides.forEach(([key, value], index) => { result[`GIT_CONFIG_KEY_${index}`] = key; result[`GIT_CONFIG_VALUE_${index}`] = value; });
@@ -138,6 +153,13 @@ export class LocalGit {
   }
 }
 
+// node-pty's Windows terminal rethrows any error of its ConPTY socket (EPIPE, ECONNRESET when a busy terminal exits) unless the
+// terminal has a second 'error' listener, and that uncaught throw takes the whole server down with every other terminal.
+// The terminal still closes and reports its exit on its own.
+export function ignoreSocketErrors(pty) {
+  if (typeof pty.on === 'function') pty.on('error', () => {});
+}
+
 export class LocalTerminal {
   constructor({ ptyFactory } = {}) {
     this.shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/sh';
@@ -149,6 +171,7 @@ export class LocalTerminal {
     // An app launched from a non-interactive tool shell (e.g. Claude Code's) inherits NO_COLOR, which would strip color from every CLI.
     const { NO_COLOR, ...inherited } = process.env;
     const pty = await this.ptyFactory.spawn(this.shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...inherited, ...env }, ...(meta && { meta }) });
+    ignoreSocketErrors(pty);
     return {
       pid: pty.pid,
       // Only a remote PTY can outlive this process; a local one is simply closed.

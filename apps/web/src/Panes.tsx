@@ -17,6 +17,16 @@ const REPORT = /^(?:\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm])+$/;
 // xterm's answers to terminal queries (device attributes, cursor position, status, modes, OSC/DCS reports). Replayed
 // output still holds the queries the shell made long ago, so answers produced while replaying would land as typed text.
 const QUERY_REPLY = /^(?:\x1b\[[?>=]?[\d;]*(?:c|R|n|\$y|t)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/;
+// Chromium drops the oldest WebGL context past ~16 per page, and every busy agent pane redrawing through its own context loads the
+// GPU process until it crashes and blanks every pane. So only a few visible panes render through WebGL (the rest use the DOM
+// renderer), a freed slot goes to a waiting pane, and after repeated context losses WebGL stays off for the session.
+const WEBGL_LIMIT = 6, WEBGL_LOSSES = 3, WEBGL_LOSS_WINDOW = 60_000;
+const webgl = { active: 0, losses: [] as number[], disabled: false, waiting: new Set<() => void>() };
+function webglLost() {
+  const now = Date.now();
+  webgl.losses = [...webgl.losses.filter(time => now - time < WEBGL_LOSS_WINDOW), now];
+  if (webgl.losses.length >= WEBGL_LOSSES) { webgl.disabled = true; webgl.waiting.clear(); }
+}
 export type AgentEventKind = 'done' | 'attention';
 export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error' } | null };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
@@ -260,17 +270,16 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         return false;
       }
       if (event.key === 'Enter') clearTimeout(composedEnter);
-      // Tab in Claude's composer is only for autocomplete (last word starts with / or @) and for queueing a follow-up while a turn runs.
-      // Everything else is swallowed: Claude would otherwise toggle thinking or accept a suggestion, which nobody asked for.
+      // Tab in Claude's composer queues a follow-up while a turn runs; every other Tab (autocomplete, thinking/ultra toggle) goes to the CLI.
       if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.isComposing && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking) {
         const typed = claudeComposerText(screenText()), text = typed && !/^Try "/.test(typed) ? typed : undefined; // an empty composer shows a `Try "…"` hint
         if (text && /(?:^|\s)[/@]\S*$/.test(text)) return true;
-        event.preventDefault();
         if (text && followUp.current.working && !/\[(?:Pasted text|Image|\.\.\.Truncated)/.test(text) && followUp.current.enqueue(text)) {
+          event.preventDefault();
           callbacks.current.send({ type: 'terminal/input', id, data: '\x05' + '\x7f'.repeat(text.length + 8) });
           refreshQueue();
+          return false;
         }
-        return false;
       }
       // xterm sends a bare CR for Shift+Enter; ESC+CR is the "newline without submit" sequence TUIs (Claude Code etc.) understand.
       // Sent on the next tick: xterm flushes a just-ended IME composition from a setTimeout(0), and the newline must come after that text.
@@ -310,12 +319,27 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     // Hidden workspaces still mount terminals, so reserve WebGL contexts for visible panes.
     const terminal = term.current;
     if (!visible || !terminal) return;
-    try {
-      const gl = new WebglAddon();
-      gl.onContextLoss(() => { if (webglRef.current === gl) webglRef.current = null; gl.dispose(); });
-      terminal.loadAddon(gl); webglRef.current = gl;
-      return () => { if (webglRef.current === gl) webglRef.current = null; gl.dispose(); };
-    } catch { /* no WebGL: keep the DOM renderer */ }
+    let gl: WebglAddon | null = null, done = false;
+    const release = () => {
+      const addon = gl; if (!addon) return;
+      gl = null; webgl.active--;
+      if (webglRef.current === addon) webglRef.current = null;
+      addon.dispose();
+      const next = webgl.waiting.values().next().value;
+      if (next) { webgl.waiting.delete(next); next(); }
+    };
+    const acquire = () => {
+      if (done || gl || webgl.disabled) return;
+      if (webgl.active >= WEBGL_LIMIT) { webgl.waiting.add(acquire); return; }
+      try {
+        const addon = new WebglAddon();
+        // A lost context falls back to the DOM renderer; it is not recreated while the pane stays visible.
+        addon.onContextLoss(() => { webglLost(); release(); });
+        terminal.loadAddon(addon); gl = addon; webgl.active++; webglRef.current = addon;
+      } catch { /* no WebGL: keep the DOM renderer */ }
+    };
+    acquire();
+    return () => { done = true; webgl.waiting.delete(acquire); release(); };
   }, [visible]);
   useEffect(() => { checkAgent.current(); }, [identity, isSsh]);
   useEffect(() => {
