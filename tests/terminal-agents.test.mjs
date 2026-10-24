@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseProcessTable, terminalProcesses } from '../apps/local-server/src/terminal-processes.js';
-import { createBannerDetector, createQuestionTracker, detectAgent, hasAgentQuestion, resolveAgent } from '../apps/web/src/terminal-agent.ts';
+import { createBannerDetector, createQuestionTracker, detectAgent, hasAgentQuestion, resolveAgent, stableTitle } from '../apps/web/src/terminal-agent.ts';
 
 test('terminal processes detect native macOS CLIs, npm wrappers, exec and SSH without prompt false positives', () => {
   const table = parseProcessTable(`
@@ -55,14 +55,14 @@ test('ssh spawned by a local agent or git is a tool call, not an ssh terminal', 
 });
 
 test('process evidence wins over stale titles and launchers; exiting clears local agent identity', () => {
-  assert.equal(resolveAgent('codex', 'claude', '✳ Claude migration', false), 'codex');
-  assert.equal(resolveAgent('claude', 'codex', 'Codex', false), 'claude');
-  assert.equal(resolveAgent(null, 'claude', 'Claude Code', false), undefined);
-  assert.equal(resolveAgent(undefined, 'codex', '⠋ Claude task', false), 'claude');
-  assert.equal(resolveAgent(undefined, 'claude', '⠋ Codex', false), 'codex');
-  assert.equal(resolveAgent(null, 'claude', 'OpenAI Codex', true), 'codex');
-  assert.equal(resolveAgent('codex', 'claude', '⠋ Claude Code', false), 'codex');
-  assert.equal(resolveAgent(null, 'claude', '⠋ Working', true), 'claude');
+  assert.equal(resolveAgent('codex', 'claude', '✳ Claude migration'), 'codex');
+  assert.equal(resolveAgent('claude', 'codex', 'Codex'), 'claude');
+  assert.equal(resolveAgent(null, 'claude', 'Claude Code'), undefined);
+  assert.equal(resolveAgent(undefined, 'codex', '⠋ Claude task'), 'claude');
+  assert.equal(resolveAgent(undefined, 'claude', '⠋ Codex'), 'codex');
+  assert.equal(resolveAgent(null, 'claude', 'OpenAI Codex'), undefined);
+  assert.equal(resolveAgent('codex', 'claude', '⠋ Claude Code'), 'codex');
+  assert.equal(resolveAgent(undefined, 'claude', '⠋ Working'), 'claude');
   assert.equal(detectAgent('/work/claude-code'), undefined);
   assert.equal(detectAgent('⠋ Working on codex'), undefined);
   assert.equal(detectAgent('Claude Code'), 'claude');
@@ -73,7 +73,7 @@ test('process evidence wins over stale titles and launchers; exiting clears loca
   assert.equal(detectAgent('cursor-agent'), 'cursor');
   assert.equal(detectAgent('⠋ Fix cursor agent bug'), undefined);
   assert.equal(detectAgent('/work/cursor'), undefined);
-  assert.equal(resolveAgent('cursor', 'claude', 'Claude Code', false), 'cursor');
+  assert.equal(resolveAgent('cursor', 'claude', 'Claude Code'), 'cursor');
 });
 
 test('banner detection handles split ANSI sequences and uses the last session in replay', () => {
@@ -167,4 +167,48 @@ test('old approval text above the current composer does not keep a completed ter
   assert.equal(question.observe(`${codexApproval}\nDone.\n› `, 'Action Required'), false);
   assert.equal(question.observe(`${claudeQuestion}\nDone.\n❯ Explain the changes`), false);
   assert.equal(question.observe(`${codexApproval}\n› Next task\n${claudeQuestion}`), true);
+});
+
+test('an agent title keeps its name while the spinner in front of it animates', () => {
+  assert.equal(stableTitle('⠂ Optimizing renderer'), 'Optimizing renderer');
+  assert.equal(stableTitle('⠐ Optimizing renderer'), 'Optimizing renderer');
+  assert.equal(stableTitle('✳ Claude Code'), 'Claude Code');
+  assert.equal(detectAgent(stableTitle('✳ Claude Code')), 'claude');
+  assert.equal(stableTitle(String.raw`C:\Windows\System32\powershell.exe`), String.raw`C:\Windows\System32\powershell.exe`);
+});
+
+test('an ssh terminal keeps its client command line, and image uploads reuse it through sftp', async () => {
+  const { sshUploadCommand } = await import('../apps/local-server/src/ssh-upload.js');
+  const inspect = terminalProcesses(parseProcessTable(`
+    40 1 /bin/zsh
+    41 40 ssh -p 2222 me@host claude
+  `));
+  assert.equal(inspect(40).sshCommand, 'ssh -p 2222 me@host claude');
+  const upload = sshUploadCommand(String.raw`"C:\Windows\System32\OpenSSH\ssh.exe" -tt -L 8080:localhost:80 -i "C:\Users\me\.ssh\my key" -p2222 -l me -J jump -o ServerAliveInterval=30 host tmux attach`);
+  assert.equal(upload.binary, String.raw`C:\Windows\System32\OpenSSH\sftp.exe`);
+  assert.ok(upload.args.indexOf('BatchMode=yes') < upload.args.indexOf('ServerAliveInterval=30'));
+  assert.deepEqual(upload.args.slice(upload.args.indexOf('LogLevel=ERROR') + 1),
+    ['-i', String.raw`C:\Users\me\.ssh\my key`, '-P', '2222', '-o', 'User=me', '-J', 'jump', '-o', 'ServerAliveInterval=30', '-b', '-', 'host']);
+  assert.equal(sshUploadCommand('ssh ssh://me@host:22').args.at(-1), 'sftp://me@host:22');
+  assert.equal(sshUploadCommand('ssh me@host').binary, 'sftp');
+  assert.equal(sshUploadCommand('ssh -p'), null);
+});
+
+test('the remote agent comes from the output: banner or agent title starts it, the empty exit title ends it', async () => {
+  const { createRemoteAgent } = await import('../apps/local-server/src/remote-agent.js');
+  const remote = createRemoteAgent();
+  assert.equal(remote.feed('mooner@server:~$ claude\r\n'), false);
+  assert.equal(remote.feed('\x1b]0;✳ Claude Code\x07'), true);
+  assert.equal(remote.agent, 'claude');
+  assert.equal(remote.feed('\x1b]0;✳ Fix the login bug\x07 working…'), false);
+  assert.equal(remote.agent, 'claude');
+  assert.equal(remote.feed('bye\x1b]0;\x07\x1b[?25h'), true);
+  assert.equal(remote.agent, null);
+  // A banner split across chunks is still seen.
+  remote.feed(' OpenAI Co'); remote.feed('dex (v0.50)');
+  assert.equal(remote.agent, 'codex');
+  remote.reset();
+  assert.equal(remote.agent, null);
+  remote.feed('\x1b[1m Claude Code\x1b[22m v2.1.3\r\n');
+  assert.equal(remote.agent, 'claude');
 });

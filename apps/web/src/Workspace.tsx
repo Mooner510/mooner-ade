@@ -31,14 +31,15 @@ const emptyGit: GitState = { branch: '', changes: [], additions: 0, deletions: 0
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const formatBytes = (bytes: number) => bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}GB` : `${Math.round(bytes / 2 ** 20)}MB`;
 const shortPath = (path: string) => { const clean = path.replace(/\\/g, '/'), parts = clean.split('/').filter(Boolean); return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : clean; };
-function Clock() {
+// The status bar items are memoized: the workspace re-renders on every pane and agent change, and formatting dates is not free.
+const Clock = memo(function Clock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 15000); return () => clearInterval(timer); }, []);
   return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>;
-}
+});
 // "1 hr 29 mins" → "1h 29m"; the full text stays in the tooltip.
 const compactDuration = (text: string) => text.replace(/\s*hrs?\b/g, 'h').replace(/\s*mins?\b/g, 'm').replace(/\s*secs?\b/g, 's');
-function WakaTimeStat() {
+const WakaTimeStat = memo(function WakaTimeStat() {
   const [status, setStatus] = useState<{ today: string; lastSent: number; lastError: string | null } | null>(null);
   useEffect(() => {
     let live = true;
@@ -50,7 +51,7 @@ function WakaTimeStat() {
   if (!status) return null;
   const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
   return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? `\n${status.lastError}` : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
-}
+});
 type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
 type Usage = { provider: 'claude' | 'codex'; windows: UsageWindow[]; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
 const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
@@ -61,7 +62,7 @@ const untilReset = (at: number) => {
   return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
-function UsageStat({ provider, colors, projectId, active }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean }) {
+const UsageStat = memo(function UsageStat({ provider, colors, projectId, active }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean }) {
   const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
@@ -87,7 +88,7 @@ function UsageStat({ provider, colors, projectId, active }: { provider: Usage['p
     <Icon name={provider} size={13} />
     {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? { '--usage-hue': usageHue(item.percent) } as CSSProperties : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
   </button>;
-}
+});
 export const showKeys = (keys: string) => keys.split('+').map(part => ({ mod: mac ? '⌘' : 'Ctrl', ctrl: mac ? '⌃' : 'Ctrl', shift: mac ? '⇧' : 'Shift', alt: mac ? '⌥' : 'Alt' } as Record<string, string>)[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
 function keyOf(event: KeyboardEvent) {
   const code = event.code;
@@ -119,7 +120,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // Terminals whose shell currently runs an ssh client (reported by the server).
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
-  const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
+  const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id]);
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const refs = {
@@ -370,7 +371,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
               bus.current.buffers.set(message.id, message);
               bus.current.listeners.get(message.id)?.({ ...message, reset: true });
             } else if (!previous || message.sequence > previous.sequence) {
-              bus.current.buffers.set(message.id, { ...message, data: ((previous?.data || '') + message.data).slice(-262144) });
+              // Kept for a remounted pane's replay (which takes the last 256 KB). Trimming copies it all, so it waits for twice that.
+              const data = (previous?.data || '') + message.data;
+              bus.current.buffers.set(message.id, { ...message, data: data.length > 524288 ? data.slice(-262144) : data });
               bus.current.listeners.get(message.id)?.(message);
               // A launcher command (claude, codex, cursor-agent) is typed once the shell has printed its first output.
               const command = refs.pending.current.get(message.id);
@@ -387,7 +390,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
           } else if (message.type === 'terminal/agent') {
             setProcessAgents(previous => previous[message.id] === message.agent ? previous : { ...previous, [message.id]: message.agent });
             setSshSet(previous => message.ssh ? new Set(previous).add(message.id) : new Set([...previous].filter(item => item !== message.id)));
-            if (!message.agent && !message.ssh) {
+            if (!message.agent) {
               clearAttention(message.id);
               setWorking(previous => new Set([...previous].filter(item => item !== message.id)));
               setLaunched(previous => { const next = { ...previous }; delete next[message.id]; return next; });
