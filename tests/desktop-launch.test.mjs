@@ -19,13 +19,13 @@ test('Windows launcher copies the runtime, launches MoonerADE.exe and reuses it'
   }
   fs.writeFileSync(path.join(desktop, 'package.json'), JSON.stringify({ productName: 'MoonerADE' }));
   const script = fs.readFileSync(new URL('../apps/desktop/launch.mjs', import.meta.url), 'utf8')
-    .replace(/^import .*;\n/gm, '')
+    .replace(/^import .*;\r?\n/gm, '')
     .replaceAll('import.meta.dirname', JSON.stringify(desktop))
     .replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(desktop, 'launch.mjs')).href));
   let copies = 0;
   for (const args of [[], ['--dev']]) {
     const child = new EventEmitter();
-    const process = Object.assign(new EventEmitter(), { platform: 'win32', arch: 'x64', argv: ['node', 'launch.mjs', ...args] });
+    const process = Object.assign(new EventEmitter(), { platform: 'win32', arch: 'x64', argv: ['node', 'launch.mjs', ...args], env: {}, execPath: 'node.exe' });
     const executable = path.join(desktop, 'dist/electron-44.7.0-win32-x64/MoonerADE.exe');
     runInNewContext(script, {
       ...fs, assert, path, process, console, URL,

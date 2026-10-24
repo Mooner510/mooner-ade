@@ -6,6 +6,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// The Windows terminal shell is PowerShell, which only runs a quoted path through its call operator.
+const runNode = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}"`;
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 const git = (cwd, ...args) => new Promise((resolve, reject) => spawn('git', args, { cwd, stdio: 'ignore' }).on('exit', code => code ? reject(new Error(`git ${args}`)) : resolve()));
 
@@ -17,7 +19,9 @@ async function boot(t) {
       const exited = new Promise(resolve => child.once('exit', resolve));
       child.kill('SIGTERM'); await exited;
     }
-    await rm(data, { recursive: true, force: true }); await rm(repo, { recursive: true, force: true });
+    // Windows keeps a folder locked until the server's terminal shells have fully exited.
+    const removal = { recursive: true, force: true, maxRetries: 20, retryDelay: 250 };
+    await rm(data, removal); await rm(repo, removal);
   });
   const line = await new Promise((resolve, reject) => { child.stdout.once('data', chunk => resolve(String(chunk))); child.once('exit', () => reject(new Error('server exited'))); });
   const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);
@@ -198,6 +202,18 @@ test('git: status, show, branches, checkout', async t => {
   await call('git/checkout', { branch: '--orphan' }, 400);
 });
 
+test('git: line counts follow further edits to a file that is already modified', async t => {
+  const { call, repo } = await boot(t);
+  await writeFile(join(repo, 'a.txt'), 'changed\n');
+  assert.equal((await call('git/status')).additions, 1);
+  // Same porcelain status (" M a.txt"); only the file watcher tells the server the counts are stale.
+  await writeFile(join(repo, 'a.txt'), 'changed\nmore\nlines\n');
+  const end = Date.now() + 5000;
+  let status;
+  do { await new Promise(resolve => setTimeout(resolve, 200)); status = await call('git/status'); } while (status.additions !== 3 && Date.now() < end);
+  assert.equal(status.additions, 3);
+});
+
 test('websocket: terminal echo and resize validation', async t => {
   const { origin, cookie, call, projectId } = await boot(t);
   const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });
@@ -273,7 +289,7 @@ test('websocket: terminal agent processes survive replay, switch providers and c
         }
       });`);
     messages.length = 0;
-    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `"${process.execPath}" "${script}"\r` }));
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `${runNode} "${script}"\r` }));
   };
   await run('@anthropic-ai/claude-code', 'cli.js');
   await until(message => message.type === 'terminal/agent' && message.id === id && message.agent === 'claude');
@@ -318,7 +334,7 @@ test('terminal follow-up validates the live Claude process and output sequence, 
   await writeFile(script, `process.stdin.setRawMode(true);
     process.stdin.on('data', data => process.stdout.write('received:' + JSON.stringify(data.toString()) + '\\n'));
     console.log('fake-claude-ready');`);
-  ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `"${process.execPath}" "${script}"\r` }));
+  ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: `${runNode} "${script}"\r` }));
   await until(message => message.type === 'terminal' && message.data.includes('fake-claude-ready'));
   assert.deepEqual(await call('terminal/follow-up', request), { accepted: false }); // Stale screen.
   request.sequence = sequence();
