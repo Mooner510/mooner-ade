@@ -14,7 +14,8 @@ import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
-import { parseProcessTable, terminalProcesses } from './terminal-processes.js';
+import { terminalProcesses } from './terminal-processes.js';
+import { createProcessTable } from './process-table.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
@@ -29,7 +30,11 @@ const devWeb = process.env.ADE_DEV === '1';
 const vite = devWeb ? await (async () => {
   const webDir = path.resolve(import.meta.dirname, '../../web');
   const { createServer } = await import(pathToFileURL(createRequire(path.join(webDir, 'package.json')).resolve('vite')).href);
-  return createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 } } });
+  // A crashing MSYS tool (Git Bash) drops a locked <tool>.exe.stackdump into its working directory; watching it fails with EBUSY.
+  const server = await createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 }, watch: { ignored: ['**/*.stackdump'] } } });
+  // Vite leaves its file watcher's 'error' event unhandled, so one unwatchable file would take down the whole server.
+  server.watcher.on('error', error => console.warn(`Vite 파일 감시 오류 (${error.code || 'WATCH_FAILED'}): ${error.path || error.message}`));
+  return server;
 })() : null;
 // pnpm can install node-pty's prebuilt spawn-helper without the executable bit, which makes every spawn fail (posix_spawnp).
 if (process.platform !== 'win32') {
@@ -42,6 +47,8 @@ if (process.platform !== 'win32') {
 const ptyHost = process.env.ADE_PTY_ENDPOINT ? await connectPtyHost({ endpoint: process.env.ADE_PTY_ENDPOINT, token: process.env.ADE_PTY_TOKEN }).catch(error => { console.error(`pty-host 연결 실패, 서버 내부 PTY를 사용합니다: ${error.message}`); return null; }) : null;
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
 delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN;
+// Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
+for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
 const pty = ptyHost ? { spawn: ptyHost.factory.spawn } : await import('node-pty').catch(() => null);
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
@@ -270,6 +277,14 @@ async function currentBranch(runtime) {
   const head = await runtime.processes.exec('git', ['rev-parse', '--short', 'HEAD']);
   return head.exitCode === 0 ? `(HEAD ${head.stdout.trim()})` : '';
 }
+// The "## " header of `git status --branch`: "main...origin/main [ahead 1]", "No commits yet on main", or "HEAD (no branch)".
+// null (detached HEAD) leaves the name to currentBranch.
+function branchFromHeader(header) {
+  const unborn = /^(?:No commits yet|Initial commit) on (.+)$/.exec(header);
+  if (unborn) return unborn[1];
+  if (!header || header.startsWith('HEAD (')) return null;
+  return header.replace(/ \[[^\]]*\]$/, '').split('...')[0];
+}
 // CPU usage is the busy share between two samples, so each call reports the time since the previous one.
 let cpuSample = os.cpus().map(cpu => ({ ...cpu.times }));
 function systemInfo() {
@@ -370,11 +385,14 @@ async function route(action, input, project) {
       project.state.ui = validateUi(input.ui); await project.save(); return {};
     }
     case 'git/status': {
-      const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z']);
+      // This runs on every refresh, so the branch comes from the status header instead of separate git calls.
+      const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z', '--branch']);
       if (output.exitCode !== 0) throw new Error(output.stderr);
       const entries = output.stdout.split('\0'), changes = [];
+      let header = '';
       for (let index = 0; index < entries.length; index++) {
         const entry = entries[index]; if (!entry) continue;
+        if (entry.startsWith('## ')) { header = entry.slice(3); continue; }
         const status = entry.slice(0, 2), file = entry.slice(3);
         const original = /[RC]/.test(status) ? entries[++index] : undefined;
         changes.push({ status, path: file, original });
@@ -406,7 +424,7 @@ async function route(action, input, project) {
           additions += lines; change.added = lines; change.deleted = 0;
         } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
       }
-      return { ...(await runtime.git.status()), branch: await currentBranch(runtime), changes, additions, deletions };
+      return { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
     }
     case 'git/show': {
       text(input.path, '경로'); await workspace.resolve(input.path);
@@ -474,7 +492,7 @@ async function route(action, input, project) {
       const terminal = project.terminals.get(input.id);
       if (!terminal || terminal.exited || !terminal.native.pid) return { accepted: false };
       if (terminal.lastFollowUp === requestId) return { accepted: true };
-      const table = await processTable();
+      const table = await processTable([terminal.native.pid]);
       const agentProcess = table && terminalProcesses(table)(terminal.native.pid);
       if (terminal.lastFollowUp === requestId) return { accepted: true };
       // Recheck after ps: a CLI may have exited or redrawn its composer since the window observed completion.
@@ -618,21 +636,14 @@ function wakatimePulse() {
 const wakatimeTimer = setInterval(wakatimePulse, PULSE / 4);
 wakatimeTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
-const processTable = () => new Promise(resolve => {
-  const [file, args] = process.platform === 'win32'
-    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $(if ($_.CommandLine) { $_.CommandLine } else { $_.Name })" }']]
-    : ['ps', ['-A', '-o', 'pid=,ppid=,args=']];
-  execFile(file, args, { windowsHide: true, timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => {
-    if (error) return resolve(null);
-    resolve(parseProcessTable(out));
-  });
-});
+const processTable = createProcessTable();
 let sshPolling = false;
 const sshTimer = setInterval(async () => {
   if (sshPolling || ![...projects.values()].some(project => [...project.terminals.values()].some(terminal => !terminal.exited))) return;
   sshPolling = true;
   try {
-    const table = await processTable(); if (!table) return;
+    const roots = [...projects.values()].flatMap(project => [...project.terminals.values()].filter(terminal => !terminal.exited && terminal.native.pid).map(terminal => terminal.native.pid));
+    const table = await processTable(roots); if (!table) return;
     const inspect = terminalProcesses(table);
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
       if (terminal.exited || !terminal.native.pid) continue;
@@ -656,7 +667,7 @@ origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); processTable.close();
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();

@@ -125,7 +125,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
-    tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {})
+    tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {}),
+    gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0)
   };
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
@@ -189,7 +190,18 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   function closeGroup(groupId: string) {
     if (findLeaf(treeOf(groupId), groupId)) commitFor(groupId, remove(treeOf(groupId)!, groupId));
   }
-  async function refreshGit() {
+  // One git/status at a time: each costs several git processes, and file events arrive every 150 ms while an agent writes.
+  // Requests made during a run share a single follow-up run, which still sees every change made before it started.
+  function refreshGit(): Promise<void> {
+    const slot = refs.gitRefresh.current;
+    if (!slot.running) {
+      slot.running = loadGit().finally(() => { slot.running = null; });
+      return slot.running;
+    }
+    slot.again ??= slot.running.catch(() => {}).then(() => { slot.again = null; return refreshGit(); });
+    return slot.again;
+  }
+  async function loadGit() {
     const state = refs.project.current;
     if (!state || !state.repositories.length || (state.multiRepo && !state.repositories.some(repo => repo.id === refs.repository.current))) { setGit(emptyGit); return; }
     const next = await call<GitState>('git/status');
@@ -347,7 +359,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   refs.onMessage.current = message => {
     try {
           if (message.type === 'snapshot') setProject(message.snapshot);
-          else if (message.type === 'fs') { if (refs.active.current) void refreshGit().catch(report); }
+          // A stream of file events (an agent at work) refreshes Git at most twice a second.
+          else if (message.type === 'fs') {
+            if (refs.active.current && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
+          }
           else if (message.type === 'terminal' || message.type === 'terminal/replay') {
             const previous = bus.current.buffers.get(message.id);
             if (message.type === 'terminal/replay') {
@@ -408,13 +423,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     }, 400);
     return () => clearTimeout(timer);
   }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, rightVisible, agentKey, call, report]);
-  // Polling only runs for the project being shown; coming back to a project refreshes it immediately.
+  // Polling only runs for the project being shown and while the window is visible; coming back refreshes immediately.
   useEffect(() => {
     if (!project?.id || !active) return;
-    let checking = false;
-    const tick = async () => { if (checking) return; checking = true; try { await refreshGit(); } catch (cause) { report(cause); } finally { checking = false; } };
-    void tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
-    return () => clearInterval(timer);
+    const tick = () => { if (!document.hidden) void refreshGit().catch(report); };
+    tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   }, [project?.id, gitRepositoryId, active, settings.diffRefresh]);
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
 

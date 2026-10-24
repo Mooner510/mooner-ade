@@ -49,8 +49,12 @@ function repositoryFilters(cwd, env) {
   });
 }
 
-async function gitEnv(cwd, env) {
-  const overrides = [...GIT_TRUSTED_REPO_CONFIG, ...(await repositoryFilters(cwd, env)).map(key => [key, ''])];
+// Ref and branch queries never read file contents, so they skip the filter probe (itself a git process).
+const NO_CONTENT = new Set(['rev-parse', 'branch', 'for-each-ref', 'show-ref']);
+
+async function gitEnv(cwd, env, args) {
+  const filters = NO_CONTENT.has(args[0]) ? [] : await repositoryFilters(cwd, env);
+  const overrides = [...GIT_TRUSTED_REPO_CONFIG, ...filters.map(key => [key, ''])];
   const result = { ...env, GIT_CONFIG_COUNT: String(overrides.length) };
   overrides.forEach(([key, value], index) => { result[`GIT_CONFIG_KEY_${index}`] = key; result[`GIT_CONFIG_VALUE_${index}`] = value; });
   return result;
@@ -66,7 +70,7 @@ export class LocalProcesses {
     if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new TypeError('Invalid output limit');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) throw new TypeError('Invalid timeout');
     let childEnv = { ...process.env, ...env };
-    if (file === 'git') childEnv = await gitEnv(cwd, childEnv);
+    if (file === 'git') childEnv = await gitEnv(cwd, childEnv, args);
     return new Promise((resolve, reject) => {
       const child = spawn(file, args, { cwd, env: childEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let stdout = '', stderr = '', bytes = 0, completed = false;
@@ -142,7 +146,9 @@ export class LocalTerminal {
 
   // `meta` is opaque data a remote PTY host keeps next to the terminal so it can be recognised after a server restart.
   async open({ cwd, cols = 100, rows = 28, env = {}, args = [], meta } = {}) {
-    const pty = await this.ptyFactory.spawn(this.shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...process.env, ...env }, ...(meta && { meta }) });
+    // An app launched from a non-interactive tool shell (e.g. Claude Code's) inherits NO_COLOR, which would strip color from every CLI.
+    const { NO_COLOR, ...inherited } = process.env;
+    const pty = await this.ptyFactory.spawn(this.shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...inherited, ...env }, ...(meta && { meta }) });
     return {
       pid: pty.pid,
       // Only a remote PTY can outlive this process; a local one is simply closed.
