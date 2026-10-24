@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { timingSafeEqual } from 'node:crypto';
 import { createTerminalBuffer } from './terminal-buffer.js';
+import { ignoreSocketErrors } from './runtime.js';
 
 const endpoint = process.env.ADE_PTY_ENDPOINT, token = process.env.ADE_PTY_TOKEN;
 if (!endpoint || !token) { console.error('ADE_PTY_ENDPOINT / ADE_PTY_TOKEN are required'); process.exit(2); }
@@ -24,6 +25,7 @@ function spawnTerminal(socket, message) {
   const { key, file, args = [], options = {}, meta = {} } = message;
   if (typeof key !== 'string' || typeof file !== 'string' || terminals.has(key)) throw new Error('invalid spawn');
   const child = pty.spawn(file, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols: options.cols, rows: options.rows, cwd: options.cwd, env: options.env });
+  ignoreSocketErrors(child);
   const entry = { process: child, meta, buffer: createTerminalBuffer(), socket };
   terminals.set(key, entry);
   child.onData(data => { entry.buffer.append(data); if (entry.socket) reply(entry.socket, { ev: 'data', key, data }); });
@@ -75,4 +77,6 @@ server.listen(endpoint, () => { process.send?.({ type: 'ready' }); });
 // Terminals must not outlive the app: the IPC channel closes when the desktop shell exits or crashes.
 process.on('disconnect', shutdown);
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
+// One terminal's stray error must not take every other terminal with it.
+process.on('uncaughtException', error => console.error(`pty-host 오류: ${error?.stack || error}`));
 process.on('message', message => { if (message?.type === 'shutdown') shutdown(); });

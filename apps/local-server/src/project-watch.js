@@ -35,5 +35,6 @@ export function watchProjectFiles(root, notify) {
     });
     watcher.on('error', failed);
   } catch (error) { failed(error); }
-  return { close };
+  // False once watching stopped, so callers no longer trust the absence of events.
+  return { close, get watching() { return !closed; } };
 }

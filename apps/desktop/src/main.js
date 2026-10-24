@@ -8,6 +8,9 @@ import { checkForUpdate } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
 app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
+// Chromium ends the whole app ("GPU process isn't usable. Goodbye.") once the GPU process has crashed a few times, which many busy
+// terminal panes can cause. Without the limit it just starts the GPU process again and the window recovers.
+app.commandLine.appendSwitch('disable-gpu-process-crash-limit');
 
 // The local server runs under the system Node (not Electron's), so node-pty keeps its normal Node ABI build.
 const serverEntry = path.resolve(import.meta.dirname, '../../local-server/src/index.js');
@@ -53,7 +56,7 @@ function startServer() {
       if (server !== child) return;
       server = null;
       if (!origin) reject(new Error(`로컬 서버가 시작되지 않았습니다 (exit ${code}).\n${output}`));
-      else if (!quitting && !restarting) { dialog.showErrorBox('무너에이드', `로컬 서버가 종료되었습니다 (exit ${code}).`); app.quit(); }
+      else if (!quitting && !restarting) recoverServer(code);
     });
   });
 }
@@ -81,7 +84,7 @@ function watchServerSources() {
     // The host is not reloaded (that would kill the terminals it protects); changing it needs a full restart of the app.
     if (!name || /pty-host\.js$|\.(md|d\.ts)$|\.stackdump$/.test(name)) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { restartQueue = restartQueue.then(restartServer).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`)); }, 400);
+    timer = setTimeout(() => { console.log('[dev] 서버 코드가 변경되어 서버만 다시 시작합니다 (터미널 유지)'); restartQueue = restartQueue.then(restartServer).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`)); }, 400);
   };
   const watchError = error => console.warn(`개발 모드 파일 감시 오류 (${error.code || 'WATCH_FAILED'}). 변경 반영은 앱을 직접 재시작하세요.`);
   for (const dir of dirs) try {
@@ -106,10 +109,31 @@ function watchServerSources() {
 }
 async function restartServer() {
   if (quitting || !mainWindow) return;
-  console.log('[dev] 서버 코드가 변경되어 서버만 다시 시작합니다 (터미널 유지)');
   restarting = true;
-  try { await stopServer(); origin = ''; const url = await startServer(); await mainWindow?.loadURL(url); }
-  finally { restarting = false; }
+  try {
+    // Leave the old page first: once the new dev server is up, its Vite HMR client reloads the page against the dead origin,
+    // which aborts the load below (ERR_ABORTED) and leaves an error page.
+    await mainWindow.loadURL('about:blank').catch(() => {});
+    await stopServer(); origin = ''; const url = await startServer();
+    if (mainWindow) await load(mainWindow, url);
+  } finally { restarting = false; }
+}
+// A navigation the page starts on its own aborts loadURL with ERR_ABORTED although nothing is wrong; load again.
+async function load(window, url) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await window.loadURL(url); }
+    catch (error) { if (error.code !== 'ERR_ABORTED' || attempt >= 3 || window.isDestroyed()) throw error; }
+  }
+}
+// A server that dies on its own is started again instead of closing the app (outside `pnpm dev` its terminals die with it).
+// Only a server that keeps dying ends the app.
+let serverCrashes = [];
+function recoverServer(code) {
+  const now = Date.now();
+  serverCrashes = [...serverCrashes.filter(time => now - time < 60_000), now];
+  if (serverCrashes.length > 3 || !mainWindow) { dialog.showErrorBox('무너에이드', `로컬 서버가 계속 종료됩니다 (exit ${code}).`); app.quit(); return; }
+  console.warn(`로컬 서버가 종료되어 다시 시작합니다 (exit ${code})`);
+  restartQueue = restartQueue.then(restartServer).catch(error => { dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`); app.quit(); });
 }
 
 function sameOrigin(target) {
@@ -132,8 +156,19 @@ function createWindow(url) {
   const guard = (event, target) => { if (!sameOrigin(target)) event.preventDefault(); };
   window.webContents.on('will-navigate', guard);
   window.webContents.on('will-redirect', guard);
+  // A renderer that crashed (e.g. out of memory with many busy panes) leaves a dead window; the server and its terminals keep
+  // running, so load the app again (the session cookie still signs it in). Repeated crashes stop the reloads.
+  let rendererCrashes = [];
+  window.webContents.on('render-process-gone', (_event, details) => {
+    if (quitting || restarting || details.reason === 'clean-exit') return;
+    const now = Date.now();
+    rendererCrashes = [...rendererCrashes.filter(time => now - time < 60_000), now];
+    console.warn(`화면 프로세스 종료 (${details.reason}, exit ${details.exitCode})`);
+    if (rendererCrashes.length > 3) { dialog.showErrorBox('무너에이드', `화면 프로세스가 계속 종료됩니다 (${details.reason}). 열린 패널 수를 줄인 뒤 다시 실행하세요.`); return; }
+    if (origin && !window.isDestroyed()) load(window, `${origin}/`).catch(error => console.warn(`창 다시 불러오기 실패: ${error.message}`));
+  });
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
-  void window.loadURL(url);
+  load(window, url).catch(error => console.warn(`창 불러오기 실패: ${error.message}`));
 }
 
 ipcMain.handle('ade:pick-folder', async event => {
@@ -162,6 +197,7 @@ if (!app.requestSingleInstanceLock()) {
     try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); else setTimeout(() => checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow }).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`)), 5000); }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }
   });
+  app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
   app.on('quit', () => { ptyHost?.kill(); });
   app.on('before-quit', event => {
