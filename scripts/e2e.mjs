@@ -10,6 +10,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 const root = resolve(import.meta.dirname, '..');
+// The Windows terminal shell is PowerShell, which only runs a quoted path through its call operator.
+const runNode = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}"`;
 const chromePath = process.env.CHROME_PATH || [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
   process.env.PROGRAMFILES && join(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
@@ -28,7 +30,7 @@ async function stop(child) {
 }
 async function main() {
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'ade-e2e-')));
-  cleanup.push(() => rm(temp, { recursive: true, force: true }));
+  cleanup.push(() => rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const data = join(temp, 'data'), home = join(temp, 'home'), repo = join(temp, 'repo'), profile = join(temp, 'chrome');
   for (const folder of [data, home, repo]) await mkdir(folder);
   const git = (...args) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo, stdio: 'ignore' });
@@ -119,7 +121,7 @@ async function main() {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   };
   const viewport = 'document.querySelector("main.app:not([hidden]) .tab-page:not([hidden]) .xterm-viewport")';
-  await send('Input.insertText', { text: `"${process.execPath}" -e "for(let i=0;i<2000;i++) console.log('scroll-history-'+i)"` }); await enter();
+  await send('Input.insertText', { text: `${runNode} -e "for(let i=0;i<2000;i++) console.log('scroll-history-'+i)"` }); await enter();
   await until(`(() => { const v = ${viewport}; return v && v.scrollHeight > v.clientHeight * 5; })()`, 'terminal scrollback');
   const projectId = await evaluate('window.e2eReloadPending = true; window.e2eProjectId');
   await send('Page.reload');
@@ -149,7 +151,7 @@ async function main() {
       });
       setInterval(() => process.stdout.write('\\rStatus redraw — ready for input\\x1b[K'), 200);`);
     await evaluate(`document.querySelector(${JSON.stringify(activeTerminal)}).focus()`);
-    await send('Input.insertText', { text: `"${process.execPath}" "${script}"` }); await enter();
+    await send('Input.insertText', { text: `${runNode} "${script}"` }); await enter();
     const pane = `main.app:not([hidden]) .terminal-pane[data-agent="${agent}"]`;
     await until(`document.querySelector(${JSON.stringify(pane)})?.dataset.agentState === 'idle'`, `${agent} negotiated idle state`);
     await evaluate(`window.e2eFalseWork = false; window.e2eStatusObserver = new MutationObserver(records => {
