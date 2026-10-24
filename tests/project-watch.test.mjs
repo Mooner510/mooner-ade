@@ -22,7 +22,7 @@ test('project watcher batches bounded paths, ignores generated folders and conti
   const fake = fakeWatch(t), batches = [];
   const handle = watchProjectFiles('/project', paths => batches.push(paths));
   t.after(() => handle.close());
-  for (const name of ['node_modules/a', 'nested/.git/index', 'dist/a', '.idea/a', null]) fake.change(name);
+  for (const name of ['node_modules/a', 'nested/.git/index', 'dist/a', '.idea/a', 'build/a', 'target/x', '.venv/lib', 'pkg/__pycache__/a.pyc', 'logs/today', 'server.log', 'bash.exe.stackdump', 'notes.md~', null]) fake.change(name);
   for (let i = 0; i < 250; i++) fake.change(`src/${i}.js`);
   fake.change('src/0.js');
   await delay(180);

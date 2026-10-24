@@ -14,7 +14,8 @@ import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
-import { parseProcessTable, terminalProcesses } from './terminal-processes.js';
+import { terminalProcesses } from './terminal-processes.js';
+import { createProcessTable } from './process-table.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
@@ -29,7 +30,11 @@ const devWeb = process.env.ADE_DEV === '1';
 const vite = devWeb ? await (async () => {
   const webDir = path.resolve(import.meta.dirname, '../../web');
   const { createServer } = await import(pathToFileURL(createRequire(path.join(webDir, 'package.json')).resolve('vite')).href);
-  return createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 } } });
+  // A crashing MSYS tool (Git Bash) drops a locked <tool>.exe.stackdump into its working directory; watching it fails with EBUSY.
+  const server = await createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 }, watch: { ignored: ['**/*.stackdump'] } } });
+  // Vite leaves its file watcher's 'error' event unhandled, so one unwatchable file would take down the whole server.
+  server.watcher.on('error', error => console.warn(`Vite 파일 감시 오류 (${error.code || 'WATCH_FAILED'}): ${error.path || error.message}`));
+  return server;
 })() : null;
 // pnpm can install node-pty's prebuilt spawn-helper without the executable bit, which makes every spawn fail (posix_spawnp).
 if (process.platform !== 'win32') {
@@ -41,7 +46,10 @@ if (process.platform !== 'win32') {
 // With ADE_PTY_ENDPOINT (`pnpm dev`) terminals live in a separate pty-host process, so this server can restart without killing them.
 const ptyHost = process.env.ADE_PTY_ENDPOINT ? await connectPtyHost({ endpoint: process.env.ADE_PTY_ENDPOINT, token: process.env.ADE_PTY_TOKEN }).catch(error => { console.error(`pty-host 연결 실패, 서버 내부 PTY를 사용합니다: ${error.message}`); return null; }) : null;
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
-delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN;
+// ADE_DEV likewise: an app launched from such a terminal would start in dev mode and look for Vite.
+delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV;
+// Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
+for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
 const pty = ptyHost ? { spawn: ptyHost.factory.spawn } : await import('node-pty').catch(() => null);
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
@@ -160,7 +168,7 @@ async function openProject(requested) {
         worktreePath: path.join(directory, 'worktrees', repo.id),
         branch: `ade/repo-${repo.id}`
       }));
-      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, mutation: serial(), persist: serial() };
+      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map() };
       project.save = () => project.persist(() => writeJson(path.join(directory, 'state.json'), state));
       for (const repo of repositories) if (repo.worktreeEnabled) await repoWorktree(project, repo);
       await project.save();
@@ -212,7 +220,7 @@ function closeProject(project, { force = false, detach = false } = {}) {
   });
 }
 function watchProject(project) {
-  return watchProjectFiles(project.root, paths => broadcast(project, { type: 'fs', paths }));
+  return watchProjectFiles(project.root, paths => { project.fsVersion++; broadcast(project, { type: 'fs', paths }); });
 }
 function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ui: project.state.ui,
@@ -259,8 +267,20 @@ async function readiness(root) {
       result[executable] = { installed: true, authenticated, version: version.stdout.trim(), message: authenticated ? '준비됨' : `${executable} ${executable === 'codex' ? 'login' : 'auth login'} 실행 후 다시 확인하세요.` };
     } catch (error) { result[executable] = { installed: true, authenticated: false, version: version.stdout.trim(), message: `${executable} 로그인 상태를 확인하지 못했습니다: ${error.message}` }; }
   }
-  result.pty = { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' };
   return result;
+}
+// Each check starts the agent CLIs (several Node processes) and every project used to run it when it opened, so one reading
+// is shared by all projects for a while; the "다시 확인" button forces a fresh one.
+const READINESS_TTL = 10 * 60_000;
+let agentReadiness = null;
+async function cachedReadiness(root, force) {
+  if (force || !agentReadiness || (agentReadiness.done && Date.now() - agentReadiness.at > READINESS_TTL)) {
+    const entry = { at: Date.now(), done: false, value: readiness(root) };
+    agentReadiness = entry;
+    entry.value.then(() => { entry.done = true; entry.at = Date.now(); }, () => { if (agentReadiness === entry) agentReadiness = null; });
+  }
+  const result = await agentReadiness.value;
+  return { ...result, pty: { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' } };
 }
 
 // `git status --short --branch` yields "## main...origin/main"; the UI and the integrate check need the bare name.
@@ -269,6 +289,14 @@ async function currentBranch(runtime) {
   if (named.exitCode === 0 && named.stdout.trim()) return named.stdout.trim();
   const head = await runtime.processes.exec('git', ['rev-parse', '--short', 'HEAD']);
   return head.exitCode === 0 ? `(HEAD ${head.stdout.trim()})` : '';
+}
+// The "## " header of `git status --branch`: "main...origin/main [ahead 1]", "No commits yet on main", or "HEAD (no branch)".
+// null (detached HEAD) leaves the name to currentBranch.
+function branchFromHeader(header) {
+  const unborn = /^(?:No commits yet|Initial commit) on (.+)$/.exec(header);
+  if (unborn) return unborn[1];
+  if (!header || header.startsWith('HEAD (')) return null;
+  return header.replace(/ \[[^\]]*\]$/, '').split('...')[0];
 }
 // CPU usage is the busy share between two samples, so each call reports the time since the previous one.
 let cpuSample = os.cpus().map(cpu => ({ ...cpu.times }));
@@ -359,7 +387,7 @@ async function route(action, input, project) {
     await closeProject(project, { force: input.force === true });
     return {};
   }
-  if (action === 'readiness') return readiness(project?.root || os.homedir());
+  if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
   const runtime = repo ? (action === 'git/worktree-setting' || action === 'git/worktree/integrate' ? repo.sourceRuntime : repositoryRuntime(project, repo)) : project.runtime;
@@ -370,20 +398,33 @@ async function route(action, input, project) {
       project.state.ui = validateUi(input.ui); await project.save(); return {};
     }
     case 'git/status': {
-      const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z']);
+      // This runs on every refresh, so the branch comes from the status header instead of separate git calls.
+      const fsVersion = project.fsVersion;
+      const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z', '--branch']);
       if (output.exitCode !== 0) throw new Error(output.stderr);
       const entries = output.stdout.split('\0'), changes = [];
+      let header = '';
       for (let index = 0; index < entries.length; index++) {
         const entry = entries[index]; if (!entry) continue;
+        if (entry.startsWith('## ')) { header = entry.slice(3); continue; }
         const status = entry.slice(0, 2), file = entry.slice(3);
         const original = /[RC]/.test(status) ? entries[++index] : undefined;
         changes.push({ status, path: file, original });
       }
-      const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
-      const stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
-        (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
-      ];
+      // Line counts change only with the working tree (which the project watcher sees) or with what status reports, so while
+      // neither changed a recent count is reused and an idle poll costs one git process instead of two (or three).
+      // A worktree lives outside the watched project folder, so its counts are always read again.
+      const cached = project.gitStats.get(workspace.root);
+      let stats;
+      if (!repo?.worktreeEnabled && project.watcher?.watching && cached?.status === output.stdout && cached.fsVersion === fsVersion && Date.now() - cached.at < 30_000) stats = cached.stats;
+      else {
+        const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
+        stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
+          (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
+          (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
+        ];
+        project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats });
+      }
       let additions = 0, deletions = 0;
       const perFile = new Map();
       for (const line of stats.join('\n').split('\n')) {
@@ -406,7 +447,7 @@ async function route(action, input, project) {
           additions += lines; change.added = lines; change.deleted = 0;
         } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
       }
-      return { ...(await runtime.git.status()), branch: await currentBranch(runtime), changes, additions, deletions };
+      return { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
     }
     case 'git/show': {
       text(input.path, '경로'); await workspace.resolve(input.path);
@@ -474,7 +515,7 @@ async function route(action, input, project) {
       const terminal = project.terminals.get(input.id);
       if (!terminal || terminal.exited || !terminal.native.pid) return { accepted: false };
       if (terminal.lastFollowUp === requestId) return { accepted: true };
-      const table = await processTable();
+      const table = await processTable([terminal.native.pid]);
       const agentProcess = table && terminalProcesses(table)(terminal.native.pid);
       if (terminal.lastFollowUp === requestId) return { accepted: true };
       // Recheck after ps: a CLI may have exited or redrawn its composer since the window observed completion.
@@ -618,21 +659,14 @@ function wakatimePulse() {
 const wakatimeTimer = setInterval(wakatimePulse, PULSE / 4);
 wakatimeTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
-const processTable = () => new Promise(resolve => {
-  const [file, args] = process.platform === 'win32'
-    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $(if ($_.CommandLine) { $_.CommandLine } else { $_.Name })" }']]
-    : ['ps', ['-A', '-o', 'pid=,ppid=,args=']];
-  execFile(file, args, { windowsHide: true, timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => {
-    if (error) return resolve(null);
-    resolve(parseProcessTable(out));
-  });
-});
+const processTable = createProcessTable();
 let sshPolling = false;
 const sshTimer = setInterval(async () => {
   if (sshPolling || ![...projects.values()].some(project => [...project.terminals.values()].some(terminal => !terminal.exited))) return;
   sshPolling = true;
   try {
-    const table = await processTable(); if (!table) return;
+    const roots = [...projects.values()].flatMap(project => [...project.terminals.values()].filter(terminal => !terminal.exited && terminal.native.pid).map(terminal => terminal.native.pid));
+    const table = await processTable(roots); if (!table) return;
     const inspect = terminalProcesses(table);
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
       if (terminal.exited || !terminal.native.pid) continue;
@@ -648,7 +682,7 @@ const sshTimer = setInterval(async () => {
       terminal.agentPid = !ssh && agentPid || null;
       if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); }
     }
-  } finally { sshPolling = false; }
+  } catch (error) { console.warn(`터미널 프로세스 확인 실패: ${error.message}`); } finally { sshPolling = false; }
 }, 3000);
 sshTimer.unref();
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
@@ -656,11 +690,14 @@ origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); processTable.close();
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
 process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void shutdown());
+// Every terminal lives in this process (outside `pnpm dev`), so one stray error in a callback must not end all of them.
+process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
+process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
 process.on('message', message => { if (message?.type === 'shutdown') void shutdown().finally(() => process.exit(0)); });

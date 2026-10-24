@@ -125,7 +125,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
-    tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {})
+    tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {}),
+    gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0)
   };
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
@@ -189,7 +190,18 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   function closeGroup(groupId: string) {
     if (findLeaf(treeOf(groupId), groupId)) commitFor(groupId, remove(treeOf(groupId)!, groupId));
   }
-  async function refreshGit() {
+  // One git/status at a time: each costs several git processes, and file events arrive every 150 ms while an agent writes.
+  // Requests made during a run share a single follow-up run, which still sees every change made before it started.
+  function refreshGit(): Promise<void> {
+    const slot = refs.gitRefresh.current;
+    if (!slot.running) {
+      slot.running = loadGit().finally(() => { slot.running = null; });
+      return slot.running;
+    }
+    slot.again ??= slot.running.catch(() => {}).then(() => { slot.again = null; return refreshGit(); });
+    return slot.again;
+  }
+  async function loadGit() {
     const state = refs.project.current;
     if (!state || !state.repositories.length || (state.multiRepo && !state.repositories.some(repo => repo.id === refs.repository.current))) { setGit(emptyGit); return; }
     const next = await call<GitState>('git/status');
@@ -341,13 +353,16 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (lastEditor) refs.lastEditor.current = lastEditor.id;
     setRestoring(false);
     void call<Record<string, any>>('readiness').then(setHealth).catch(report);
-    if (!leafList(active.pane).some(leaf => leaf.kind !== 'editor')) await openTerminalLeaf('').catch(report);
+    // A project with nothing to restore shows the launcher (an empty tab) instead of opening a shell nobody chose.
   }
 
   refs.onMessage.current = message => {
     try {
           if (message.type === 'snapshot') setProject(message.snapshot);
-          else if (message.type === 'fs') { if (refs.active.current) void refreshGit().catch(report); }
+          // A stream of file events (an agent at work) refreshes Git at most twice a second.
+          else if (message.type === 'fs') {
+            if (refs.active.current && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
+          }
           else if (message.type === 'terminal' || message.type === 'terminal/replay') {
             const previous = bus.current.buffers.get(message.id);
             if (message.type === 'terminal/replay') {
@@ -408,13 +423,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     }, 400);
     return () => clearTimeout(timer);
   }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, rightVisible, agentKey, call, report]);
-  // Polling only runs for the project being shown; coming back to a project refreshes it immediately.
+  // Polling only runs for the project being shown and while the window is visible; coming back refreshes immediately.
   useEffect(() => {
     if (!project?.id || !active) return;
-    let checking = false;
-    const tick = async () => { if (checking) return; checking = true; try { await refreshGit(); } catch (cause) { report(cause); } finally { checking = false; } };
-    void tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
-    return () => clearInterval(timer);
+    const tick = () => { if (!document.hidden) void refreshGit().catch(report); };
+    tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   }, [project?.id, gitRepositoryId, active, settings.diffRefresh]);
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
 
@@ -488,7 +503,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     if (running.length && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
-    if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); await refresh(); await openTerminalLeaf(''); return; }
+    // The final tab stays open and empty, showing the launcher.
+    if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); setFocusLeaf(''); setZoom(''); await refresh(); return; }
     commitTab(tabId, null); dropEmptyTab(tabId); await refresh();
   }
   function cyclePaneTab(step: number) {
@@ -662,7 +678,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} />,
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock />,
-    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness')))}>다시 확인</button></div></details>,
+    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
     openproject: <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
