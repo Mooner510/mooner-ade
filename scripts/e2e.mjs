@@ -94,7 +94,11 @@ async function main() {
   await evaluate(`${visible('[aria-label="프로젝트 열기"]')}.click()`);
   await until(visible('input[aria-label="프로젝트 절대 경로"]'), 'project picker');
   await evaluate(`(() => { const input = document.querySelector('input[aria-label="프로젝트 절대 경로"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(repo)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.form.requestSubmit(); })()`);
-  await until(`Boolean(${visible('main.app .xterm-helper-textarea')}) && document.querySelector('main.app:not([hidden])').innerText.includes('repo')`, 'project terminal');
+  // A project with nothing to restore shows the launcher instead of a shell; its first entry opens a plain shell.
+  await until(`Boolean(document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .launchers button')) && document.querySelector('main.app:not([hidden])').innerText.includes('repo')`, 'empty project launcher');
+  assert.equal(await evaluate(`document.querySelectorAll('main.app:not([hidden]) .xterm-helper-textarea').length`), 0, 'an empty project must not open a terminal on its own');
+  await evaluate(`document.querySelector('main.app:not([hidden]) .tab-page:not([hidden]) .launchers button').click()`);
+  await until(`Boolean(${visible('main.app .xterm-helper-textarea')})`, 'project terminal');
   await until(`!location.hash`, 'token removed from URL');
   await evaluate(`(async () => {
     const recent = await (await fetch('/api/recent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();

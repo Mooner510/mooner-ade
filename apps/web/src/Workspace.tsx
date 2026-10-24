@@ -353,7 +353,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (lastEditor) refs.lastEditor.current = lastEditor.id;
     setRestoring(false);
     void call<Record<string, any>>('readiness').then(setHealth).catch(report);
-    if (!leafList(active.pane).some(leaf => leaf.kind !== 'editor')) await openTerminalLeaf('').catch(report);
+    // A project with nothing to restore shows the launcher (an empty tab) instead of opening a shell nobody chose.
   }
 
   refs.onMessage.current = message => {
@@ -503,7 +503,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     if (running.length && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
-    if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); await refresh(); await openTerminalLeaf(''); return; }
+    // The final tab stays open and empty, showing the launcher.
+    if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); setFocusLeaf(''); setZoom(''); await refresh(); return; }
     commitTab(tabId, null); dropEmptyTab(tabId); await refresh();
   }
   function cyclePaneTab(step: number) {
