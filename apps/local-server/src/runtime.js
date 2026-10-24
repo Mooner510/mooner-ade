@@ -2,6 +2,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+// `pnpm dev` runs Vite inside the server, which sets NODE_ENV=development on this process. Terminals get the value the server
+// started with; otherwise every build run in them (another project's `vite build`, `next build`) would come out as a dev build.
+const startNodeEnv = process.env.NODE_ENV;
+
 function inside(root, target) {
   const rel = path.relative(root, target);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
@@ -169,7 +173,8 @@ export class LocalTerminal {
   // `meta` is opaque data a remote PTY host keeps next to the terminal so it can be recognised after a server restart.
   async open({ cwd, cols = 100, rows = 28, env = {}, args = [], meta } = {}) {
     // An app launched from a non-interactive tool shell (e.g. Claude Code's) inherits NO_COLOR, which would strip color from every CLI.
-    const { NO_COLOR, ...inherited } = process.env;
+    const { NO_COLOR, NODE_ENV, ...inherited } = process.env;
+    if (startNodeEnv !== undefined) inherited.NODE_ENV = startNodeEnv;
     const pty = await this.ptyFactory.spawn(this.shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...inherited, ...env }, ...(meta && { meta }) });
     ignoreSocketErrors(pty);
     return {

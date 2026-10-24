@@ -44,10 +44,12 @@ export function createModeTracker() {
 export function createTerminalBuffer(limit = 262144, initial = '') {
   const head = createModeTracker();
   let tail = '';
+  // Trimming copies the whole tail, so a busy terminal trims once it holds twice the limit (or is read), not on every chunk.
+  const trim = () => { if (tail.length > limit) { head.feed(tail.slice(0, tail.length - limit)); tail = tail.slice(-limit); } };
   const append = data => {
     tail += data;
-    if (tail.length > limit) { head.feed(tail.slice(0, tail.length - limit)); tail = tail.slice(-limit); }
+    if (tail.length > 2 * limit) trim();
   };
   append(initial);
-  return { append, get text() { return head.preamble() + tail; } };
+  return { append, get text() { trim(); return head.preamble() + tail; } };
 }
