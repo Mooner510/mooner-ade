@@ -7,7 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
 import { DiffView, monoFont, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
-import { ANSI, createBannerDetector, createQuestionTracker } from './terminal-agent';
+import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
 export type { Agent } from './terminal-agent';
@@ -158,6 +158,18 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       if (followUpSupported && !sshRef.current && !replays && callbacks.current.agentOf(id) === 'claude') { followUp.current.progress(value); refreshQueue(); }
       return false;
     });
+    // OSC 52: a TUI (Claude Code over ssh, tmux, vim) copies by sending base64 text, since it cannot reach this machine's clipboard.
+    // Replayed output still holds old copies, and a query ("?") is never answered so remote programs cannot read the clipboard.
+    const osc52 = terminal.parser.registerOscHandler(52, value => {
+      const data = value.slice(value.indexOf(';') + 1);
+      if (replays || value.indexOf(';') < 0 || data === '?') return true;
+      try {
+        const text = new TextDecoder().decode(Uint8Array.from(atob(data), char => char.charCodeAt(0)));
+        const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
+        if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text).catch(error => console.warn('OSC 52 복사 실패', error));
+      } catch { /* malformed base64 */ }
+      return true;
+    });
     const notifyResize = () => {
       if (replays) { pendingResize = true; return; }
       pendingResize = false;
@@ -253,8 +265,11 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         start = end;
       }
     });
+    let shownTitle: string | undefined;
     terminal.onTitleChange(value => {
-      title = value; callbacks.current.onTitle(id, title);
+      title = value;
+      const shown = stableTitle(value);
+      if (shown !== shownTitle) { shownTitle = shown; callbacks.current.onTitle(id, shown); }
     });
     terminal.attachCustomKeyEventHandler(event => {
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
@@ -311,8 +326,8 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     centerRef.current = center;
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
-    const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
-    return () => { clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    const initial = bus.buffers.get(id); if (initial) receive({ ...initial, data: initial.data.slice(-262144), reset: true });
+    return () => { clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {

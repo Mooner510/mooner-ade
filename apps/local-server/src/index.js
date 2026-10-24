@@ -16,6 +16,8 @@ import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
 import { terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
+import { uploadOverSsh } from './ssh-upload.js';
+import { createRemoteAgent } from './remote-agent.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
@@ -189,9 +191,15 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   const status = createTerminalStatus(data => native.write(data));
   status.feed(initial, true);
   // Adopted terminals start above any sequence the window saw from a previous server, or it would drop their replay as stale.
-  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status };
+  const remoteAgent = createRemoteAgent(); remoteAgent.feed(initial);
+  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status, remoteAgent };
   project.terminals.set(id, terminal);
-  native.onData(data => { status.feed(data); terminal.buffer.append(data); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: status.status }); });
+  native.onData(data => {
+    status.feed(data); const remoteChanged = remoteAgent.feed(data);
+    terminal.buffer.append(data); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: status.status });
+    // Over ssh the output is the only evidence of the remote agent, so a start or exit is reported at once instead of on the next poll.
+    if (remoteChanged && terminal.ssh && terminal.agent !== remoteAgent.agent) { terminal.agent = remoteAgent.agent; broadcast(project, { type: 'terminal/agent', id, agent: terminal.agent, ssh: true }); }
+  });
   native.onExit(event => { terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
   return terminal;
 }
@@ -627,9 +635,20 @@ wss.on('connection', socket => {
           if (!ext || typeof message.data !== 'string') throw fault('INVALID_INPUT', '지원하지 않는 이미지입니다.');
           const bytes = Buffer.from(message.data, 'base64');
           if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw fault('INVALID_INPUT', '이미지 크기가 올바르지 않습니다.');
+          const name = `paste-${randomUUID()}.${ext}`;
+          // Over ssh the CLI runs on the remote host, which cannot read a local path; the image goes there through the same ssh setup.
+          if (terminal.ssh && terminal.sshCommand) {
+            const remote = await uploadOverSsh(terminal.sshCommand, bytes, name).catch(error => {
+              throw fault('INVALID_INPUT', `원격 서버로 이미지를 보내지 못했습니다 (키 인증 또는 ControlMaster 연결이 필요합니다): ${error.message}`);
+            });
+            const quoted = remote.windows ? (/\s/.test(remote.path) ? `"${remote.path}"` : remote.path)
+              : /[^\w@%+=:,./-]/.test(remote.path) ? `'${remote.path.replaceAll("'", `'\\''`)}'` : remote.path;
+            if (!terminal.exited) terminal.native.write(`${quoted} `);
+            return;
+          }
           const dir = path.join(os.tmpdir(), 'mooner-ade-paste');
           await fs.mkdir(dir, { recursive: true });
-          const file = path.join(dir, `paste-${randomUUID()}.${ext}`);
+          const file = path.join(dir, name);
           await fs.writeFile(file, bytes);
           terminal.native.write(`${file} `);
         } else if (message.type === 'terminal/resize') {
@@ -670,7 +689,11 @@ const sshTimer = setInterval(async () => {
     const inspect = terminalProcesses(table);
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
       if (terminal.exited || !terminal.native.pid) continue;
-      const { agent, agentPid, ssh } = inspect(terminal.native.pid), changedSsh = ssh !== Boolean(terminal.ssh);
+      const found = inspect(terminal.native.pid), { agentPid, ssh, sshCommand } = found, changedSsh = ssh !== Boolean(terminal.ssh);
+      terminal.sshCommand = sshCommand;
+      // An agent seen before the ssh session ended belongs to that remote host; the next session starts clean.
+      if (changedSsh && !ssh) terminal.remoteAgent.reset();
+      const agent = ssh ? terminal.remoteAgent.agent : found.agent;
       if (terminal.agent && agent !== terminal.agent && !ssh && terminal.status.status?.agent !== agent) {
         terminal.status.clear();
         broadcast(project, { type: 'terminal/status', id, status: null });
