@@ -26,3 +26,11 @@ test('mode sequences split across chunks and a full reset are tracked', () => {
   tracker.feed('\x1bc');
   assert.equal(tracker.preamble(), '');
 });
+
+test('a busy terminal trims lazily but always replays exactly the last limit characters', () => {
+  const buffer = createTerminalBuffer(16);
+  let all = '';
+  for (let i = 0; i < 100; i++) { const chunk = `${i}${i % 7 === 0 ? '[?2004h' : i % 7 === 3 ? '[?2004l' : ''}-`; buffer.append(chunk); all += chunk; }
+  const tracker = createModeTracker(); tracker.feed(all.slice(0, -16));
+  assert.equal(buffer.text, tracker.preamble() + all.slice(-16));
+});
