@@ -122,7 +122,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // Terminals whose shell currently runs an ssh client (reported by the server).
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
-  const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id]);
+  const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const refs = {
