@@ -5,7 +5,22 @@ import { Icon, IconButton, type IconName } from './Icon';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 
-type Section = 'appearance' | 'terminal' | 'status' | 'notify' | 'diff' | 'wakatime' | 'keys';
+type Desktop = { appInfo(): Promise<{ version: string }>; checkUpdate(): Promise<string> };
+const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
+
+function AboutSettings() {
+  const [version, setVersion] = useState(''), [checking, setChecking] = useState(false);
+  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.version), () => {}); }, []);
+  const canCheck = typeof desktop()?.checkUpdate === 'function';
+  return <>
+    <Row title="현재 버전" hint="새 버전은 실행 5초 뒤와 이후 6시간마다 자동으로 확인합니다."><span>{version || '—'}</span></Row>
+    {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교합니다. 새 버전이 있으면 설치 여부를 묻습니다.">
+      <button disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
+    </Row>}
+  </>;
+}
+
+type Section = 'appearance' | 'terminal' | 'status' | 'notify' | 'diff' | 'wakatime' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
@@ -13,7 +28,8 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'notify', label: '알림', icon: 'bell' },
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
-  { id: 'keys', label: '단축키', icon: 'code' }
+  { id: 'keys', label: '단축키', icon: 'code' },
+  { id: 'about', label: '정보', icon: 'info' }
 ];
 export const statusLabels: Record<string, string> = {
   connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', changes: '변경 파일 수', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
@@ -121,6 +137,19 @@ function WakaTimeSettings({ settings, set, onChange }: { settings: Settings; set
   </>;
 }
 
+type ShellList = { shells: { id: string; label: string; path: string }[]; default: string };
+function ShellSetting({ settings, set }: { settings: Settings; set<K extends keyof Settings>(key: K, value: Settings[K]): void }) {
+  const [list, setList] = useState<ShellList | null>(null);
+  useEffect(() => { void api<ShellList>('shell/list').then(setList, () => {}); }, []);
+  const auto = list?.shells.find(item => item.id === list.default);
+  const saved = settings.terminalShell && list && !list.shells.some(item => item.id === settings.terminalShell);
+  return <Row title="기본 셸" hint={`새 터미널에 쓸 셸입니다. 이미 열린 터미널은 그대로입니다.${saved ? ' 저장된 셸이 이 컴퓨터에 없어 자동 선택을 씁니다.' : ''}${list && !list.shells.some(item => item.id === 'pwsh') && list.shells.some(item => item.id === 'powershell') ? ' PowerShell 7은 winget install Microsoft.PowerShell 로 설치할 수 있습니다.' : ''}`}>
+    <Dropdown label="기본 셸" value={saved ? '' : settings.terminalShell}
+      options={[{ value: '', label: `자동${auto ? ` (${auto.label})` : ''}` }, ...(list?.shells ?? []).map(item => ({ value: item.id, label: item.label }))]}
+      onChange={value => set('terminalShell', value)} />
+  </Row>;
+}
+
 function Row({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return <div className="setting-row"><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
 }
@@ -151,6 +180,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다.">{toggle('dimInactivePanes')}</Row>
         </>}
         {section === 'terminal' && <>
+          <ShellSetting settings={settings} set={set} />
           <Row title="글꼴 크기">{number('terminalFontSize', 8, 40)}</Row>
           <Row title="글꼴" hint="비우면 기본 모노스페이스 글꼴을 씁니다. 예: Cascadia Mono"><input type="text" value={settings.terminalFont} maxLength={200} placeholder="JetBrains Mono" onChange={event => set('terminalFont', event.target.value)} /></Row>
           <Row title="줄 높이">{number('lineHeight', 1, 2, 0.05)}</Row>
@@ -179,6 +209,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="자동 줄바꿈"><input type="checkbox" role="switch" checked={settings.wordWrap} onChange={event => set('wordWrap', event.target.checked)} /></Row>
         </>}
         {section === 'wakatime' && <WakaTimeSettings settings={settings} set={set} onChange={onChange} />}
+        {section === 'about' && <AboutSettings />}
         {section === 'keys' && <div className="shortcut-list">{shortcuts.map(item => <div key={item.label + item.keys}><span>{item.label}</span><kbd>{item.keys}</kbd></div>)}</div>}
       </div>
     </div>

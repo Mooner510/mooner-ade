@@ -24,6 +24,7 @@ import { watchProjectFiles } from './project-watch.js';
 import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
+import { detectShells, resolveShell } from './shells.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -72,9 +73,10 @@ const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname
 const wakatime = createWakaTime({ version: appVersion });
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
-let activeProjectId = '', wakatimeBackground = true;
+let activeProjectId = '', wakatimeBackground = true, terminalShell = '';
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
+  terminalShell = typeof state?.settings?.terminalShell === 'string' ? state.settings.terminalShell : '';
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
 }
@@ -374,6 +376,7 @@ async function route(action, input, project) {
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
+  if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'recent') return readJson(path.join(dataRoot, 'recent.json'), []);
   if (action === 'project/open') return snapshot(await openProject(input.path));
@@ -504,11 +507,13 @@ async function route(action, input, project) {
         if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
         const id = randomUUID();
         if (input.restoreId !== undefined && input.agent === undefined) throw fault('INVALID_INPUT', '복구할 에이전트를 지정하세요.');
-        const sessionShell = await terminalSessionShell(project.directory, id, runtime.terminal.shell);
+        // The chosen shell may have been uninstalled since it was saved; resolveShell then falls back to the automatic pick.
+        const shell = resolveShell(terminalShell).path;
+        const sessionShell = await terminalSessionShell(project.directory, id, shell);
         const command = input.agent === undefined ? undefined : await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked);
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
-        const native = await runtime.terminal.open({ cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
+        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
