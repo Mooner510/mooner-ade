@@ -15,7 +15,7 @@ function AboutSettings() {
   return <>
     <Row title="현재 버전" hint="새 버전은 실행 5초 뒤와 이후 6시간마다 자동으로 확인합니다."><span>{version || '—'}</span></Row>
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교합니다. 새 버전이 있으면 설치 여부를 묻습니다.">
-      <button disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
+      <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
   </>;
 }

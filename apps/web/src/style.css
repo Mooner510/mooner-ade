@@ -428,6 +428,9 @@ body.resizing .xterm-host { pointer-events: none; }
 .setting-control .dropdown > div button { padding: 7px 8px; border-radius: 4px; }
 .setting-control .dropdown > div button:focus-visible { background: var(--selected); outline: 1px solid var(--focus); }
 @media (prefers-reduced-motion: reduce) { .dropdown summary > .icon, .setting-control .dropdown summary { transition: none; } }
+.setting-control button:not(.icon-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 12px; white-space: nowrap; border-color: var(--border-strong); border-radius: 7px; transition: border-color .12s, background .12s; }
+.setting-control button:not(.icon-btn):hover:not(:disabled) { background: var(--raised); }
+.setting-control button:not(.icon-btn):focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
 .setting-control .range-value { min-width: 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .setting-control input[type=text], .setting-control input[type=password] { width: 220px; }
 .setting-control input[type=checkbox] { appearance: none; width: 34px; height: 20px; padding: 0; border-radius: 10px; position: relative; cursor: pointer; background: var(--border-strong); border: 0; transition: background .12s; }
