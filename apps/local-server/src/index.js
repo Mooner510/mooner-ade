@@ -698,7 +698,8 @@ const sshTimer = setInterval(async () => {
       terminal.sshCommand = sshCommand;
       // An agent seen before the ssh session ended belongs to that remote host; the next session starts clean.
       if (changedSsh && !ssh) terminal.remoteAgent.reset();
-      const agent = ssh ? terminal.remoteAgent.agent : found.agent;
+      // Over ssh the agent's own OSC 7501 status report (app=claude-code) is as good as a banner, and survives a lost banner or title.
+      const agent = ssh ? terminal.remoteAgent.agent ?? terminal.status.status?.agent ?? null : found.agent;
       if (terminal.agent && agent !== terminal.agent && !ssh && terminal.status.status?.agent !== agent) {
         terminal.status.clear();
         broadcast(project, { type: 'terminal/status', id, status: null });
