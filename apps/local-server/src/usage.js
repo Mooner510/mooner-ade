@@ -57,6 +57,9 @@ export function parseClaudeUsage(body) {
   return windows;
 }
 
+// The Ultra plan has no 5-hour window, so a 0% reading there would only mislead; the API leaves it out, and this covers it if it does not.
+export const claudeWindowsForPlan = (windows, plan) => /ultra/i.test(plan || '') ? windows.filter(item => item.key !== 'session') : windows;
+
 // { plan_type, rate_limit: { primary_window: { used_percent, limit_window_seconds, reset_at }, secondary_window } } from chatgpt.com/backend-api/wham/usage.
 export function parseCodexUsage(body, now = Date.now()) {
   const windows = [];
@@ -214,7 +217,7 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
       if (!login) throw new UsageError('Claude Code 로그인 정보를 찾지 못했습니다. claude를 실행해 로그인하세요.');
       if (login.expiresAt && login.expiresAt < now()) throw new UsageError('Claude Code 로그인 토큰이 만료되었습니다. claude를 한 번 실행하면 갱신됩니다.');
       const body = await getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/usage', { Authorization: `Bearer ${login.token}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': userAgent });
-      return { windows: parseClaudeUsage(body), plan: login.plan, source: 'api', at: now() };
+      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), login.plan), plan: login.plan, source: 'api', at: now() };
     },
     async codex(env) {
       const login = await codexLogin({ env });

@@ -125,3 +125,12 @@ test('session sync gets the folder of the Claude process itself, cached per PID'
   const plain = createAccountResolver({ env: {}, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => null, exists: async () => false });
   assert.equal(await plain.agentFolder('claude', 1, '/p'), path.join('/h', '.claude'));
 });
+
+test('the Ultra plan shows no 5-hour window, other plans keep it', async () => {
+  const { claudeWindowsForPlan } = await import('../apps/local-server/src/usage.js');
+  const windows = [{ key: 'session', percent: 3 }, { key: 'weekly', percent: 10 }];
+  assert.deepEqual(claudeWindowsForPlan(windows, 'ultra').map(item => item.key), ['weekly']);
+  assert.deepEqual(claudeWindowsForPlan(windows, 'Claude_Ultra').map(item => item.key), ['weekly']);
+  assert.deepEqual(claudeWindowsForPlan(windows, 'max').map(item => item.key), ['session', 'weekly']);
+  assert.deepEqual(claudeWindowsForPlan(windows, '').map(item => item.key), ['session', 'weekly']);
+});
