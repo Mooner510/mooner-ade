@@ -90,6 +90,9 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => {
     const terminal = new Terminal({ fontSize: settings.terminalFontSize, fontFamily: fontStack(settings), lineHeight: settings.lineHeight, cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, allowProposedApi: true,
+      // xterm's default OSC 8 link handler asks via confirm() and then opens a blank window it navigates afterwards, which the desktop
+      // shell denies. Open the URL directly instead (the desktop shell hands http(s) links to the system browser).
+      linkHandler: { allowNonHttpProtocols: false, activate: (_event, uri) => { if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener'); } },
       // The server runs ConPTY (bundled conpty.dll, which reflows on its own). Telling xterm keeps its wrapped-line handling in step with
       // ConPTY's; without it, old output is mangled when the pane resizes or a long answer scrolls past the top.
       ...(/Windows/.test(navigator.userAgent) ? { windowsPty: { backend: 'conpty' as const, buildNumber: 26100 } } : {}), theme: terminalTheme(host.current!) });

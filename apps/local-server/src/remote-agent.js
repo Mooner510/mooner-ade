@@ -3,9 +3,11 @@
 // Kept on the server so it survives window reloads and replays that no longer hold the banner.
 const OSC_TITLE = /\x1b\][02];([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g;
-const BANNER = /OpenAI Codex|Claude Code\s+v?\d/gi;
+// Claude's own screens name it ("Claude Code v2", the plan on the welcome panel); once it titles a session ("✳ Fix login bug") the title no longer does.
+const BANNER = /OpenAI Codex|Claude\s*Code\s*v?\d|\bClaude (?:Max|Pro|Team|Enterprise|API)\b|bypass permissions on|accept edits on|plan mode on|shift\+tab to cycle/gi;
 
-const titleAgent = title => /^\s*(?:[✳⠀-⣿]\s*)?claude(?: code)?\b/i.test(title) ? 'claude' : /^\s*(?:[✳⠀-⣿]\s*)?(?:OpenAI\s+)?codex\b/i.test(title) ? 'codex'
+// ✳ is the glyph only Claude Code puts in front of its (task) title; braille spinners are shared with other CLIs.
+const titleAgent = title => /^\s*✳/.test(title) || /^\s*(?:[✳⠀-⣿]\s*)?claude(?: code)?\b/i.test(title) ? 'claude' : /^\s*(?:[✳⠀-⣿]\s*)?(?:OpenAI\s+)?codex\b/i.test(title) ? 'codex'
   : /^\s*(?:[✳⠀-⣿]\s*)?cursor[- ]agent\b/i.test(title) ? 'cursor' : undefined;
 
 export function createRemoteAgent() {
