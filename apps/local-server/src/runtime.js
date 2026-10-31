@@ -171,11 +171,11 @@ export class LocalTerminal {
   }
 
   // `meta` is opaque data a remote PTY host keeps next to the terminal so it can be recognised after a server restart.
-  async open({ cwd, cols = 100, rows = 28, env = {}, args = [], meta } = {}) {
+  async open({ shell = this.shell, cwd, cols = 100, rows = 28, env = {}, args = [], meta } = {}) {
     // An app launched from a non-interactive tool shell (e.g. Claude Code's) inherits NO_COLOR, which would strip color from every CLI.
     const { NO_COLOR, NODE_ENV, ...inherited } = process.env;
     if (startNodeEnv !== undefined) inherited.NODE_ENV = startNodeEnv;
-    const pty = await this.ptyFactory.spawn(this.shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...inherited, ...env }, ...(meta && { meta }) });
+    const pty = await this.ptyFactory.spawn(shell, args, { name: 'xterm-256color', useConptyDll: process.platform === 'win32', cols, rows, cwd, env: { COLORTERM: 'truecolor', ...inherited, ...env }, ...(meta && { meta }) });
     ignoreSocketErrors(pty);
     return {
       pid: pty.pid,

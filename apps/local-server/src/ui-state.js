@@ -13,6 +13,7 @@ function validateSettings(settings, invalid) {
   if (settings.soundVolume !== undefined && !(Number.isInteger(settings.soundVolume) && settings.soundVolume >= 0 && settings.soundVolume <= (settings.soundVolumeExtended === true ? 200 : 100))) invalid();
   for (const name of ['soundDone', 'soundAttention']) if (settings[name] !== undefined && !(typeof settings[name] === 'string' && /^[a-z]{1,16}$/.test(settings[name]))) invalid();
   if (settings.terminalFont !== undefined && !(typeof settings.terminalFont === 'string' && settings.terminalFont.length <= 200)) invalid();
+  if (settings.terminalShell !== undefined && !(typeof settings.terminalShell === 'string' && settings.terminalShell.length <= 512)) invalid();
   for (const name of ['statusItems', 'statusLeft', 'statusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
 }
 
