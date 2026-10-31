@@ -1,4 +1,4 @@
-import { app, dialog } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -33,6 +33,39 @@ $ok = $LASTEXITCODE -lt 8
 Start-Process -FilePath $Exe
 if ($ok) { Remove-Item -LiteralPath (Split-Path $Source) -Recurse -Force -ErrorAction SilentlyContinue }
 `;
+
+const PROGRESS_PAGE = `<!doctype html><meta charset="utf-8"><style>
+:root{color-scheme:dark light}body{margin:0;padding:20px;font:14px system-ui,'Malgun Gothic',sans-serif;background:#1e1f22;color:#e6e6e6}
+#text{margin-bottom:12px}.bar{height:8px;border-radius:4px;background:#3a3c40;overflow:hidden}
+#fill{height:100%;width:0;background:#4c8bf5;transition:width .15s}#fill.wait{width:35%;animation:slide 1.1s ease-in-out infinite alternate}
+@keyframes slide{from{margin-left:0}to{margin-left:65%}}</style>
+<div id="text">준비 중…</div><div class="bar"><div id="fill" class="wait"></div></div>
+<script>function set(text,fraction){document.getElementById('text').textContent=text;const f=document.getElementById('fill');
+f.classList.toggle('wait',fraction==null);f.style.width=fraction==null?'':Math.round(fraction*100)+'%'}</script>`;
+
+// A small window plus the taskbar bar: the download and install take a while, and the app otherwise looks frozen.
+function progressWindow(parent) {
+  const win = new BrowserWindow({ width: 380, height: 120, parent: parent ?? undefined, resizable: false, minimizable: false, maximizable: false, closable: false, show: false, autoHideMenuBar: true, title: '업데이트', webPreferences: { sandbox: true, contextIsolation: true } });
+  win.setMenu(null);
+  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PROGRESS_PAGE)}`);
+  win.once('ready-to-show', () => win.show());
+  let last = 0;
+  return {
+    // fraction === null shows an indeterminate bar.
+    set(text, fraction = null, force = true) {
+      const now = Date.now();
+      if (!force && now - last < 100) return;
+      last = now;
+      if (!win.isDestroyed()) void win.webContents.executeJavaScript(`set(${JSON.stringify(text)}, ${fraction})`).catch(() => {});
+      const main = parent && !parent.isDestroyed() ? parent : null;
+      if (main) fraction === null ? main.setProgressBar(2, { mode: 'indeterminate' }) : main.setProgressBar(fraction);
+    },
+    close() {
+      if (parent && !parent.isDestroyed()) parent.setProgressBar(-1);
+      if (!win.isDestroyed()) win.destroy();
+    }
+  };
+}
 
 // One check or update at a time: the periodic timer, the startup check and the settings button may overlap.
 let busy = false;
@@ -75,14 +108,26 @@ async function check({ repo, asset, window, manual }) {
   const { response: choice } = await (window ? dialog.showMessageBox(window, prompt) : dialog.showMessageBox(prompt));
   if (choice !== 0) return 'declined';
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
+  const progress = progressWindow(window);
   try {
     const zip = path.join(work, asset);
+    progress.set(`v${version} 다운로드 준비 중…`);
     const download = await fetch(file.browser_download_url, { headers: { 'User-Agent': app.getName() } });
     if (!download.ok) throw new Error(`다운로드 실패 (HTTP ${download.status})`);
     const hash = createHash('sha256');
-    await pipeline(Readable.fromWeb(download.body), async function* (source) { for await (const chunk of source) { hash.update(chunk); yield chunk; } }, fs.createWriteStream(zip));
+    const total = Number(download.headers.get('content-length')) || file.size || 0;
+    const mb = bytes => (bytes / 1048576).toFixed(1);
+    let received = 0;
+    await pipeline(Readable.fromWeb(download.body), async function* (source) {
+      for await (const chunk of source) {
+        hash.update(chunk); received += chunk.length; yield chunk;
+        progress.set(total ? `v${version} 다운로드 중… ${mb(received)} / ${mb(total)} MB` : `v${version} 다운로드 중… ${mb(received)} MB`, total ? Math.min(1, received / total) : null, false);
+      }
+    }, fs.createWriteStream(zip));
+    progress.set('파일 검증 중…');
     // GitHub records a sha256 digest for every uploaded asset; refuse anything that does not match it.
     if (file.digest !== `sha256:${hash.digest('hex')}`) throw new Error('받은 업데이트 파일의 해시가 릴리스와 다릅니다.');
+    progress.set('압축 푸는 중…');
     const extracted = path.join(work, 'new');
     fs.mkdirSync(extracted);
     await run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', extracted]);
@@ -96,10 +141,13 @@ async function check({ repo, asset, window, manual }) {
     // child. Win32_Process.Create starts the helper from the WMI service instead, outside that job.
     const command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, path.dirname(process.execPath), process.execPath]
       .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
+    progress.set('설치를 위해 앱을 다시 시작합니다…');
     await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
+    // The progress window stays up until the app exits, so the restart does not look like a crash.
     app.quit();
     return 'updating';
   } catch (error) {
+    progress.close();
     fs.rmSync(work, { recursive: true, force: true });
     dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
     return 'error';

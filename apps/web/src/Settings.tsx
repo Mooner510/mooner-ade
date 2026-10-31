@@ -90,6 +90,9 @@ function StatusLayoutEditor({ settings, onChange }: { settings: Settings; onChan
       {settings.usageColors && <span className="usage-preview" aria-hidden="true">{[10, 45, 70, 90, 100].map(value => <span key={value} className="usage-window graded" style={{ '--usage-hue': usageHue(value) } as CSSProperties}>{value}%</span>)}</span>}
       <input type="checkbox" role="switch" aria-label="사용량 % 색상" checked={settings.usageColors} onChange={event => onChange({ ...settings, usageColors: event.target.checked })} />
     </Row>
+    <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 Claude Code 사용량에 주간 한도만 표시합니다.">
+      <input type="checkbox" role="switch" aria-label="Claude 5시간 한도 표시" checked={settings.claudeSession} onChange={event => onChange({ ...settings, claudeSession: event.target.checked })} />
+    </Row>
     <div className="actions"><button onClick={() => onChange({ ...settings, statusLeft: defaultSettings.statusLeft, statusRight: defaultSettings.statusRight, statusItems: defaultSettings.statusItems })}><Icon name="refresh" />상태바 기본 배치로</button></div>
   </>;
 }

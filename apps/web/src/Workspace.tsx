@@ -62,7 +62,7 @@ const untilReset = (at: number) => {
   return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
-const UsageStat = memo(function UsageStat({ provider, colors, projectId, active }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean }) {
+const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean }) {
   const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
@@ -77,9 +77,11 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active 
     return () => { live = false; clearInterval(timer); };
   }, [load, active]);
   if (!usage) return null;
-  const main = ['session', 'weekly'].map(key => usage.windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[];
-  const peak = Math.max(0, ...usage.windows.map(item => item.percent));
-  const lines = usage.windows.map(item => `${item.label}: ${item.percent}%${item.resetsAt ? ` · ${untilReset(item.resetsAt)} 후 초기화 (${new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })})` : ''}`);
+  // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
+  const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
+  const main = ['session', 'weekly'].map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[];
+  const peak = Math.max(0, ...windows.map(item => item.percent));
+  const lines = windows.map(item => `${item.label}: ${item.percent}%${item.resetsAt ? ` · ${untilReset(item.resetsAt)} 후 초기화 (${new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })})` : ''}`);
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `계정: ${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const title = [`${usageNames[provider]} 사용량${usage.plan ? ` · ${usage.plan}` : ''}`, account, ...lines, from, usage.error, usage.note, '클릭: 새로고침'].filter(Boolean).join('\n');
@@ -677,8 +679,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
     cpu: system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>,
     memory: system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>,
-    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} />,
-    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} />,
+    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} />,
+    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession />,
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
