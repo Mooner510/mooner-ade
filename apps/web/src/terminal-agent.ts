@@ -36,8 +36,11 @@ export function createQuestionTracker() {
 
 // The server's answer (`process`) wins once it has one: the process table locally, the terminal output over ssh.
 // Titles and the launcher only fill the gap before its first report.
-export function resolveAgent(process: Agent | null | undefined, remembered: Agent | undefined, title: string | undefined): Agent | undefined {
-  if (process !== undefined) return process ?? undefined;
+// Over ssh the server only has the terminal output to go on, so what the window saw on its own screen (`remembered`) still counts.
+// An agent that exits clears `remembered` when the server reports it gone.
+export function resolveAgent(process: Agent | null | undefined, remembered: Agent | undefined, title: string | undefined, ssh = false): Agent | undefined {
+  if (process) return process;
+  if (process !== undefined && !ssh) return undefined;
   return detectAgent(title) || remembered;
 }
 
