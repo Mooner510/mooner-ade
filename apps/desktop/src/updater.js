@@ -34,22 +34,46 @@ Start-Process -FilePath $Exe
 if ($ok) { Remove-Item -LiteralPath (Split-Path $Source) -Recurse -Force -ErrorAction SilentlyContinue }
 `;
 
-export async function checkForUpdate({ repo, asset, window }) {
-  if (!portable()) return;
+// One check or update at a time: the periodic timer, the startup check and the settings button may overlap.
+let busy = false;
+
+// Resolves to 'unsupported' | 'latest' | 'declined' | 'updating' | 'error'. `manual` (the settings button) also answers
+// "up to date" and failures in a dialog; background checks stay silent unless a new version is there.
+export async function checkForUpdate({ repo, asset, window, manual = false }) {
+  if (!portable()) {
+    if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치형(포터블) 앱에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
+    return 'unsupported';
+  }
+  if (busy) return 'updating';
+  busy = true;
+  try { return await check({ repo, asset, window, manual }); }
+  catch (error) {
+    if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` });
+    else throw error;
+    return 'error';
+  } finally { busy = false; }
+}
+
+const say = (window, options) => Promise.resolve(window ? dialog.showMessageBox(window, { buttons: ['확인'], ...options }) : dialog.showMessageBox({ buttons: ['확인'], ...options }));
+
+async function check({ repo, asset, window, manual }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
   const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers });
-  if (!response.ok) return;
+  if (!response.ok) throw new Error(`GitHub 응답 오류 (HTTP ${response.status})`);
   const release = await response.json();
   const version = String(release.tag_name).replace(/^v/, '');
   const file = release.assets?.find(item => item.name === asset);
-  if (!/^\d+\.\d+\.\d+$/.test(version) || !newer(version, app.getVersion()) || !file) return;
+  if (!/^\d+\.\d+\.\d+$/.test(version) || !newer(version, app.getVersion()) || !file) {
+    if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.` });
+    return 'latest';
+  }
   const prompt = {
     type: 'info', buttons: ['업데이트 후 재시작', '나중에'], defaultId: 0, cancelId: 1, title: '업데이트',
     message: `새 버전 ${version}을 사용할 수 있습니다.`,
     detail: `현재 버전은 ${app.getVersion()}입니다. 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다.`,
   };
   const { response: choice } = await (window ? dialog.showMessageBox(window, prompt) : dialog.showMessageBox(prompt));
-  if (choice !== 0) return;
+  if (choice !== 0) return 'declined';
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
   try {
     const zip = path.join(work, asset);
@@ -74,8 +98,10 @@ export async function checkForUpdate({ repo, asset, window }) {
       .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
     await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
     app.quit();
+    return 'updating';
   } catch (error) {
     fs.rmSync(work, { recursive: true, force: true });
     dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+    return 'error';
   }
 }

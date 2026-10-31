@@ -192,6 +192,10 @@ ipcMain.handle('ade:pick-folder', async event => {
 });
 ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });
 
+const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow, manual });
+ipcMain.handle('ade:app-info', () => ({ version: app.getVersion() }));
+ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
+
 function installMenu() {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(dev ? Menu.buildFromTemplate([{ label: 'Dev', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }] }]) : null);
@@ -209,7 +213,15 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
-    try { if (dev) await startPtyHost(); createWindow(await startServer()); if (dev) watchServerSources(); else setTimeout(() => checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow }).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`)), 5000); }
+    try {
+      if (dev) await startPtyHost(); createWindow(await startServer());
+      if (dev) watchServerSources();
+      else {
+        // Once shortly after start, then every 6 hours for an app that stays open for days.
+        const background = () => checkForUpdate(updateTarget()).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`));
+        setTimeout(background, 5000); setInterval(background, 6 * 60 * 60 * 1000).unref();
+      }
+    }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }
   });
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
