@@ -85,7 +85,9 @@ export async function terminalSessionShell(directory, id, shell) {
     }).join('\n')
     : [claude, codex].map(command => name === 'fish'
       ? `function ${command.split(' ')[0]}\n command ${command} $argv\nend`
-      : `\\${command.split(' ')[0]}() { command \\${command} "$@"; }`).join('\n');
+      : name === 'zsh' ? `\\${command.split(' ')[0]}() { command \\${command} "$@"; }`
+      // bash and POSIX sh reject `\\name()`; drop a user alias first (on its own line, since aliases expand when a line is parsed).
+      : `unalias ${command.split(' ')[0]} 2>/dev/null\n${command.split(' ')[0]}() { command \\${command} "$@"; }`).join('\n');
   const init = path.join(root, windows ? 'init.ps1' : 'init.sh');
   if (windows) {
     await fs.writeFile(init, functions);
