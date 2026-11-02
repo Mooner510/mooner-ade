@@ -145,6 +145,22 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     confirm: async message => (await new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'pick', title: message, items: [{ id: 'yes', label: '확인' }, { id: 'no', label: '취소' }], resolve } }))) === 'yes'
   }), []);
   const pick = (title: string, items: QuickItem[]) => new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'pick', title, items, resolve } }));
+  // A link clicked in a terminal: warn, then open in the default browser, copy the address, or cancel. Only the visible project answers.
+  useEffect(() => {
+    const onLink = (event: Event) => {
+      const uri = (event as CustomEvent<string>).detail;
+      if (!refs.active.current || typeof uri !== 'string') return;
+      void pick(`외부 링크를 열까요? 신뢰할 수 있는 주소인지 확인하세요.\n${uri}`, [{ id: 'open', label: '기본 브라우저로 열기' }, { id: 'copy', label: '링크 복사' }, { id: 'cancel', label: '취소' }]).then(choice => {
+        if (choice === 'open') window.open(uri, '_blank', 'noopener');
+        else if (choice === 'copy') {
+          const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
+          if (desktop?.writeClipboard) desktop.writeClipboard(uri); else void navigator.clipboard?.writeText(uri).catch(() => {});
+        }
+      });
+    };
+    window.addEventListener('ade:link', onLink);
+    return () => window.removeEventListener('ade:link', onLink);
+  }, []);
 
   // ---- tabs and pane trees ----
   const commitTabs = (next: PaneTab[]) => { refs.paneTabs.current = next; setPaneTabs(next); };
