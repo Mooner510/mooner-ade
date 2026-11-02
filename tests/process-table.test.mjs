@@ -17,7 +17,8 @@ test('process table lists this process, serves overlapping calls and reuses one 
   assert.ok(third.some(row => row.pid === process.pid));
 });
 
-test('with root PIDs the table holds only them and their descendants, command lines included on every reading', { timeout: 60000 }, async t => {
+// Only the Windows table narrows to the roots' subtrees; `ps -A` on macOS and Linux always lists every process.
+test('with root PIDs the table holds only them and their descendants, command lines included on every reading', { timeout: 60000, skip: process.platform !== 'win32' && 'root filtering is Windows-only' }, async t => {
   const table = createProcessTable();
   t.after(() => table.close());
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'ade-process-table-marker'], { stdio: 'ignore' });
