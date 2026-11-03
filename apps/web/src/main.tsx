@@ -234,13 +234,6 @@ function Shell() {
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(report);
   }, [report]);
-  // With nothing open (first launch, or the last project was closed) the home folder opens as a plain top-level workspace, so a terminal is always one step away.
-  const homeRoot = useRef(''), homeFailed = useRef(false), openingHome = useRef(false);
-  useEffect(() => {
-    if (!booted || entries.length || openingHome.current || homeFailed.current) return;
-    openingHome.current = true;
-    api<{ path: string }>('home').then(({ path }) => { homeRoot.current = path; commit([{ root: path, id: '' }]); setActiveRoot(path); }).catch(report).finally(() => { openingHome.current = false; });
-  }, [booted, entries.length, report]);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
   // CPU and memory are only sampled while the status bar shows them.
   const wantsSystem = settings.statusItems.includes('cpu') || settings.statusItems.includes('memory');
@@ -273,12 +266,8 @@ function Shell() {
     const mine = entriesRef.current.find(entry => entry.root === root);
     if (mine && next.id && mine.id !== next.id) commit(entriesRef.current.map(entry => entry.root === root ? { ...entry, id: next.id } : entry));
   }, []);
-  const onFailed = useCallback((root: string, cause: unknown) => {
-    // Only the home fallback is dropped (the project picker takes over); real projects stay listed and show a retry.
-    if (root !== homeRoot.current) return;
-    homeFailed.current = true;
-    report(cause); commit(entriesRef.current.filter(entry => entry.root !== root));
-  }, [report]);
+  // A project that fails to open stays listed and shows a retry in its own workspace.
+  const onFailed = useCallback((_root: string, _cause: unknown) => {}, []);
 
   // ---- background activity: a project you are not looking at can still need you ----
   // Terminal agents (Claude Code, Codex, Cursor CLI) that stopped or asked something: a notification plus a short sound, unless you are already watching.
@@ -365,7 +354,7 @@ function Shell() {
   ];
   const open = new Set(entries.map(entry => entry.root));
   const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
-  if (!entries.length) return booted && homeFailed.current ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
+  if (!entries.length) return booted ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
 
   return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
