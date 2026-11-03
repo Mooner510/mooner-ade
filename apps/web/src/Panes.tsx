@@ -132,6 +132,17 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       if (followUpSupported && !sshRef.current && !replays && callbacks.current.agentOf(id) === 'claude') { followUp.current.progress(value); refreshQueue(); }
       return false;
     });
+    // OSC 52 (`<targets>;<base64>`) is how TUIs copy: Claude Code's /copy on Windows relies on it alone, while on macOS it also runs pbcopy.
+    // Replayed history is skipped so reconnecting does not overwrite the clipboard with an old copy; `?` (clipboard read) is refused.
+    const osc52 = terminal.parser.registerOscHandler(52, value => {
+      const data = value.slice(value.indexOf(';') + 1);
+      if (replays || !data || data === '?') return true;
+      try {
+        const bytes = Uint8Array.from(atob(data), char => char.charCodeAt(0));
+        void navigator.clipboard?.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+      } catch {}
+      return true;
+    });
     const notifyResize = () => {
       if (replays) { pendingResize = true; return; }
       pendingResize = false;
@@ -270,7 +281,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, reset: true });
-    return () => { clearTimeout(retryTimer); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { clearTimeout(retryTimer); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {

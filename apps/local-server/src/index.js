@@ -81,6 +81,9 @@ function send(socket, value) {
 function broadcast(project, value) { for (const socket of clients) if (socket.projects.has(project.id)) send(socket, { ...value, projectId: project.id }); }
 const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.', retryable: ['EBUSY', 'EAGAIN', 'REVISION_CONFLICT'].includes(error.code), details: error.details });
 
+// A live pid alone does not prove ownership: Windows reuses pids quickly, so a crashed server's lock can name an unrelated process.
+// Running servers refresh their locks' mtime; a lock left untouched past LOCK_STALE_MS is abandoned.
+const LOCK_STALE_MS = 2 * 60 * 1000;
 async function lock(directory) {
   const file = path.join(directory, 'server.lock');
   try { const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); }
@@ -93,6 +96,7 @@ async function lock(directory) {
       if (probe.code === 'ESRCH') { await fs.unlink(file); return lock(directory); }
       throw probe;
     }
+    if (Date.now() - (await fs.stat(file)).mtimeMs > LOCK_STALE_MS) { await fs.unlink(file); return lock(directory); }
     throw fault('PROJECT_LOCKED', '이 저장소를 연 서버가 이미 실행 중입니다.', 409);
   }
   return file;
@@ -831,6 +835,12 @@ const timer = setInterval(() => {
   }
 }, 1000);
 timer.unref();
+// Heartbeat for lock(): keeps this server's locks fresh so only abandoned ones age out.
+const lockTimer = setInterval(() => {
+  const now = new Date();
+  for (const project of projects.values()) fs.utimes(project.lockFile, now, now).catch(() => {});
+}, LOCK_STALE_MS / 4);
+lockTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
 const processTable = () => new Promise(resolve => {
   const [file, args] = process.platform === 'win32'
@@ -866,7 +876,7 @@ origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(timer); clearInterval(sshTimer);
+  if (closing) return; closing = true; clearInterval(timer); clearInterval(sshTimer); clearInterval(lockTimer);
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();

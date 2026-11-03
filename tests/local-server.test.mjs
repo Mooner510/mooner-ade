@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFrameParser, frame } from '../apps/local-server/src/lsp.js';
@@ -362,7 +362,7 @@ test('terminal follow-up validates the live Claude process and output sequence, 
 });
 
 test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => {
-  const { origin, cookie, api, call, projectId, repo } = await boot(t);
+  const { origin, cookie, api, call, projectId, repo, data } = await boot(t);
   const second = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo2-')));
   // The server's directory watcher can still hold the folder on Windows; a leftover temp dir is harmless.
   t.after(() => rm(second, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}));
@@ -404,6 +404,11 @@ test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => 
   await api('snapshot', { projectId: other.id }, 404);
   await call('snapshot'); // the other project is unaffected
   assert.equal((await api('project/open', { path: second })).id, other.id); // lock was released, so it reopens
+  await api('project/close', { projectId: other.id, force: true });
+  // A crashed server's lock whose pid now belongs to an unrelated live process (Windows reuses pids) must not block reopening.
+  const staleLock = join(data, other.id, 'server.lock'), old = new Date(Date.now() - 10 * 60 * 1000);
+  await writeFile(staleLock, String(process.pid)); await utimes(staleLock, old, old);
+  assert.equal((await api('project/open', { path: second })).id, other.id);
 
   const state = { openProjects: [{ id: projectId, root: repo }, { id: other.id, root: second }], activeProjectId: other.id, settings: { theme: 'light' } };
   await api('app/state', { state });

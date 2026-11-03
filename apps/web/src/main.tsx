@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, basename } from './api';
+import { api, ApiError, basename } from './api';
 import { defaultSettings, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton } from './Icon';
@@ -25,6 +25,8 @@ const sameStatus = (a: WorkspaceStatus, b: WorkspaceStatus) => (Object.keys(a) a
 // First and last character, so projects that start alike (app-web, app-api) stay distinguishable.
 const initials = (name: string) => (name.length > 1 ? name[0] + name[name.length - 1] : name).toUpperCase();
 const shortName = (root: string) => basename(root.replace(/\\/g, '/'));
+// Open failures that mean the folder itself is gone, so remembering it would only fail again.
+const gone = new Set(['ENOENT', 'ENOTDIR', 'INVALID_PROJECT']);
 
 // One websocket serves every open project. Each project subscribes by id and only receives messages tagged with it.
 function useHub(enabled: boolean) {
@@ -133,6 +135,13 @@ function Shell() {
   const handles = useRef(new Map<string, WorkspaceHandle>());
   const statusRef = useRef(status); statusRef.current = status;
   const globalSettings = useRef(false);
+  // Saved projects that could not be opened this session, with their place in the saved list.
+  const unavailable = useRef<{ entry: Entry; index: number }[]>([]);
+  const remembered = (list: Entry[]) => {
+    const all = [...list];
+    for (const { entry, index } of [...unavailable.current].sort((a, b) => a.index - b.index)) if (!all.some(other => other.id === entry.id || other.root === entry.root)) all.splice(Math.min(index, all.length), 0, entry);
+    return all;
+  };
   const current = entries.some(entry => entry.root === activeRoot) ? activeRoot : entries[0]?.root ?? '';
   const commit = (next: Entry[]) => { entriesRef.current = next; setEntries(next); };
   const moveProject = (root: string, targetRoot: string, after: boolean) => {
@@ -161,13 +170,6 @@ function Shell() {
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(report);
   }, [report]);
-  // With nothing open (first launch, or the last project was closed) the home folder opens as a plain top-level workspace, so a terminal is always one step away.
-  const homeRoot = useRef(''), homeFailed = useRef(false), openingHome = useRef(false);
-  useEffect(() => {
-    if (!booted || entries.length || openingHome.current || homeFailed.current) return;
-    openingHome.current = true;
-    api<{ path: string }>('home').then(({ path }) => { homeRoot.current = path; commit([{ root: path, id: '' }]); setActiveRoot(path); }).catch(report).finally(() => { openingHome.current = false; });
-  }, [booted, entries.length, report]);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
   // CPU and memory are only sampled while the status bar shows them.
   const wantsSystem = settings.statusItems.includes('cpu') || settings.statusItems.includes('memory');
@@ -183,7 +185,8 @@ function Shell() {
   useEffect(() => {
     if (!booted) return;
     const timer = setTimeout(() => {
-      const open = entries.filter((entry, index) => entry.id && entries.findIndex(other => other.id === entry.id) === index).map(({ root, id }) => ({ root, id }));
+      // Projects that failed to open this session keep their saved place.
+      const open = remembered(entries.filter((entry, index) => entry.id && entries.findIndex(other => other.id === entry.id) === index)).map(({ root, id }) => ({ root, id }));
       const activeId = entries.find(entry => entry.root === current)?.id ?? '';
       globalSettings.current = true;
       void api('app/state', { state: { openProjects: open, activeProjectId: open.some(entry => entry.id === activeId) ? activeId : '', settings } }).catch(report);
@@ -201,8 +204,13 @@ function Shell() {
     if (mine && next.id && mine.id !== next.id) commit(entriesRef.current.map(entry => entry.root === root ? { ...entry, id: next.id } : entry));
   }, []);
   const onFailed = useCallback((root: string, cause: unknown) => {
-    if (root === homeRoot.current) homeFailed.current = true; // fall back to the project picker instead of retrying forever
-    report(cause); commit(entriesRef.current.filter(entry => entry.root !== root));
+    const list = entriesRef.current, entry = list.find(item => item.root === root);
+    // Only a folder that is gone leaves the saved list; anything else (a lock, a busy server) may pass, so the project returns next launch.
+    if (entry?.id && !(cause instanceof ApiError && gone.has(cause.code))) {
+      const index = remembered(list.filter(item => item.id)).indexOf(entry);
+      unavailable.current = [...unavailable.current.filter(item => item.entry.root !== root), { entry, index }];
+    }
+    report(cause instanceof Error ? new Error(`${shortName(root)}: ${cause.message}`) : cause); commit(list.filter(entry => entry.root !== root));
   }, [report]);
 
   // ---- background activity: a project you are not looking at can still need you ----
@@ -229,6 +237,7 @@ function Shell() {
     setError('');
     try {
       const opened = await api<{ id: string; root: string }>(action, input);
+      unavailable.current = unavailable.current.filter(item => item.entry.id !== opened.id && item.entry.root !== opened.root);
       // The same project can be reached through different paths (worktrees, symlinks); the id decides.
       const existing = entriesRef.current.find(entry => entry.id === opened.id || entry.root === opened.root);
       if (existing) setActiveRoot(existing.root);
@@ -289,7 +298,7 @@ function Shell() {
   ];
   const open = new Set(entries.map(entry => entry.root));
   const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
-  if (!entries.length) return booted && homeFailed.current ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
+  if (!entries.length) return booted ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
 
   return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
