@@ -25,6 +25,7 @@ import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from '.
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
+import { chooseFolder } from './folder-dialog.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -98,6 +99,9 @@ function send(socket, value) {
 function broadcast(project, value) { for (const socket of clients) if (socket.projects.has(project.id)) send(socket, { ...value, projectId: project.id }); }
 const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.' });
 
+// A live pid alone does not prove ownership: Windows reuses pids quickly, so a crashed server's lock can name an unrelated process.
+// Running servers refresh their locks' mtime; a lock left untouched past LOCK_STALE_MS is abandoned.
+const LOCK_STALE_MS = 2 * 60 * 1000;
 async function lock(directory) {
   const file = path.join(directory, 'server.lock');
   try { const handle = await fs.open(file, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); }
@@ -110,6 +114,7 @@ async function lock(directory) {
       if (probe.code === 'ESRCH') { await fs.unlink(file); return lock(directory); }
       throw probe;
     }
+    if (Date.now() - (await fs.stat(file)).mtimeMs > LOCK_STALE_MS) { await fs.unlink(file); return lock(directory); }
     throw fault('PROJECT_LOCKED', '이 저장소를 연 서버가 이미 실행 중입니다.', 409);
   }
   return file;
@@ -348,6 +353,31 @@ async function cloneProject(input) {
   });
   return openProject(target);
 }
+// A fresh project: an empty folder under `parent`, optionally made a git repository, then opened like any other.
+async function createProject(input) {
+  const parent = path.resolve(text(input.parent, '만들 위치'));
+  const folder = text(input.name, '프로젝트 이름').trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(folder) || folder === '.' || folder === '..') throw fault('INVALID_NAME', '프로젝트 이름에는 영문, 숫자, . _ - 만 쓸 수 있습니다.');
+  await fs.mkdir(parent, { recursive: true });
+  const target = path.join(parent, folder);
+  const existing = await fs.readdir(target).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+  if (existing && existing.length) throw fault('TARGET_EXISTS', `${target} 폴더가 이미 있고 비어 있지 않습니다.`);
+  if (!existing) await fs.mkdir(target);
+  if (input.git) {
+    await new Promise((resolve, reject) => {
+      execFile('git', ['init', '--', target], { windowsHide: true, timeout: 60_000 }, (error, _out, stderr) => {
+        if (!error) return resolve();
+        if (error.code === 'ENOENT') return reject(fault('GIT_MISSING', 'git이 설치되어 있지 않습니다.'));
+        reject(fault('GIT_INIT_FAILED', `git 저장소를 만들지 못했습니다.\n${String(stderr || error.message).trim().slice(-500)}`));
+      });
+    }).catch(async error => {
+      // Leave nothing behind for a folder this call made, so retrying with the same name works.
+      if (!existing) await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    });
+  }
+  return openProject(target);
+}
 // Pinned projects never age out; only the unpinned ones are capped.
 function trimRecent(list) {
   let unpinned = 0;
@@ -373,6 +403,8 @@ async function route(action, input, project) {
     });
   }
   if (action === 'project/clone') return snapshot(await cloneProject(input));
+  if (action === 'project/create') return snapshot(await createProject(input));
+  if (action === 'dialog/folder') return chooseFolder(input);
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
@@ -682,6 +714,12 @@ function wakatimePulse() {
 }
 const wakatimeTimer = setInterval(wakatimePulse, PULSE / 4);
 wakatimeTimer.unref();
+// Heartbeat for lock(): keeps this server's locks fresh so only abandoned ones age out.
+const lockTimer = setInterval(() => {
+  const now = new Date();
+  for (const project of projects.values()) fs.utimes(project.lockFile, now, now).catch(() => {});
+}, LOCK_STALE_MS / 4);
+lockTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
 const processTable = createProcessTable();
 let sshPolling = false;
@@ -719,7 +757,7 @@ origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); processTable.close();
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); processTable.close();
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
