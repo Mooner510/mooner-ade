@@ -9,6 +9,10 @@ test('automatic follow-up requires a Claude version with progress covering the w
   assert.equal(claudeFollowUpVersion('OpenAI Codex v2.1.303'), undefined);
   assert.equal(claudeFollowUpVersion('Claude Code v2.'), undefined);
   assert.equal(claudeFollowUpVersion('Claude Code v2.1.303\nClaude Code v2.1.123'), false);
+  // The welcome panel places the version with a cursor move; stripping ANSI leaves no space before it.
+  assert.equal(claudeFollowUpVersion('▐▛███▛█Claude Codev2.1.317\r'), true);
+  assert.equal(claudeFollowUpVersion('Claude Codev2.1.123'), false);
+  assert.equal(claudeFollowUpVersion('Claude Code2.1.303'), undefined);
 });
 
 test('follow-ups wait for a real working-to-idle transition and send one per turn', () => {

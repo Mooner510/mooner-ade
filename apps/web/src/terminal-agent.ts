@@ -49,7 +49,8 @@ export function createBannerDetector() {
   return (data: string, reset = false): Agent | undefined => {
     if (reset) pending = '';
     const raw = pending + data, plain = raw.replace(ANSI, '');
-    const matches = [...plain.matchAll(/OpenAI Codex|Claude Code\s+v?\d/gi)], last = matches.at(-1);
+    // Claude's welcome panel places the version with a cursor move (`Claude Code\x1b[24Gv2.1.317`), so no space is left once ANSI is stripped.
+    const matches = [...plain.matchAll(/OpenAI Codex|Claude Code(?:\s+v?|\s*v)\d/gi)], last = matches.at(-1);
     pending = (last ? plain.slice(last.index! + last[0].length) : raw).slice(-256);
     return last ? /^OpenAI/i.test(last[0]) ? 'codex' : 'claude' : undefined;
   };
