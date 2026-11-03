@@ -25,6 +25,7 @@ import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from '.
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
+import { chooseFolder } from './folder-dialog.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -348,6 +349,31 @@ async function cloneProject(input) {
   });
   return openProject(target);
 }
+// A fresh project: an empty folder under `parent`, optionally made a git repository, then opened like any other.
+async function createProject(input) {
+  const parent = path.resolve(text(input.parent, '만들 위치'));
+  const folder = text(input.name, '프로젝트 이름').trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(folder) || folder === '.' || folder === '..') throw fault('INVALID_NAME', '프로젝트 이름에는 영문, 숫자, . _ - 만 쓸 수 있습니다.');
+  await fs.mkdir(parent, { recursive: true });
+  const target = path.join(parent, folder);
+  const existing = await fs.readdir(target).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+  if (existing && existing.length) throw fault('TARGET_EXISTS', `${target} 폴더가 이미 있고 비어 있지 않습니다.`);
+  if (!existing) await fs.mkdir(target);
+  if (input.git) {
+    await new Promise((resolve, reject) => {
+      execFile('git', ['init', '--', target], { windowsHide: true, timeout: 60_000 }, (error, _out, stderr) => {
+        if (!error) return resolve();
+        if (error.code === 'ENOENT') return reject(fault('GIT_MISSING', 'git이 설치되어 있지 않습니다.'));
+        reject(fault('GIT_INIT_FAILED', `git 저장소를 만들지 못했습니다.\n${String(stderr || error.message).trim().slice(-500)}`));
+      });
+    }).catch(async error => {
+      // Leave nothing behind for a folder this call made, so retrying with the same name works.
+      if (!existing) await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    });
+  }
+  return openProject(target);
+}
 // Pinned projects never age out; only the unpinned ones are capped.
 function trimRecent(list) {
   let unpinned = 0;
@@ -373,6 +399,8 @@ async function route(action, input, project) {
     });
   }
   if (action === 'project/clone') return snapshot(await cloneProject(input));
+  if (action === 'project/create') return snapshot(await createProject(input));
+  if (action === 'dialog/folder') return chooseFolder(input);
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
