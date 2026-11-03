@@ -1,11 +1,25 @@
 // OSC 7501: https://www.superlogical.com/rex/docs/build/program-status
-export function createTerminalStatus(reply) {
+// OSC 9;4 (ConEmu progress) is the fallback for a CLI that cannot negotiate 7501, e.g. Claude inside tmux: tmux drops the 7501 query, but
+// Claude wraps its progress in tmux passthrough. Progress names no program, so it only counts once `agentOf()` has identified the agent,
+// and never in a terminal whose CLI already speaks 7501 (Claude sends both locally).
+const PROGRESS_STATE = { 1: 'working', 2: 'error', 3: 'working', 4: 'working' };
+export function createTerminalStatus(reply, agentOf = () => null) {
   const records = new Map();
-  let body = null, escaped = false;
+  let body = null, escaped = false, progress = null, speaks7501 = false;
   const report = (value, replay) => {
     if (value === '7501;?') { if (!replay) reply('\x1b]7501;?\x1b\\'); return; }
     if (value.startsWith('133;A')) {
       for (const [id, record] of records) if (['working', 'blocked', 'idle'].includes(record.state)) records.delete(id);
+      // Back at a shell prompt: whatever runs next may be a CLI that only reports progress.
+      if (progress === 'working') progress = null;
+      speaks7501 = false;
+      return;
+    }
+    const bar = /^9;4(?:;(\d*))?(?:;|$)/.exec(value);
+    if (bar) {
+      const next = PROGRESS_STATE[bar[1]];
+      // Clearing a running bar is the end of the turn; clearing an idle one (startup, exit) changes nothing.
+      progress = next ?? (progress === 'working' ? 'done' : progress ?? 'idle');
       return;
     }
     if (!value.startsWith('7501;') || Buffer.byteLength(value) + 4 > 4096) return;
@@ -29,6 +43,7 @@ export function createTerminalStatus(reply) {
     if (fields.id !== undefined && (id.length > 128 || id.split('/').length > 8 || !/^[A-Za-z0-9_.+-]{1,32}(?:\/[A-Za-z0-9_.+-]{1,32})*$/.test(id))) return;
     if (fields.app?.length > 32) return;
     if (!['idle', 'working', 'done', 'blocked', 'error', 'clear'].includes(fields.state)) return;
+    speaks7501 = true; progress = null;
     if (fields.state === 'clear') {
       for (const key of records.keys()) if (!id || key === id || key.startsWith(`${id}/`)) records.delete(key);
       return;
@@ -38,7 +53,9 @@ export function createTerminalStatus(reply) {
     if (records.size > 256) records.delete(records.keys().next().value);
   };
   return {
-    get status() {
+    // What the CLI said about itself over 7501, the only report that names its program. Agent identification reads this, not `status`,
+    // which would otherwise echo the identification back through the progress fallback.
+    get reported() {
       let result = null;
       const priority = ['idle', 'done', 'error', 'working', 'blocked'];
       for (const [id, record] of records) {
@@ -49,13 +66,20 @@ export function createTerminalStatus(reply) {
       }
       return result;
     },
+    // `source: 'progress'` tells the window that questions are not reported and must still be read from the screen.
+    get status() {
+      const reported = this.reported;
+      if (reported || speaks7501 || !progress) return reported;
+      const agent = agentOf();
+      return agent ? { agent, state: progress, source: 'progress' } : null;
+    },
     feed(data, replay = false) {
       for (const char of data) {
         if (escaped) {
           escaped = false;
           if (body !== null && char === '\\') { report(body, replay); body = null; }
           else if (char === ']') body = '';
-          else { body = null; if (char === 'c') records.clear(); escaped = char === '\x1b'; }
+          else { body = null; if (char === 'c') { records.clear(); progress = null; speaks7501 = false; } escaped = char === '\x1b'; }
         } else if (char === '\x1b') escaped = true;
         else if (body !== null) {
           if (char === '\x07') { report(body, replay); body = null; }
@@ -64,6 +88,6 @@ export function createTerminalStatus(reply) {
         }
       }
     },
-    clear() { records.clear(); }
+    clear() { records.clear(); progress = null; speaks7501 = false; }
   };
 }
