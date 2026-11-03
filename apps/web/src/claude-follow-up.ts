@@ -69,7 +69,8 @@ export const validClaudeDraft = (text: string) => Boolean(text.trim()) && text.l
 
 // Earlier versions could clear progress between tool calls, which would inject the follow-up mid-task.
 export function claudeFollowUpVersion(banner: string): boolean | undefined {
-  const version = [...banner.matchAll(/Claude Code\s+v?(\d+)\.(\d+)\.(\d+)/g)].at(-1);
+  // The welcome panel positions the version with a cursor move, which leaves no space once ANSI is stripped.
+  const version = [...banner.matchAll(/Claude Code(?:\s+v?|\s*v)(\d+)\.(\d+)\.(\d+)/g)].at(-1);
   if (!version) return;
   const [major, minor, patch] = version.slice(1).map(Number);
   return major > 2 || major === 2 && (minor > 1 || minor === 1 && patch >= 303);

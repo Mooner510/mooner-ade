@@ -28,7 +28,10 @@ function webglLost() {
   if (webgl.losses.length >= WEBGL_LOSSES) { webgl.disabled = true; webgl.waiting.clear(); }
 }
 export type AgentEventKind = 'done' | 'attention';
-export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error' } | null };
+export type TerminalFeed = { data: string; sequence: number; reset?: boolean; exited?: boolean; status?: { agent: Agent; state: 'idle' | 'working' | 'blocked' | 'done' | 'error'; source?: 'progress' } | null };
+// A status from OSC 7501 itself, rather than the OSC 9;4 progress fallback. Only 7501 reports questions (`blocked`); with progress they still
+// come from the screen, and progress alone does not vouch for the follow-up queue's Claude version check.
+const fromProgramStatus = (status: TerminalFeed['status']) => Boolean(status) && status!.source !== 'progress';
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
 export type EditorCtx = {
   settings: Settings; gitVersion: number;
@@ -142,7 +145,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     flushQueue.current = () => {
       if (sendingFollowUp) return;
       const screen = screenText();
-      const next = followUp.current.next((followUpSupported || status?.agent === 'claude') && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
+      const next = followUp.current.next((followUpSupported || status?.agent === 'claude' && fromProgramStatus(status)) && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
         && !question.observe(screen, title) && hasEmptyClaudeComposer(screen));
       if (next) {
         sendingFollowUp = true; clearTimeout(retryTimer);
@@ -207,7 +210,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         followUp.current.reset(); refreshQueue(); return;
       }
       const screen = screenText();
-      const pending = status ? status.state === 'blocked' : question.observe(screen, title);
+      const pending = fromProgramStatus(status) ? status!.state === 'blocked' : question.observe(screen, title);
       if (pending !== asking) {
         asking = pending;
         if (asking) callbacks.current.onAgentEvent(id, 'attention');
@@ -218,7 +221,8 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         working = false; reportedState = status?.state; return;
       }
       const next = status?.state === 'working';
-      if (status?.agent === 'claude' && !sshRef.current && callbacks.current.agentOf(id) === 'claude') { followUp.current.turn(next); refreshQueue(); flushQueue.current(); }
+      // The follow-up queue already reads OSC 9;4 itself; turns derived from the same progress must not drive it a second time.
+      if (status?.agent === 'claude' && status.source !== 'progress' && !sshRef.current && callbacks.current.agentOf(id) === 'claude') { followUp.current.turn(next); refreshQueue(); flushQueue.current(); }
       if (next !== working) { working = next; callbacks.current.onAgentWorking(id, working); }
       if (status?.state !== reportedState) {
         reportedState = status?.state;

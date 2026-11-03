@@ -91,6 +91,19 @@ test('banner detection handles split ANSI sequences and uses the last session in
   assert.equal(detect('2', true), undefined);
 });
 
+test('banner detection reads the version Claude places with a cursor move instead of a space', () => {
+  // Captured from Claude Code 2.1.317's welcome panel over ssh.
+  const banner = '\x1b[38;5;174m ▐\x1b[48;5;16m▛███▛█\x1b[12G\x1b[39m\x1b[49m\x1b[1mClaude Code\x1b[24G\x1b[22m\x1b[38;5;246mv2.1.317\r';
+  assert.equal(createBannerDetector()(banner, true), 'claude');
+  // Split right at the cursor move, as a pty read can deliver it.
+  const detect = createBannerDetector(), cut = banner.indexOf('\x1b[24G') + 3;
+  assert.equal(detect(banner.slice(0, cut), true), undefined);
+  assert.equal(detect(banner.slice(cut)), 'claude');
+  // Ordinary text naming the product is still not a banner.
+  assert.equal(createBannerDetector()('see Claude Code docs for v', true), undefined);
+  assert.equal(createBannerDetector()('Claude Codex2', true), undefined);
+});
+
 const codexApproval = `Would you like to run the following command?
   › 1. Yes, proceed (y)
     2. No, and tell Codex what to do differently (esc)
