@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { api, basename } from './api';
 import { defaultSettings, migrateSettings, type Settings } from './Editor';
 import { playSound } from './sound';
-import { Icon, IconButton } from './Icon';
+import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
 import { Modal } from './views';
 import { Workspace, showKeys, type Command, type Hub, type SystemInfo, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
@@ -69,28 +69,105 @@ function useHub(enabled: boolean) {
   return { hub, connection };
 }
 
-type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; error: string; onOpen(path: string): Promise<void>; onClone(url: string, parent: string): Promise<void>; onPin(root: string, pinned: boolean): void; onRemove(root: string): Promise<void>; onDismissError(): void };
-function PickerCard({ ready, recent, open, error, onOpen, onClone, onPin, onRemove, onDismissError }: PickerProps) {
-  const [path, setPath] = useState(''), [cloning, setCloning] = useState(false), [url, setUrl] = useState(''), [parent, setParent] = useState(''), [busy, setBusy] = useState(false);
-  const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false), [removeError, setRemoveError] = useState('');
-  useEffect(() => { if (cloning && !parent) void api<{ path: string }>('home').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [cloning, parent]);
-  const desktop = (window as unknown as { adeDesktop?: { pickFolder(): Promise<string | null> } }).adeDesktop;
-  return <><div className="welcome-card"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
+type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; error: string; onOpen(path: string): Promise<void>; onCreate(name: string, parent: string, git: boolean): Promise<void>; onClone(url: string, parent: string, name: string): Promise<void>; onPin(root: string, pinned: boolean): void; onRemove(root: string): Promise<void>; onDismissError(): void; onClose?(): void };
+type PickerTab = 'open' | 'create' | 'clone';
+const pickerTabs: { id: PickerTab; label: string; icon: IconName }[] = [
+  { id: 'open', label: '기존 프로젝트 추가', icon: 'folder' },
+  { id: 'create', label: '새 프로젝트 생성', icon: 'folderPlus' },
+  { id: 'clone', label: 'GitHub에서 가져오기', icon: 'branch' }
+];
+// Where a create/clone will land, shown before it happens; the separator follows whatever the parent path already uses.
+const joinPath = (parent: string, name: string) => !parent || !name ? '' : parent.replace(/[\\/]+$/, '') + (parent.includes('\\') ? '\\' : '/') + name;
+const repoName = (url: string) => url.trim().replace(/\.git$/, '').replace(/\/+$/, '').split(/[/:]/).pop() || '';
+// Paths are only ever chosen in the OS folder dialog, never typed: the desktop app uses Electron's, the browser asks the local server to open one.
+type DesktopBridge = { pickFolder(options?: { title?: string; defaultPath?: string }): Promise<string | null> };
+async function chooseFolder(title: string, defaultPath: string) {
+  const desktop = (window as unknown as { adeDesktop?: DesktopBridge }).adeDesktop;
+  if (desktop) return desktop.pickFolder({ title, defaultPath: defaultPath || undefined });
+  return (await api<{ path: string | null }>('dialog/folder', { title, defaultPath })).path;
+}
+type FolderFieldProps = { label: string; ariaLabel: string; title: string; value: string; placeholder: string; disabled: boolean; onChange(path: string): void; onError(message: string): void };
+function FolderField({ label, ariaLabel, title, value, placeholder, disabled, onChange, onError }: FolderFieldProps) {
+  const [picking, setPicking] = useState(false);
+  const pick = () => {
+    if (disabled || picking) return;
+    setPicking(true); onError('');
+    void chooseFolder(title, value).then(picked => { if (picked) onChange(picked); }).catch(cause => onError(cause instanceof Error ? cause.message : String(cause))).finally(() => setPicking(false));
+  };
+  // Read-only: a click (or Enter/Space) opens the dialog. onChange stays only so scripted tests can still fill it.
+  return <div className="field"><span className="field-label">{label}</span><div className="folder-field">
+    <input readOnly aria-label={ariaLabel} className="folder-path" value={value} title={value} placeholder={picking ? '폴더 선택 창에서 고르는 중…' : placeholder} disabled={disabled}
+      onClick={pick} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pick(); } }} onChange={event => onChange(event.target.value)} />
+    <button type="button" className={value ? '' : 'primary'} disabled={disabled || picking} onClick={pick}><Icon name="folder" size={15} />{picking ? '선택 중…' : value ? '변경…' : '폴더 선택…'}</button>
+  </div></div>;
+}
+function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onPin, onRemove, onDismissError, onClose }: PickerProps) {
+  const [tab, setTab] = useState<PickerTab>(() => { try { const saved = localStorage.getItem('ade-picker-tab'); return pickerTabs.some(item => item.id === saved) ? saved as PickerTab : 'open'; } catch { return 'open'; } });
+  const [path, setPath] = useState(''), [url, setUrl] = useState(''), [parent, setParent] = useState(''), [name, setName] = useState(''), [folder, setFolder] = useState(''), [git, setGit] = useState(true), [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false), [removeError, setRemoveError] = useState(''), [pickError, setPickError] = useState('');
+  const tabRefs = useRef<Partial<Record<PickerTab, HTMLButtonElement | null>>>({});
+  useEffect(() => { try { localStorage.setItem('ade-picker-tab', tab); } catch {} }, [tab]);
+  useEffect(() => { if (tab !== 'open' && !parent) void api<{ path: string }>('home').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [tab, parent]);
+  const run = (work: () => Promise<void>) => { setBusy(true); void work().finally(() => setBusy(false)); };
+  const fieldState = { disabled: !ready || busy, onError: setPickError };
+  const onTabKey = (event: React.KeyboardEvent) => {
+    const index = pickerTabs.findIndex(item => item.id === tab);
+    const next = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? pickerTabs.length - 1 : null;
+    if (next === null) return;
+    event.preventDefault();
+    const target = pickerTabs[(next + pickerTabs.length) % pickerTabs.length].id;
+    setTab(target); tabRefs.current[target]?.focus();
+  };
+  const favorites = recent.filter(item => item.pinned), others = recent.filter(item => !item.pinned);
+  // Already-open projects stand out; choosing one just switches to it.
+  const row = (item: Recent) => { const isOpen = open.has(item.root); return <div className={`recent${item.pinned ? ' pinned' : ''}${isOpen ? ' open' : ''}`} key={item.root}>
+    <button type="button" className="recent-open" title={isOpen ? `${item.root}
+열려 있음 · 누르면 이 프로젝트로 이동` : item.root} onClick={() => void onOpen(item.root)}><strong><span className="recent-name">{shortName(item.root)}</span>{isOpen && <span className="open-badge">열림</span>}</strong><small>{item.root}</small></button>
+    <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} title={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
+    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => { setRemoveError(''); setRemoving(item.root); }}><Icon name="x" size={14} /></button></div>; };
+  const submitLabel = tab === 'open' ? (busy ? '여는 중…' : '열기') : tab === 'create' ? (busy ? '만드는 중…' : '만들고 열기') : (busy ? '클론 중…' : '클론하고 열기');
+  const createTarget = joinPath(parent.trim(), name.trim()), cloneTarget = joinPath(parent.trim(), folder.trim() || repoName(url));
+  return <><div className="welcome-card picker"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
     {error && <div role="alert" className="error">{error}<button onClick={onDismissError}>닫기</button></div>}
-    <form onSubmit={event => { event.preventDefault(); void onOpen(path); }}><input aria-label="프로젝트 절대 경로" value={path} onChange={event => setPath(event.target.value)} placeholder="C:\Users\me\project 또는 /Users/me/project" required />
-      {desktop && <button type="button" disabled={!ready} onClick={() => void desktop.pickFolder().then(folder => { if (folder) { setPath(folder); return onOpen(folder); } })}>폴더 선택…</button>}<button className="primary" disabled={!ready}>열기</button></form>
-    <button type="button" className="link" aria-expanded={cloning} onClick={() => setCloning(value => !value)}>{cloning ? '▾' : '▸'} GitHub에서 클론…</button>
-    {cloning && <form onSubmit={event => { event.preventDefault(); setBusy(true); void onClone(url, parent).finally(() => setBusy(false)); }}>
-      <input aria-label="GitHub 저장소" value={url} onChange={event => setUrl(event.target.value)} placeholder="owner/repo 또는 https://github.com/owner/repo" required disabled={busy} />
-      <input aria-label="클론할 위치(루트 경로)" value={parent} onChange={event => setParent(event.target.value)} placeholder="클론할 위치 (예: C:\Users\me\projects)" required disabled={busy} />
-      {desktop && <button type="button" disabled={!ready || busy} onClick={() => void desktop.pickFolder().then(folder => { if (folder) setParent(folder); })}>위치 선택…</button>}
-      <button className="primary" disabled={!ready || busy}>{busy ? '클론 중…' : '클론하고 열기'}</button></form>}
-    <h2>최근 프로젝트</h2>
-    {recent.length ? <div className="recent-list">{[...recent.filter(item => item.pinned), ...recent.filter(item => !item.pinned)].map(item => <div className={`recent ${item.pinned ? 'pinned' : ''}`} key={item.root}>
-      <button type="button" className="recent-open" title={item.root} onClick={() => void onOpen(item.root)}><strong>{shortName(item.root)}{open.has(item.root) && <small className="open-mark"> · 열려 있음</small>}</strong><small>{item.root}</small></button>
-      <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '고정 해제' : '상단에 고정'} title={item.pinned ? '고정 해제' : '상단에 고정'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
-      <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => { setRemoveError(''); setRemoving(item.root); }}><Icon name="x" size={14} /></button></div>)}</div> : <p className="hint">아직 연 프로젝트가 없습니다.</p>}
-    {!ready && <p className="hint">서버 터미널에 표시된 접속 링크를 여세요.</p>}</div>
+    <div className="picker-split">
+      <aside className="picker-side" aria-label="즐겨찾기와 최근 프로젝트">
+        <h2>즐겨찾기</h2>
+        {favorites.length ? <div className="recent-list">{favorites.map(row)}</div> : <p className="hint">최근 프로젝트의 ☆를 눌러 고정하세요.</p>}
+        <h2>최근 프로젝트</h2>
+        {others.length ? <div className="recent-list">{others.map(row)}</div> : <p className="hint">{recent.length ? '모두 즐겨찾기에 있습니다.' : '아직 연 프로젝트가 없습니다.'}</p>}
+      </aside>
+      <section className="picker-main">
+        <div role="tablist" aria-label="프로젝트 추가 방법" className="picker-tabs" onKeyDown={onTabKey}>
+          {pickerTabs.map(item => <button key={item.id} ref={element => { tabRefs.current[item.id] = element; }} type="button" role="tab" id={`picker-tab-${item.id}`} aria-controls="picker-panel" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><Icon name={item.icon} size={15} />{item.label}</button>)}
+        </div>
+        <div role="tabpanel" id="picker-panel" aria-labelledby={`picker-tab-${tab}`} className="picker-panel">
+          {pickError && <div role="alert" className="error">{pickError}<button type="button" onClick={() => setPickError('')}>닫기</button></div>}
+          {tab === 'open' && <form id="picker-form" className="picker-form" onSubmit={event => { event.preventDefault(); if (path) run(() => onOpen(path)); }}>
+            <p className="hint">이미 있는 폴더를 프로젝트로 엽니다.</p>
+            <FolderField label="프로젝트 폴더" ariaLabel="프로젝트 절대 경로" title="프로젝트 폴더 선택" value={path} placeholder="열 프로젝트 폴더를 선택하세요" onChange={setPath} {...fieldState} /></form>}
+          {tab === 'create' && <form id="picker-form" className="picker-form" onSubmit={event => { event.preventDefault(); if (parent) run(() => onCreate(name.trim(), parent, git)); }}>
+            <p className="hint">선택한 위치에 빈 폴더를 만들고 바로 엽니다.</p>
+            <FolderField label="만들 위치" ariaLabel="새 프로젝트를 만들 위치" title="새 프로젝트를 만들 위치 선택" value={parent} placeholder="프로젝트를 만들 상위 폴더를 선택하세요" onChange={setParent} {...fieldState} />
+            <div className="field"><span className="field-label">프로젝트 이름</span>
+              <input aria-label="새 프로젝트 이름" value={name} onChange={event => setName(event.target.value)} placeholder="my-project" pattern="[A-Za-z0-9_.\-]+" title="영문, 숫자, . _ - 만 쓸 수 있습니다." required disabled={busy} autoFocus /></div>
+            <label className="check"><input type="checkbox" checked={git} onChange={event => setGit(event.target.checked)} disabled={busy} />git 저장소로 초기화 (git init)</label>
+            {createTarget && <p className="picker-target">만들 경로 <code>{createTarget}</code></p>}</form>}
+          {tab === 'clone' && <form id="picker-form" className="picker-form" onSubmit={event => { event.preventDefault(); if (parent) run(() => onClone(url.trim(), parent, folder.trim())); }}>
+            <p className="hint">GitHub 저장소를 클론해서 엽니다. 비공개 저장소는 git 인증이 필요합니다.</p>
+            <div className="field"><span className="field-label">GitHub 저장소</span>
+              <input aria-label="GitHub 저장소" value={url} onChange={event => setUrl(event.target.value)} placeholder="owner/repo 또는 https://github.com/owner/repo" required disabled={busy} autoFocus /></div>
+            <FolderField label="클론할 위치" ariaLabel="클론할 위치(루트 경로)" title="클론할 위치 선택" value={parent} placeholder="저장소를 받을 상위 폴더를 선택하세요" onChange={setParent} {...fieldState} />
+            <div className="field"><span className="field-label">폴더 이름 <small>(선택)</small></span>
+              <input aria-label="클론할 폴더 이름" value={folder} onChange={event => setFolder(event.target.value)} placeholder={repoName(url) || '저장소 이름'} pattern="[A-Za-z0-9_.\-]+" title="영문, 숫자, . _ - 만 쓸 수 있습니다." disabled={busy} /></div>
+            {cloneTarget && <p className="picker-target">클론 경로 <code>{cloneTarget}</code></p>}</form>}
+        </div>
+      </section>
+    </div>
+    {!ready && <p className="hint">서버 터미널에 표시된 접속 링크를 여세요.</p>}
+    <div className="picker-actions">
+      {onClose && <button type="button" onClick={onClose}>닫기</button>}
+      <button type="submit" form="picker-form" className="primary" disabled={!ready || busy || (tab === 'open' ? !path : !parent)}>{submitLabel}</button>
+    </div></div>
     {removing && <Modal className="recent-remove-modal" labelledBy="recent-remove-title" onClose={() => { if (!deleting) setRemoving(''); }}>
       <h2 id="recent-remove-title">최근 프로젝트에서 삭제할까요?</h2>
       <p><strong>{shortName(removing)}</strong></p><p className="hint">{removing}</p>
@@ -222,7 +299,8 @@ function Shell() {
 
   // ---- project list ----
   const addProject = useCallback((path: string) => openEntry('project/open', { path }), []);
-  const cloneProject = useCallback((url: string, parent: string) => openEntry('project/clone', { url, parent }), []);
+  const cloneProject = useCallback((url: string, parent: string, name: string) => openEntry('project/clone', name ? { url, parent, name } : { url, parent }), []);
+  const createProject = useCallback((name: string, parent: string, git: boolean) => openEntry('project/create', { name, parent, git }), []);
   async function openEntry(action: string, input: object) {
     setError('');
     try {
@@ -286,7 +364,7 @@ function Shell() {
     { label: '다음/이전 프로젝트', keys: `${showKeys('mod+alt+]')} / ${showKeys('mod+alt+[')}` }, { label: '프로젝트 번호로 이동', keys: showKeys('mod+alt+1') + '…9' }, { label: '설정', keys: showKeys('mod+,') }
   ];
   const open = new Set(entries.map(entry => entry.root));
-  const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
+  const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
   if (!entries.length) return booted && homeFailed.current ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
 
   return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
@@ -428,7 +506,7 @@ function Shell() {
     </div>
     {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
     {settingsOpen && <SettingsModal settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}
-    {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} /><div className="actions"><button onClick={() => setPicker(false)}>닫기</button></div></Modal>}
+    {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<Shell />);
