@@ -23,6 +23,16 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); }
+/* scrollbars: a slim rounded thumb on a clear track, no arrow buttons; it widens and brightens under the pointer */
+:root { --scroll-thumb: #ffffff1c; --scroll-thumb-hover: #ffffff38; --scroll-thumb-active: #ffffff52; }
+:root[data-theme=light] { --scroll-thumb: #0000001f; --scroll-thumb-hover: #0000003d; --scroll-thumb-active: #00000057; }
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { min-height: 36px; min-width: 36px; border: 3px solid transparent; border-radius: 999px; background: var(--scroll-thumb) padding-box; }
+::-webkit-scrollbar-thumb:hover { border-width: 2px; background-color: var(--scroll-thumb-hover); }
+::-webkit-scrollbar-thumb:active { border-width: 2px; background-color: var(--scroll-thumb-active); }
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb-hover) transparent; } }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; }
 button:hover { background: var(--hover); }
@@ -77,6 +87,65 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .recent-remove-modal { width: min(440px, 94vw); padding: 20px; overflow-wrap: anywhere; }
 .recent-remove-modal h2 { margin-top: 0; font-size: 16px; }
 .recent-remove-modal .actions { justify-content: flex-end; }
+/* project picker: favorites/recent on the left, the way to add a project (tabs) on the right, actions in a footer.
+   Spacing: 24px around the card, 20px between title, body and footer, and the same 26px on both sides of the column divider. */
+.welcome-card.picker { width: min(920px, 100%); }
+.project-modal .welcome-card.picker { width: 100%; padding: 24px 24px 20px; }
+.welcome-card.picker .picker-title { margin: 0; }
+.picker-split { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); margin-top: 20px; }
+/* The gutter is always reserved, so the gap to the divider does not change when the list starts to scroll. */
+.picker-side { min-width: 0; max-height: min(560px, 64dvh); overflow-y: auto; scrollbar-gutter: stable; padding-right: 12px; margin-right: 4px; }
+.picker-main { min-width: 0; display: flex; flex-direction: column; padding-left: 26px; border-left: 1px solid var(--border); }
+/* The first heading is as tall as the tab row, so both columns start on the same line. */
+.welcome-card .picker-side h2 { margin: 16px 0 8px; line-height: 16px; }
+.welcome-card .picker-side h2:first-child { margin: 0 0 4px; line-height: 36px; }
+.picker-side .hint { padding: 0; margin: 0 0 8px; font-size: 12px; line-height: 1.5; }
+.picker-side .recent-list { max-height: none; overflow: visible; gap: 4px; }
+.picker-side .recent.pinned { border-color: var(--border); }
+.picker-side .recent-open { flex-direction: column; align-items: stretch; gap: 2px; padding: 7px 10px; }
+.picker-side .recent-open strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.picker-side .recent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* open projects: tinted row, accent edge and an 열림 badge */
+.recent.open, .picker-side .recent.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.recent.open:hover, .picker-side .recent.open:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.recent.open .recent-open small { color: color-mix(in srgb, var(--accent) 35%, var(--muted)); }
+.open-badge { flex: none; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-weight: 700; line-height: 16px; letter-spacing: .02em; }
+.picker-side .recent-pin, .picker-side .recent-remove { align-self: stretch; padding: 0 8px; }
+.picker-side .recent-remove { padding-right: 10px; }
+.picker-tabs { display: flex; gap: 4px; height: 36px; border-bottom: 1px solid var(--border); }
+.picker-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; margin-bottom: -1px; background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; color: var(--muted); white-space: nowrap; }
+.picker-tabs [role="tab"]:first-child { margin-left: -12px; }
+.picker-tabs [role="tab"]:hover { color: var(--fg); background: var(--hover); }
+.picker-tabs [role="tab"].active { color: var(--fg); border-bottom-color: var(--accent); }
+.picker-tabs [role="tab"].active .icon { color: var(--accent); }
+.picker-panel > .error { margin: 16px 0 0; white-space: pre-wrap; }
+.welcome-card form.picker-form { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 16px 0 0; }
+.picker-form > .hint { padding: 0; margin: 0; line-height: 1.5; }
+.picker-form .field { display: flex; flex-direction: column; gap: 6px; }
+.picker-form .field-label { font-size: 12px; line-height: 16px; color: var(--muted); }
+.picker-form .field-label small { color: var(--faint); }
+/* Inputs keep their own height: the older `form input { flex: 1 }` rules would squash them inside a column. */
+.welcome-card .picker-form input:not([type="checkbox"]) { flex: none; box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 12px; }
+.welcome-card .picker-form .folder-field input { flex: 1; width: auto; }
+.welcome-card .picker-form .check input { flex: none; margin: 0; }
+.picker-form .check { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.picker-form .folder-field { display: flex; gap: 8px; }
+.welcome-card .picker-form input.folder-path { cursor: pointer; text-overflow: ellipsis; background: var(--surface); }
+.welcome-card .picker-form input.folder-path:disabled { cursor: default; }
+.welcome-card .picker-form .folder-field button { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; white-space: nowrap; }
+.picker-target { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.picker-target code { color: var(--fg); }
+/* footer: the tab's action sits beside 닫기, so the buttons stay put while the form above changes */
+.picker-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.welcome-card .picker-actions button { min-width: 80px; height: 36px; padding: 0 18px; }
+.welcome-card .picker-form .folder-field button:not(.primary), .welcome-card .picker-actions button:not(.primary) { border: 1px solid var(--border-strong); background: var(--raised); }
+@media (max-width: 720px) {
+  .picker-split { grid-template-columns: minmax(0, 1fr); }
+  .picker-main { padding-left: 0; border-left: 0; }
+  .picker-side { order: 2; max-height: none; overflow: visible; padding: 16px 0 0; margin: 20px 0 0; border-top: 1px solid var(--border); }
+  .welcome-card .picker-side h2:first-child { line-height: 16px; margin-bottom: 8px; }
+  .picker-tabs { overflow-x: auto; scrollbar-width: none; }
+}
 
 /* shell */
 .app { height: 100%; display: flex; flex-direction: column; background: var(--bg); }
@@ -172,7 +241,6 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 :root[data-theme=light] .terminal-pane[data-ssh] .pane-label { text-shadow: 0 0 6px color-mix(in srgb, var(--ssh) 35%, transparent); }
 .dim-inactive .terminal-pane:not(.focused) .xterm-host, .dim-inactive .editor-group:not(.focused) .editor { opacity: .55; transition: opacity .15s; }
 .xterm-host { box-sizing: content-box; flex: 1; min-height: 0; padding: 8px 10px 12px; overflow: hidden; }
-.xterm .xterm-viewport { scrollbar-width: thin; }
 .pane-tools { flex: none; height: 24px; display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; padding: 0 4px 0 10px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .pane-tools button { width: 22px; height: 20px; padding: 0; color: var(--muted); opacity: 0; transition: opacity .12s; }
 .terminal-pane:hover .pane-tools button, .pane-tools:focus-within button { opacity: 1; }
@@ -272,11 +340,10 @@ dialog::backdrop { background: #0009; }
 .app.loading { display: grid; place-items: center; }
 .open-failed { display: grid; justify-items: center; gap: 8px; max-width: 480px; text-align: center; }
 .shell-error { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 100; max-width: min(640px, 92vw); }
-.project-modal { width: min(560px, 94vw); max-height: 92dvh; padding: 0; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg); color: var(--fg); }
+.project-modal { width: min(960px, 94vw); max-height: 92dvh; padding: 0; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg); color: var(--fg); }
 .project-modal::backdrop { background: #0008; }
-.project-modal .welcome-card { padding: 24px 24px 8px; }
+.project-modal .welcome-card { padding: 24px 24px 18px; }
 .project-modal .actions { padding: 8px 24px 20px; justify-content: flex-end; }
-.open-mark { color: var(--accent); }
 /* A tab holding a single pane must fill the tab; otherwise it sizes to its content and collapses once the tab was hidden. */
 .tab-page > .terminal-pane, .tab-page > .editor-group { flex: 1; }
 .project-modal form { display: flex; gap: 8px; padding: 18px 0 8px; }
@@ -292,7 +359,7 @@ dialog::backdrop { background: #0009; }
 .icon-btn { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; flex: none; color: var(--muted); background: transparent; border-color: transparent; border-radius: 6px; }
 .icon-btn:hover { color: var(--fg); background: var(--raised); }
 .icon-btn[aria-pressed=true] { color: var(--accent); }
-.folders { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px 8px; display: flex; flex-direction: column; gap: 4px; scrollbar-width: thin; }
+.folders { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 6px 8px; display: flex; flex-direction: column; gap: 4px; }
 .shell.compact .folders { align-items: center; gap: 8px; padding: 0 0 8px; scrollbar-width: none; }
 .folder { min-width: 0; }
 .folder-head { position: relative; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px; border-radius: 7px; color: var(--muted); cursor: pointer; user-select: none; min-width: 0; }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -145,6 +145,29 @@ test('recent: removal persists without deleting files or closing projects', asyn
   await api('project/close', { projectId });
   await api('project/open', { path: repo });
   assert.ok((await api('recent')).some(item => item.root === repo));
+});
+
+test('project/create makes an empty folder, optionally a git repository, and opens it', async t => {
+  const { api } = await boot(t);
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'ade-new-')));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}));
+  for (const name of [undefined, '', '..', 'a/b', 'bad name']) await api('project/create', { name, parent }, 400);
+  await api('project/create', { name: 'x' }, 400);
+  const plain = await api('project/create', { name: 'plain', parent });
+  assert.equal(plain.root, join(parent, 'plain'));
+  await assert.rejects(stat(join(parent, 'plain', '.git')));
+  const repo = await api('project/create', { name: 'with-git', parent, git: true });
+  assert.equal(repo.root, join(parent, 'with-git'));
+  assert.ok((await stat(join(parent, 'with-git', '.git'))).isDirectory());
+  // An existing empty folder is reused; one with content is never touched.
+  await mkdir(join(parent, 'empty'));
+  assert.equal((await api('project/create', { name: 'empty', parent })).root, join(parent, 'empty'));
+  await mkdir(join(parent, 'taken')); await writeFile(join(parent, 'taken', 'keep.txt'), 'keep');
+  assert.equal((await api('project/create', { name: 'taken', parent, git: true }, 400)).error.code, 'TARGET_EXISTS');
+  assert.equal(await readFile(join(parent, 'taken', 'keep.txt'), 'utf8'), 'keep');
+  await assert.rejects(stat(join(parent, 'taken', '.git')));
+  const recent = await api('recent');
+  for (const root of [plain.root, repo.root]) assert.ok(recent.some(item => item.root === root));
 });
 
 test('endpoints of removed features stay gone', async t => {
@@ -348,7 +371,7 @@ test('terminal follow-up validates the live Claude process and output sequence, 
 });
 
 test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => {
-  const { origin, cookie, api, call, projectId, repo } = await boot(t);
+  const { origin, cookie, api, call, projectId, repo, data } = await boot(t);
   const second = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo2-')));
   // The server's directory watcher can still hold the folder on Windows; a leftover temp dir is harmless.
   t.after(() => rm(second, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}));
@@ -389,6 +412,11 @@ test('multi-project: tagged fan-out, unsubscribe, close, app state', async t => 
   await api('snapshot', { projectId: other.id }, 404);
   await call('snapshot'); // the other project is unaffected
   assert.equal((await api('project/open', { path: second })).id, other.id); // lock was released, so it reopens
+  await api('project/close', { projectId: other.id, force: true });
+  // A crashed server's lock whose pid now belongs to an unrelated live process (Windows reuses pids) must not block reopening.
+  const staleLock = join(data, other.id, 'server.lock'), old = new Date(Date.now() - 10 * 60 * 1000);
+  await writeFile(staleLock, String(process.pid)); await utimes(staleLock, old, old);
+  assert.equal((await api('project/open', { path: second })).id, other.id);
 
   const state = { openProjects: [{ id: projectId, root: repo }, { id: other.id, root: second }], activeProjectId: other.id, settings: { theme: 'light' } };
   await api('app/state', { state });
