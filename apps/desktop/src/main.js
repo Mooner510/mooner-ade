@@ -185,9 +185,11 @@ function createWindow(url) {
   void load(window, url);
 }
 
-ipcMain.handle('ade:pick-folder', async event => {
+ipcMain.handle('ade:pick-folder', async (event, options) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showOpenDialog(owner, { title: '프로젝트 폴더 선택', properties: ['openDirectory'] });
+  const title = typeof options?.title === 'string' && options.title ? options.title.slice(0, 200) : '프로젝트 폴더 선택';
+  const defaultPath = typeof options?.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined;
+  const result = await dialog.showOpenDialog(owner, { title, defaultPath, properties: ['openDirectory', 'createDirectory'] });
   return result.canceled ? null : result.filePaths[0];
 });
 ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });

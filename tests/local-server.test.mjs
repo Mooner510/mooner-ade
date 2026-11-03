@@ -147,6 +147,29 @@ test('recent: removal persists without deleting files or closing projects', asyn
   assert.ok((await api('recent')).some(item => item.root === repo));
 });
 
+test('project/create makes an empty folder, optionally a git repository, and opens it', async t => {
+  const { api } = await boot(t);
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'ade-new-')));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}));
+  for (const name of [undefined, '', '..', 'a/b', 'bad name']) await api('project/create', { name, parent }, 400);
+  await api('project/create', { name: 'x' }, 400);
+  const plain = await api('project/create', { name: 'plain', parent });
+  assert.equal(plain.root, join(parent, 'plain'));
+  await assert.rejects(stat(join(parent, 'plain', '.git')));
+  const repo = await api('project/create', { name: 'with-git', parent, git: true });
+  assert.equal(repo.root, join(parent, 'with-git'));
+  assert.ok((await stat(join(parent, 'with-git', '.git'))).isDirectory());
+  // An existing empty folder is reused; one with content is never touched.
+  await mkdir(join(parent, 'empty'));
+  assert.equal((await api('project/create', { name: 'empty', parent })).root, join(parent, 'empty'));
+  await mkdir(join(parent, 'taken')); await writeFile(join(parent, 'taken', 'keep.txt'), 'keep');
+  assert.equal((await api('project/create', { name: 'taken', parent, git: true }, 400)).error.code, 'TARGET_EXISTS');
+  assert.equal(await readFile(join(parent, 'taken', 'keep.txt'), 'utf8'), 'keep');
+  await assert.rejects(stat(join(parent, 'taken', '.git')));
+  const recent = await api('recent');
+  for (const root of [plain.root, repo.root]) assert.ok(recent.some(item => item.root === root));
+});
+
 test('endpoints of removed features stay gone', async t => {
   const { call } = await boot(t);
   for (const action of ['files/read', 'files/save', 'files/search', 'git/discard', 'git/stage', 'git/commit', 'run/start', 'conversation/create', 'approval', 'agents/catalog']) await call(action, {}, 404);
