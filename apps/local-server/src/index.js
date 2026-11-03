@@ -195,7 +195,8 @@ async function openProject(requested) {
   });
 }
 function registerTerminal(project, id, native, cwd, initial = '') {
-  const status = createTerminalStatus(data => native.write(data));
+  // Progress reports (OSC 9;4) name no program; they count as agent status once this terminal's agent is identified.
+  const status = createTerminalStatus(data => native.write(data), () => terminal.agent);
   status.feed(initial, true);
   // Adopted terminals start above any sequence the window saw from a previous server, or it would drop their replay as stale.
   const remoteAgent = createRemoteAgent(); remoteAgent.feed(initial);
@@ -203,12 +204,18 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   project.terminals.set(id, terminal);
   native.onData(data => {
     status.feed(data); const remoteChanged = remoteAgent.feed(data);
-    terminal.buffer.append(data); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: status.status });
+    const current = status.status; terminal.statusKey = JSON.stringify(current);
+    terminal.buffer.append(data); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: current });
     // Over ssh the output is the only evidence of the remote agent, so a start or exit is reported at once instead of on the next poll.
-    if (remoteChanged && terminal.ssh && terminal.agent !== remoteAgent.agent) { terminal.agent = remoteAgent.agent; broadcast(project, { type: 'terminal/agent', id, agent: terminal.agent, ssh: true }); }
+    if (remoteChanged && terminal.ssh && terminal.agent !== remoteAgent.agent) { terminal.agent = remoteAgent.agent; broadcast(project, { type: 'terminal/agent', id, agent: terminal.agent, ssh: true }); broadcastStatus(project, id, terminal); }
   });
   native.onExit(event => { terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
   return terminal;
+}
+// The progress fallback depends on the identified agent, so a new identification can change the status without any new output.
+function broadcastStatus(project, id, terminal) {
+  const next = terminal.status.status, key = JSON.stringify(next);
+  if (key !== terminal.statusKey) { terminal.statusKey = key; broadcast(project, { type: 'terminal/status', id, status: next }); }
 }
 // Terminals that kept running in the pty-host while the previous server was replaced come back under their old ids.
 async function adoptTerminals(project) {
@@ -737,17 +744,17 @@ const sshTimer = setInterval(async () => {
       // An agent seen before the ssh session ended belongs to that remote host; the next session starts clean.
       if (changedSsh && !ssh) terminal.remoteAgent.reset();
       // Over ssh the agent's own OSC 7501 status report (app=claude-code) is as good as a banner, and survives a lost banner or title.
-      const agent = ssh ? terminal.remoteAgent.agent ?? terminal.status.status?.agent ?? null : found.agent;
-      if (terminal.agent && agent !== terminal.agent && !ssh && terminal.status.status?.agent !== agent) {
+      const agent = ssh ? terminal.remoteAgent.agent ?? terminal.status.reported?.agent ?? null : found.agent;
+      if (terminal.agent && agent !== terminal.agent && !ssh && terminal.status.reported?.agent !== agent) {
         terminal.status.clear();
-        broadcast(project, { type: 'terminal/status', id, status: null });
+        terminal.statusKey = 'null'; broadcast(project, { type: 'terminal/status', id, status: null });
       }
       // Each project may run Claude under its own account, whose folder holds this process's session file.
       if (agent === 'claude' && agentPid && !ssh) await accounts.agentFolder('claude', agentPid, project.root).then(dir => syncClaudeSession(project.directory, id, agentPid, dir)).catch(() => {});
       if (ssh !== Boolean(terminal.ssh)) { terminal.ssh = ssh; broadcast(project, { type: 'terminal/ssh', id, ssh }); }
       // Usage readings look up which account this agent runs under.
       terminal.agentPid = !ssh && agentPid || null;
-      if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); }
+      if (terminal.agent !== agent || changedSsh) { terminal.agent = agent; broadcast(project, { type: 'terminal/agent', id, agent, ssh }); broadcastStatus(project, id, terminal); }
     }
   } catch (error) { console.warn(`터미널 프로세스 확인 실패: ${error.message}`); } finally { sshPolling = false; }
 }, 3000);
