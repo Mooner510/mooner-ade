@@ -194,7 +194,7 @@ ipcMain.handle('ade:pick-folder', async (event, options) => {
 });
 ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });
 
-const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-win32-${process.arch}.zip`, window: mainWindow, manual });
+const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual });
 ipcMain.handle('ade:app-info', () => ({ version: app.getVersion() }));
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
 
