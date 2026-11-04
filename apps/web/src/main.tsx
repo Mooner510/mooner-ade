@@ -107,7 +107,7 @@ function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onP
   const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false), [removeError, setRemoveError] = useState(''), [pickError, setPickError] = useState('');
   const tabRefs = useRef<Partial<Record<PickerTab, HTMLButtonElement | null>>>({});
   useEffect(() => { try { localStorage.setItem('ade-picker-tab', tab); } catch {} }, [tab]);
-  useEffect(() => { if (tab !== 'open' && !parent) void api<{ path: string }>('home').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [tab, parent]);
+  useEffect(() => { if (tab !== 'open' && !parent) void api<{ path: string }>('picker/parent').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [tab, parent]);
   const run = (work: () => Promise<void>) => { setBusy(true); void work().finally(() => setBusy(false)); };
   const fieldState = { disabled: !ready || busy, onError: setPickError };
   const onTabKey = (event: React.KeyboardEvent) => {
