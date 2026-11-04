@@ -358,7 +358,22 @@ async function cloneProject(input) {
       reject(fault('CLONE_FAILED', `클론하지 못했습니다. 비공개 저장소라면 git 인증(gh auth login 등)을 먼저 설정하세요.\n${String(stderr || error.message).trim().slice(-500)}`));
     });
   });
-  return openProject(target);
+  const opened = await openProject(target);
+  await rememberParent(parent);
+  return opened;
+}
+// The parent folder of the last successful create/clone, kept on disk so it survives restarts (the browser origin may change
+// between launches, so localStorage cannot hold it). Falls back to the home folder when it is unset or no longer exists.
+async function rememberParent(parent) {
+  await registryWrite(() => writeJson(path.join(dataRoot, 'picker.json'), { lastParent: parent })).catch(() => {});
+}
+async function defaultParent() {
+  const saved = (await readJson(path.join(dataRoot, 'picker.json'), null).catch(() => null))?.lastParent;
+  if (typeof saved === 'string' && saved) {
+    const stat = await fs.stat(saved).catch(() => null);
+    if (stat?.isDirectory()) return { path: saved };
+  }
+  return { path: os.homedir() };
 }
 // A fresh project: an empty folder under `parent`, optionally made a git repository, then opened like any other.
 async function createProject(input) {
@@ -383,7 +398,9 @@ async function createProject(input) {
       throw error;
     });
   }
-  return openProject(target);
+  const opened = await openProject(target);
+  await rememberParent(parent);
+  return opened;
 }
 // Pinned projects never age out; only the unpinned ones are capped.
 function trimRecent(list) {
@@ -417,6 +434,7 @@ async function route(action, input, project) {
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
+  if (action === 'picker/parent') return defaultParent();
   if (action === 'recent') return readJson(path.join(dataRoot, 'recent.json'), []);
   if (action === 'project/open') return snapshot(await openProject(input.path));
   if (action === 'app/state') {
