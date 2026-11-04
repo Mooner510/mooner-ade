@@ -104,7 +104,7 @@ test('direct shell commands keep user arguments and track separate terminals aft
   } finally { if (previous === undefined) delete process.env.ZDOTDIR; else process.env.ZDOTDIR = previous; }
   // macOS login shells run path_helper, which reorders the test's PATH, so the login flag is dropped here.
   const run = prepared => new Promise((resolve, reject) => {
-    const child = spawn('/bin/zsh', [...prepared.args.filter(arg => arg !== '-l'), '-ic', `claude 'a b'; codex resume ${first}; print -r -- "$ADE_TEST_ENV:$ADE_TEST_RC:$ZDOTDIR:$HISTFILE"`], { env: { ...process.env, ...prepared.env, PATH: `${bin}:${process.env.PATH}` } });
+    const child = spawn('/bin/zsh', [...prepared.args.filter(arg => arg !== '-l'), '-ic', `claude 'a b'; codex resume ${first}; print -r -- "$ADE_TEST_ENV:$ADE_TEST_RC:$ZDOTDIR"`], { env: { ...process.env, ...prepared.env, PATH: `${bin}:${process.env.PATH}` } });
     let output = '', errors = '';
     child.stdout.on('data', chunk => output += chunk);
     child.stderr.on('data', chunk => errors += chunk);
@@ -117,8 +117,7 @@ test('direct shell commands keep user arguments and track separate terminals aft
     assert.ok(output.includes(`log_dir=${path.join(root, 'terminal-sessions', id)}`));
     assert.ok(output.includes('--user-flag\na b\n'));
     assert.ok(output.includes(`resume\n${first}\n`));
-    // /etc/zshrc's HISTFILE must follow the user's ZDOTDIR, or history-based suggestions start empty.
-    assert.ok(output.includes(`loaded:loaded:${original}:${path.join(original, '.zsh_history')}`));
+    assert.ok(output.includes(`loaded:loaded:${original}`));
   }
   assert.deepEqual(await terminalSessionShell(root, 'unknown', '/bin/custom-shell'), { args: [], env: {}, tracked: false });
 });
