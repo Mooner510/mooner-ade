@@ -7,9 +7,11 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-// Portable Windows self-update from the repository's latest GitHub release.
-// The release carries one zip of the packaged folder; after the app exits, a PowerShell helper mirrors the new folder
-// over the install folder and starts the app again. User data lives in %APPDATA%, outside the install folder.
+// Self-update of the packaged Windows and macOS app from the repository's latest GitHub release.
+// The release carries one zip per platform. Windows: after the app exits, a PowerShell helper mirrors the new folder
+// over the install folder and starts the app again; user data lives in %APPDATA%, outside the install folder.
+// macOS: the zip holds MoonerADE.app (made with ditto so the framework symlinks and signature survive); after the app
+// exits, a shell helper swaps the new bundle in for the old one and opens it. User data lives in ~/Library.
 
 const newer = (a, b) => {
   const x = a.split('.').map(Number), y = b.split('.').map(Number);
@@ -17,8 +19,13 @@ const newer = (a, b) => {
   return false;
 };
 
-// Only a packaged copy (exe + resources/app) updates itself; `pnpm dev` / `pnpm start` run from the source tree.
-const portable = () => process.platform === 'win32' && path.basename(path.dirname(app.getAppPath())) === 'resources';
+// Only a packaged copy (exe + resources/app, or MoonerADE.app/Contents/Resources/app) updates itself;
+// `pnpm dev` / `pnpm start` run from the source tree, even inside a renamed Electron bundle.
+const bundlePath = () => path.resolve(process.execPath, '../../..');
+const real = file => { try { return fs.realpathSync(file); } catch { return file; } };
+const packagedMac = () => process.platform === 'darwin' && bundlePath().endsWith('.app')
+  && real(app.getAppPath()) === path.join(real(bundlePath()), 'Contents', 'Resources', 'app');
+const portable = () => (process.platform === 'win32' && path.basename(path.dirname(app.getAppPath())) === 'resources') || packagedMac();
 
 const run = (file, args, env = {}) => new Promise((resolve, reject) => {
   const child = spawn(file, args, { env: { ...process.env, ...env }, stdio: 'ignore', windowsHide: true });
@@ -32,6 +39,22 @@ robocopy $Source $Target /MIR /R:30 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 $ok = $LASTEXITCODE -lt 8
 Start-Process -FilePath $Exe
 if ($ok) { Remove-Item -LiteralPath (Split-Path $Source) -Recurse -Force -ErrorAction SilentlyContinue }
+`;
+
+// $1 pid, $2 staged new bundle, $3 installed bundle, $4 backup path, $5 stage folder and $6 work folder to delete afterwards.
+// Renames stay on one volume (the stage sits next to the install), so the swap is quick and rolls back on failure.
+const APPLY_MAC = `#!/bin/sh
+while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+if mv "$3" "$4"; then
+  if mv "$2" "$3"; then
+    /usr/bin/xattr -cr "$3" 2>/dev/null
+    rm -rf "$4"
+  else
+    mv "$4" "$3"
+  fi
+fi
+/usr/bin/open "$3"
+rm -rf "$5" "$6"
 `;
 
 const PROGRESS_PAGE = `<!doctype html><meta charset="utf-8"><style>
@@ -74,7 +97,7 @@ let busy = false;
 // "up to date" and failures in a dialog; background checks stay silent unless a new version is there.
 export async function checkForUpdate({ repo, asset, window, manual = false }) {
   if (!portable()) {
-    if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치형(포터블) 앱에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
+    if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치된 앱(Windows 포터블, macOS .app)에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
     return 'unsupported';
   }
   if (busy) return 'updating';
@@ -128,21 +151,8 @@ async function check({ repo, asset, window, manual }) {
     // GitHub records a sha256 digest for every uploaded asset; refuse anything that does not match it.
     if (file.digest !== `sha256:${hash.digest('hex')}`) throw new Error('받은 업데이트 파일의 해시가 릴리스와 다릅니다.');
     progress.set('압축 푸는 중…');
-    const extracted = path.join(work, 'new');
-    fs.mkdirSync(extracted);
-    await run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', extracted]);
-    fs.rmSync(zip);
-    const [folder] = fs.readdirSync(extracted);
-    const source = path.join(extracted, folder ?? '');
-    if (!folder || !fs.existsSync(path.join(source, path.basename(process.execPath)))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
-    const script = path.join(work, 'apply.ps1');
-    fs.writeFileSync(script, APPLY);
-    // Electron keeps its processes in a Windows job object that is torn down with the app, killing even a detached
-    // child. Win32_Process.Create starts the helper from the WMI service instead, outside that job.
-    const command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, path.dirname(process.execPath), process.execPath]
-      .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
-    progress.set('설치를 위해 앱을 다시 시작합니다…');
-    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
+    if (process.platform === 'darwin') await applyMac({ zip, work, progress });
+    else await applyWindows({ zip, work, progress });
     // The progress window stays up until the app exits, so the restart does not look like a crash.
     app.quit();
     return 'updating';
@@ -151,5 +161,49 @@ async function check({ repo, asset, window, manual }) {
     fs.rmSync(work, { recursive: true, force: true });
     dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
     return 'error';
+  }
+}
+
+async function applyWindows({ zip, work, progress }) {
+  const extracted = path.join(work, 'new');
+  fs.mkdirSync(extracted);
+  await run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', extracted]);
+  fs.rmSync(zip);
+  const [folder] = fs.readdirSync(extracted);
+  const source = path.join(extracted, folder ?? '');
+  if (!folder || !fs.existsSync(path.join(source, path.basename(process.execPath)))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
+  const script = path.join(work, 'apply.ps1');
+  fs.writeFileSync(script, APPLY);
+  // Electron keeps its processes in a Windows job object that is torn down with the app, killing even a detached
+  // child. Win32_Process.Create starts the helper from the WMI service instead, outside that job.
+  const command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, path.dirname(process.execPath), process.execPath]
+    .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
+  progress.set('설치를 위해 앱을 다시 시작합니다…');
+  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
+}
+
+async function applyMac({ zip, work, progress }) {
+  const target = real(bundlePath());
+  const parent = path.dirname(target);
+  // Stage next to the installed bundle: it proves the folder is writable now and keeps the later swap on one volume.
+  let stage;
+  try { stage = fs.mkdtempSync(path.join(parent, '.MoonerADE-update-')); }
+  catch { throw new Error(`${parent} 폴더에 쓸 수 없습니다. 앱을 쓰기 가능한 폴더(예: /Applications)로 옮긴 뒤 다시 시도하세요.`); }
+  try {
+    await run('/usr/bin/ditto', ['-x', '-k', zip, stage]);
+    fs.rmSync(zip);
+    const next = path.join(stage, path.basename(target));
+    if (!fs.existsSync(path.join(next, 'Contents', 'MacOS', path.basename(process.execPath)))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
+    progress.set('서명 확인 중…');
+    await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', next]);
+    const script = path.join(work, 'apply.sh');
+    fs.writeFileSync(script, APPLY_MAC, { mode: 0o700 });
+    progress.set('설치를 위해 앱을 다시 시작합니다…');
+    // Detached with no stdio, so the helper outlives the app and finishes the swap once the app's process is gone.
+    const helper = spawn('/bin/sh', [script, String(process.pid), next, target, path.join(stage, 'previous.app'), stage, work], { detached: true, stdio: 'ignore' });
+    helper.unref();
+  } catch (error) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    throw error;
   }
 }

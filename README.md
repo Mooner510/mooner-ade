@@ -64,6 +64,12 @@ pnpm package
 
 macOS에서는 `apps/desktop/dist/MoonerADE.app`, Windows에서는 `apps/desktop/dist/MoonerADE-win32-<arch>/MoonerADE.exe`를 만듭니다. Node 런타임과 서버 의존성을 앱에 포함합니다. 네이티브 PTY 모듈도 포함하므로 각 OS에서 해당 OS용 빌드를 생성해야 합니다. Windows 빌드는 Windows 머신에서 위 명령을 실행하세요. Claude Code 또는 Codex CLI와 Git은 앱을 사용하는 컴퓨터에 별도로 설치하고 로그인해야 합니다.
 
+### 릴리스와 자동 업데이트
+
+패키지된 앱(Windows 포터블, macOS `.app`)은 시작 5초 뒤와 6시간마다 GitHub 최신 릴리스를 확인하고, 새 버전이 있으면 받아서 교체한 뒤 다시 실행합니다. 설정의 업데이트 확인 버튼으로 직접 확인할 수도 있습니다. 소스에서 실행한 앱(`pnpm dev`, `pnpm start`)은 자동 업데이트하지 않습니다.
+
+릴리스는 `package.json`의 `version`을 올린 뒤 OS별로 한 번씩 `pnpm release`를 실행합니다. 첫 실행이 `v<version>` 릴리스를 만들고 다음 실행은 자기 OS의 zip(`MoonerADE-win32-<arch>.zip`, `MoonerADE-darwin-<arch>.zip`)을 같은 릴리스에 추가합니다. macOS 앱은 쓰기 가능한 폴더(예: `/Applications`)에 설치해야 하며, Apple 공증이 없는 ad-hoc 서명입니다.
+
 에이전트 CLI를 처음 사용하는 경우, 사용할 제공자의 로그인을 먼저 완료합니다.
 
 ```sh
