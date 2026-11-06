@@ -130,7 +130,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const settingsRef = useRef(settings); settingsRef.current = settings;
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
-    project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
+    project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0), quickRequest: useRef<QuickRequest | null>(null),
     tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {}),
     gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0)
   };
@@ -143,11 +143,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const run = (operation: () => Promise<unknown>) => { setError(''); void operation().catch(report); };
   const refresh = useCallback(async () => { const state = await call<Snapshot>('snapshot'); setProject(state); return state; }, [call]);
   const send = useCallback((message: object) => hub.send({ ...message, projectId: refs.project.current?.id }), [hub]);
+  // A dialog that replaces another one cancels it: its caller (e.g. a terminal holding an Enter back) would otherwise wait forever.
+  const openQuick = (request: QuickRequest) => { refs.quickRequest.current?.resolve(null); refs.quickRequest.current = request; setQuick({ key: ++refs.quickKey.current, request }); };
   const ask = useMemo<Ask>(() => ({
-    input: (title, initial) => new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'input', title, initial, resolve } })),
-    confirm: async message => (await new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'pick', title: message, items: [{ id: 'yes', label: '확인' }, { id: 'no', label: '취소' }], resolve } }))) === 'yes'
+    input: (title, initial) => new Promise<string | null>(resolve => openQuick({ kind: 'input', title, initial, resolve })),
+    confirm: async message => (await new Promise<string | null>(resolve => openQuick({ kind: 'pick', title: message, items: [{ id: 'yes', label: '확인' }, { id: 'no', label: '취소' }], resolve }))) === 'yes'
   }), []);
-  const pick = (title: string, items: QuickItem[]) => new Promise<string | null>(resolve => setQuick({ key: ++refs.quickKey.current, request: { kind: 'pick', title, items, resolve } }));
+  const pick = (title: string, items: QuickItem[]) => new Promise<string | null>(resolve => openQuick({ kind: 'pick', title, items, resolve }));
   // A link clicked in a terminal: warn, then open in the default browser, copy the address, or cancel. Only the visible project answers.
   useEffect(() => {
     const onLink = (event: Event) => {
@@ -673,6 +675,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
   const paneProps = {
     followUpInput: async (id: string, prompt: string, sequence: number, requestId: string) => (await call<{ accepted: boolean }>('terminal/follow-up', { id, prompt, sequence, requestId })).accepted,
+    // "취소" comes first so it is the preselected entry: the Enter that triggered this must not also accept it.
+    confirmSend: async (message: string) => (await pick(message, [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }])) === 'yes',
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
     onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, caches, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),

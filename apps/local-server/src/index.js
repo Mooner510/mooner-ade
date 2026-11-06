@@ -14,7 +14,7 @@ import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
-import { terminalProcesses } from './terminal-processes.js';
+import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
 import { uploadOverSsh } from './ssh-upload.js';
 import { createRemoteAgent } from './remote-agent.js';
@@ -23,6 +23,7 @@ import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
 import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { readClaudeCache } from './claude-cache.js';
+import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
@@ -805,12 +806,55 @@ const sshTimer = setInterval(async () => {
   } catch (error) { console.warn(`터미널 프로세스 확인 실패: ${error.message}`); } finally { sshPolling = false; }
 }, 3000);
 sshTimer.unref();
+// Whether anything in any open project would be cut off by restarting the app (the auto-updater asks over IPC before it does).
+// Each reason names where it is and what runs: a working agent, a Claude with a background task or wakeup still pending, a command in a plain shell.
+// Anything that cannot be verified counts as busy rather than being guessed idle; a terminal over ssh is only busy while its agent reports working.
+async function busyReport() {
+  const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
+  const reasons = [];
+  if (!live.length) return { busy: false, reasons };
+  const table = await processTable(live.filter(item => item.terminal.native.pid).map(item => item.terminal.native.pid)).catch(() => null);
+  const inspect = table && terminalProcesses(table);
+  for (const { project, id, terminal } of live) {
+    const where = { project: path.basename(project.root), terminal: terminal.cwd ? path.basename(terminal.cwd) : id.slice(0, 6) };
+    const found = inspect && terminal.native.pid ? inspect(terminal.native.pid) : { agent: terminal.agent, agentPid: terminal.agentPid, ssh: Boolean(terminal.ssh), descendants: null };
+    const working = terminal.status.status?.state === 'working';
+    if (found.ssh) { if (working) reasons.push({ ...where, kind: 'turn', agent: terminal.agent ?? undefined }); continue; }
+    if (found.agent === 'claude' && found.agentPid) {
+      if (working) { reasons.push({ ...where, kind: 'turn', agent: 'claude' }); continue; }
+      const dir = await accounts.agentFolder('claude', found.agentPid, project.root).catch(() => null);
+      const result = dir ? await claudeBusy(dir, found.agentPid).catch(error => ({ busy: true, kind: 'unknown', detail: error.message })) : { busy: true, kind: 'unknown', detail: 'Claude 설정 폴더를 찾지 못했습니다' };
+      if (result.busy) reasons.push({ ...where, agent: 'claude', kind: result.kind, ...(result.detail && { detail: result.detail }) });
+      continue;
+    }
+    if (found.agent) { if (working) reasons.push({ ...where, kind: 'turn', agent: found.agent }); continue; }
+    if (!found.descendants) { reasons.push({ ...where, kind: working ? 'turn' : 'unknown', ...!working && { detail: '프로세스 목록을 읽지 못했습니다' } }); continue; }
+    const [command] = runningCommands(found.descendants);
+    if (command) {
+      const first = command.command.match(/^"([^"]*)"|^\S+/) ?? [], name = (first[1] ?? first[0] ?? '').replaceAll('\\', '/').split('/').pop().replace(/\.exe$/i, '');
+      reasons.push({ ...where, kind: 'command', detail: name });
+    }
+  }
+  return { busy: reasons.length > 0, reasons };
+}
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
+// The 3 s poll records each Claude's session id; one last pass means an update restart resumes the conversation as it is now, not as of a few seconds ago.
+// Bounded, because the app force-kills the server 5 s after asking it to stop.
+async function syncSessionsBeforeExit() {
+  const syncs = [];
+  for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
+    if (terminal.exited || terminal.ssh || terminal.agent !== 'claude' || !terminal.agentPid) continue;
+    syncs.push(accounts.agentFolder('claude', terminal.agentPid, project.root).then(dir => dir && syncClaudeSession(project.directory, id, terminal.agentPid, dir)).catch(() => {}));
+  }
+  await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
+}
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); processTable.close();
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer);
+  await syncSessionsBeforeExit();
+  processTable.close();
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
@@ -820,4 +864,10 @@ process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void sh
 process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
 process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
-process.on('message', message => { if (message?.type === 'shutdown') void shutdown().finally(() => process.exit(0)); });
+process.on('message', message => {
+  if (message?.type === 'shutdown') void shutdown().finally(() => process.exit(0));
+  else if (message?.type === 'busy?') {
+    const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
+    busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
+  }
+});

@@ -8,7 +8,7 @@ const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const TAIL = 2 * 1024 * 1024;
 const TTL = { '5m': 300, '1h': 3600 };
 
-async function transcriptOf(configDir, live) {
+export async function transcriptOf(configDir, live) {
   const name = `${live.sessionId}.jsonl`, projects = path.join(configDir, 'projects');
   const direct = path.join(projects, String(live.cwd ?? '').replace(/[^a-zA-Z0-9]/g, '-'), name);
   if (await fs.access(direct).then(() => true, () => false)) return direct;

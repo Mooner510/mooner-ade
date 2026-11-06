@@ -13,7 +13,7 @@ function AboutSettings() {
   useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.version), () => {}); }, []);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
-    <Row title="현재 버전" hint="새 버전은 실행 5초 뒤와 이후 6시간마다 자동으로 확인합니다."><span>{version || '—'}</span></Row>
+    <Row title="현재 버전" hint="새 버전은 실행 5초 뒤와 이후 30분마다 자동으로 확인합니다. 실행 중인 작업이 있으면 끝난 뒤에 설치하도록 고를 수 있습니다."><span>{version || '—'}</span></Row>
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교합니다. 새 버전이 있으면 설치 여부를 묻습니다.">
       <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
@@ -161,9 +161,9 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
 export function SettingsModal({ settings, onChange, onClose, shortcuts }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; shortcuts: { label: string; keys: string }[] }) {
   const [section, setSection] = useState<Section>('appearance'), [aiTab, setAiTab] = useState<AiTab>('common');
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
-  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'usageRefresh', min: number, max: number, step = 1) =>
+  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'usageRefresh', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'followUpQueue' | 'usageColors' | 'claudeSession') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'followUpQueue' | 'usageColors' | 'claudeSession') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -252,6 +252,8 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
               <h4 className="setting-group">프롬프트 캐시·입력</h4>
               <Row title="프롬프트 캐시 타이머" hint="터미널 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
               {settings.cacheTimer && <Row title="식기 전 경고 시점" hint="남은 시간이 이 비율 이하이면 노란색(곧 식음)으로 바뀝니다. (5–50%)">{number('cacheWarn', 5, 50)}</Row>}
+              <Row title="캐시 만료 시 전송 경고" hint="캐시가 식었거나 곧 식을 때 메시지를 보내려 하면 먼저 확인을 받고, 허락하지 않으면 보내지 않습니다. 후속 대기열의 자동 전송에도 적용됩니다. 캐시 타이머 표시와는 별개입니다.">{toggle('cacheSendWarn')}</Row>
+              {settings.cacheSendWarn && <Row title="경고 기준 남은 시간(분)" hint="1시간 캐시에서 남은 시간이 이 값 이하이면 경고합니다. (1–60분) 5분 캐시는 이미 식었을 때만 경고합니다.">{number('cacheSendWarnMinutes', 1, 60)}</Row>}
               <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
             </>}
           </>}
