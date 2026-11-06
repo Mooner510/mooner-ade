@@ -1,8 +1,8 @@
 import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
-import { statusLayout, usageHue, type Settings } from './Editor';
+import { agentArgs, statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton } from './Icon';
-import { Launchers, launchers, Panes, type Agent, type AgentEventKind, type EditorCtx, type TerminalBus } from './Panes';
+import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
@@ -11,8 +11,8 @@ import { Dropdown, type Ask, type GitState } from './views';
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
-export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean };
-export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean };
+export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache };
+export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
@@ -62,7 +62,7 @@ const untilReset = (at: number) => {
   return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
-const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean }) {
+const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
   const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
@@ -73,9 +73,9 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     if (!active) return;
     let live = true;
     const tick = () => { if (live) void load(); };
-    tick(); const timer = setInterval(tick, 120000);
+    tick(); const timer = setInterval(tick, refresh * 1000);
     return () => { live = false; clearInterval(timer); };
-  }, [load, active]);
+  }, [load, active, refresh]);
   if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
   const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
@@ -121,10 +121,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [working, setWorking] = useState<Set<string>>(new Set());
   // Terminals whose shell currently runs an ssh client (reported by the server).
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
+  const [caches, setCaches] = useState<Record<string, ClaudeCache>>({});
+  const dropCache = (id: string) => setCaches(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const settingsRef = useRef(settings); settingsRef.current = settings;
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
@@ -309,11 +312,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     return () => window.removeEventListener('focus', clear);
   }, [active, focus, activeTab, needsYou]);
   const attentionCount = Object.keys(attention).length;
+  const cacheOf = (id: string) => agentOf(id) === 'claude' ? caches[id] : undefined;
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
-    return { id: tab.id, label: tabLabel(tab), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)),
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id })) : [] };
+    return { id: tab.id, label: tabLabel(tab), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined,
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id) })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, tabs: JSON.parse(tabInfo), activeTab });
@@ -344,7 +348,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       const dead = leafList(tree).filter(leaf => isTerminal(leaf) && !live.has(leaf.id)).slice(0, 16);
       const reopened = await Promise.all(dead.map(async leaf => {
         try {
-          const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id } : {};
+          const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id, args: agentArgs(settingsRef.current, leaf.agent) } : {};
           const result = await call<{ id: string; command?: string }>('terminal/open', { ...agent, ...(leaf.cwd ? { path: leaf.cwd } : {}) }).catch(() => call<{ id: string; command?: string }>('terminal/open', agent));
           if (result.command && leaf.agent) { refs.pending.current.set(result.id, result.command); setLaunched(previous => ({ ...previous, [result.id]: leaf.agent! })); }
           renamed.set(leaf.id, result.id); live.add(result.id);
@@ -413,7 +417,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
               setWorking(previous => new Set([...previous].filter(item => item !== message.id)));
               setLaunched(previous => { const next = { ...previous }; delete next[message.id]; return next; });
             }
+          } else if (message.type === 'terminal/cache') {
+            if (message.cache) setCaches(previous => ({ ...previous, [message.id]: message.cache })); else dropCache(message.id);
           } else if (message.type === 'terminal/exit') {
+            dropCache(message.id);
             // `lost`: the pty-host connection dropped, not the shell. Keep the pane so the saved layout survives and can be revived.
             if (!message.lost) removeTerminalPane(message.id);
             void refresh().catch(report);
@@ -457,7 +464,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // ---- terminals ----
   async function openTerminalLeaf(anchorId: string, direction: 'row' | 'column' = 'row', path?: string, command = '') {
     const agent = detectAgent(command);
-    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent } : {}) });
+    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent, args: agentArgs(settings, agent) } : {}) });
     if (command) {
       refs.pending.current.set(result.id, result.command || command);
       if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
@@ -475,7 +482,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   async function fillLauncher(id: string, command: string) {
     const agent = detectAgent(command);
-    const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent } : {});
+    const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent, args: agentArgs(settings, agent) } : {});
     if (command) {
       refs.pending.current.set(result.id, result.command || command);
       if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
@@ -593,12 +600,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   const showReview = () => { setRightVisible(true); run(refreshGit); };
   const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
+  const launchers = allLaunchers.filter(item => !settings.agentsOff.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
     const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
     if (item) await launch(item.command, where);
   }
-  const commands: Command[] = [
+  const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', keys: 'mod+shift+t', run: () => newTab() },
     { id: 'newTab2', label: '새 탭', keys: 'alt+t', hidden: true, run: () => newTab() },
     { id: 'newClaude', label: '새 탭에서 Claude Code 실행', run: () => launch('claude', 'tab') },
@@ -632,6 +640,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'theme', label: '색 테마 전환', run: () => setSettings(previous => ({ ...previous, theme: previous.theme === 'dark' ? 'light' : 'dark' })) },
     ...projectCommands
   ];
+  // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
+  const commands = allCommands.filter(command => !settings.agentsOff.includes(command.id.replace(/^(?:new|split)/, '').toLowerCase()));
   refs.commands.current = commands;
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -665,7 +675,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     followUpInput: async (id: string, prompt: string, sequence: number, requestId: string) => (await call<{ accepted: boolean }>('terminal/follow-up', { id, prompt, sequence, requestId })).accepted,
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
     onAgentResolved: clearAttention,
-    ssh: sshSet, working, attention, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),
+    ssh: sshSet, working, attention, caches, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),
     onAgentEvent: (id: string, kind: AgentEventKind) => {
       const agent = agentOf(id), owner = refs.paneTabs.current.find(tab => leaves(tab.pane).includes(id)); if (!agent || !owner) return;
       const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
@@ -695,8 +705,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
     cpu: system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>,
     memory: system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>,
-    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} />,
-    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession />,
+    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
+    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
@@ -704,7 +714,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
-      : <Launchers title="새 탭" autoFocus onLaunch={command => run(() => launch(command, 'split'))} />}
+      : <Launchers title="새 탭" autoFocus hidden={settings.agentsOff} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar">

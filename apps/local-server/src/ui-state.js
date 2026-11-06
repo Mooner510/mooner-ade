@@ -1,10 +1,13 @@
 import { fault } from './files.js';
 
+// Typed into the agent's launch line, so a newline or other control character would run a second command.
+export const validAgentArgs = value => typeof value === 'string' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
+
 function validateSettings(settings, invalid) {
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 4096) invalid();
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 8192) invalid();
   if (settings.theme !== undefined && !['dark', 'light'].includes(settings.theme)) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
-  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'followUpQueue']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();
   if (settings.scrollback !== undefined && !(Number.isInteger(settings.scrollback) && settings.scrollback >= 500 && settings.scrollback <= 100000)) invalid();
@@ -14,6 +17,10 @@ function validateSettings(settings, invalid) {
   for (const name of ['soundDone', 'soundAttention']) if (settings[name] !== undefined && !(typeof settings[name] === 'string' && /^[a-z]{1,16}$/.test(settings[name]))) invalid();
   if (settings.terminalFont !== undefined && !(typeof settings.terminalFont === 'string' && settings.terminalFont.length <= 200)) invalid();
   if (settings.terminalShell !== undefined && !(typeof settings.terminalShell === 'string' && settings.terminalShell.length <= 512)) invalid();
+  for (const name of ['claudeArgs', 'codexArgs', 'cursorArgs']) if (settings[name] !== undefined && !validAgentArgs(settings[name])) invalid();
+  if (settings.cacheWarn !== undefined && !(Number.isInteger(settings.cacheWarn) && settings.cacheWarn >= 5 && settings.cacheWarn <= 50)) invalid();
+  if (settings.usageRefresh !== undefined && !(Number.isInteger(settings.usageRefresh) && settings.usageRefresh >= 60 && settings.usageRefresh <= 600)) invalid();
+  for (const name of ['agentsOff', 'agentsMuted']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 8 && settings[name].every(item => ['claude', 'codex', 'cursor'].includes(item)))) invalid();
   for (const name of ['statusItems', 'statusLeft', 'statusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
 }
 

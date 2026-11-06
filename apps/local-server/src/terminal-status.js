@@ -74,7 +74,10 @@ export function createTerminalStatus(reply, agentOf = () => null) {
       return agent ? { agent, state: progress, source: 'progress' } : null;
     },
     feed(data, replay = false) {
-      for (const char of data) {
+      for (let index = 0; index < data.length; index++) {
+        // Outside an escape, everything up to the next ESC is plain output and can be skipped.
+        if (!escaped && body === null) { index = data.indexOf('\x1b', index); if (index < 0) return; }
+        const char = data[index];
         if (escaped) {
           escaped = false;
           if (body !== null && char === '\\') { report(body, replay); body = null; }
