@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkForUpdate } from './updater.js';
+import { checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
 app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
@@ -194,7 +194,23 @@ ipcMain.handle('ade:pick-folder', async (event, options) => {
 });
 ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });
 
-const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual });
+// Asks the server what an app restart would cut off (running agent turns, background tasks, commands). The answer is
+// { busy, reasons }; a missing or silent server rejects, which the updater counts as busy instead of guessing idle.
+let busyRequests = 0;
+function serverBusy() {
+  const child = server;
+  if (!child) return Promise.resolve({ busy: false, reasons: [] }); // no server, so no terminals either
+  if (!child.connected) return Promise.reject(new Error('서버와 연결되어 있지 않습니다'));
+  return new Promise((resolve, reject) => {
+    const id = ++busyRequests;
+    const finish = result => { clearTimeout(timer); child.off('message', onMessage); result instanceof Error ? reject(result) : resolve(result); };
+    const onMessage = message => { if (message?.type === 'busy' && message.id === id) finish({ busy: message.busy, reasons: message.reasons }); };
+    const timer = setTimeout(() => finish(new Error('서버가 작업 상태에 응답하지 않습니다')), 10_000);
+    child.on('message', onMessage);
+    child.send({ type: 'busy?', id }, error => { if (error) finish(error); });
+  });
+}
+const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, getBusy: serverBusy });
 ipcMain.handle('ade:app-info', () => ({ version: app.getVersion() }));
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
 
@@ -219,9 +235,10 @@ if (!app.requestSingleInstanceLock()) {
       if (dev) await startPtyHost(); createWindow(await startServer());
       if (dev) watchServerSources();
       else {
-        // Once shortly after start, then every 6 hours for an app that stays open for days.
+        // Once shortly after start, then every 30 minutes for an app that stays open for days.
+        sweepStaleUpdates();
         const background = () => checkForUpdate(updateTarget()).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`));
-        setTimeout(background, 5000); setInterval(background, 6 * 60 * 60 * 1000).unref();
+        setTimeout(background, 5000); setInterval(background, UPDATE_CHECK_INTERVAL_MS).unref();
       }
     }
     catch (error) { dialog.showErrorBox('무너에이드', error instanceof Error ? error.message : String(error)); app.quit(); }

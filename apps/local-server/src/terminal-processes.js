@@ -26,12 +26,13 @@ export function terminalProcesses(table) {
   for (const entry of table) children.set(entry.ppid, [...(children.get(entry.ppid) || []), entry]);
   return pid => {
     let agent = null, agentPid = null, ssh = false, sshCommand = null;
-    const seen = new Set(), queue = [pid], underAgent = new Set();
+    const seen = new Set(), queue = [pid], underAgent = new Set(), descendants = [];
     for (let i = 0; i < queue.length; i++) {
       const next = queue[i]; if (seen.has(next)) continue; seen.add(next);
       // Include the root: a shell may exec the CLI and retain the PTY's original PID.
       const entry = byPid.get(next);
       let isAgent = false;
+      if (entry && next !== pid) descendants.push({ pid: entry.pid, command: entry.command });
       if (entry) {
         const name = executable((entry.command.match(/^"[^"]*"|^\S+/) || [''])[0]), found = agentCommand(entry.command);
         // An ssh below a local agent or git is a tool call (e.g. git over ssh), not the user's remote session.
@@ -43,6 +44,10 @@ export function terminalProcesses(table) {
       const nested = isAgent || underAgent.has(next);
       for (const child of children.get(next) || []) { if (nested) underAgent.add(child.pid); queue.push(child.pid); }
     }
-    return { agent, agentPid, ssh, sshCommand };
+    return { agent, agentPid, ssh, sshCommand, descendants };
   };
 }
+
+// Console plumbing that lives below an idle shell on Windows; anything else under a plain shell is a command the user started.
+const SHELL_HELPERS = /^(conhost|openconsole|werfault)(\.exe)?$/;
+export const runningCommands = descendants => descendants.filter(item => !SHELL_HELPERS.test(executable((item.command.match(/^"[^"]*"|^\S+/) || [''])[0])));

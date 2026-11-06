@@ -10,6 +10,7 @@ import { Icon, IconButton, type IconName } from './Icon';
 import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
+import { cacheSendWarning, cacheSendWarningText, isClaudeMessageText, type CacheSendWarning } from './claude-cache-warning';
 export type { Agent } from './terminal-agent';
 
 // Terminal-generated reports: focus in/out (CSI I / O) and SGR mouse events.
@@ -86,6 +87,8 @@ export const CacheTimer = memo(function CacheTimer({ cache, working, warn = 20 }
 });
 type Props = {
   followUpInput(id: string, prompt: string, sequence: number, requestId: string): Promise<boolean>;
+  // Asks whether to send anyway while the prompt cache is cold or about to be; resolves false unless the user accepts.
+  confirmSend(message: string): Promise<boolean>;
   pane: Pane; visible: boolean; onLayout(pane: Pane): void; send(message: object): boolean; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; caches: Record<string, ClaudeCache>; focus: string; zoom: string;
   onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; onLaunch(id: string, command: string): void; editor: EditorCtx;
 };
@@ -123,7 +126,7 @@ function terminalTheme(element: Element = document.documentElement): ITheme {
 
 const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
 
-function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
@@ -139,8 +142,10 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
   const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {});
-  const callbacks = useRef({ send, followUpInput, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
+  const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
+  // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
+  const cachesRef = useRef(caches); cachesRef.current = caches;
   useEffect(() => {
     const terminal = new Terminal({ fontSize: settings.terminalFontSize, fontFamily: fontStack(settings), lineHeight: settings.lineHeight, cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, allowProposedApi: true,
       // xterm's default OSC 8 link handler asks via confirm() and then opens a blank window it navigates afterwards, which the desktop
@@ -192,6 +197,26 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
         return (line?.isWrapped ? '' : '\n') + (line?.translateToString(true) || '');
       }).join('');
     };
+    // Send warning: a message about to reach a Claude whose prompt cache is cold (or nearly) needs the user's OK first, and
+    // without it nothing is sent. Enter is held in onData; the follow-up queue skips onData, so flushQueue asks on its own.
+    let sendGate = false, queueAsking = false, queueHold = '', queueAllowed = '', lastTyped = 0;
+    const sendWarning = () => cacheSendWarning(cachesRef.current[id], Date.now(), { enabled: settingsRef.current.cacheSendWarn, minutes: settingsRef.current.cacheSendWarnMinutes, working });
+    const enterWarning = () => {
+      if (sshRef.current || asking || replays || callbacks.current.agentOf(id) !== 'claude') return;
+      const warning = sendWarning(); if (!warning) return;
+      const typed = claudeComposerText(screenText());
+      // The last typed characters may not be echoed yet, which makes the composer look empty; err towards asking.
+      return isClaudeMessageText(typed) || (!typed && Date.now() - lastTyped < 80) ? warning : undefined;
+    };
+    const askBeforeSend = (warning: CacheSendWarning) => {
+      sendGate = true;
+      void callbacks.current.confirmSend(cacheSendWarningText(warning)).catch(() => false).then(accepted => {
+        sendGate = false;
+        if (term.current !== terminal) return;
+        if (accepted) { followUp.current.submitted(); question.input('\r'); callbacks.current.send({ type: 'terminal/input', id, data: '\r' }); }
+        terminal.focus();
+      });
+    };
     flushQueue.current = () => {
       // Reading the screen is the costly part; with nothing queued there is nothing to send.
       if (sendingFollowUp || !followUp.current.items.length) return;
@@ -199,6 +224,19 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       const next = followUp.current.next((followUpSupported || status?.agent === 'claude' && fromProgramStatus(status)) && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
         && !question.observe(screen, title) && hasEmptyClaudeComposer(screen));
       if (next) {
+        const warning = sendWarning(), key = String(cachesRef.current[id]?.at);
+        if (warning && queueAllowed !== key) {
+          // Asked once per cache: a declined item stays queued until a new request starts the cache over, instead of asking after every output chunk.
+          if (!queueAsking && !sendGate && queueHold !== key) {
+            queueAsking = true;
+            void callbacks.current.confirmSend(`후속 대기열의 메시지를 자동으로 보내려 합니다.\n${cacheSendWarningText(warning)}`).catch(() => false).then(accepted => {
+              queueAsking = false;
+              if (term.current !== terminal) return;
+              if (accepted) { queueAllowed = key; queueHold = ''; flushQueue.current(); } else queueHold = key;
+            });
+          }
+          return;
+        }
         sendingFollowUp = true; clearTimeout(retryTimer);
         let accepted = false;
         void callbacks.current.followUpInput(id, next.text, sequence, `${queueId}:${next.id}`).then(result => {
@@ -309,8 +347,14 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
     bus.listeners.set(id, receive);
     terminal.onData(data => {
       if (replays && QUERY_REPLY.test(data)) return;
+      // A send confirmation is open: keystrokes must not reach Claude, or land around the held Enter, until it is answered.
+      if (sendGate && !REPORT.test(data)) return;
       // Esc/Ctrl+C interrupt the turn; the queue keeps going once the CLI reports it idle (4;0).
-      if (data === '\r') followUp.current.submitted();
+      if (data === '\r') {
+        const warning = enterWarning();
+        if (warning) { askBeforeSend(warning); return; }
+        followUp.current.submitted();
+      } else if (data.charCodeAt(0) >= 32) lastTyped = Date.now();
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
       // Typing and reports do not change the agent's turn state.
       if (!REPORT.test(data)) question.input(data);
