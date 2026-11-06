@@ -10,7 +10,7 @@
 
 ## 에이전트
 
-Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승인은 CLI 자체 화면을 따르며, 서버는 CLI가 보내는 OSC 7501 상태 보고와 프로세스 트리로 작업 상태·SSH 여부·세션 ID를 추적합니다. 서버가 직접 모델을 호출하는 경로는 없습니다. 준비 상태 확인만 `claude auth status`와 `codex app-server`의 계정 조회를 사용합니다.
+Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승인은 CLI 자체 화면을 따르며, 서버는 CLI가 보내는 OSC 7501 상태 보고와 프로세스 트리로 작업 상태·SSH 여부·세션 ID를 추적합니다. 로컬 Claude Code는 `<config>/sessions/<pid>.json`과 대화 transcript의 마지막 메인 요청(`api-request` 시작 시각, 요청한 캐시 TTL)으로 프롬프트 캐시 만료 시각을 계산해 해당 pane 헤더의 타이머에 보냅니다. 서버가 직접 모델을 호출하는 경로는 없습니다. 준비 상태 확인만 `claude auth status`와 `codex app-server`의 계정 조회를 사용합니다.
 
 ## 인증과 연결
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from './api';
-import { defaultSettings, statusLayout, usageHue, type Settings } from './Editor';
+import { agentNames, defaultSettings, statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
@@ -20,16 +20,23 @@ function AboutSettings() {
   </>;
 }
 
-type Section = 'appearance' | 'terminal' | 'status' | 'notify' | 'diff' | 'wakatime' | 'keys' | 'about';
+type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
+  { id: 'ai', label: 'AI 툴', icon: 'claude' },
   { id: 'status', label: '상태바', icon: 'info' },
-  { id: 'notify', label: '알림', icon: 'bell' },
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
+];
+type AiTab = 'common' | 'claude' | 'codex' | 'cursor';
+const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
+  { id: 'common', label: '공용', icon: 'settings' },
+  { id: 'claude', label: agentNames.claude, icon: 'claude' },
+  { id: 'codex', label: agentNames.codex, icon: 'codex' },
+  { id: 'cursor', label: agentNames.cursor, icon: 'cursor' }
 ];
 export const statusLabels: Record<string, string> = {
   connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', changes: '변경 파일 수', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
@@ -86,13 +93,7 @@ function StatusLayoutEditor({ settings, onChange }: { settings: Settings; onChan
   return <>
     <p className="setting-note">항목을 끌어 왼쪽·오른쪽과 순서를 정하고, 스위치로 켜고 끕니다. 키보드로는 항목에서 Alt+화살표를 누릅니다.</p>
     <div className="status-layout">{column('left')}{column('right')}</div>
-    <Row title="사용량 % 색상" hint="Claude Code statusline처럼 사용률에 따라 초록 → 노랑 → 빨강으로 색을 바꿉니다. 끄면 80% 이상만 경고색으로 표시합니다.">
-      {settings.usageColors && <span className="usage-preview" aria-hidden="true">{[10, 45, 70, 90, 100].map(value => <span key={value} className="usage-window graded" style={{ '--usage-hue': usageHue(value) } as CSSProperties}>{value}%</span>)}</span>}
-      <input type="checkbox" role="switch" aria-label="사용량 % 색상" checked={settings.usageColors} onChange={event => onChange({ ...settings, usageColors: event.target.checked })} />
-    </Row>
-    <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 Claude Code 사용량에 주간 한도만 표시합니다.">
-      <input type="checkbox" role="switch" aria-label="Claude 5시간 한도 표시" checked={settings.claudeSession} onChange={event => onChange({ ...settings, claudeSession: event.target.checked })} />
-    </Row>
+    <p className="setting-note">Claude Code·Codex 사용량 표시(색상, 5시간 한도, 갱신 주기)는 ‘AI 툴’ 분류에 있습니다.</p>
     <div className="actions"><button onClick={() => onChange({ ...settings, statusLeft: defaultSettings.statusLeft, statusRight: defaultSettings.statusRight, statusItems: defaultSettings.statusItems })}><Icon name="refresh" />상태바 기본 배치로</button></div>
   </>;
 }
@@ -158,12 +159,21 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
 }
 
 export function SettingsModal({ settings, onChange, onClose, shortcuts }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; shortcuts: { label: string; keys: string }[] }) {
-  const [section, setSection] = useState<Section>('appearance');
+  const [section, setSection] = useState<Section>('appearance'), [aiTab, setAiTab] = useState<AiTab>('common');
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
-  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight', min: number, max: number, step = 1) =>
+  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'usageRefresh', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'followUpQueue' | 'usageColors' | 'claudeSession') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
+  // Switch on = the agent is not in the list (shown / alerting).
+  const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
+    <input type="checkbox" role="switch" aria-label={label} checked={!settings[key].includes(agent)} onChange={event => set(key, event.target.checked ? settings[key].filter(item => item !== agent) : [...settings[key], agent])} />;
+  const statusSwitch = (id: string, label: string) =>
+    <input type="checkbox" role="switch" aria-label={label} checked={settings.statusItems.includes(id)} onChange={event => set('statusItems', event.target.checked ? [...settings.statusItems.filter(item => item !== id), id] : settings.statusItems.filter(item => item !== id))} />;
+  const argsRow = (agent: 'claude' | 'codex' | 'cursor', key: 'claudeArgs' | 'codexArgs' | 'cursorArgs', example: string) =>
+    <Row title={`${agentNames[agent]} 추가 실행 인자`} hint={`실행할 때 명령 뒤에 붙입니다. 예: ${example} · 새로 여는 터미널과 되살리는 터미널에 적용되고, 이미 실행 중인 에이전트는 그대로입니다.`}>
+      <input type="text" value={settings[key]} maxLength={512} placeholder={example} aria-label={`${agentNames[agent]} 추가 실행 인자`}
+        onChange={event => set(key, event.target.value.replace(/[\x00-\x1f\x7f]/g, ''))} /></Row>;
   const soundPicker = (title: string, hint: string, key: 'soundDone' | 'soundAttention') =>
     <Row title={title} hint={hint}><Dropdown label={title} value={settings[key]} options={soundIds.map(id => ({ value: id, label: sounds[id].label }))} onChange={value => { set(key, value); playSound(value, settings.soundVolume); }} />
       <IconButton icon="bell" label={`${title} 미리 듣기`} onClick={() => playSound(settings[key], settings.soundVolume)} /></Row>;
@@ -195,15 +205,55 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
         {section === 'status' && <>
           <StatusLayoutEditor settings={settings} onChange={onChange} />
         </>}
-        {section === 'notify' && <>
-          <Row title="에이전트 작업 완료" hint="터미널의 Claude Code·Codex·Cursor CLI가 5초 넘게 출력을 멈췄을 때(완료 또는 입력 대기) 알립니다. 해당 터미널을 보고 있을 때는 알리지 않습니다.">{toggle('notifyDone')}</Row>
-          <Row title="승인·입력 요청" hint="터미널의 Claude Code·Codex·Cursor CLI가 벨(BEL)로 확인을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
-          <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
-          {settings.notifySound && <>
-            <Row title="소리 확장" hint="소리 크기를 최대 200%까지 조절합니다."><input type="checkbox" role="switch" aria-label="소리 확장" checked={settings.soundVolumeExtended} onChange={event => onChange({ ...settings, soundVolumeExtended: event.target.checked, soundVolume: event.target.checked ? settings.soundVolume : Math.min(settings.soundVolume, 100) })} /></Row>
-            <Row title="소리 크기" hint={settings.soundVolumeExtended ? '0–200%' : '0–100%'}><input type="range" min={0} max={settings.soundVolumeExtended ? 200 : 100} step={5} value={settings.soundVolume} aria-label="소리 크기" onChange={event => set('soundVolume', Number(event.target.value))} /><span className="range-value">{settings.soundVolume}%</span></Row>
-            {soundPicker('완료 소리', '작업이 멈췄을 때 재생합니다.', 'soundDone')}
-            {soundPicker('입력 요청 소리', '확인이 필요할 때 재생합니다.', 'soundAttention')}
+        {section === 'ai' && <>
+          <div className="ai-tabs" role="tablist" aria-label="AI 툴 분류">
+            {aiTabs.map(item => <button key={item.id} role="tab" aria-selected={aiTab === item.id} onClick={() => setAiTab(item.id)}>
+              <Icon name={item.icon} size={14} />{item.label}{item.id !== 'common' && settings.agentsOff.includes(item.id) && <small>숨김</small>}
+            </button>)}
+          </div>
+          {aiTab === 'common' && <>
+            <h4 className="setting-group">알림</h4>
+            <p className="setting-note">모든 에이전트에 공통입니다. 에이전트마다 끄려면 해당 탭의 ‘알림’을 사용하세요.</p>
+            <Row title="에이전트 작업 완료" hint="터미널의 Claude Code·Codex·Cursor CLI가 5초 넘게 출력을 멈췄을 때(완료 또는 입력 대기) 알립니다. 해당 터미널을 보고 있을 때는 알리지 않습니다.">{toggle('notifyDone')}</Row>
+            <Row title="승인·입력 요청" hint="터미널의 Claude Code·Codex·Cursor CLI가 벨(BEL)로 확인을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
+            <Row title="보고 있는 터미널도 알림" hint="끄면 지금 보고 있는 터미널의 에이전트는 알리지 않습니다. 켜면 포커스가 있어도 알립니다.">{toggle('notifyLooking')}</Row>
+            <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
+            {settings.notifySound && <>
+              <Row title="소리 확장" hint="소리 크기를 최대 200%까지 조절합니다."><input type="checkbox" role="switch" aria-label="소리 확장" checked={settings.soundVolumeExtended} onChange={event => onChange({ ...settings, soundVolumeExtended: event.target.checked, soundVolume: event.target.checked ? settings.soundVolume : Math.min(settings.soundVolume, 100) })} /></Row>
+              <Row title="소리 크기" hint={settings.soundVolumeExtended ? '0–200%' : '0–100%'}><input type="range" min={0} max={settings.soundVolumeExtended ? 200 : 100} step={5} value={settings.soundVolume} aria-label="소리 크기" onChange={event => set('soundVolume', Number(event.target.value))} /><span className="range-value">{settings.soundVolume}%</span></Row>
+              {soundPicker('완료 소리', '작업이 멈췄을 때 재생합니다.', 'soundDone')}
+              {soundPicker('입력 요청 소리', '확인이 필요할 때 재생합니다.', 'soundAttention')}
+            </>}
+            <h4 className="setting-group">사용량 표시</h4>
+            <Row title="사용량 % 색상" hint="Claude Code statusline처럼 사용률에 따라 초록 → 노랑 → 빨강으로 색을 바꿉니다. 끄면 80% 이상만 경고색으로 표시합니다.">
+              {settings.usageColors && <span className="usage-preview" aria-hidden="true">{[10, 45, 70, 90, 100].map(value => <span key={value} className="usage-window graded" style={{ '--usage-hue': usageHue(value) } as CSSProperties}>{value}%</span>)}</span>}
+              {toggle('usageColors')}
+            </Row>
+            <Row title="사용량 갱신 주기" hint="초 단위 (60–600). 한도 조회는 서버에서 3분간 재사용하므로 더 짧게 해도 같은 값이 보일 수 있습니다. 상태바의 사용량을 눌러도 바로 새로고침합니다.">{number('usageRefresh', 60, 600, 10)}</Row>
+          </>}
+          {aiTab !== 'common' && <>
+            <h4 className="setting-group">실행</h4>
+            <Row title="런처에 표시" hint="새 탭 메뉴, 새 pane, 명령 팔레트에 보입니다. 끄면 목록에서만 숨기며 실행 중인 에이전트에는 영향이 없습니다.">{inList('agentsOff', aiTab, `${agentNames[aiTab]} 표시`)}</Row>
+            {aiTab === 'claude' && argsRow('claude', 'claudeArgs', '--model opus')}
+            {aiTab === 'codex' && argsRow('codex', 'codexArgs', '--model gpt-5')}
+            {aiTab === 'cursor' && argsRow('cursor', 'cursorArgs', '--model auto')}
+            <h4 className="setting-group">알림</h4>
+            <Row title="이 에이전트의 알림" hint="끄면 알림과 소리를 모두 끕니다. 사이드바의 표시는 그대로입니다. 알림 종류와 소리는 ‘공용’에서 정합니다.">{inList('agentsMuted', aiTab, `${agentNames[aiTab]} 알림`)}</Row>
+            {aiTab !== 'cursor' && <>
+              <h4 className="setting-group">사용량 (상태바)</h4>
+              {aiTab === 'claude' && <>
+                <Row title="사용량 표시" hint="5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.">{statusSwitch('claudeusage', 'Claude Code 사용량 표시')}</Row>
+              <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 주간 한도만 표시합니다.">{toggle('claudeSession')}</Row>
+              </>}
+              {aiTab === 'codex' && <Row title="사용량 표시" hint="Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.">{statusSwitch('codexusage', 'Codex 사용량 표시')}</Row>}
+              <p className="setting-note">색상과 갱신 주기는 ‘공용’에서 정합니다.</p>
+            </>}
+            {aiTab === 'claude' && <>
+              <h4 className="setting-group">프롬프트 캐시·입력</h4>
+              <Row title="프롬프트 캐시 타이머" hint="터미널 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
+              {settings.cacheTimer && <Row title="식기 전 경고 시점" hint="남은 시간이 이 비율 이하이면 노란색(곧 식음)으로 바뀝니다. (5–50%)">{number('cacheWarn', 5, 50)}</Row>}
+              <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
+            </>}
           </>}
         </>}
         {section === 'diff' && <>
