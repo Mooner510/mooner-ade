@@ -34,5 +34,5 @@ CHROME_PATH=/path/to/chrome pnpm e2e
 - 멀티 저장소 worktree 켜기·끄기, dirty 제거 거절, fast-forward 통합 확인
 - 앱 재시작 후 레이아웃·에이전트 세션 복구 확인
 - 큰 저장소·감시 자원 고갈 시 응답성과 폴링 확인
-
+- 캐시 타이머(`node --test tests/claude-cache.test.mjs`로 transcript 해석부터 확인): 로컬 Claude Code에서 한 번 요청하면 3초 안에 그 Claude pane 헤더 왼쪽에 🔥 `59:5x`(TTL은 transcript의 `promptCacheRequested` 값, 현재 구독 계정은 1시간)가 뜨는지, 남은 시간이 20% 아래로 내려가면 아이콘 없이 노란 시간만, 만료되면 파란 `식음` 한 단어로 바뀌는지, Claude가 작업 중일 때는 시간 대신 🔥 `캐시 사용중`이 뜨고 작업이 끝나면 다시 시간으로 돌아오는지, 툴팁의 마지막 요청 시각이 실제 요청 시작과 맞는지 확인. Claude pane을 여러 개 띄우면 각 pane 헤더에 자기 대화 기준 타이머가 따로 뜨고, `/clear` 직후·Claude 종료·SSH 안의 Claude에서는 타이머가 사라져야 합니다. 사이드바에서는 지금 보고 있지 않은 탭(분할 탭은 각 pane 줄)의 오른쪽 끝에만 같은 타이머가 작게 뜨고, 그 탭을 선택하면 사이드바에서 사라지는지, 알림 점·닫기 버튼과 겹치지 않는지 확인.
 이 항목들은 단위 테스트 통과만으로 완료 처리하지 않습니다.

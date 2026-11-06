@@ -22,6 +22,7 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
 import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { readClaudeCache } from './claude-cache.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
@@ -682,6 +683,7 @@ wss.on('connection', socket => {
         for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
         for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
         for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
+        for (const [id, terminal] of project.terminals) if (terminal.cache?.value) tagged({ type: 'terminal/cache', id, cache: terminal.cache.value });
       } else if (message.type === 'unsubscribe') {
         socket.projects.delete(project.id);
       } else if (socket.projects.has(project.id)) {
@@ -767,8 +769,18 @@ const sshTimer = setInterval(async () => {
         terminal.status.clear();
         terminal.statusKey = 'null'; broadcast(project, { type: 'terminal/status', id, status: null });
       }
-      // Each project may run Claude under its own account, whose folder holds this process's session file.
-      if (agent === 'claude' && agentPid && !ssh) await accounts.agentFolder('claude', agentPid, project.root).then(dir => syncClaudeSession(project.directory, id, agentPid, dir)).catch(() => {});
+      // Each project may run Claude under its own account, whose folder holds this process's session file and transcript.
+      let cache = null;
+      if (agent === 'claude' && agentPid && !ssh) {
+        const dir = await accounts.agentFolder('claude', agentPid, project.root).catch(() => null);
+        if (dir) {
+          await syncClaudeSession(project.directory, id, agentPid, dir).catch(() => {});
+          cache = await readClaudeCache(dir, agentPid, terminal.cache).catch(() => null);
+        }
+      }
+      terminal.cache = cache;
+      const cacheKey = JSON.stringify(cache?.value ?? null);
+      if (cacheKey !== (terminal.cacheKey ?? 'null')) { terminal.cacheKey = cacheKey; broadcast(project, { type: 'terminal/cache', id, cache: cache?.value ?? null }); }
       if (ssh !== Boolean(terminal.ssh)) { terminal.ssh = ssh; broadcast(project, { type: 'terminal/ssh', id, ssh }); }
       // Usage readings look up which account this agent runs under.
       terminal.agentPid = !ssh && agentPid || null;
