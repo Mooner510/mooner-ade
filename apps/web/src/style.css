@@ -171,6 +171,14 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .palette-button { display: inline-flex; align-items: center; gap: 8px; height: 28px; min-width: 220px; padding: 0 8px 0 10px; color: var(--muted); background: var(--surface); border-color: var(--border); }
 .palette-button > span:not(.icon) { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-button:hover { border-color: var(--border-strong); background: var(--raised); color: var(--fg); }
+/* Claude Code prompt-cache timer in the pane header: the hairline drains with the TTL; cold gets a tint, since sending then rewrites the whole conversation. */
+.cache-timer { position: relative; flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.cache-timer b { min-width: 4ch; font-weight: 600; }
+.cache-timer i { position: absolute; left: 6px; bottom: 1px; height: 2px; width: calc((100% - 12px) * var(--left)); border-radius: 1px; background: currentColor; opacity: .5; transition: width 1s linear; }
+.pane-tools > .cache-timer { grid-column: 1; justify-self: start; margin-left: -6px; }
+.cache-timer.hot, .cache-timer.using { color: var(--brand-claude); }
+.cache-timer.warm { color: var(--warn); }
+.cache-timer.cold { color: var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); }
 .workbench { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; padding: 0 6px; }
 .workbench > .right-panel { position: absolute; z-index: 20; top: 0; bottom: 0; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .statusbar { height: 26px; min-height: 26px; padding: 0 10px; gap: 4px; font-size: 12px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; color: var(--muted); background: var(--bg); }
@@ -400,6 +408,9 @@ dialog::backdrop { background: #0009; }
 .folder-tab > .question-alert, .group-pane > .question-alert { margin-left: auto; margin-right: 2px; }
 .folder-tab > .attn-dot + .ptab-close, .group-pane > .attn-dot + .ptab-close { margin-left: -9px; }
 .folder-tab > .question-alert + .ptab-close, .group-pane > .question-alert + .ptab-close { margin-left: -6px; }
+/* Sidebar: only on tabs you are not looking at, pushed right; whatever follows it (alert, dot, close) sits right after it. */
+.folder-tab > .cache-timer, .group-pane > .cache-timer { margin-left: auto; height: 18px; padding: 0 4px; }
+.folder-tab > .cache-timer ~ *, .group-pane > .cache-timer ~ * { margin-left: 0; }
 /* a tab split into several panes is drawn as one box that groups them */
 /* a split tab: one box that holds its terminals */
 .folder-group { display: flex; flex-direction: column; min-width: 0; padding: 6px; margin: 3px 0; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); }

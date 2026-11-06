@@ -39,7 +39,8 @@ const glyphs = {
   externalLink: 'open_in_new',
   layers: 'layers',
   info: 'info',
-  grip: 'drag_indicator'
+  grip: 'drag_indicator',
+  flame: 'local_fire_department'
 } as const;
 
 // Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's isometric cube.

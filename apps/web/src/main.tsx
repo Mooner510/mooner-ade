@@ -6,6 +6,7 @@ import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
 import { Modal } from './views';
+import { CacheTimer } from './Panes';
 import { Workspace, showKeys, type Command, type Hub, type SystemInfo, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import '@material-symbols/font-400/outlined.css';
 import './style.css';
@@ -406,6 +407,7 @@ function Shell() {
                   onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}
                   onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span><span className="folder-tab-label">{tab.label}</span>
+                  {!on && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} />}
                   {tab.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
                   <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>
                 </div>;
@@ -463,6 +465,7 @@ function Shell() {
                       onClick={() => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }}
                       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); } }}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>
+                      {!on && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />}
                       <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>)}
