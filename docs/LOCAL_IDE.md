@@ -57,7 +57,7 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 
 열린 프로젝트·공용 설정은 `app-state.json`, 최근 목록은 `recent.json`, 프로젝트별 레이아웃과 저장소 worktree 설정은 `<projectId>/state.json`입니다. 이전 버전이 만든 `<projectId>/runs/`(서버 SDK 실행 기록)는 더 이상 읽지 않으며 필요 없으면 지워도 됩니다.
 
-창 새로고침은 기존 서버의 PTY에 다시 붙고 최근 터미널 출력 256 KiB를 재생합니다. 앱 재시작은 저장된 레이아웃에 새 셸을 열며 예전 셸 프로세스나 명령 실행을 복원하지 않습니다.
+창 새로고침은 기존 서버의 PTY에 다시 붙고 최근 터미널 출력 256 KiB를 재생합니다. 앱 재시작은 저장된 레이아웃에 새 셸을 열며 예전 셸 프로세스나 명령 실행을 복원하지 않습니다. 자동 업데이트도 같은 재시작이라 터미널 프로세스는 모두 종료되고 Claude 대화만 `claude --resume`으로 이어지므로(진행 중이던 턴·승인 대기·백그라운드 작업은 이어지지 않습니다), 업데이터는 서버에 먼저 작업 중인 것이 있는지 묻고 모두 끝난 뒤에 재시작합니다. 서버는 종료 직전에 각 Claude의 세션 ID를 한 번 더 기록합니다. 재시작 뒤에도 프로세스를 살려 두려면 PTY 호스트를 앱과 분리해 상주시켜야 하는데, 현재는 `pnpm dev`에서만 쓰고 앱 종료와 함께 끝납니다.
 
 ADE의 Claude Code/Codex 실행 메뉴와 터미널에 직접 입력한 `claude`·`codex` 모두 각각의 대화 ID로 복구합니다. bash/zsh/sh/dash/fish/PowerShell에서 사용자 시작 설정을 먼저 읽고 ADE 셸에만 실행 함수를 연결합니다. 프로젝트 데이터의 `terminal-sessions/<terminalId>/`에 Claude의 `SessionStart` 훅 기록 또는 Codex의 터미널별 실행 로그를 보관합니다. Claude의 `/clear`·`/resume`, Codex의 새 대화·복구로 ID가 바뀌면 다음 복구에 반영합니다. ID가 없는 기존 기록은 `claude --resume` / `codex resume` 선택 화면을 엽니다. 최근 대화를 임의로 선택하지 않습니다.
 

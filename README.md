@@ -66,7 +66,7 @@ macOS에서는 `apps/desktop/dist/MoonerADE.app`, Windows에서는 `apps/desktop
 
 ### 릴리스와 자동 업데이트
 
-패키지된 앱(Windows 포터블, macOS `.app`)은 시작 5초 뒤와 6시간마다 GitHub 최신 릴리스를 확인하고, 새 버전이 있으면 받아서 교체한 뒤 다시 실행합니다. 설정의 업데이트 확인 버튼으로 직접 확인할 수도 있습니다. 소스에서 실행한 앱(`pnpm dev`, `pnpm start`)은 자동 업데이트하지 않습니다.
+패키지된 앱(Windows 포터블, macOS `.app`)은 시작 5초 뒤와 30분마다 GitHub 최신 릴리스를 확인하고, 새 버전이 있으면 받아서 교체한 뒤 다시 실행합니다. 새 버전이 없으면 확인은 작은 API 호출 한 번이고 디스크에는 아무것도 쓰지 않으며, 있어도 코드(`resources/app`, 약 8MB)만 바뀌는 릴리스는 그 부분만 받아 이전 버전을 보관하지 않고 덮어씁니다. 재시작하면 터미널 프로세스는 종료되므로(Claude 대화는 다시 열 때 `claude --resume`으로 이어집니다) 에이전트 작업·백그라운드 shell/monitor·예약 작업·실행 중인 명령이 있으면 먼저 알려 주고, "모두 중단되면 업데이트"를 고르면 그것들이 끝난 뒤 설치합니다. "나중에"를 고른 버전은 앱을 다시 켤 때까지 자동으로 다시 묻지 않습니다. 설정의 업데이트 확인 버튼으로 직접 확인하거나, 대기 중인 업데이트를 취소·강제할 수도 있습니다. 소스에서 실행한 앱(`pnpm dev`, `pnpm start`)은 자동 업데이트하지 않습니다.
 
 릴리스는 `package.json`의 `version`을 올린 뒤 OS별로 한 번씩 `pnpm release`를 실행합니다. 첫 실행이 `v<version>` 릴리스를 만들고 다음 실행은 자기 OS의 zip(`MoonerADE-win32-<arch>.zip`, `MoonerADE-darwin-<arch>.zip`)을 같은 릴리스에 추가합니다. macOS 앱은 쓰기 가능한 폴더(예: `/Applications`)에 설치해야 하며, Apple 공증이 없는 ad-hoc 서명입니다.
 
