@@ -172,13 +172,16 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .palette-button > span:not(.icon) { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-button:hover { border-color: var(--border-strong); background: var(--raised); color: var(--fg); }
 /* Claude Code prompt-cache timer in the pane header: the hairline drains with the TTL; cold gets a tint, since sending then rewrites the whole conversation. */
-.cache-timer { position: relative; flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.cache-timer { position: relative; flex: none; display: inline-flex; align-items: center; gap: 1px; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
 .cache-timer b { min-width: 4ch; font-weight: 600; }
+/* the outlined flame/snowflake are hairlines at 12px; filling them makes them readable */
+.cache-timer .icon { font-variation-settings: 'FILL' 1; }
 .cache-timer i { position: absolute; left: 6px; bottom: 1px; height: 2px; width: calc((100% - 12px) * var(--left)); border-radius: 1px; background: currentColor; opacity: .5; transition: width 1s linear; }
 .pane-tools > .cache-timer { grid-column: 1; justify-self: start; margin-left: -6px; }
 .cache-timer.hot, .cache-timer.using { color: var(--brand-claude); }
 .cache-timer.warm { color: var(--warn); }
 .cache-timer.cold { color: var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); }
+.cache-timer.compacted { color: var(--term-magenta); background: color-mix(in srgb, var(--term-magenta) 12%, transparent); }
 .workbench { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; padding: 0 6px; }
 .workbench > .right-panel { position: absolute; z-index: 20; top: 0; bottom: 0; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .statusbar { height: 26px; min-height: 26px; padding: 0 10px; gap: 4px; font-size: 12px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; color: var(--muted); background: var(--bg); }
@@ -516,6 +519,12 @@ body.resizing .xterm-host { pointer-events: none; }
 .setting-control input[type=checkbox]:checked { background: var(--accent); }
 .setting-control input[type=checkbox]:checked::after { transform: translateX(14px); }
 .setting-note { color: var(--muted); margin: 4px 0 0; }
+.ai-tabs { display: flex; gap: 2px; padding: 3px; margin-bottom: 8px; border-radius: 8px; background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.ai-tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; white-space: nowrap; color: var(--muted); background: transparent; }
+.ai-tabs button[aria-selected=true] { background: var(--selected); color: var(--fg); }
+.ai-tabs small { font-size: 10px; opacity: .75; }
+.setting-group { margin: 18px 0 2px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.setting-group:first-child { margin-top: 0; }
 .shortcut-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 @media (max-width: 640px) { .settings { flex-direction: column; } .settings-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav h2, .settings-nav .spacer { display: none; } }
 .file-glyph { flex: none; display: block; object-fit: contain; }

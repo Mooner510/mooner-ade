@@ -38,7 +38,9 @@ export type EditorCtx = {
   onSelectTab(group: string, path: string): void; onCloseTab(group: string, path: string): void; onCloseGroup(group: string): void;
   loadDiff(kind: string, path: string): Promise<{ original: string; modified: string }>;
 };
-export type ClaudeCache = { at: number; ttl: number; tokens: number; model: string };
+// `compactAt`: idle compaction (auto-compact on, long conversation, 1h cache) summarizes the conversation at this time, before the cache would go cold.
+// `compacted`: the conversation was summarized after that request (token counts before/after when Claude Code reports them); its old cache is no longer used.
+export type ClaudeCache = { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } };
 // ponytail: cache-read price as a share of base input from Anthropic pricing (2026-10); other models read at 0.1×. Update when prices move.
 const cacheReadShare = (model: string) => /fable-5-1|mythos-5-1/.test(model) ? 0.025 : /opus-5-5/.test(model) ? 0.05 : 0.1;
 const formatTokens = (count: number) => count >= 1e6 ? `${(count / 1e6).toFixed(1)}M` : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
@@ -46,8 +48,8 @@ const clockTime = (at: number) => new Date(at).toLocaleTimeString('ko-KR', { hou
 // Claude Code's prompt cache for the conversation at hand. Each request reads it and restarts its TTL; once the TTL runs out the next
 // request writes the whole conversation again, which costs many times a read. Hot → warm (last 20%) → cold; while Claude works,
 // each request restarts the TTL, so it shows as in use instead of a countdown.
-export const CacheTimer = memo(function CacheTimer({ cache, working }: { cache: ClaudeCache; working: boolean }) {
-  const expires = cache.at + cache.ttl * 1000;
+export const CacheTimer = memo(function CacheTimer({ cache, working, warn = 20 }: { cache: ClaudeCache; working: boolean; warn?: number }) {
+  const expires = cache.compactAt ?? cache.at + cache.ttl * 1000, total = expires - cache.at, compacts = cache.compactAt !== undefined;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     setNow(Date.now());
@@ -55,10 +57,13 @@ export const CacheTimer = memo(function CacheTimer({ cache, working }: { cache: 
     const timer = setInterval(() => { const time = Date.now(); setNow(time); if (time >= expires) clearInterval(timer); }, 1000);
     return () => clearInterval(timer);
   }, [expires]);
-  const left = Math.max(0, expires - now), state = working ? 'using' : !left ? 'cold' : left <= cache.ttl * 200 ? 'warm' : 'hot';
+  const left = Math.max(0, expires - now), state = working ? 'using' : cache.compacted ? 'compacted' : !left ? 'cold' : left <= total * warn / 100 ? 'warm' : 'hot';
   const seconds = Math.ceil(left / 1000), ttl = cache.ttl >= 3600 ? '1시간' : `${Math.round(cache.ttl / 60)}분`;
   const write = cache.ttl >= 3600 ? 2 : 1.25, read = cacheReadShare(cache.model), ratio = Math.round(write / read), tokens = formatTokens(cache.tokens);
-  const title = (state === 'cold' ? [
+  const done = cache.compacted, title = (state === 'compacted' && done ? [
+    `Claude Code가 ${clockTime(done.at)}에 대화를 compact했습니다 (${done.trigger === 'manual' ? '수동' : '자동'})${done.before && done.after ? ` · ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}`,
+    '이전 대화의 캐시는 더 쓰지 않습니다. 다음 요청은 긴 대화 대신 요약본만 캐시에 기록하므로 비용이 작습니다.'
+  ] : state === 'cold' ? [
     `Claude Code 프롬프트 캐시가 식었습니다 · ${clockTime(expires)} 만료 (${ttl} 유지)`,
     `다음 요청은 대화 ${tokens} 토큰을 캐시에 다시 기록합니다. 입력 단가의 ${write}배로, 캐시가 살아 있을 때보다 약 ${ratio}배의 비용·사용량이 듭니다.`,
     '이전 맥락이 필요 없다면 /clear로 새 대화를 시작하는 편이 저렴합니다.'
@@ -66,14 +71,16 @@ export const CacheTimer = memo(function CacheTimer({ cache, working }: { cache: 
     `Claude Code 프롬프트 캐시 사용중 · 작업 중에는 요청마다 캐시를 읽고 ${ttl} 유지 시간을 다시 시작합니다.`,
     `마지막 응답 ${clockTime(cache.at)} · 대화 ${tokens} 토큰`
   ] : [
-    `Claude Code 프롬프트 캐시 · ${ttl} 유지${state === 'warm' ? ' · 곧 식음' : ''}`,
-    `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}에 식음`,
+    `Claude Code 프롬프트 캐시 · ${ttl} 유지${state === 'warm' ? compacts ? ' · 곧 자동 compact' : ' · 곧 식음' : ''}`,
+    compacts ? `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}경 자동 compact(idle compaction)` : `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}에 식음`,
     `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다 (입력 단가의 ${read}배).`,
-    `식은 뒤에 보내면 다시 기록하느라 약 ${ratio}배의 비용·사용량이 듭니다.`
+    compacts ? '그 전에 보내지 않으면 대화를 요약한 뒤 식으며, 다음 요청은 요약본만 기록해 비용이 작습니다.' : `식은 뒤에 보내면 다시 기록하느라 약 ${ratio}배의 비용·사용량이 듭니다.`
   ]).join('\n');
-  return <span className={`cache-timer ${state}`} title={title} aria-label={title} style={{ '--left': working ? 1 : left / (cache.ttl * 1000) } as CSSProperties}>
+  return <span className={`cache-timer ${state}`} title={title} aria-label={title} style={{ '--left': working ? 1 : left / total } as CSSProperties}>
     {(state === 'hot' || state === 'using') && <Icon name="flame" size={12} />}
-    {state === 'using' ? '캐시 사용중' : state === 'cold' ? '식음' : <b>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</b>}
+    {state === 'cold' && <Icon name="snowflake" size={12} />}
+    {state === 'compacted' && <Icon name="archive" size={12} />}
+    {state === 'using' ? '캐시 사용중' : state === 'cold' || state === 'compacted' ? null : <b>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</b>}
     <i />
   </span>;
 });
@@ -90,16 +97,16 @@ export const launchers: { id: string; label: string; detail: string; command: st
   { id: 'cursor', label: 'Cursor CLI', detail: 'cursor-agent', command: 'cursor-agent', icon: 'cursor' }
 ];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
-export function Launchers({ title, onLaunch, autoFocus }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean }) {
-  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
+export function Launchers({ title, onLaunch, autoFocus, hidden = [] }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[] }) {
+  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.filter(item => !hidden.includes(item.id)).map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
 }
-function LauncherPane({ id, focused, onFocus, onClose, onLaunch }: { id: string; focused: boolean; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
+function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden }: { id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
   return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
       <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
-    <Launchers autoFocus onLaunch={command => onLaunch(id, command)} />
+    <Launchers autoFocus hidden={hidden} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
 
@@ -123,7 +130,11 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
   editingRef.current = editing !== null;
   const [queued, setQueued] = useState(followUp.current.items);
   const flushQueue = useRef<() => void>(() => {});
-  const refreshQueue = () => setQueued(followUp.current.items);
+  // Called after every output chunk of a Claude pane; an unchanged queue must not re-render it.
+  const refreshQueue = () => setQueued(previous => {
+    const next = followUp.current.items;
+    return next.length === previous.length && next.every((item, index) => item.id === previous[index].id && item.text === previous[index].text) ? previous : next;
+  });
   const checkAgent = useRef<() => void>(() => {});
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
@@ -182,7 +193,8 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       }).join('');
     };
     flushQueue.current = () => {
-      if (sendingFollowUp) return;
+      // Reading the screen is the costly part; with nothing queued there is nothing to send.
+      if (sendingFollowUp || !followUp.current.items.length) return;
       const screen = screenText();
       const next = followUp.current.next((followUpSupported || status?.agent === 'claude' && fromProgramStatus(status)) && !sshRef.current && !replays && !writes && callbacks.current.agentOf(id) === 'claude' && !editingRef.current
         && !question.observe(screen, title) && hasEmptyClaudeComposer(screen));
@@ -335,7 +347,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
       if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.isComposing && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking) {
         const typed = claudeComposerText(screenText()), text = typed && !/^Try "/.test(typed) ? typed : undefined; // an empty composer shows a `Try "…"` hint
         if (text && /(?:^|\s)[/@]\S*$/.test(text)) return true;
-        if (text && followUp.current.working && !/\[(?:Pasted text|Image|\.\.\.Truncated)/.test(text) && followUp.current.enqueue(text)) {
+        if (text && settingsRef.current.followUpQueue && followUp.current.working && !/\[(?:Pasted text|Image|\.\.\.Truncated)/.test(text) && followUp.current.enqueue(text)) {
           event.preventDefault();
           callbacks.current.send({ type: 'terminal/input', id, data: '\x05' + '\x7f'.repeat(text.length + 8) });
           refreshQueue();
@@ -420,7 +432,7 @@ function TerminalPane({ id, send, followUpInput, bus, visible, live, cwds, title
   const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle');
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
-      {agent === 'claude' && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} />}
+      {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
       <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
         <IconButton icon="splitH" label="좌우 분할" keys="Ctrl+D" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" label="상하 분할" keys="Ctrl+Shift+D" onClick={() => onSplit(id, 'column')} />
@@ -506,7 +518,7 @@ function Tree(props: Props) {
   const { pane } = props;
   if (isLeaf(pane)) return pane.kind === 'editor'
     ? <EditorGroup leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} ctx={props.editor} onFocus={props.onFocus} onZoom={props.onZoom} />
-    : pane.kind === 'launcher' ? <LauncherPane id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
+    : pane.kind === 'launcher' ? <LauncherPane hidden={props.editor.settings.agentsOff} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
     : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
   return <Splitter equalOnClick direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
     {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}

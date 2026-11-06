@@ -1,8 +1,8 @@
 import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
-import { statusLayout, usageHue, type Settings } from './Editor';
+import { agentArgs, statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton } from './Icon';
-import { Launchers, launchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
+import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
@@ -62,7 +62,7 @@ const untilReset = (at: number) => {
   return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
 };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
-const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean }) {
+const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
   const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
@@ -73,9 +73,9 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     if (!active) return;
     let live = true;
     const tick = () => { if (live) void load(); };
-    tick(); const timer = setInterval(tick, 120000);
+    tick(); const timer = setInterval(tick, refresh * 1000);
     return () => { live = false; clearInterval(timer); };
-  }, [load, active]);
+  }, [load, active, refresh]);
   if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
   const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
@@ -127,6 +127,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const settingsRef = useRef(settings); settingsRef.current = settings;
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0),
@@ -347,7 +348,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       const dead = leafList(tree).filter(leaf => isTerminal(leaf) && !live.has(leaf.id)).slice(0, 16);
       const reopened = await Promise.all(dead.map(async leaf => {
         try {
-          const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id } : {};
+          const agent = leaf.agent ? { agent: leaf.agent, restoreId: leaf.id, args: agentArgs(settingsRef.current, leaf.agent) } : {};
           const result = await call<{ id: string; command?: string }>('terminal/open', { ...agent, ...(leaf.cwd ? { path: leaf.cwd } : {}) }).catch(() => call<{ id: string; command?: string }>('terminal/open', agent));
           if (result.command && leaf.agent) { refs.pending.current.set(result.id, result.command); setLaunched(previous => ({ ...previous, [result.id]: leaf.agent! })); }
           renamed.set(leaf.id, result.id); live.add(result.id);
@@ -463,7 +464,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // ---- terminals ----
   async function openTerminalLeaf(anchorId: string, direction: 'row' | 'column' = 'row', path?: string, command = '') {
     const agent = detectAgent(command);
-    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent } : {}) });
+    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent, args: agentArgs(settings, agent) } : {}) });
     if (command) {
       refs.pending.current.set(result.id, result.command || command);
       if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
@@ -481,7 +482,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   async function fillLauncher(id: string, command: string) {
     const agent = detectAgent(command);
-    const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent } : {});
+    const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent, args: agentArgs(settings, agent) } : {});
     if (command) {
       refs.pending.current.set(result.id, result.command || command);
       if (agent) setLaunched(previous => ({ ...previous, [result.id]: agent }));
@@ -599,12 +600,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   const showReview = () => { setRightVisible(true); run(refreshGit); };
   const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
+  const launchers = allLaunchers.filter(item => !settings.agentsOff.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
     const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
     if (item) await launch(item.command, where);
   }
-  const commands: Command[] = [
+  const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', keys: 'mod+shift+t', run: () => newTab() },
     { id: 'newTab2', label: '새 탭', keys: 'alt+t', hidden: true, run: () => newTab() },
     { id: 'newClaude', label: '새 탭에서 Claude Code 실행', run: () => launch('claude', 'tab') },
@@ -638,6 +640,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'theme', label: '색 테마 전환', run: () => setSettings(previous => ({ ...previous, theme: previous.theme === 'dark' ? 'light' : 'dark' })) },
     ...projectCommands
   ];
+  // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
+  const commands = allCommands.filter(command => !settings.agentsOff.includes(command.id.replace(/^(?:new|split)/, '').toLowerCase()));
   refs.commands.current = commands;
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -701,8 +705,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
     cpu: system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>,
     memory: system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>,
-    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} />,
-    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession />,
+    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
+    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
@@ -710,7 +714,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
-      : <Launchers title="새 탭" autoFocus onLaunch={command => run(() => launch(command, 'split'))} />}
+      : <Launchers title="새 탭" autoFocus hidden={settings.agentsOff} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar">

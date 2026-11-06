@@ -11,7 +11,7 @@ import { WebSocketServer } from 'ws';
 import { createLocalRuntime, LocalProcesses } from './runtime.js';
 import { codexAuthenticated } from './agents.js';
 import { fault, text, readText, serial } from './files.js';
-import { validateUi, validateAppState } from './ui-state.js';
+import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { connectPtyHost } from './pty-client.js';
 import { terminalProcesses } from './terminal-processes.js';
@@ -201,16 +201,24 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   status.feed(initial, true);
   // Adopted terminals start above any sequence the window saw from a previous server, or it would drop their replay as stale.
   const remoteAgent = createRemoteAgent(); remoteAgent.feed(initial);
-  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status, remoteAgent };
+  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status, remoteAgent, pending: '', flushTimer: null };
   project.terminals.set(id, terminal);
+  // Output goes out in 5 ms batches (as in VS Code): a busy TUI emits many small chunks, and each one cost a message, a parse and an xterm write.
+  // `sequence` still counts every chunk, so a follow-up check against it also rejects output that is not sent yet.
+  terminal.flush = () => {
+    clearTimeout(terminal.flushTimer); terminal.flushTimer = null;
+    if (!terminal.pending) return;
+    const data = terminal.pending, current = status.status; terminal.pending = ''; terminal.statusKey = JSON.stringify(current);
+    broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: current });
+  };
   native.onData(data => {
     status.feed(data); const remoteChanged = remoteAgent.feed(data);
-    const current = status.status; terminal.statusKey = JSON.stringify(current);
-    terminal.buffer.append(data); terminal.sequence++; broadcast(project, { type: 'terminal', id, data, sequence: terminal.sequence, status: current });
+    terminal.buffer.append(data); terminal.sequence++; terminal.pending += data;
+    terminal.flushTimer ??= setTimeout(terminal.flush, 5);
     // Over ssh the output is the only evidence of the remote agent, so a start or exit is reported at once instead of on the next poll.
     if (remoteChanged && terminal.ssh && terminal.agent !== remoteAgent.agent) { terminal.agent = remoteAgent.agent; broadcast(project, { type: 'terminal/agent', id, agent: terminal.agent, ssh: true }); broadcastStatus(project, id, terminal); }
   });
-  native.onExit(event => { terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
+  native.onExit(event => { terminal.flush(); terminal.exited = true; project.terminals.delete(id); broadcast(project, { type: 'terminal/exit', id, ...event }); });
   return terminal;
 }
 // The progress fallback depends on the identified agent, so a new identification can change the status without any new output.
@@ -483,16 +491,24 @@ async function route(action, input, project) {
       // Line counts change only with the working tree (which the project watcher sees) or with what status reports, so while
       // neither changed a recent count is reused and an idle poll costs one git process instead of two (or three).
       // A worktree lives outside the watched project folder, so its counts are always read again.
+      // Untracked files' line counts are kept the same way, so an idle poll reads none of them.
       const cached = project.gitStats.get(workspace.root);
-      let stats;
-      if (!repo?.worktreeEnabled && project.watcher?.watching && cached?.status === output.stdout && cached.fsVersion === fsVersion && Date.now() - cached.at < 30_000) stats = cached.stats;
+      let stats, untracked;
+      if (!repo?.worktreeEnabled && project.watcher?.watching && cached?.status === output.stdout && cached.fsVersion === fsVersion && Date.now() - cached.at < 30_000) ({ stats, untracked } = cached);
       else {
         const headDiff = await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD']);
         stats = headDiff.exitCode === 0 ? [headDiff.stdout] : [
           (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--numstat'])).stdout,
           (await runtime.processes.exec('git', ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--cached', '--numstat'])).stdout
         ];
-        project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats });
+        untracked = new Map();
+        for (const change of changes.filter(item => item.status === '??')) {
+          try {
+            const content = await readText(workspace, change.path);
+            untracked.set(change.path, content ? content.split('\n').length - Number(content.endsWith('\n')) : 0);
+          } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
+        }
+        project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats, untracked });
       }
       let additions = 0, deletions = 0;
       const perFile = new Map();
@@ -509,12 +525,9 @@ async function route(action, input, project) {
         const counts = perFile.get(change.path);
         if (counts) [change.added, change.deleted] = counts;
       }
-      for (const change of changes.filter(item => item.status === '??')) {
-        try {
-          const content = await readText(workspace, change.path);
-          const lines = content ? content.split('\n').length - Number(content.endsWith('\n')) : 0;
-          additions += lines; change.added = lines; change.deleted = 0;
-        } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
+      for (const change of changes) {
+        const lines = change.status === '??' ? untracked.get(change.path) : undefined;
+        if (lines !== undefined) { additions += lines; change.added = lines; change.deleted = 0; }
       }
       return { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
     }
@@ -568,7 +581,8 @@ async function route(action, input, project) {
         // The chosen shell may have been uninstalled since it was saved; resolveShell then falls back to the automatic pick.
         const shell = resolveShell(terminalShell).path;
         const sessionShell = await terminalSessionShell(project.directory, id, shell);
-        const command = input.agent === undefined ? undefined : await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked);
+        if (input.args !== undefined && !validAgentArgs(input.args)) throw fault('INVALID_INPUT', '잘못된 실행 인자입니다.');
+        const command = input.agent === undefined ? undefined : [await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked), input.args?.trim()].filter(Boolean).join(' ');
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
         const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
@@ -677,6 +691,8 @@ wss.on('connection', socket => {
       if (message.type === 'subscribe') {
         // Subscriptions are additive: one socket streams every open project.
         if (socket.projects.size >= 64) throw fault('INVALID_INPUT', '구독할 수 있는 프로젝트 수를 초과했습니다.');
+        // Unsent output is already in the replay; flushing it first keeps it from arriving twice.
+        for (const terminal of project.terminals.values()) terminal.flush();
         socket.projects.add(project.id);
         const tagged = value => send(socket, { ...value, projectId: project.id });
         tagged({ type: 'snapshot', snapshot: snapshot(project) });
