@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename } from './api';
-import { defaultSettings, migrateSettings, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
@@ -273,9 +273,10 @@ function Shell() {
   // ---- background activity: a project you are not looking at can still need you ----
   // Terminal agents (Claude Code, Codex, Cursor CLI) that stopped or asked something: a notification plus a short sound, unless you are already watching.
   const onAgentAlert = useCallback((root: string, alert: AgentAlert) => {
-    const wanted = !alert.looking && (alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval);
+    if (settings.agentsMuted.includes(alert.agent)) return;
+    const wanted = (!alert.looking || settings.notifyLooking) && (alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval);
     if (!wanted && !settings.notifySound) return;
-    const project = statusRef.current[root]?.name || shortName(root), agent = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' }[alert.agent];
+    const project = statusRef.current[root]?.name || shortName(root), agent = agentNames[alert.agent];
     const title = `${project} · ${agent} ${alert.kind === 'done' ? '작업 멈춤' : '입력 요청'}`;
     if (wanted && 'Notification' in window) {
       if (Notification.permission === 'default') void Notification.requestPermission();
@@ -285,7 +286,7 @@ function Shell() {
       }
     }
     if (settings.notifySound) playSound(alert.kind === 'done' ? settings.soundDone : settings.soundAttention, settings.soundVolume);
-  }, [settings.notifyDone, settings.notifyApproval, settings.notifySound, settings.soundDone, settings.soundAttention, settings.soundVolume]);
+  }, [settings.agentsMuted, settings.notifyLooking, settings.notifyDone, settings.notifyApproval, settings.notifySound, settings.soundDone, settings.soundAttention, settings.soundVolume]);
 
   // ---- project list ----
   const addProject = useCallback((path: string) => openEntry('project/open', { path }), []);
@@ -407,7 +408,7 @@ function Shell() {
                   onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}
                   onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span><span className="folder-tab-label">{tab.label}</span>
-                  {!on && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} />}
+                  {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
                   {tab.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
                   <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>
                 </div>;
@@ -465,7 +466,7 @@ function Shell() {
                       onClick={() => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }}
                       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); } }}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>
-                      {!on && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
+                      {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />}
                       <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>)}
@@ -494,7 +495,7 @@ function Shell() {
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handle => { if (handle) handles.current.set(entry.root, handle); else handles.current.delete(entry.root); }}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
-        system={system} onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onAgentAlert={onAgentAlert} />)}
+        system={entry.root === current ? system : null} onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onAgentAlert={onAgentAlert} />)}
     </div>
     {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
     {settingsOpen && <SettingsModal settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}

@@ -14,7 +14,8 @@ export async function readText(workspace, file) {
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > 2 * 1024 * 1024) throw fault('UNSUPPORTED_FILE', '일반 텍스트 파일(2 MiB 이하)만 표시할 수 있습니다.');
-    const buffer = Buffer.alloc(2 * 1024 * 1024 + 1);
+    // One byte past the size stat reported: filling it means the file grew since (or past the limit), which is refused as before.
+    const buffer = Buffer.alloc(stat.size + 1);
     let offset = 0;
     while (offset < buffer.length) {
       const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, null);
