@@ -11,7 +11,36 @@ import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from '
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
 import { cacheSendWarning, cacheSendWarningText, isClaudeMessageText, type CacheSendWarning } from './claude-cache-warning';
+import { createPrefixGuide, guideActive, guideGroups, isModifierOnly, isPrefixKey, looksLikeTmux, normalizePrefix, type ScreenRow } from './tmux-guide';
 export type { Agent } from './terminal-agent';
+
+// The tmux key table, shown over the pane from the prefix key until the next key. It never takes pointer input and sits on the half of the
+// pane away from the cursor, so what is being typed stays visible; the terminal itself is not resized.
+function TmuxGuide({ prefix, place }: { prefix: string; place: 'top' | 'bottom' }) {
+  const key = `Ctrl+${normalizePrefix(prefix).toUpperCase()}`;
+  return <aside className={`tmux-guide ${place}`} role="note" aria-label="tmux 단축키 안내">
+    <header><strong>tmux</strong><span><kbd>{key}</kbd> 다음에 누를 키</span><small>아무 키나 누르면 닫힙니다</small></header>
+    <div className="tmux-guide-groups">{guideGroups.map(group => <section key={group.title}>
+      <h4>{group.title}</h4>
+      <dl>{group.items.map(item => <div key={item.keys}><dt><kbd>{item.keys}</kbd></dt><dd>{item.label}</dd></div>)}</dl>
+    </section>)}</div>
+  </aside>;
+}
+
+// First and last screen row as the tmux detector wants them. "Filled" = nearly every cell has one and the same non-default background.
+function screenRows(terminal: Terminal): ScreenRow[] {
+  const buffer = terminal.buffer.active, cell = buffer.getNullCell();
+  return [buffer.baseY + terminal.rows - 1, buffer.baseY].flatMap(y => {
+    const line = buffer.getLine(y); if (!line) return [];
+    const seen = new Map<number, number>();
+    for (let x = 0; x < terminal.cols; x++) {
+      const current = line.getCell(x, cell); if (!current || current.isBgDefault()) continue;
+      const color = current.getBgColorMode() * 0x1000000 + current.getBgColor();
+      seen.set(color, (seen.get(color) ?? 0) + 1);
+    }
+    return [{ text: line.translateToString(true), filled: Math.max(0, ...seen.values()) >= terminal.cols * 0.9 }];
+  });
+}
 
 // Terminal-generated reports: focus in/out (CSI I / O) and SGR mouse events.
 const REPORT = /^(?:\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm])+$/;
@@ -131,6 +160,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
   editingRef.current = editing !== null;
+  const [tmuxPlace, setTmuxPlace] = useState<'top' | 'bottom' | null>(null);
   const [queued, setQueued] = useState(followUp.current.items);
   const flushQueue = useRef<() => void>(() => {});
   // Called after every output chunk of a Claude pane; an unchanged queue must not re-render it.
@@ -373,7 +403,20 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       const shown = stableTitle(value);
       if (shown !== shownTitle) { shownTitle = shown; callbacks.current.onTitle(id, shown); }
     });
+    // tmux key guide (which-key style): the prefix pressed in a pane that shows a tmux status line opens the guide until the next key.
+    // Keys always pass through to the terminal; the guide only listens. It sits on the side of the pane away from the cursor.
+    const tmuxGuide = createPrefixGuide({
+      timeout: 10_000,
+      show: () => setTmuxPlace(terminal.buffer.active.cursorY >= terminal.rows / 2 ? 'top' : 'bottom'),
+      hide: () => setTmuxPlace(null)
+    });
+    const tmuxOnScreen = () => guideActive(settingsRef.current.tmuxGuide, () => looksLikeTmux(screenRows(terminal)));
+    terminal.textarea?.addEventListener('blur', tmuxGuide.cancel);
     terminal.attachCustomKeyEventHandler(event => {
+      if (event.type === 'keydown') {
+        if (isPrefixKey(event, settingsRef.current.tmuxPrefix)) { if (!event.repeat && (tmuxGuide.state !== 'idle' || !replays && tmuxOnScreen())) tmuxGuide.prefix(); }
+        else if (!isModifierOnly(event.key)) tmuxGuide.key();
+      }
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
         if (event.type === 'keydown') { event.preventDefault(); callbacks.current.onSplit(id, event.shiftKey ? 'column' : 'row'); }
         return false;
@@ -429,7 +472,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, data: initial.data.slice(-262144), reset: true });
-    return () => { clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {
@@ -483,6 +526,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys="Ctrl+Shift+Enter" onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
+    {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
     {queued.length > 0 && <div className="claude-follow-up">
       <div className="follow-up-heading" role="status">Follow-up {queued.length}개 · 현재 작업 완료 후 순서대로 전송</div>
       <ol>{queued.map(item => editing?.id === item.id
