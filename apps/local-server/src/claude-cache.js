@@ -68,6 +68,16 @@ export function cacheFromLine(line, requests) {
   return { at, ttl, tokens, model: String(entry.message.model || '') };
 }
 
+// Folds transcript lines into the cache reading. `requests` carries request start times between calls.
+export function cacheFromText(text, requests, value) {
+  for (const line of text.split('\n')) {
+    // A boundary belongs to the request before it; the next request starts a fresh cache and drops the mark.
+    const compacted = compactionFromLine(line);
+    if (compacted) { if (value) value = { ...value, compacted }; } else value = cacheFromLine(line, requests) ?? value;
+  }
+  return value;
+}
+
 // `state` is the previous return value: only bytes appended since then are read.
 export async function readClaudeCache(configDir, pid, state = null) {
   let live;
@@ -88,11 +98,7 @@ export async function readClaudeCache(configDir, pid, state = null) {
   const requests = resume ? state.requests : new Map();
   const before = resume ? state.value : null;
   let value = before;
-  if (end > from) for (const line of buffer.subarray(from, end).toString('utf8').split('\n')) {
-    // A boundary belongs to the request before it; the next request starts a fresh cache and drops the mark.
-    const compacted = compactionFromLine(line);
-    if (compacted) { if (value) value = { ...value, compacted }; } else value = cacheFromLine(line, requests) ?? value;
-  }
+  if (end > from) value = cacheFromText(buffer.subarray(from, end).toString('utf8'), requests, value);
   if (value && value !== before && !value.compacted) { const compactAt = await idleCompactAt(configDir, live.cwd, value); if (compactAt) value = { ...value, compactAt }; }
   return { sessionId: live.sessionId, file, offset: start + Math.max(end, from), requests, value };
 }

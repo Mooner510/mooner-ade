@@ -18,6 +18,7 @@ import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
 import { uploadOverSsh } from './ssh-upload.js';
 import { createRemoteAgent } from './remote-agent.js';
+import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remote-claude.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
@@ -764,6 +765,34 @@ const lockTimer = setInterval(() => {
   for (const project of projects.values()) fs.utimes(project.lockFile, now, now).catch(() => {});
 }, LOCK_STALE_MS / 4);
 lockTimer.unref();
+function publishCache(project, id, terminal, value) {
+  const key = JSON.stringify(value ?? null);
+  if (key !== (terminal.cacheKey ?? 'null')) { terminal.cacheKey = key; broadcast(project, { type: 'terminal/cache', id, cache: value ?? null }); }
+}
+// A Claude over ssh is read from its own host: session state (busy/idle) and the transcript behind the cache timer, one ssh call per poll.
+// Failures (a password prompt, a host that is down) back off instead of retrying every few seconds.
+const ANSI_TEXT = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\x5c)|\x1b[()][A-Za-z0-9]/g;
+async function pollRemoteClaude(project, id, terminal) {
+  const remote = terminal.remoteClaude ??= createRemoteClaude();
+  let output;
+  try { output = await runRemote(terminal.sshCommand, remoteScript(remote.request)); }
+  catch { terminal.remoteRetry = Date.now() + 30_000; return; }
+  if (terminal.exited || !terminal.ssh || terminal.agent !== 'claude' || terminal.remoteClaude !== remote) return;
+  const screen = terminal.buffer.text.slice(-16384).replace(ANSI_TEXT, '');
+  const { state, cache } = remote.update(parseRemote(output), screen);
+  terminal.remoteCache = cache;
+  terminal.status.setRemote(state);
+  broadcastStatus(project, id, terminal);
+  publishCache(project, id, terminal, cache);
+}
+const remoteTimer = setInterval(() => {
+  for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
+    if (terminal.exited || !terminal.ssh || terminal.agent !== 'claude' || !terminal.sshCommand || terminal.remotePolling || Date.now() < (terminal.remoteRetry ?? 0)) continue;
+    terminal.remotePolling = true;
+    void pollRemoteClaude(project, id, terminal).catch(() => {}).finally(() => { terminal.remotePolling = false; });
+  }
+}, 4000);
+remoteTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
 const processTable = createProcessTable();
 let sshPolling = false;
@@ -796,8 +825,9 @@ const sshTimer = setInterval(async () => {
         }
       }
       terminal.cache = cache;
-      const cacheKey = JSON.stringify(cache?.value ?? null);
-      if (cacheKey !== (terminal.cacheKey ?? 'null')) { terminal.cacheKey = cacheKey; broadcast(project, { type: 'terminal/cache', id, cache: cache?.value ?? null }); }
+      // Over ssh the remote poller below owns the cache and the session state; it stops once the agent or the ssh session is gone.
+      if (!(ssh && agent === 'claude') && terminal.remoteClaude) { terminal.remoteClaude = null; terminal.status.setRemote(null); }
+      publishCache(project, id, terminal, ssh && agent === 'claude' ? terminal.remoteCache ?? null : cache?.value ?? null);
       if (ssh !== Boolean(terminal.ssh)) { terminal.ssh = ssh; broadcast(project, { type: 'terminal/ssh', id, ssh }); }
       // Usage readings look up which account this agent runs under.
       terminal.agentPid = !ssh && agentPid || null;
@@ -852,7 +882,7 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer);
   await syncSessionsBeforeExit();
   processTable.close();
   // One project failing to release must not leave the rest locked.
