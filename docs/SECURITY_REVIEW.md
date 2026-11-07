@@ -36,11 +36,32 @@
 - **클라이언트 XSS**: `dangerouslySetInnerHTML`, `innerHTML`, 마크다운 렌더러가 없다. 터미널 출력은 xterm이 그린다. 일반 실행의 CSP는 `script-src 'self'`다. Vite 개발 모드에는 HMR용 inline script와 localhost WebSocket 예외가 있다.
 - **토큰 취급**: 서버 프로세스마다 `randomBytes(32)`로 생성하며 디스크에 쓰지 않는다. 이전 버전이 남긴 `token` 파일은 기동 시 삭제한다. URL 해시는 클라이언트가 읽은 뒤 `history.replaceState`로 지우고 `Referrer-Policy: no-referrer`를 적용한다. 쿠키는 HttpOnly, SameSite=Strict다.
 
-## 4. 실행하지 않은 검증
+## 4. 원격 접속 (2026-11, 선택 기능)
 
-- 원격 노출 시나리오 (설계상 127.0.0.1 전용이라 대상이 아님)
+로컬 서버는 계속 127.0.0.1 전용이고, 원격 접속은 Hub로 나가는 연결만 씁니다. 설계와 프로토콜은 [REMOTE_ACCESS](REMOTE_ACCESS.md)에 있습니다. 위협과 대응은 다음과 같습니다.
 
-## 5. 현재 회귀 검증과 의존성
+| 위협 | 대응 | 검증 |
+|---|---|---|
+| Hub 침해·악성 운영자가 셸을 얻음 | PC 키는 QR로만 고정하고, 폰은 PC에서 승인할 때 고정한 Noise 정적 키를 증명해야 합니다. Hub는 `revoke`만 보낼 수 있습니다. 내용은 끝단 암호화됩니다. | `remote-gateway.test.mjs` (모르는 기기·키 거부) |
+| QR 사진 유출 | 5분, 1회용입니다. 승인은 PC 확인 창에서 따로 받고, 실패 5번이면 소진됩니다. | 같은 테스트 (만료, 1회성, 거부) |
+| 렌더러 XSS·터미널 안 에이전트가 원격을 몰래 켬 | 설정은 main이 소유합니다. 켜기, 승인, 권한 상향, 키 교체는 네이티브 확인 창을 거칩니다. 화면에는 키와 토큰을 주지 않습니다. | 코드 검토 (`apps/desktop/src/remote.js`), `remote-store.test.mjs` (`publicState`) |
+| 원격 권한 남용(설정 변경, 임의 경로 열기) | 기본 거부 허용 목록과 필드 화이트리스트를 씁니다. project/open은 아는 프로젝트만, 원격 터미널은 8개까지입니다. | `remote-dispatch.test.mjs`, 통합 테스트 (`project/open`·`recent/remove` 거부) |
+| replay·변조·재정렬 | Noise nonce와 AEAD를 씁니다. 첫 transport 메시지 전에는 처리하지 않습니다. | `noise.test.mjs` |
+| 큰 메시지·느린 소비자로 메모리 고갈 | 조각 64 KiB, 메시지 32 MiB, 송신 버퍼 8 MiB(넘으면 1013), 세션 수, 붙여넣기 rate limit을 둡니다. | `noise.test.mjs`, `remote-gateway.test.mjs` |
+| 설정 파일 탈취 | `safeStorage`로 봉인합니다. 암호화를 못 쓰면 원격 접속을 쓰지 않습니다. refresh 토큰은 서버 프로세스에도 주지 않습니다. | `remote-store.test.mjs` |
+| 붙여 넣은 이미지가 임시 폴더에 쌓여 노출 | 데이터 폴더 `paste/`(0700), 파일 0600, 24시간과 256 MiB 상한을 둡니다. 로컬 붙여넣기에도 적용됩니다. | 코드 검토 (`index.js` `prunePastes`) |
+
+남은 위험은 다음과 같습니다.
+- `control` 권한은 사용자 셸 권한과 같습니다. 폰 분실 대비는 Android 앱의 생체 인증과 PC에서의 해제에 기댑니다.
+- Hub는 접속 메타데이터(시각, 기기)를 봅니다.
+- Tailscale 직접 연결은 아직 구현하지 않았습니다. 구현하면 Hub 대신 PC가 기기 상태를 확인해야 합니다.
+
+## 5. 실행하지 않은 검증
+
+- 실제 Hub와 Android 앱 사이의 종단 시험(별도 저장소에서 진행)
+- 원격 접속 외의 원격 노출 시나리오(설계상 127.0.0.1 전용이라 대상이 아님)
+
+## 6. 현재 회귀 검증과 의존성
 
 실행 환경·결과는 [VERIFICATION](VERIFICATION.md)에 모은다. 과거 테스트 수나 ADE/IDE 화면의 통과 기록을 현재 상태로 사용하지 않는다.
 
