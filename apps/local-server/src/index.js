@@ -29,6 +29,8 @@ import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
+import { createRemoteGateway } from './remote-gateway.js';
+import { REMOTE_TERMINAL_LIMIT } from './remote-dispatch.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -679,68 +681,124 @@ server.on('upgrade', (request, socket, head) => {
   if (request.url !== '/ws' || !trusted(request) || !authenticated(request)) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
   wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
 });
+// Pasted images are files the agent CLI reads by path. They live in the app's own folder (not the shared temp folder, where
+// any local user could read them), are removed after a day, and the folder is kept under a size cap, oldest first.
+const pasteDir = path.join(dataRoot, 'paste');
+const PASTE_TTL_MS = 24 * 60 * 60_000, PASTE_TOTAL_BYTES = 256 * 1024 * 1024;
+async function prunePastes(incoming = 0) {
+  const entries = await fs.readdir(pasteDir, { withFileTypes: true }).catch(() => []);
+  const files = (await Promise.all(entries.filter(entry => entry.isFile() && /^paste-[\w-]+\.\w+$/.test(entry.name)).map(async entry => {
+    const file = path.join(pasteDir, entry.name);
+    return fs.stat(file).then(stat => ({ file, size: stat.size, mtimeMs: stat.mtimeMs }), () => null);
+  }))).filter(Boolean).sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let total = files.reduce((sum, item) => sum + item.size, 0) + incoming;
+  for (const item of files) {
+    if (Date.now() - item.mtimeMs < PASTE_TTL_MS && total <= PASTE_TOTAL_BYTES) continue;
+    await fs.rm(item.file, { force: true }).catch(() => {}); total -= item.size;
+  }
+}
+const pasteTimer = setInterval(() => void prunePastes(), 60 * 60_000);
+pasteTimer.unref();
+void prunePastes();
+async function savePaste(bytes, name) {
+  await fs.mkdir(pasteDir, { recursive: true, mode: 0o700 });
+  await prunePastes(bytes.length);
+  const file = path.join(pasteDir, name);
+  await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
+  return file;
+}
+// One message from a client: the window's /ws socket, or a remote session after the remote dispatcher checked it.
+async function handleClientMessage(socket, message) {
+  let projectId;
+  try {
+    if (!message || typeof message !== 'object') throw fault('INVALID_INPUT', '잘못된 메시지입니다.');
+    projectId = message.projectId;
+    const project = projects.get(message.projectId);
+    if (!project) throw fault('NOT_FOUND', '프로젝트가 없습니다.', 404);
+    if (message.type === 'subscribe') {
+      // Subscriptions are additive: one socket streams every open project.
+      if (socket.projects.size >= 64) throw fault('INVALID_INPUT', '구독할 수 있는 프로젝트 수를 초과했습니다.');
+      // Unsent output is already in the replay; flushing it first keeps it from arriving twice.
+      for (const terminal of project.terminals.values()) terminal.flush();
+      socket.projects.add(project.id);
+      const tagged = value => send(socket, { ...value, projectId: project.id });
+      tagged({ type: 'snapshot', snapshot: snapshot(project) });
+      for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
+      for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
+      for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
+      for (const [id, terminal] of project.terminals) if (terminal.cache?.value) tagged({ type: 'terminal/cache', id, cache: terminal.cache.value });
+    } else if (message.type === 'unsubscribe') {
+      socket.projects.delete(project.id);
+    } else if (socket.projects.has(project.id)) {
+      const terminal = project.terminals.get(message.id);
+      // Input and resize events can still arrive while the client removes an exited pane.
+      if (!terminal || terminal.exited) return;
+      if (message.type === 'terminal/input') {
+        if (typeof message.data !== 'string' || message.data.length > 16384) throw fault('INVALID_INPUT', '잘못된 터미널 입력입니다.');
+        terminal.native.write(message.data);
+      } else if (message.type === 'terminal/paste-image') {
+        // Agent CLIs take an image by file path; write the pasted clipboard image to a file and type its path.
+        const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[message.mime];
+        if (!ext || typeof message.data !== 'string') throw fault('INVALID_INPUT', '지원하지 않는 이미지입니다.');
+        const bytes = Buffer.from(message.data, 'base64');
+        if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw fault('INVALID_INPUT', '이미지 크기가 올바르지 않습니다.');
+        const name = `paste-${randomUUID()}.${ext}`;
+        // Over ssh the CLI runs on the remote host, which cannot read a local path; the image goes there through the same ssh setup.
+        if (terminal.ssh && terminal.sshCommand) {
+          const remote = await uploadOverSsh(terminal.sshCommand, bytes, name).catch(error => {
+            throw fault('INVALID_INPUT', `원격 서버로 이미지를 보내지 못했습니다 (키 인증 또는 ControlMaster 연결이 필요합니다): ${error.message}`);
+          });
+          const quoted = remote.windows ? (/\s/.test(remote.path) ? `"${remote.path}"` : remote.path)
+            : /[^\w@%+=:,./-]/.test(remote.path) ? `'${remote.path.replaceAll("'", `'\\''`)}'` : remote.path;
+          if (!terminal.exited) terminal.native.write(`${quoted} `);
+          return;
+        }
+        const file = await savePaste(bytes, name);
+        if (!terminal.exited) terminal.native.write(/\s/.test(file) ? (process.platform === 'win32' ? `"${file}" ` : `'${file.replaceAll("'", `'\\''`)}' `) : `${file} `);
+      } else if (message.type === 'terminal/resize') {
+        if (![message.cols, message.rows].every(n => Number.isInteger(n) && n >= 1 && n <= 1000)) throw fault('INVALID_INPUT', '잘못된 터미널 크기입니다.');
+        terminal.native.resize(message.cols, message.rows);
+      }
+      else throw fault('INVALID_INPUT', '잘못된 메시지입니다.');
+    }
+  } catch (error) { send(socket, { type: 'error', error: errorValue(error), ...(typeof projectId === 'string' && { projectId }) }); }
+}
 wss.on('connection', socket => {
   socket.projects = new Set();
   clients.add(socket);
   socket.on('close', () => clients.delete(socket));
-  socket.on('message', async raw => {
-    let projectId;
-    try {
-      const message = JSON.parse(raw.toString());
-      projectId = message.projectId;
-      const project = projects.get(message.projectId);
-      if (!project) throw fault('NOT_FOUND', '프로젝트가 없습니다.', 404);
-      if (message.type === 'subscribe') {
-        // Subscriptions are additive: one socket streams every open project.
-        if (socket.projects.size >= 64) throw fault('INVALID_INPUT', '구독할 수 있는 프로젝트 수를 초과했습니다.');
-        // Unsent output is already in the replay; flushing it first keeps it from arriving twice.
-        for (const terminal of project.terminals.values()) terminal.flush();
-        socket.projects.add(project.id);
-        const tagged = value => send(socket, { ...value, projectId: project.id });
-        tagged({ type: 'snapshot', snapshot: snapshot(project) });
-        for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
-        for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
-        for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
-        for (const [id, terminal] of project.terminals) if (terminal.cache?.value) tagged({ type: 'terminal/cache', id, cache: terminal.cache.value });
-      } else if (message.type === 'unsubscribe') {
-        socket.projects.delete(project.id);
-      } else if (socket.projects.has(project.id)) {
-        const terminal = project.terminals.get(message.id);
-        // Input and resize events can still arrive while the client removes an exited pane.
-        if (!terminal || terminal.exited) return;
-        if (message.type === 'terminal/input') {
-          if (typeof message.data !== 'string' || message.data.length > 16384) throw fault('INVALID_INPUT', '잘못된 터미널 입력입니다.');
-          terminal.native.write(message.data);
-        } else if (message.type === 'terminal/paste-image') {
-          // Agent CLIs take an image by file path; write the pasted clipboard image to a temp file and type its path.
-          const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[message.mime];
-          if (!ext || typeof message.data !== 'string') throw fault('INVALID_INPUT', '지원하지 않는 이미지입니다.');
-          const bytes = Buffer.from(message.data, 'base64');
-          if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw fault('INVALID_INPUT', '이미지 크기가 올바르지 않습니다.');
-          const name = `paste-${randomUUID()}.${ext}`;
-          // Over ssh the CLI runs on the remote host, which cannot read a local path; the image goes there through the same ssh setup.
-          if (terminal.ssh && terminal.sshCommand) {
-            const remote = await uploadOverSsh(terminal.sshCommand, bytes, name).catch(error => {
-              throw fault('INVALID_INPUT', `원격 서버로 이미지를 보내지 못했습니다 (키 인증 또는 ControlMaster 연결이 필요합니다): ${error.message}`);
-            });
-            const quoted = remote.windows ? (/\s/.test(remote.path) ? `"${remote.path}"` : remote.path)
-              : /[^\w@%+=:,./-]/.test(remote.path) ? `'${remote.path.replaceAll("'", `'\\''`)}'` : remote.path;
-            if (!terminal.exited) terminal.native.write(`${quoted} `);
-            return;
-          }
-          const dir = path.join(os.tmpdir(), 'mooner-ade-paste');
-          await fs.mkdir(dir, { recursive: true });
-          const file = path.join(dir, name);
-          await fs.writeFile(file, bytes);
-          terminal.native.write(`${file} `);
-        } else if (message.type === 'terminal/resize') {
-          if (![message.cols, message.rows].every(n => Number.isInteger(n) && n >= 1 && n <= 1000)) throw fault('INVALID_INPUT', '잘못된 터미널 크기입니다.');
-          terminal.native.resize(message.cols, message.rows);
-        }
-        else throw fault('INVALID_INPUT', '잘못된 메시지입니다.');
-      }
-    } catch (error) { send(socket, { type: 'error', error: errorValue(error), ...(typeof projectId === 'string' && { projectId }) }); }
+  socket.on('message', raw => {
+    let message;
+    try { message = JSON.parse(raw.toString()); } catch { return send(socket, { type: 'error', error: errorValue(fault('INVALID_JSON', '잘못된 JSON입니다.')) }); }
+    void handleClientMessage(socket, message);
   });
+});
+// Remote sessions join `clients` like a window does, so they get the same broadcasts; what they may ask is checked first.
+async function knownProject(requested) {
+  const root = await fs.realpath(requested).catch(() => null);
+  if (!root) throw fault('NOT_FOUND', '프로젝트를 찾을 수 없습니다.', 404);
+  if ([...projects.values()].some(project => project.root === root)) return;
+  const recent = await readJson(path.join(dataRoot, 'recent.json'), []);
+  if (!recent.some(item => item.root === root)) throw fault('REMOTE_FORBIDDEN', '원격에서는 이 PC에서 열어 본 프로젝트만 열 수 있습니다.', 403);
+}
+const remoteTerminals = () => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy && !terminal.exited).length, 0);
+const gateway = createRemoteGateway({
+  api: async (action, input, client) => {
+    const value = await route(action, input, projects.get(input.projectId));
+    if (action === 'terminal/open' && value?.id) {
+      const terminal = projects.get(input.projectId)?.terminals.get(value.id);
+      if (terminal) terminal.openedBy = client.remote.deviceId;
+    }
+    return value;
+  },
+  message: (client, message) => handleClientMessage(client, message),
+  attach: client => clients.add(client),
+  detach: client => clients.delete(client),
+  check: async (name, input) => {
+    if (name === 'known-project') return knownProject(input.path);
+    if (name === 'remote-terminal' && remoteTerminals() >= REMOTE_TERMINAL_LIMIT) throw fault('TERMINAL_LIMIT', `원격 기기에서는 최대 ${REMOTE_TERMINAL_LIMIT}개 터미널을 열 수 있습니다.`);
+  },
+  event: value => process.send?.(value)
 });
 // While a window is connected the ADE counts as in use: the active project gets an app heartbeat, as "ai coding" when one of its
 // agents is working, and with `wakatimeBackground` so do other projects whose agents are working.
@@ -841,8 +899,9 @@ sshTimer.unref();
 // Anything that cannot be verified counts as busy rather than being guessed idle; a terminal over ssh is only busy while its agent reports working.
 async function busyReport() {
   const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
-  const reasons = [];
-  if (!live.length) return { busy: false, reasons };
+  // A phone in the middle of a session would lose it to a restart just like a terminal would.
+  const reasons = gateway.sessions.map(session => ({ project: '', terminal: session.name, kind: 'remote' }));
+  if (!live.length) return { busy: reasons.length > 0, reasons };
   const table = await processTable(live.filter(item => item.terminal.native.pid).map(item => item.terminal.native.pid)).catch(() => null);
   const inspect = table && terminalProcesses(table);
   for (const { project, id, terminal } of live) {
@@ -882,7 +941,8 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer);
+  gateway.close();
   await syncSessionsBeforeExit();
   processTable.close();
   // One project failing to release must not leave the rest locked.
@@ -900,4 +960,8 @@ process.on('message', message => {
     const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
   }
+  // Remote access settings exist only in the main process (sealed with safeStorage) and reach this process only this way.
+  else if (message?.type === 'remote/config') gateway.configure(message.config);
+  else if (message?.type === 'remote/decide' && typeof message.requestId === 'string') gateway.decide(message.requestId, message.scope ?? null);
+  else if (message?.type === 'remote/disconnect' && typeof message.sessionId === 'string') gateway.disconnect(message.sessionId);
 });

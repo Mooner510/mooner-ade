@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setupRemote } from './remote.js';
 import { checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
@@ -22,7 +23,7 @@ const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
-let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null;
+let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null, remote = null;
 // The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
 // bundled runtime/ (resources/runtime, beside resources/app), so fall back to the system Node instead of failing with ENOENT.
 const bundledNode = path.resolve(import.meta.dirname, '../../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
@@ -45,12 +46,14 @@ function startPtyHost() {
 function startServer() {
   return new Promise((resolve, reject) => {
     const child = server = spawn(nodeBinary, [serverEntry], { env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+    remote?.attach(child);
     let output = '';
     child.stdout.on('data', chunk => {
       process.stdout.write(chunk);
       output += chunk;
       const match = /(http:\/\/127\.0\.0\.1:\d+)\/#token=([a-f0-9]+)/.exec(output);
-      if (match && !origin) { origin = match[1]; resolve(`${match[1]}/#token=${match[2]}`); }
+      // Listening means its IPC handlers are in place: hand it the remote access settings (off unless turned on).
+      if (match && !origin) { origin = match[1]; remote?.push(); resolve(`${match[1]}/#token=${match[2]}`); }
     });
     child.stderr.on('data', chunk => process.stderr.write(chunk));
     child.once('error', reject);
@@ -232,6 +235,9 @@ if (!app.requestSingleInstanceLock()) {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
     try {
+      // Needs the app to be ready (safeStorage). Settings it cannot open leave remote access off, never the app.
+      try { remote = setupRemote({ userData: app.getPath('userData'), version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      catch (error) { console.warn(`원격 접속 설정을 불러오지 못했습니다: ${error.message}`); }
       if (dev) await startPtyHost(); createWindow(await startServer());
       if (dev) watchServerSources();
       else {
