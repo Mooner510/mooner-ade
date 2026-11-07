@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setupPlugins } from './plugins.js';
 import { setupRemote } from './remote.js';
 import { checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
@@ -23,7 +24,7 @@ const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
-let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null, remote = null;
+let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null, remote = null, plugins = null;
 // The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
 // bundled runtime/ (resources/runtime, beside resources/app), so fall back to the system Node instead of failing with ENOENT.
 const bundledNode = path.resolve(import.meta.dirname, '../../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
@@ -53,7 +54,7 @@ function startServer() {
       output += chunk;
       const match = /(http:\/\/127\.0\.0\.1:\d+)\/#token=([a-f0-9]+)/.exec(output);
       // Listening means its IPC handlers are in place: hand it the remote access settings (off unless turned on).
-      if (match && !origin) { origin = match[1]; remote?.push(); resolve(`${match[1]}/#token=${match[2]}`); }
+      if (match && !origin) { origin = match[1]; remote?.push(); plugins?.push(); resolve(`${match[1]}/#token=${match[2]}`); }
     });
     child.stderr.on('data', chunk => process.stderr.write(chunk));
     child.once('error', reject);
@@ -238,6 +239,9 @@ if (!app.requestSingleInstanceLock()) {
       // Needs the app to be ready (safeStorage). Settings it cannot open leave remote access off, never the app.
       try { remote = setupRemote({ userData: app.getPath('userData'), version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`원격 접속 설정을 불러오지 못했습니다: ${error.message}`); }
+      // Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
+      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       if (dev) await startPtyHost(); createWindow(await startServer());
       if (dev) watchServerSources();
       else {
@@ -251,7 +255,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
-  app.on('quit', () => { ptyHost?.kill(); });
+  app.on('quit', () => { ptyHost?.kill(); plugins?.close(); });
   app.on('before-quit', event => {
     if (quitting || !server) return;
     event.preventDefault(); quitting = true;

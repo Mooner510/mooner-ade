@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type DragEvent, type KeyboardE
 import { api } from './api';
 import { agentNames, defaultSettings, statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
+import { PluginSettings } from './PluginSettings';
 import { RemoteSettings } from './RemoteSettings';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
@@ -21,7 +22,7 @@ function AboutSettings() {
   </>;
 }
 
-type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'remote' | 'keys' | 'about';
+type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'remote' | 'plugins' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
@@ -30,6 +31,7 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'remote', label: '원격 접속', icon: 'wifi' },
+  { id: 'plugins', label: '플러그인', icon: 'plugin' },
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
 ];
@@ -277,6 +279,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
         </>}
         {section === 'wakatime' && <WakaTimeSettings settings={settings} set={set} onChange={onChange} />}
         {section === 'remote' && <RemoteSettings />}
+        {section === 'plugins' && <PluginSettings />}
         {section === 'about' && <AboutSettings />}
         {section === 'keys' && <div className="shortcut-list">{shortcuts.map(item => <div key={item.label + item.keys}><span>{item.label}</span><kbd>{item.keys}</kbd></div>)}</div>}
       </div>

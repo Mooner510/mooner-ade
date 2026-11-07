@@ -534,6 +534,18 @@ body.resizing .xterm-host { pointer-events: none; }
 .remote-qr-cover { flex: none; width: 220px; height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg); }
 .remote-qr-cover small { color: var(--muted); font-size: 11px; padding: 0 16px; text-align: center; }
 @media (max-width: 640px) { .remote-pairing { flex-direction: column; } }
+.plugin-card { border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.plugin-card .setting-row { border-bottom: 0; }
+.plugin-version, .plugin-hash { color: var(--muted); font-weight: 400; }
+.plugin-hash { word-break: break-all; font-size: 11px; }
+.plugin-state.ok { color: var(--add); } .plugin-state.warn { color: var(--warn); } .plugin-state.error { color: var(--error); }
+.plugin-message { display: flex; align-items: center; gap: 6px; color: var(--add); }
+.plugin-view { margin: 0 0 6px 12px; padding-left: 12px; border-left: 2px solid var(--border); }
+.plugin-view .setting-row { padding: 7px 0; }
+.plugin-value { white-space: pre-wrap; word-break: break-all; }
+.plugin-status { margin: 6px 0 2px; }
+.plugin-status.ok { color: var(--add); } .plugin-status.warn { color: var(--warn); } .plugin-status.error { color: var(--error); } .plugin-status.info { color: var(--info); }
+.plugin-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
 .remote-stat { color: var(--muted); }
 .statusbar .remote-stat.live { color: var(--accent-fg); background: var(--accent); border-radius: 4px; padding: 0 6px; }
 .shortcut-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }

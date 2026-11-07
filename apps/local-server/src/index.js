@@ -22,7 +22,7 @@ import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remo
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { watchProjectFiles } from './project-watch.js';
-import { syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { readClaudeCache } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
@@ -270,6 +270,26 @@ function snapshot(project) {
   const current = (process.env[key] || '').split(sep).filter(Boolean);
   const missing = extra.filter(dir => !current.some(item => path.resolve(item).toLowerCase() === path.resolve(dir).toLowerCase()) && fsSync.existsSync(dir));
   if (missing.length) process.env[key] = [...current, ...missing].join(sep);
+}
+// What approved plugins add to terminals opened from now on (docs/PLUGINS.md). It comes only from the main process over IPC,
+// which has already limited each plugin to its declared env prefix, bin folder and MCP script.
+let pluginTerminal = { node: null, plugins: [] };
+function configurePlugins(config) {
+  const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string');
+  const plugins = Array.isArray(config?.plugins) ? config.plugins.filter(plugin => plugin && typeof plugin.id === 'string' && plugin.env && typeof plugin.env === 'object' && strings(plugin.path) && Object.values(plugin.env).every(value => typeof value === 'string')
+    && (plugin.mcp === null || (typeof plugin.mcp?.name === 'string' && typeof plugin.mcp.command === 'string' && strings(plugin.mcp.args)))) : [];
+  pluginTerminal = { node: typeof config?.node === 'string' ? config.node : null, plugins };
+  setAgentMcpServers(plugins.map(plugin => plugin.mcp).filter(Boolean));
+}
+function pluginEnv() {
+  if (!pluginTerminal.plugins.length) return {};
+  const env = {}, dirs = pluginTerminal.plugins.flatMap(plugin => plugin.path);
+  for (const plugin of pluginTerminal.plugins) Object.assign(env, plugin.env);
+  if (pluginTerminal.node) env.ADE_PLUGIN_NODE = pluginTerminal.node;
+  // The same key the environment already uses (Path on Windows), or the terminal would get two.
+  const key = Object.keys(process.env).find(name => name.toLowerCase() === 'path') || 'PATH';
+  if (dirs.length) env[key] = [...dirs, process.env[key] || ''].filter(Boolean).join(path.delimiter);
+  return env;
 }
 // A slow cold start or a busy machine must not read as "not installed": retry once with a generous timeout.
 async function probe(processes, file, args) {
@@ -589,7 +609,7 @@ async function route(action, input, project) {
         const command = input.agent === undefined ? undefined : [await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked), input.args?.trim()].filter(Boolean).join(' ');
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
-        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
+        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
@@ -962,6 +982,7 @@ process.on('message', message => {
   }
   // Remote access settings exist only in the main process (sealed with safeStorage) and reach this process only this way.
   else if (message?.type === 'remote/config') gateway.configure(message.config);
+  else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
   else if (message?.type === 'remote/decide' && typeof message.requestId === 'string') gateway.decide(message.requestId, message.scope ?? null);
   else if (message?.type === 'remote/disconnect' && typeof message.sessionId === 'string') gateway.disconnect(message.sessionId);
 });
