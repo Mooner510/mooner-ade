@@ -2,7 +2,7 @@
 // plugins add to new terminals (sent to the server child as `plugins/terminal`). The page can only read the state and start
 // steps; turning plugins on, approving one and installing a zip are confirmed in native dialogs (see plugin-core.js and
 // docs/PLUGINS.md). A .zip dropped directly into the plugin folder starts the install dialog.
-import { BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
+import { BrowserWindow, dialog, ipcMain, Notification, safeStorage, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +22,23 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
   };
   const push = () => { const child = getServer(); if (child?.connected) child.send({ type: 'plugins/terminal', config: terminal }); };
   const toServer = message => { const child = getServer(); if (!child?.connected) return false; child.send(message); return true; };
+  // A click brings the window forward on the plugins page. Shown ones are kept referenced, or the click handler can be collected.
+  const shown = new Set();
+  function notify({ title, body }) {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    shown.add(notification);
+    notification.on('close', () => shown.delete(notification));
+    notification.on('click', () => {
+      shown.delete(notification);
+      const window = getWindow();
+      if (!window || window.isDestroyed()) return;
+      if (window.isMinimized()) window.restore();
+      window.show(); window.focus();
+      window.webContents.send('ade:plugins-open');
+    });
+    notification.show();
+  }
   async function ask(options) {
     const window = getWindow();
     window?.show(); window?.focus();
@@ -44,7 +61,7 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
 
   const manager = createPluginManager({
     dir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, appVersion: version,
-    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer
+    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify
   });
 
   const handlers = {

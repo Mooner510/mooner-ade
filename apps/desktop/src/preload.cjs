@@ -5,6 +5,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // Plugins: the page can only read the state and start steps; turning them on, approving one and installing a zip are native dialogs.
 const pluginCall = name => (...args) => ipcRenderer.invoke(`ade:plugins:${name}`, ...args);
 const plugins = Object.fromEntries(['state', 'setEnabled', 'rescan', 'approve', 'revoke', 'restart', 'action', 'openFolder', 'pickZip'].map(name => [name, pluginCall(name)]));
+plugins.onOpen = listener => {
+  const handler = () => listener();
+  ipcRenderer.on('ade:plugins-open', handler);
+  return () => ipcRenderer.off('ade:plugins-open', handler);
+};
 plugins.onState = listener => {
   const handler = (_event, state) => listener(state);
   ipcRenderer.on('ade:plugins-state', handler);
