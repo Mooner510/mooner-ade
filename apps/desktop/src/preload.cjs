@@ -2,9 +2,9 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // File.path was removed from Electron, so a dropped file's absolute path is only reachable through webUtils here.
 // OSC 52 copies arrive while the window may be unfocused, where navigator.clipboard refuses to write.
-// Plugins: the page can only read the state and start steps; turning them on and approving one are native dialogs.
+// Plugins: the page can only read the state and start steps; turning them on, approving one and installing a zip are native dialogs.
 const pluginCall = name => (...args) => ipcRenderer.invoke(`ade:plugins:${name}`, ...args);
-const plugins = Object.fromEntries(['state', 'setEnabled', 'rescan', 'approve', 'revoke', 'restart', 'action', 'openFolder'].map(name => [name, pluginCall(name)]));
+const plugins = Object.fromEntries(['state', 'setEnabled', 'rescan', 'approve', 'revoke', 'restart', 'action', 'openFolder', 'pickZip'].map(name => [name, pluginCall(name)]));
 plugins.onState = listener => {
   const handler = (_event, state) => listener(state);
   ipcRenderer.on('ade:plugins-state', handler);
