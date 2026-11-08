@@ -949,7 +949,8 @@ async function shutdown() {
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
-process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void shutdown());
+// Exit explicitly: an IPC channel to the app (or a remote gateway socket) would otherwise keep the process alive after shutdown.
+process.on('SIGINT', () => void shutdown().finally(() => process.exit(0))); process.on('SIGTERM', () => void shutdown().finally(() => process.exit(0)));
 // Every terminal lives in this process (outside `pnpm dev`), so one stray error in a callback must not end all of them.
 process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
 process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
