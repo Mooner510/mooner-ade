@@ -10,6 +10,8 @@ export type Settings = {
   agentsOff: string[]; agentsMuted: string[]; claudeArgs: string; codexArgs: string; cursorArgs: string; notifyLooking: boolean;
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
   cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; usageRefresh: number;
+  // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
+  tmuxGuide: 'auto' | 'always' | 'off'; tmuxPrefix: string;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -36,7 +38,8 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120,
+  tmuxGuide: 'auto', tmuxPrefix: 'b'
 };
 export const monoFont = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';

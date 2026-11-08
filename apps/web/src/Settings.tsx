@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type DragEvent, type KeyboardE
 import { api } from './api';
 import { agentNames, defaultSettings, statusLayout, usageHue, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
+import { RemoteSettings } from './RemoteSettings';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 
@@ -20,7 +21,7 @@ function AboutSettings() {
   </>;
 }
 
-type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'keys' | 'about';
+type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'remote' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
@@ -28,6 +29,7 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'status', label: '상태바', icon: 'info' },
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
+  { id: 'remote', label: '원격 접속', icon: 'wifi' },
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
 ];
@@ -201,6 +203,16 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="커서 모양"><Dropdown label="커서 모양" value={settings.cursorStyle} options={[{ value: 'bar', label: '막대' }, { value: 'block', label: '블록' }, { value: 'underline', label: '밑줄' }]} onChange={value => set('cursorStyle', value as Settings['cursorStyle'])} /></Row>
           <Row title="커서 깜빡임">{toggle('cursorBlink')}</Row>
           <Row title="선택하면 바로 복사">{toggle('copyOnSelect')}</Row>
+          <h4 className="setting-group">tmux 키 가이드</h4>
+          <p className="setting-note">tmux 접두 키(기본 Ctrl+B)를 누르면 바로 다음에 누를 키를 안내합니다. 터미널 크기는 바꾸지 않고, 입력 중인 커서에서 먼 쪽에 띄우며 다음 키를 누르면 바로 닫힙니다. SSH와 로컬 tmux에 똑같이 적용됩니다.</p>
+          <Row title="가이드 표시" hint="자동은 화면에 tmux 상태줄(예: [0] 0:bash*)이 보일 때만 띄웁니다. 상태줄을 직접 꾸며 인식되지 않으면 ‘항상’을 고르세요. ‘항상’은 tmux가 아닌 곳의 Ctrl+B(vim, readline)에도 뜹니다.">
+            <Dropdown label="tmux 가이드 표시" value={settings.tmuxGuide} options={[{ value: 'auto', label: '자동 (tmux 상태줄 감지)' }, { value: 'always', label: '항상' }, { value: 'off', label: '끔' }]} onChange={value => set('tmuxGuide', value as Settings['tmuxGuide'])} /></Row>
+          {settings.tmuxGuide !== 'off' && <>
+            <Row title="접두 키 (Ctrl+…)" hint=".tmux.conf에서 바꾼 경우 그 글자를 적으세요. 예: Ctrl+A면 a. 영문 소문자 한 글자입니다.">
+              <input type="text" value={settings.tmuxPrefix} maxLength={1} aria-label="tmux 접두 키 글자" style={{ width: 48, textAlign: 'center' }}
+                onChange={event => { const value = event.target.value.toLowerCase(); if (value === '' || /^[a-z]$/.test(value)) set('tmuxPrefix', value); }}
+                onBlur={() => { if (!settings.tmuxPrefix) set('tmuxPrefix', defaultSettings.tmuxPrefix); }} /></Row>
+          </>}
         </>}
         {section === 'status' && <>
           <StatusLayoutEditor settings={settings} onChange={onChange} />
@@ -264,6 +276,7 @@ export function SettingsModal({ settings, onChange, onClose, shortcuts }: { sett
           <Row title="자동 줄바꿈"><input type="checkbox" role="switch" checked={settings.wordWrap} onChange={event => set('wordWrap', event.target.checked)} /></Row>
         </>}
         {section === 'wakatime' && <WakaTimeSettings settings={settings} set={set} onChange={onChange} />}
+        {section === 'remote' && <RemoteSettings />}
         {section === 'about' && <AboutSettings />}
         {section === 'keys' && <div className="shortcut-list">{shortcuts.map(item => <div key={item.label + item.keys}><span>{item.label}</span><kbd>{item.keys}</kbd></div>)}</div>}
       </div>

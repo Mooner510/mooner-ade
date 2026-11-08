@@ -52,6 +52,7 @@ const KIND = {
   waiting: () => '승인·답변을 기다리는 중',
   scheduled: () => '예약된 작업이 곧 실행될 예정',
   command: () => '명령 실행 중',
+  remote: () => '원격 기기가 접속 중',
   unknown: () => '상태를 확인할 수 없음'
 };
 const AGENT = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' };

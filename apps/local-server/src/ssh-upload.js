@@ -15,7 +15,14 @@ const unquote = value => value.replace(/^"(.*)"$|^'(.*)'$/s, (_, a, b) => a ?? b
 // Turns the command line of the terminal's ssh client into an sftp invocation of the same host: the sftp next to that ssh binary,
 // with its identity, port, jump hosts and config, but no remote command, forwards or prompts. sftp needs no remote shell, so the
 // upload works the same on POSIX hosts and on Windows OpenSSH (whose login shell is cmd or PowerShell).
-export function sshUploadCommand(command) {
+export function sshUploadCommand(command) { return sshClientCommand(command, 'sftp'); }
+
+// The same host as an ssh invocation that runs a command (the caller appends it) with no tty, forwards or prompts.
+// Used to read a remote agent's own files, so it needs the same non-interactive authentication as an upload.
+export const sshRunCommand = command => sshClientCommand(command, 'ssh');
+
+function sshClientCommand(command, client) {
+  const sftpClient = client === 'sftp';
   const tokens = (command.match(/"[^"]*"|'[^']*'|\S+/g) || []).map(unquote);
   const [binary, ...rest] = tokens, kept = [];
   let destination = null;
@@ -28,8 +35,8 @@ export function sshUploadCommand(command) {
       if (WITH_VALUE.has(flag)) {
         const value = token.length > j + 1 ? token.slice(j + 1) : rest[++i];
         if (value === undefined) return null;
-        if (flag === 'p') kept.push('-P', value);
-        else if (AS_OPTION[flag]) kept.push('-o', `${AS_OPTION[flag]}=${value}`);
+        if (flag === 'p') kept.push(sftpClient ? '-P' : '-p', value);
+        else if (sftpClient && AS_OPTION[flag]) kept.push('-o', `${AS_OPTION[flag]}=${value}`);
         else if (!DROP_VALUE.has(flag)) kept.push(`-${flag}`, value);
         break;
       }
@@ -41,7 +48,9 @@ export function sshUploadCommand(command) {
     ? binary.slice(0, -name.length) + name.replace(/^ssh/i, 'sftp') : 'sftp';
   // ssh keeps the first value it reads for an option, so these win over the user's flags and ssh_config.
   const overrides = ['BatchMode=yes', 'ConnectTimeout=10', 'RemoteCommand=none', 'RequestTTY=no', 'ClearAllForwardings=yes', 'ControlMaster=no', 'ForwardX11=no', 'PermitLocalCommand=no', 'LogLevel=ERROR'];
-  return { binary: sftp, args: [...overrides.flatMap(option => ['-o', option]), ...kept, '-b', '-', destination.replace(/^ssh:\/\//, 'sftp://')] };
+  const options = overrides.flatMap(option => ['-o', option]), target = sftpClient ? sftp : binary;
+  return sftpClient ? { binary: target, args: [...options, ...kept, '-b', '-', destination.replace(/^ssh:\/\//, 'sftp://')] }
+    : { binary: target, args: [...options, ...kept, destination] };
 }
 
 // The folder is created under the remote home (sftp starts there); `pwd` reports the home so the absolute path can be typed.

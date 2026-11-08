@@ -525,6 +525,17 @@ body.resizing .xterm-host { pointer-events: none; }
 .ai-tabs small { font-size: 10px; opacity: .75; }
 .setting-group { margin: 18px 0 2px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .setting-group:first-child { margin-top: 0; }
+.remote-error { display: flex; align-items: center; gap: 6px; color: var(--error); }
+.remote-code { padding: 4px 10px; border-radius: 6px; background: var(--bg); font: 600 16px/1.4 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace; letter-spacing: .12em; }
+.settings-body .mono { font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+.remote-pairing { display: flex; gap: 16px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.remote-pairing p { margin: 0 0 6px; }
+.remote-qr { flex: none; border-radius: 8px; }
+.remote-qr-cover { flex: none; width: 220px; height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg); }
+.remote-qr-cover small { color: var(--muted); font-size: 11px; padding: 0 16px; text-align: center; }
+@media (max-width: 640px) { .remote-pairing { flex-direction: column; } }
+.remote-stat { color: var(--muted); }
+.statusbar .remote-stat.live { color: var(--accent-fg); background: var(--accent); border-radius: 4px; padding: 0 6px; }
 .shortcut-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 @media (max-width: 640px) { .settings { flex-direction: column; } .settings-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav h2, .settings-nav .spacer { display: none; } }
 .file-glyph { flex: none; display: block; object-fit: contain; }
@@ -596,3 +607,21 @@ body.resizing .xterm-host { pointer-events: none; }
 .usage-window.graded { color: hsl(var(--usage-hue) 72% 58%); }
 :root[data-theme=light] .usage-window.graded { color: hsl(var(--usage-hue) 85% 32%); }
 .usage-preview { display: inline-flex; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* tmux key guide: floats over the half of the pane away from the cursor; the terminal is not resized and takes the mouse as usual */
+.tmux-guide { position: absolute; z-index: 20; right: 8px; width: min(calc(100% - 16px), 620px); padding: 8px 10px 10px; pointer-events: none; font-size: 12px; line-height: 1.35; color: var(--fg);
+  background: color-mix(in srgb, var(--overlay) 90%, transparent); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); backdrop-filter: blur(6px); animation: tmux-guide-in .12s ease-out; }
+.tmux-guide.top { top: 30px; }
+.tmux-guide.bottom { bottom: 8px; }
+.tmux-guide header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 6px; }
+.tmux-guide header strong { color: var(--accent); }
+.tmux-guide header small { margin-left: auto; color: var(--faint); }
+.tmux-guide-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 14px; }
+.tmux-guide h4 { margin: 0 0 3px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.tmux-guide dl { margin: 0; }
+.tmux-guide dl > div { display: flex; align-items: baseline; gap: 8px; }
+.tmux-guide dt { flex: none; min-width: 52px; }
+.tmux-guide dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmux-guide kbd { color: var(--fg); background: var(--raised); }
+@keyframes tmux-guide-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tmux-guide { animation: none; } }

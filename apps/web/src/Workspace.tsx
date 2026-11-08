@@ -6,6 +6,7 @@ import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEven
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
+import { RemoteStat } from './RemoteSettings';
 import { Dropdown, type Ask, type GitState } from './views';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
@@ -739,7 +740,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     <div className="workbench">{center}{rightVisible && rightPanel}</div>
     <footer className="statusbar">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right"><RemoteStat onOpen={onOpenSettings} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
     {quickDialog}
   </main>;
