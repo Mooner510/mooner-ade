@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { ignoreSocketErrors } from './pty-safety.js';
 
 // `pnpm dev` runs Vite inside the server, which sets NODE_ENV=development on this process. Terminals get the value the server
 // started with; otherwise every build run in them (another project's `vite build`, `next build`) would come out as a dev build.
@@ -157,12 +158,7 @@ export class LocalGit {
   }
 }
 
-// node-pty's Windows terminal rethrows any error of its ConPTY socket (EPIPE, ECONNRESET when a busy terminal exits) unless the
-// terminal has a second 'error' listener, and that uncaught throw takes the whole server down with every other terminal.
-// The terminal still closes and reports its exit on its own.
-export function ignoreSocketErrors(pty) {
-  if (typeof pty.on === 'function') pty.on('error', () => {});
-}
+export { ignoreSocketErrors } from './pty-safety.js';
 
 export class LocalTerminal {
   constructor({ ptyFactory } = {}) {

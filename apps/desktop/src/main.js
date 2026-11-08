@@ -2,9 +2,12 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'ele
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { helloPtyHost, ptyHostControl } from '../../local-server/src/pty-client.js';
+import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
 import { setupPlugins } from './plugins.js';
+import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
@@ -23,24 +26,85 @@ const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
-let server = null, origin = '', quitting = false, restarting = false, ptyHost = null, mainWindow = null, plugins = null;
+let server = null, origin = '', quitting = false, restarting = false, mainWindow = null, plugins = null;
 // The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
 // bundled runtime/ (resources/runtime, beside resources/app), so fall back to the system Node instead of failing with ENOENT.
 const bundledNode = path.resolve(import.meta.dirname, '../../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
 const nodeBinary = process.env.ADE_NODE || (app.isPackaged && fs.existsSync(bundledNode) ? bundledNode : 'node');
 
-// Dev only: terminals live in their own process so the server can be replaced on every code change without killing them.
-// The host dies with this app (its IPC channel closes), so quitting `pnpm dev` always cleans it up.
-function startPtyHost() {
-  const token = randomBytes(32).toString('hex'), id = randomBytes(6).toString('hex');
-  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\mooner-ade-pty-${id}` : path.join(os.tmpdir(), `mooner-ade-pty-${id}.sock`);
-  return new Promise((resolve, reject) => {
-    const child = spawn(nodeBinary, [path.resolve(import.meta.dirname, '../../local-server/src/pty-host.js')], { env: { ...process.env, ADE_PTY_ENDPOINT: endpoint, ADE_PTY_TOKEN: token }, stdio: ['ignore', 'inherit', 'inherit', 'ipc'], windowsHide: true });
-    ptyHost = child;
-    child.once('error', reject);
-    child.once('exit', code => { if (ptyHost === child) ptyHost = null; reject(new Error(`pty-host 종료 (exit ${code})`)); });
-    child.on('message', message => { if (message?.type === 'ready') { process.env.ADE_PTY_ENDPOINT = endpoint; process.env.ADE_PTY_TOKEN = token; resolve(); } });
-  });
+// Terminals live in their own process, the pty-host (apps/local-server/src/pty-host.js), so they keep running while the server is
+// replaced (dev reload, a crash) and while the app restarts for an update; the next app finds the host through pty-host.json and its
+// server takes the terminals over. A normal quit ends them as before. Without a host (it could not start) the server keeps its
+// terminals in its own process, which is how every terminal used to live.
+const ptyRoot = path.join(app.getPath('userData'), 'pty-host');
+// How long the host keeps terminals for the app that an update is restarting.
+const UPDATE_LINGER_MS = 5 * 60_000;
+let ptyHostInfo = null, keepTerminalsOnQuit = false, ptyNotice = '';
+
+async function ensurePtyHost() {
+  const known = readRendezvous(ptyRoot);
+  if (known && processAlive(known.pid)) {
+    try {
+      const { socket, hello } = await helloPtyHost({ endpoint: known.endpoint, token: known.token, role: 'control' });
+      socket.destroy();
+      if (hello.pid === known.pid) {
+        console.log(`실행 중인 pty-host에 연결합니다 (pid ${hello.pid}, 터미널 ${hello.terminals}개)`);
+        return usePtyHost(known);
+      }
+    } catch (error) {
+      // Not ended here: it may be an older host whose terminals someone still wants. It ends them itself once nobody takes them over.
+      console.warn(`실행 중인 pty-host를 이어받을 수 없어 새로 시작합니다: ${error.message}`);
+      if (error.code === 'PTY_INCOMPATIBLE') ptyNotice = '이전 버전에서 열려 있던 터미널은 이 버전에서 이어받지 못했습니다. 그 터미널은 몇 분 뒤 종료됩니다.';
+    }
+  }
+  const token = randomBytes(32).toString('hex'), endpoint = newEndpoint();
+  // The packaged app runs the host from a copy in its data folder, so updating the install folder never hits its locked files.
+  // `pnpm dev` runs it from the source tree with the system Node.
+  const source = path.dirname(serverEntry);
+  const files = app.isPackaged && !dev
+    ? prepareHostCopy({ root: ptyRoot, serverSrc: source, nodePtyDir: path.dirname(createRequire(serverEntry).resolve('node-pty/package.json')), nodeBinary })
+    : { dir: ptyRoot, entry: path.join(source, 'pty-host.js'), node: nodeBinary, key: null };
+  fs.mkdirSync(ptyRoot, { recursive: true });
+  const logFile = path.join(ptyRoot, 'pty-host.log');
+  try { if (fs.statSync(logFile).size > 1024 * 1024) fs.renameSync(logFile, `${logFile}.old`); } catch { /* no log yet */ }
+  const log = fs.openSync(logFile, 'a');
+  let child;
+  try {
+    // Detached with its own stdio, so it outlives this app; its cwd is its own folder, never the install folder.
+    child = spawn(files.node, [files.entry], { cwd: files.dir, env: { ...process.env, ADE_PTY_ENDPOINT: endpoint, ADE_PTY_TOKEN: token }, detached: true, stdio: ['ignore', log, log], windowsHide: true });
+  } finally { fs.closeSync(log); }
+  if (files.key) markHostCopy(files.dir, child.pid);
+  let exited = null;
+  child.once('exit', code => { exited = code ?? 'signal'; });
+  child.once('error', error => { exited = error.message; });
+  child.unref();
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    if (exited !== null) throw new Error(`pty-host가 시작하지 못했습니다 (${exited}). ${logFile}을 확인하세요.`);
+    try { const { socket } = await helloPtyHost({ endpoint, token, role: 'control', timeoutMs: 2000 }); socket.destroy(); break; }
+    catch (error) { if (Date.now() > deadline) { try { child.kill(); } catch { /* gone */ } throw new Error(`pty-host가 응답하지 않습니다: ${error.message}`); } }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const info = { protocol: PTY_PROTOCOL, endpoint, token, pid: child.pid, key: files.key };
+  writeRendezvous(ptyRoot, info);
+  return usePtyHost(info);
+}
+function usePtyHost(info) {
+  // The copy's Node also runs the plugin tools in terminals (see setupPlugins); `pnpm dev` has no copy.
+  ptyHostInfo = { ...info, node: info.key ? path.join(ptyRoot, info.key, process.platform === 'win32' ? 'node.exe' : 'node') : null };
+  // Read by the server it starts, which removes them from its own environment so terminals never see them.
+  process.env.ADE_PTY_ENDPOINT = info.endpoint; process.env.ADE_PTY_TOKEN = info.token;
+  // Copies of earlier versions no running host uses any more.
+  if (app.isPackaged && !dev) sweepHostCopies(ptyRoot, info.key ? [info.key] : []);
+}
+// Before the server goes: an update restart asks the host to keep the terminals for the next app; a normal quit ends them.
+async function releasePtyHost() {
+  const info = ptyHostInfo;
+  if (!info) return;
+  const request = keepTerminalsOnQuit ? { op: 'linger', ms: UPDATE_LINGER_MS } : { op: 'shutdown', reason: '앱 종료' };
+  const result = await ptyHostControl(info, request).catch(error => ({ ok: false, error: error.message }));
+  if (!result.ok) console.warn(`pty-host에 ${request.op}를 알리지 못했습니다: ${result.error ?? '응답 없음'}`);
+  if (!keepTerminalsOnQuit) clearRendezvous(ptyRoot, info.pid);
 }
 
 function startServer() {
@@ -213,7 +277,8 @@ function serverBusy() {
     child.send({ type: 'busy?', id }, error => { if (error) finish(error); });
   });
 }
-const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, getBusy: serverBusy });
+// Just before the update restarts the app: keep the terminals for the new version instead of ending them.
+const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
 ipcMain.handle('ade:app-info', () => ({ version: app.getVersion() }));
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
 
@@ -235,10 +300,14 @@ if (!app.requestSingleInstanceLock()) {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
     try {
+      // First, so plugins learn which Node terminals use. A host that cannot start leaves terminals in the server process, as they
+      // used to be: nothing is kept through a restart then.
+      await ensurePtyHost().catch(error => console.warn(`pty-host 없이 시작합니다: ${error.message}`));
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
-      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
-      if (dev) await startPtyHost(); createWindow(await startServer());
+      createWindow(await startServer());
+      if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });
       if (dev) watchServerSources();
       else {
         // Once shortly after start, then every 30 minutes for an app that stays open for days.
@@ -251,10 +320,12 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
-  app.on('quit', () => { ptyHost?.kill(); plugins?.close(); });
+  app.on('quit', () => { plugins?.close(); });
   app.on('before-quit', event => {
-    if (quitting || !server) return;
+    if (quitting) return;
     event.preventDefault(); quitting = true;
-    void stopServer().finally(() => app.quit());
+    // Linger is set before the server lets go of the terminals; shutdown after it has saved the sessions it reads from them.
+    const steps = keepTerminalsOnQuit ? [releasePtyHost, stopServer] : [stopServer, releasePtyHost];
+    void steps.reduce((chain, step) => chain.then(step).catch(error => console.warn(error.message)), Promise.resolve()).finally(() => app.quit());
   });
 }

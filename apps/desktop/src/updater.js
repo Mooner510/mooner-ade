@@ -17,9 +17,10 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // over the install folder and starts the app again; user data lives in %APPDATA%, outside the install folder.
 // macOS: the zip holds MoonerADE.app (made with ditto so the framework symlinks and signature survive); after the app
 // exits, a shell helper swaps the new bundle in for the old one and opens it. User data lives in ~/Library.
-// Restarting ends every terminal (they live in the server process), so the app is only restarted once the server reports that nothing
-// is running: an agent turn, a Claude with a background task or wakeup pending, a command in a plain shell. If something is, the user
-// chooses between waiting for it to finish and "later"; either way the new version is not downloaded until the restart is safe.
+// Terminals live in the pty-host, outside the app (apps/local-server/src/pty-host.js): just before the restart the app asks it to keep
+// them, and the restarted app takes them over, so agents and commands running in them simply go on. What a restart would still cut off
+// (a plugin at work, or every terminal when the host could not start) holds it back: if something like that runs, the user chooses
+// between waiting for it to finish and "later"; either way the new version is not downloaded until the restart is safe.
 // The previous version is not kept (the new files are mirrored over it), and the scratch folder is removed after the helper has run.
 
 const newer = (a, b) => {
@@ -113,7 +114,7 @@ const declined = createDeclined();
 // Resolves to 'unsupported' | 'latest' | 'declined' | 'waiting' | 'updating' | 'error'. `manual` (the settings button) also answers
 // "up to date" and failures in a dialog, asks again about a version turned down earlier, and manages an update that is waiting for
 // work to finish; background checks stay silent unless a new version is there. `getBusy()` asks the server what a restart would cut off.
-export async function checkForUpdate({ repo, asset, window, manual = false, getBusy }) {
+export async function checkForUpdate({ repo, asset, window, manual = false, getBusy, beforeRestart }) {
   if (!portable()) {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치된 앱(Windows 포터블, macOS .app)에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
     return 'unsupported';
@@ -122,7 +123,7 @@ export async function checkForUpdate({ repo, asset, window, manual = false, getB
   if (pending) return manual ? manageWaiting(window) : 'waiting';
   if (running) return 'updating';
   running = true;
-  try { return await check({ repo, asset, window, manual, getBusy }); }
+  try { return await check({ repo, asset, window, manual, getBusy, beforeRestart }); }
   catch (error) {
     if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` });
     else throw error;
@@ -152,7 +153,9 @@ async function manageWaiting(window) {
   const confirmOptions = {
     type: 'warning', buttons: ['지금 업데이트', '취소'], defaultId: 1, cancelId: 1, title: '업데이트',
     message: '실행 중인 작업을 끝내지 않고 지금 업데이트할까요?',
-    detail: `모든 터미널과 에이전트가 종료됩니다. 진행 중인 작업, 승인 대기, 백그라운드 작업은 이어지지 않고, Claude 대화는 다시 열 때 resume으로 이어집니다.\n\n${describeReasons(current.report.reasons)}`,
+    detail: current.report.keepsTerminals
+      ? `터미널과 그 안의 작업은 계속 실행됩니다. 아래 작업만 끊깁니다.\n\n${describeReasons(current.report.reasons)}`
+      : `모든 터미널과 에이전트가 종료됩니다. 진행 중인 작업, 승인 대기, 백그라운드 작업은 이어지지 않고, Claude 대화는 다시 열 때 resume으로 이어집니다.\n\n${describeReasons(current.report.reasons)}`,
   };
   const confirmed = await (window ? dialog.showMessageBox(window, confirmOptions) : dialog.showMessageBox(confirmOptions));
   if (confirmed.response !== 0 || pending !== current) return 'waiting';
@@ -210,7 +213,7 @@ async function pickPackage(release, asset, version) {
 
 const mb = bytes => (bytes / 1048576).toFixed(1);
 
-async function check({ repo, asset, window, manual, getBusy }) {
+async function check({ repo, asset, window, manual, getBusy, beforeRestart }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
   const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`GitHub 응답 오류 (HTTP ${response.status})`);
@@ -230,16 +233,18 @@ async function check({ repo, asset, window, manual, getBusy }) {
     ? {
       type: 'warning', buttons: ['모두 중단되면 업데이트', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
       message: `새 버전 ${version}을 사용할 수 있습니다.`,
-      detail: `현재 버전은 ${app.getVersion()}입니다. 지금은 아래 작업이 진행 중이라 바로 재시작하면 끊깁니다.\n\n${describeReasons(report.reasons)}\n\n"모두 중단되면 업데이트"를 고르면 위 작업이 모두 끝나고 1분쯤 지난 뒤 받아서 설치하고 재시작합니다. ${size}`,
+      detail: `현재 버전은 ${app.getVersion()}입니다. 지금은 아래 작업이 진행 중이라 바로 재시작하면 끊깁니다.\n\n${describeReasons(report.reasons)}\n\n"모두 중단되면 업데이트"를 고르면 위 작업이 모두 끝나고 1분쯤 지난 뒤 받아서 설치하고 재시작합니다.${report.keepsTerminals ? ' 터미널은 기다리지 않고 업데이트 중에도 계속 실행됩니다.' : ''} ${size}`,
     }
     : {
       type: 'info', buttons: ['업데이트 후 재시작', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
       message: `새 버전 ${version}을 사용할 수 있습니다.`,
-      detail: `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널은 종료되고, Claude 대화는 다시 열 때 이어집니다.`,
+      detail: report.keepsTerminals
+        ? `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널과 그 안에서 실행 중인 작업은 끊기지 않고 계속되며, 다시 실행된 앱에 그대로 이어집니다.${report.kept.length ? `\n\n계속 실행되는 작업:\n${describeReasons(report.kept)}` : ''}`
+        : `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널은 종료되고, Claude 대화는 다시 열 때 이어집니다.`,
     };
   const { response: choice } = await (window ? dialog.showMessageBox(window, prompt) : dialog.showMessageBox(prompt));
   if (choice !== 0) { declined.add(version); return 'declined'; }
-  return install({ version, file, kind, window, getBusy, mustWait: report.busy });
+  return install({ version, file, kind, window, getBusy, beforeRestart, mustWait: report.busy });
 }
 
 // Waits (without a time limit) until the server has reported idle several times in a row. 'idle' | 'force' | 'cancelled'.
@@ -250,7 +255,7 @@ async function settle(version, getBusy) {
   finally { if (pending === state) pending = null; }
 }
 
-async function install({ version, file, kind, window, getBusy, mustWait }) {
+async function install({ version, file, kind, window, getBusy, beforeRestart, mustWait }) {
   let forced = false;
   if (mustWait) {
     const outcome = await settle(version, getBusy);
@@ -278,6 +283,8 @@ async function install({ version, file, kind, window, getBusy, mustWait }) {
     progress.set('설치를 위해 앱을 다시 시작합니다…');
     await staged.launch({ work, progress });
     applying = true;
+    // Tells the app to have its terminals kept for the new version instead of ended with this one.
+    beforeRestart?.();
     // The progress window stays up until the app exits, so the restart does not look like a crash.
     app.quit();
     return 'updating';
