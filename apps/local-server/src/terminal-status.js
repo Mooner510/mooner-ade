@@ -5,7 +5,7 @@
 const PROGRESS_STATE = { 1: 'working', 2: 'error', 3: 'working', 4: 'working' };
 export function createTerminalStatus(reply, agentOf = () => null) {
   const records = new Map();
-  let body = null, escaped = false, progress = null, speaks7501 = false;
+  let body = null, escaped = false, progress = null, speaks7501 = false, remote = null;
   const report = (value, replay) => {
     if (value === '7501;?') { if (!replay) reply('\x1b]7501;?\x1b\\'); return; }
     if (value.startsWith('133;A')) {
@@ -66,12 +66,20 @@ export function createTerminalStatus(reply, agentOf = () => null) {
       }
       return result;
     },
-    // `source: 'progress'` tells the window that questions are not reported and must still be read from the screen.
+    // `source` tells the window that questions are not reported and must still be read from the screen: 'progress' for OSC 9;4, 'session' for
+    // the state read from the remote Claude's own session file (see setRemote).
     get status() {
       const reported = this.reported;
-      if (reported || speaks7501 || !progress) return reported;
+      if (reported || speaks7501) return reported;
       const agent = agentOf();
-      return agent ? { agent, state: progress, source: 'progress' } : null;
+      if (progress && agent) return { agent, state: progress, source: 'progress' };
+      return !progress && remote && agent ? { agent, state: remote, source: 'session' } : null;
+    },
+    // Over ssh, tmux may swallow every report, so the remote Claude's own session state ('working' or 'idle') stands in when nothing else speaks.
+    // A turn that ends reads as 'done' until the next one starts, like the other sources.
+    setRemote(next) {
+      if (next === 'idle' && (remote === 'working' || remote === 'done')) next = 'done';
+      remote = next ?? null;
     },
     feed(data, replay = false) {
       for (let index = 0; index < data.length; index++) {
@@ -91,6 +99,6 @@ export function createTerminalStatus(reply, agentOf = () => null) {
         }
       }
     },
-    clear() { records.clear(); progress = null; speaks7501 = false; }
+    clear() { records.clear(); progress = null; speaks7501 = false; remote = null; }
   };
 }

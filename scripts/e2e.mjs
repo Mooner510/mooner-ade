@@ -90,8 +90,9 @@ async function main() {
   };
   const visible = selector => `([...document.querySelectorAll(${JSON.stringify(selector)})].find(el => el.getClientRects().length))`;
   await send('Runtime.enable'); await send('Page.enable'); await send('Page.navigate', { url });
-  await until(visible('[aria-label="프로젝트 열기"]'), 'authenticated shell');
-  await evaluate(`${visible('[aria-label="프로젝트 열기"]')}.click()`);
+  // With no project open the app starts on the project picker; otherwise it is behind the "open project" button.
+  await until(`${visible('[aria-label="프로젝트 열기"]')} || ${visible('input[aria-label="프로젝트 절대 경로"]')}`, 'authenticated shell');
+  await evaluate(`void (${visible('input[aria-label="프로젝트 절대 경로"]')} || ${visible('[aria-label="프로젝트 열기"]')}.click())`);
   await until(visible('input[aria-label="프로젝트 절대 경로"]'), 'project picker');
   await evaluate(`(() => { const input = document.querySelector('input[aria-label="프로젝트 절대 경로"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(repo)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.form.requestSubmit(); })()`);
   // A project with nothing to restore shows the launcher instead of a shell; its first entry opens a plain shell.

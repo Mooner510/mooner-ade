@@ -16,6 +16,10 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 
 서버는 `127.0.0.1`의 임의 포트에 바인딩하고, 실행할 때마다 새 접속 토큰을 만들어 stdout으로 앱에 알립니다. 토큰은 디스크에 저장하지 않습니다. 앱 창은 URL 해시의 토큰을 HttpOnly·SameSite=Strict 세션 쿠키로 교환한 뒤 주소에서 지웁니다. API는 동일 출처 JSON POST만, WebSocket은 Host·Origin·쿠키가 맞는 요청만 받습니다.
 
+## 원격 접속 (선택)
+
+기본으로 꺼져 있습니다. 켜면 로컬 서버가 Hub(`ADE_HUB_URL`)로 나가는 WebSocket을 유지하고, 페어링한 Android 폰의 연결을 Noise(IK)로 받아 원격 세션으로 만듭니다. 원격 세션은 데스크톱 화면과 같은 메시지 처리기를 쓰지만, 그 앞의 허용 목록(`remote-dispatch.js`)이 권한(view/control)에 맞는 action과 필드만 통과시킵니다. 원격 설정(켜짐 여부, PC 키, 폰 목록, 계정 토큰)은 Electron main이 `safeStorage`로 봉인해 소유하고 서버에는 IPC로만 줍니다. 열린 포트는 늘지 않습니다. 자세한 내용은 [원격 접속](REMOTE_ACCESS.md)에 있습니다.
+
 ## 로컬 경계
 
 경로 검사는 traversal·symlink를 막지만 악성 프로세스에 대한 OS sandbox가 아닙니다. PTY는 사용자 셸과 같은 권한입니다. 로컬 서버가 실행하는 Git은 저장소의 fsmonitor와 hooks를 끄며, 터미널에서 실행한 Git에는 적용하지 않습니다.
