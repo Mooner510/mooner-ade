@@ -20,6 +20,10 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 
 기본으로 꺼져 있습니다. 켜면 로컬 서버가 Hub(`ADE_HUB_URL`)로 나가는 WebSocket을 유지하고, 페어링한 Android 폰의 연결을 Noise(IK)로 받아 원격 세션으로 만듭니다. 원격 세션은 데스크톱 화면과 같은 메시지 처리기를 쓰지만, 그 앞의 허용 목록(`remote-dispatch.js`)이 권한(view/control)에 맞는 action과 필드만 통과시킵니다. 원격 설정(켜짐 여부, PC 키, 폰 목록, 계정 토큰)은 Electron main이 `safeStorage`로 봉인해 소유하고 서버에는 IPC로만 줍니다. 열린 포트는 늘지 않습니다. 자세한 내용은 [원격 접속](REMOTE_ACCESS.md)에 있습니다.
 
+## 플러그인 (선택)
+
+받은 플러그인 폴더를 `<userData>/plugins`에 넣어 기능을 더합니다. MoonerADE 자체에는 플러그인이 들어 있지 않습니다. 기본으로 꺼져 있고, 켜기와 플러그인별 승인은 main의 네이티브 확인 창을 거칩니다. 승인은 폴더의 SHA-256에 고정되어 파일이 바뀌면 실행되지 않습니다. 승인한 플러그인은 각자 Node 프로세스로 실행되고 main과 IPC로만 이야기합니다. main은 플러그인이 선언한 환경 변수 접두사, bin 폴더, MCP 스크립트만 골라 서버에 `plugins/terminal`로 보내고, 서버는 새 터미널과 그 안의 Claude Code·Codex에 이것을 더합니다(`apps/desktop/src/plugin-core.js`, [플러그인](PLUGINS.md)).
+
 ## 로컬 경계
 
 경로 검사는 traversal·symlink를 막지만 악성 프로세스에 대한 OS sandbox가 아닙니다. PTY는 사용자 셸과 같은 권한입니다. 로컬 서버가 실행하는 Git은 저장소의 fsmonitor와 hooks를 끄며, 터미널에서 실행한 Git에는 적용하지 않습니다.

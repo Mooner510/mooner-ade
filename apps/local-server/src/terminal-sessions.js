@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { fault } from './files.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const quote = (value, windows = process.platform === 'win32') => `'${value.replaceAll("'", windows ? "''" : "'\"'\"'")}'`;
+// PowerShell also ends a single-quoted string at the typographic quotes U+2018-U+201B (a path such as a user or folder name
+// may hold one); any of them doubled stays literal.
+const quote = (value, windows = process.platform === 'win32') => windows ? `'${value.replace(/['\u2018-\u201B]/g, '$&$&')}'` : `'${value.replaceAll("'", "'\"'\"'")}'`;
 const folder = (directory, id) => {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(id)) throw fault('INVALID_INPUT', '잘못된 터미널 ID입니다.');
   return path.join(directory, 'terminal-sessions', id);
@@ -48,6 +50,18 @@ export async function readTerminalSession(directory, id, agent) {
   } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
 }
 
+// MCP servers approved plugins give the agents started in ADE terminals (docs/PLUGINS.md). Set by the main process only.
+let agentMcpServers = [];
+const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
+export function setAgentMcpServers(servers) {
+  agentMcpServers = (Array.isArray(servers) ? servers : []).filter(server => MCP_NAME.test(server?.name ?? '') && typeof server.command === 'string' && Array.isArray(server.args)
+    // Codex gets these as TOML literal strings, which cannot hold a quote; such a server is left out of both agents.
+    && [server.command, ...server.args].every(value => typeof value === 'string' && !value.includes("'") && !/[\0\r\n]/.test(value)))
+    .map(server => ({ name: server.name, command: server.command, args: [...server.args] }));
+}
+// TOML literal strings ('...') so no shell, including Windows PowerShell 5.1, has to pass a double quote through.
+const toml = value => `'${value.replaceAll('\\', '/')}'`;
+
 export async function terminalAgentCommand(directory, id, agent, restoreId, shellTracksSessions = false) {
   if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
   // shortcut: Cursor CLI has no per-run hook or log option to learn its chat ID, so a restore opens its picker.
@@ -60,7 +74,11 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   if (shellTracksSessions) return command;
   if (agent === 'codex') {
     // shortcut: Codex's root session-start log is version-dependent; unknown IDs open the picker.
-    return `${command} --no-daemon -c ${quote(`log_dir=${root}`)}`;
+    const mcp = agentMcpServers.flatMap(server => [
+      '-c', quote(`mcp_servers.${server.name}.command=${toml(server.command)}`),
+      '-c', quote(`mcp_servers.${server.name}.args=[${server.args.map(toml).join(',')}]`)
+    ]);
+    return [command, '--no-daemon', '-c', quote(`log_dir=${root}`), ...mcp].join(' ');
   }
   // Claude runs command hooks through a shell, including Git Bash on Windows.
   const hook = [process.execPath, import.meta.filename, path.join(root, 'session.json')]
@@ -68,7 +86,12 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   const settings = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] } });
   const settingsFile = path.join(root, 'claude-settings.json');
   await fs.writeFile(settingsFile, settings, { mode: 0o600 });
-  return `${command} --settings ${quote(settingsFile)}`;
+  if (!agentMcpServers.length) return `${command} --settings ${quote(settingsFile)}`;
+  // --mcp-config adds to the user's own MCP servers.
+  const mcpFile = path.join(root, 'claude-mcp.json');
+  const servers = Object.fromEntries(agentMcpServers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args }]));
+  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
+  return `${command} --settings ${quote(settingsFile)} --mcp-config ${quote(mcpFile)}`;
 }
 
 // Source the user's normal startup first; these functions exist only in ADE's interactive shell.
