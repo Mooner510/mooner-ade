@@ -4,13 +4,12 @@
 
 | 변수 | 기본값 | 용도 |
 |---|---|---|
-| `ADE_PORT` | 사용 가능한 임의 포트 | 서버는 항상 `127.0.0.1`에 바인딩. 원격 접속은 이 포트를 열지 않고 Hub로 나가는 연결만 씁니다. |
+| `ADE_PORT` | 사용 가능한 임의 포트 | 서버는 항상 `127.0.0.1`에 바인딩. |
 | `ADE_DATA_DIR` | OS별 앱 데이터 경로 | 열린 프로젝트·레이아웃·설정, 터미널 세션 기록, 저장소 worktree 저장 |
 | `ADE_NODE` | `node` | Electron이 로컬 서버·PTY 호스트를 실행할 시스템 Node |
 | `ADE_DEV` | 꺼짐 | `1`이면 로컬 서버가 Vite를 같은 출처에서 제공. `pnpm dev`가 설정 |
 | `CHROME_PATH` | OS의 일반 설치 경로 탐색 | E2E용 Chrome/Chromium 실행 파일 |
 | `ADE_TEST_CDP` | 없음 | 이미 실행 중인 격리 Chrome의 CDP HTTP 주소. 사이드바 드래그 테스트 전용 |
-| `ADE_HUB_URL` | `https://ade-hub.mooner510.kr` | 원격 접속 중계 서버(Hub) 주소. 계정을 연결할 때의 값이 저장되어 이후에도 쓰입니다. `http`는 루프백 주소에만 허용합니다. [원격 접속](docs/REMOTE_ACCESS.md) |
 | `ADE_PLUGINS_DIR` | `<userData>/plugins` | 플러그인 폴더. 개발·테스트용 [플러그인](docs/PLUGINS.md) |
 | `ADE_PTY_ENDPOINT` / `ADE_PTY_TOKEN` | 없음 | 개발 모드(`pnpm dev`)의 내부 PTY 호스트 연결·인증. 직접 설정하지 않음 |
 

@@ -29,8 +29,6 @@ import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
-import { createRemoteGateway } from './remote-gateway.js';
-import { REMOTE_TERMINAL_LIMIT } from './remote-dispatch.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -727,7 +725,7 @@ async function savePaste(bytes, name) {
   await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
   return file;
 }
-// One message from a client: the window's /ws socket, or a remote session after the remote dispatcher checked it.
+// One message from a client: the window's /ws socket, or a plugin's workspace session.
 async function handleClientMessage(socket, message) {
   let projectId;
   try {
@@ -793,33 +791,68 @@ wss.on('connection', socket => {
     void handleClientMessage(socket, message);
   });
 });
-// Remote sessions join `clients` like a window does, so they get the same broadcasts; what they may ask is checked first.
-async function knownProject(requested) {
-  const root = await fs.realpath(requested).catch(() => null);
-  if (!root) throw fault('NOT_FOUND', '프로젝트를 찾을 수 없습니다.', 404);
-  if ([...projects.values()].some(project => project.root === root)) return;
-  const recent = await readJson(path.join(dataRoot, 'recent.json'), []);
-  if (!recent.some(item => item.root === root)) throw fault('REMOTE_FORBIDDEN', '원격에서는 이 PC에서 열어 본 프로젝트만 열 수 있습니다.', 403);
-}
-const remoteTerminals = () => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy && !terminal.exited).length, 0);
-const gateway = createRemoteGateway({
-  api: async (action, input, client) => {
-    const value = await route(action, input, projects.get(input.projectId));
-    if (action === 'terminal/open' && value?.id) {
-      const terminal = projects.get(input.projectId)?.terminals.get(value.id);
-      if (terminal) terminal.openedBy = client.remote.deviceId;
+// Workspace sessions of plugins that declared the `workspace` permission (docs/PLUGINS.md). The app relays them over IPC; a
+// session joins `clients` like a window does, so it gets the same broadcasts, and its requests go through the same handlers.
+const PLUGIN_SESSIONS = 16, PLUGIN_TERMINALS = 8, PLUGIN_BUFFER = 8 * 1024 * 1024;
+const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{1,39}$/, SESSION_ID = /^[\w-]{1,64}$/;
+const pluginSessions = new Map(); // `${plugin}\0${session}` -> client
+const toApp = (value, done) => { if (process.connected) process.send(value, done); else done?.(); };
+const pluginTerminals = plugin => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy === plugin && !terminal.exited).length, 0);
+function openPluginSession(plugin, session) {
+  const key = `${plugin}\0${session}`;
+  let pending = 0, closed = false;
+  const client = {
+    plugin,
+    projects: new Set(),
+    get readyState() { return closed ? 3 : 1; },
+    // Bytes handed to the IPC channel and not yet written; a session that stops reading is closed, as a slow window is.
+    get bufferedAmount() { return pending; },
+    send(text) {
+      if (closed) return;
+      pending += text.length;
+      toApp({ type: 'plugin/workspace', plugin, op: 'message', session, text }, () => { pending -= text.length; });
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      clients.delete(client); pluginSessions.delete(key);
+      toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
     }
-    return value;
-  },
-  message: (client, message) => handleClientMessage(client, message),
-  attach: client => clients.add(client),
-  detach: client => clients.delete(client),
-  check: async (name, input) => {
-    if (name === 'known-project') return knownProject(input.path);
-    if (name === 'remote-terminal' && remoteTerminals() >= REMOTE_TERMINAL_LIMIT) throw fault('TERMINAL_LIMIT', `원격 기기에서는 최대 ${REMOTE_TERMINAL_LIMIT}개 터미널을 열 수 있습니다.`);
-  },
-  event: value => process.send?.(value)
-});
+  };
+  pluginSessions.set(key, client); clients.add(client);
+}
+async function pluginApi(plugin, action, input) {
+  if (typeof action !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) throw fault('INVALID_INPUT', '잘못된 요청입니다.');
+  if (action === 'terminal/open' && pluginTerminals(plugin) >= PLUGIN_TERMINALS) throw fault('TERMINAL_LIMIT', `플러그인은 터미널을 최대 ${PLUGIN_TERMINALS}개까지 열 수 있습니다.`);
+  const value = await route(action, input, projects.get(input.projectId));
+  if (action === 'terminal/open' && value?.id) {
+    const terminal = projects.get(input.projectId)?.terminals.get(value.id);
+    if (terminal) terminal.openedBy = plugin;
+  }
+  return value;
+}
+function pluginWorkspace(message) {
+  const { plugin, op, session } = message;
+  if (!PLUGIN_ID.test(plugin ?? '')) return;
+  if (op === 'close-all') { for (const client of [...pluginSessions.values()]) if (client.plugin === plugin) client.close(); return; }
+  if (!SESSION_ID.test(session ?? '')) return;
+  const key = `${plugin}\0${session}`, client = pluginSessions.get(key);
+  if (op === 'open') {
+    if (client || [...pluginSessions.keys()].filter(item => item.startsWith(`${plugin}\0`)).length >= PLUGIN_SESSIONS) return toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
+    openPluginSession(plugin, session);
+  } else if (op === 'close') client?.close();
+  else if (op === 'send') { if (client) void handleClientMessage(client, message.message); }
+  else if (op === 'api') {
+    const id = message.id;
+    if (!Number.isSafeInteger(id)) return;
+    const reply = result => toApp({ type: 'plugin/workspace', plugin, op: 'api-result', session, id, ...result });
+    if (!client) return reply({ ok: false, error: { code: 'NOT_FOUND', message: '세션이 없습니다.' } });
+    pluginApi(plugin, message.action, message.input ?? {}).then(value => reply({ ok: true, value: value ?? null }), error => reply({ ok: false, error: errorValue(error) }));
+  }
+}
+// Keeps a plugin session that stopped reading from piling up output in this process.
+const pluginBufferTimer = setInterval(() => { for (const client of [...pluginSessions.values()]) if (client.bufferedAmount > PLUGIN_BUFFER) client.close(); }, 1000);
+pluginBufferTimer.unref();
 // While a window is connected the ADE counts as in use: the active project gets an app heartbeat, as "ai coding" when one of its
 // agents is working, and with `wakatimeBackground` so do other projects whose agents are working.
 // wakatime-cli also picks up Claude/Codex transcripts on each call.
@@ -919,8 +952,8 @@ sshTimer.unref();
 // Anything that cannot be verified counts as busy rather than being guessed idle; a terminal over ssh is only busy while its agent reports working.
 async function busyReport() {
   const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
-  // A phone in the middle of a session would lose it to a restart just like a terminal would.
-  const reasons = gateway.sessions.map(session => ({ project: '', terminal: session.name, kind: 'remote' }));
+  // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
+  const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
   if (!live.length) return { busy: reasons.length > 0, reasons };
   const table = await processTable(live.filter(item => item.terminal.native.pid).map(item => item.terminal.native.pid)).catch(() => null);
   const inspect = table && terminalProcesses(table);
@@ -961,15 +994,15 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer);
-  gateway.close();
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer);
+  for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
   // One project failing to release must not leave the rest locked.
   for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
-// Exit explicitly: an IPC channel to the app (or a remote gateway socket) would otherwise keep the process alive after shutdown.
+// Exit explicitly: the IPC channel to the app would otherwise keep the process alive after shutdown.
 process.on('SIGINT', () => void shutdown().finally(() => process.exit(0))); process.on('SIGTERM', () => void shutdown().finally(() => process.exit(0)));
 // Every terminal lives in this process (outside `pnpm dev`), so one stray error in a callback must not end all of them.
 process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
@@ -981,9 +1014,7 @@ process.on('message', message => {
     const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
   }
-  // Remote access settings exist only in the main process (sealed with safeStorage) and reach this process only this way.
-  else if (message?.type === 'remote/config') gateway.configure(message.config);
   else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
-  else if (message?.type === 'remote/decide' && typeof message.requestId === 'string') gateway.decide(message.requestId, message.scope ?? null);
-  else if (message?.type === 'remote/disconnect' && typeof message.sessionId === 'string') gateway.disconnect(message.sessionId);
+  // A plugin host (in the main process) relays its workspace sessions to this process this way.
+  else if (message?.type === 'plugin/workspace') pluginWorkspace(message);
 });

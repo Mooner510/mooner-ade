@@ -64,7 +64,7 @@ export function PluginSettings() {
 
   return <>
     {intro}
-    {(message?.error || state.error) && <p className="setting-note remote-error" role="alert"><Icon name="alert" size={14} /> {message?.error ? message.text : state.error}</p>}
+    {(message?.error || state.error) && <p className="setting-note setting-error" role="alert"><Icon name="alert" size={14} /> {message?.error ? message.text : state.error}</p>}
     {message && !message.error && <p className="setting-note plugin-message" role="status"><Icon name="check" size={14} /> {message.text}</p>}
 
     <Row title="플러그인 사용" hint="켤 때 확인 창이 뜹니다. 켜도 플러그인마다 따로 승인해야 실행됩니다.">
@@ -97,7 +97,7 @@ function PluginCard({ plugin, enabled, busy, run, bridge }: { plugin: PluginInfo
       {id && plugin.state === 'error' && <button disabled={busy} onClick={() => run(() => bridge.restart(id))}><Icon name="refresh" />다시 시작</button>}
       {id && !['new', 'invalid'].includes(plugin.state) && <button disabled={busy} onClick={() => run(() => bridge.revoke(id))} title="승인을 거두고 멈춥니다. 플러그인이 저장한 키와 설정은 남습니다.">승인 취소</button>}
     </Row>
-    {plugin.error && <p className="setting-note remote-error"><Icon name="alert" size={14} /> {plugin.error}</p>}
+    {plugin.error && <p className="setting-note setting-error"><Icon name="alert" size={14} /> {plugin.error}</p>}
     {plugin.hash && ['new', 'changed'].includes(plugin.state) && <p className="setting-note">SHA-256 <span className="mono plugin-hash">{plugin.hash}</span></p>}
 
     {view && id && <div className="plugin-view">
