@@ -19,6 +19,8 @@ const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROP
 const MAX_FILES = 2000, MAX_BYTES = 32 * 1024 * 1024, MAX_MANIFEST = 64 * 1024;
 export const MAX_STORAGE = 64 * 1024;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
+// Workspace relay: what a host may ask for, and how much output may wait for a host that stops reading before its session is closed.
+const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
 
 const fail = (message, code = 'PLUGIN_INVALID') => Object.assign(new Error(message), { code });
 // The name and description appear in MoonerADE's own approval dialog: no control or bidirectional formatting characters
@@ -59,6 +61,10 @@ export function validManifest(value) {
     const args = mcp.args ?? [];
     if (!Array.isArray(args) || args.length > 8 || !args.every(arg => str(arg, 200) && !arg.includes("'"))) throw fail('mcp.args가 올바르지 않습니다.');
     manifest.mcp = { name: mcp.name, script: relative(mcp.script, 'mcp.script'), args: [...args] };
+  }
+  if (value.workspace !== undefined) {
+    if (typeof value.workspace !== 'boolean') throw fail('workspace 항목이 올바르지 않습니다.');
+    if (value.workspace) manifest.workspace = true;
   }
   return manifest;
 }
@@ -183,7 +189,8 @@ export function pluginTerminal(manifest, dir, report, nodeBinary) {
 // ---- the manager --------------------------------------------------------------------------------------------------
 // spawnHost({ id, dir, main }) returns a ChildProcess-like object (send, kill, connected, on('message'|'exit')).
 // ask({ title, message, detail, buttons, defaultId, cancelId }) resolves the chosen button index.
-export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, log = console }) {
+// toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
+export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -206,7 +213,7 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
         return {
           folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
-          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, view: host?.status === 'running' ? host.view : null
+          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null
         };
       })
     };
@@ -225,7 +232,7 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
     if (hash !== item.hash) { item.hash = hash; return; }
     const dataDir = path.join(dataRoot, manifest.id);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, terminal: null, pending: new Map(), confirms: Promise.resolve(), stopping: false };
+    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, terminal: null, pending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
     hosts.set(manifest.id, host);
     let child;
     try { child = spawnHost({ id: manifest.id, dir: item.dir, main: path.join(item.dir, ...manifest.main.split('/')) }); }
@@ -242,6 +249,7 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
     host.stopping = true;
     for (const { reject } of host.pending.values()) reject(fail('플러그인이 멈췄습니다.', 'PLUGIN_STOPPED'));
     host.pending.clear();
+    closeWorkspace(host);
     const child = host.child;
     if (child && child.exitCode === null) {
       if (child.connected) child.send({ type: 'shutdown' });
@@ -252,6 +260,8 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
   function onHostExit(host, code) {
     for (const { reject } of host.pending.values()) reject(fail('플러그인이 종료되었습니다.', 'PLUGIN_STOPPED'));
     host.pending.clear();
+    // A host replaced by a newer one for the same plugin already closed its sessions when it was stopped; the newer one's stay.
+    if (!hosts.has(host.id) || hosts.get(host.id) === host) closeWorkspace(host);
     const wasRunning = host.terminal !== null;
     if (hosts.get(host.id) !== host) { if (wasRunning) emitTerminal(); return; }
     host.terminal = null;
@@ -299,9 +309,47 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
         message.ok ? pending.resolve(message.message ?? null) : pending.reject(fail(String(message.error ?? '플러그인 작업이 실패했습니다.').slice(0, 500), 'PLUGIN_ACTION'));
         break;
       }
+      case 'workspace': relayWorkspace(host, message); break;
       case 'log': log[message.level === 'error' ? 'error' : message.level === 'warn' ? 'warn' : 'log'](`[plugin ${host.id}] ${String(message.message ?? '').slice(0, 2000)}`); break;
     }
   }
+  // ---- workspace sessions (plugins that declared `workspace`) --------------------------------------------------------
+  // The server owns the sessions; this only relays, and only for a plugin whose approved manifest asked for it.
+  function relayWorkspace(host, message) {
+    const { manifest } = host.item;
+    if (!manifest.workspace || !SESSION_ID.test(message.session ?? '')) return;
+    const { op, session } = message, base = { type: 'plugin/workspace', plugin: manifest.id, op, session };
+    const reply = value => { if (host.child?.connected) host.child.send({ type: 'workspace', session, ...value }); };
+    if (op === 'open' || op === 'close') { if (!toServer(base) && op === 'open') reply({ op: 'closed' }); }
+    else if (op === 'send') { if (message.message && typeof message.message === 'object') toServer({ ...base, message: message.message }); }
+    else if (op === 'api') {
+      if (!Number.isSafeInteger(message.id)) return;
+      if (typeof message.action !== 'string' || message.action.length > 100) return reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'INVALID_INPUT', message: '잘못된 요청입니다.' } });
+      if (!toServer({ ...base, id: message.id, action: message.action, input: message.input ?? {} })) reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'SERVER_UNAVAILABLE', message: '로컬 서버가 실행 중이 아닙니다.' } });
+    }
+  }
+  function closeWorkspace(host) {
+    if (host.item.manifest.workspace) toServer({ type: 'plugin/workspace', plugin: host.id, op: 'close-all' });
+  }
+  // A message from the server for a plugin's session.
+  function fromServer(message) {
+    const host = hosts.get(message?.plugin);
+    if (!host?.item.manifest.workspace || !host.child?.connected || !SESSION_ID.test(message.session ?? '')) return;
+    const { op, session } = message;
+    if (op === 'message' && typeof message.text === 'string') {
+      // A host that stops reading would otherwise pile its output up in this process.
+      if (host.backlog > WORKSPACE_BACKLOG) { toServer({ type: 'plugin/workspace', plugin: host.id, op: 'close', session }); return; }
+      const size = message.text.length;
+      host.backlog += size;
+      host.child.send({ type: 'workspace', op, session, text: message.text }, () => { host.backlog -= size; });
+    } else if (op === 'closed') host.child.send({ type: 'workspace', op, session });
+    else if (op === 'api-result' && Number.isSafeInteger(message.id)) host.child.send({ type: 'workspace', op, session, id: message.id, ok: message.ok === true, ...(message.ok === true ? { value: message.value ?? null } : { error: message.error ?? null }) });
+  }
+  // The server started again: every session is gone, so the hosts open what they need again.
+  function serverReset() {
+    for (const host of hosts.values()) if (host.item.manifest.workspace && host.child?.connected) host.child.send({ type: 'workspace', op: 'reset' });
+  }
+
   // Starts what should run and stops what should not.
   function reconcile() {
     // A running plugin whose files changed no longer matches its approval and stops; one approved again with new files
@@ -352,7 +400,8 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
     const { manifest } = item, grants = [
       '별도 프로세스로 실행되며 이 컴퓨터에서 MoonerADE와 같은 권한을 갖습니다.',
       manifest.terminal && `새로 여는 MoonerADE 터미널에 명령${manifest.terminal.bin ? `(${manifest.terminal.bin} 폴더)` : ''}과 환경 변수${manifest.terminal.envPrefix ? `(${manifest.terminal.envPrefix}*)` : ''}를 추가합니다.`,
-      manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`
+      manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
+      manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.'
     ].filter(Boolean);
     const answer = await ask({
       type: 'warning', title: '플러그인 승인', message: `“${manifest.name}” ${manifest.version} 플러그인을 실행할까요?`,
@@ -393,5 +442,5 @@ export function createPluginManager({ dir, dataRoot, store, spawnHost, ask, node
   }
   function close() { closing = true; for (const host of [...hosts.values()]) stop(host); }
 
-  return { snapshot, rescan, restart, setEnabled, approve, revoke, action, close, emitTerminal };
+  return { snapshot, rescan, restart, setEnabled, approve, revoke, action, close, emitTerminal, fromServer, serverReset };
 }

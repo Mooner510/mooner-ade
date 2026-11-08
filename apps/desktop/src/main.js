@@ -55,6 +55,7 @@ function startServer() {
       if (match && !origin) { origin = match[1]; plugins?.push(); resolve(`${match[1]}/#token=${match[2]}`); }
     });
     child.stderr.on('data', chunk => process.stderr.write(chunk));
+    child.on('message', message => { if (message?.type === 'plugin/workspace' && server === child) plugins?.fromServer(message); });
     child.once('error', reject);
     child.once('exit', code => {
       // A replaced server exiting late must not be mistaken for the current one dying.
