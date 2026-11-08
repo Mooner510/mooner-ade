@@ -18,6 +18,7 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
     if (window && !window.isDestroyed()) window.webContents.send('ade:plugins-state', { ...snapshot, error });
   };
   const push = () => { const child = getServer(); if (child?.connected) child.send({ type: 'plugins/terminal', config: terminal }); };
+  const toServer = message => { const child = getServer(); if (!child?.connected) return false; child.send(message); return true; };
   async function ask(options) {
     const window = getWindow();
     window?.show(); window?.focus();
@@ -40,7 +41,7 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
 
   const manager = createPluginManager({
     dir, dataRoot: path.join(userData, 'plugin-data'), store, spawnHost, ask, nodeBinary, appVersion: version,
-    onChange: publish, onTerminal: config => { terminal = config; push(); }
+    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer
   });
 
   const handlers = {
@@ -74,8 +75,10 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
   } catch (failure) { console.warn(`플러그인 폴더를 감시할 수 없습니다: ${failure.message}`); }
 
   return {
-    // Called for every server process the app starts, once it is listening.
-    push,
+    // Called for every server process the app starts, once it is listening: a new server has none of the old sessions.
+    push: () => { push(); manager.serverReset(); },
+    // Workspace session traffic from the server for a plugin host.
+    fromServer: message => manager.fromServer(message),
     close: () => manager.close()
   };
 }

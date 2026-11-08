@@ -18,7 +18,7 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 
 ## 플러그인 (선택)
 
-받은 플러그인 폴더를 `<userData>/plugins`에 넣어 기능을 더합니다. MoonerADE 자체에는 플러그인이 들어 있지 않습니다. 기본으로 꺼져 있고, 켜기와 플러그인별 승인은 main의 네이티브 확인 창을 거칩니다. 승인은 폴더의 SHA-256에 고정되어 파일이 바뀌면 실행되지 않습니다. 승인한 플러그인은 각자 Node 프로세스로 실행되고 main과 IPC로만 이야기합니다. main은 플러그인이 선언한 환경 변수 접두사, bin 폴더, MCP 스크립트만 골라 서버에 `plugins/terminal`로 보내고, 서버는 새 터미널과 그 안의 Claude Code·Codex에 이것을 더합니다(`apps/desktop/src/plugin-core.js`, [플러그인](PLUGINS.md)).
+받은 플러그인 폴더를 `<userData>/plugins`에 넣어 기능을 더합니다. MoonerADE 자체에는 플러그인이 들어 있지 않습니다. 기본으로 꺼져 있고, 켜기와 플러그인별 승인은 main의 네이티브 확인 창을 거칩니다. 승인은 폴더의 SHA-256에 고정되어 파일이 바뀌면 실행되지 않습니다. 승인한 플러그인은 각자 Node 프로세스로 실행되고 main과 IPC로만 이야기합니다. main은 플러그인이 선언한 환경 변수 접두사, bin 폴더, MCP 스크립트만 골라 서버에 `plugins/terminal`로 보내고, 서버는 새 터미널과 그 안의 Claude Code·Codex에 이것을 더합니다. `workspace`를 선언한 플러그인의 작업공간 세션은 main이 서버에 `plugin/workspace`로 전달하고, 서버는 화면의 요청과 같은 처리기로 다룹니다(`apps/desktop/src/plugin-core.js`, [플러그인](PLUGINS.md)).
 
 ## 로컬 경계
 

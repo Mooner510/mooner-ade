@@ -838,7 +838,8 @@ function pluginWorkspace(message) {
   if (!SESSION_ID.test(session ?? '')) return;
   const key = `${plugin}\0${session}`, client = pluginSessions.get(key);
   if (op === 'open') {
-    if (client || [...pluginSessions.keys()].filter(item => item.startsWith(`${plugin}\0`)).length >= PLUGIN_SESSIONS) return toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
+    if (client) return; // already open
+    if ([...pluginSessions.values()].filter(item => item.plugin === plugin).length >= PLUGIN_SESSIONS) return toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
     openPluginSession(plugin, session);
   } else if (op === 'close') client?.close();
   else if (op === 'send') { if (client) void handleClientMessage(client, message.message); }
