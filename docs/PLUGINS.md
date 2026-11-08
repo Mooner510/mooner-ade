@@ -89,7 +89,9 @@ MoonerADE → 플러그인
 | 메시지 | 뜻 |
 |---|---|
 | `{type:'ready'}` | 준비 끝. 이때부터 터미널 추가가 적용됩니다 |
-| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{label,value,mono,copy}], fields:[{key,label,value,placeholder,hint}], actions:[{id,label,primary}]}` |
+| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{label,value,mono,copy}], fields:[{key,label,value,placeholder,hint}], actions:[{id,label,primary}], qr:{label,value}}`. `qr`의 `value`(1000자 이하)는 MoonerADE가 QR 코드로 그립니다 |
+| `{type:'notify', title, body}` | OS 알림. 제목은 `플러그인: <이름>`이고, `title`(100자)과 `body`(300자)가 본문입니다. 플러그인마다 1분에 10개까지 보여 주고 나머지는 버립니다. 누르면 설정 → 플러그인이 열립니다 |
+| `{type:'badge', badge}` / `{type:'badge', badge:null}` | 상태바 표시 `{text, tone}`(24자, 한 줄) / 지움. 실행 중인 동안 항상 보이고(숨길 수 없음), 누르면 설정 → 플러그인이 열립니다. 플러그인이 멈추면 사라집니다 |
 | `{type:'storage', value}` | 봉인해 저장할 값(JSON 64 KiB 이하). 다음 `init`의 `storage`로 돌아옵니다 |
 | `{type:'confirm', id, message, detail, confirmLabel}` | 네이티브 확인 창 |
 | `{type:'terminal', env, mcpArgs}` / `{type:'terminal', enabled:false}` | 새 터미널에 더할 환경 변수와 MCP 인자 / 더하지 않음 |

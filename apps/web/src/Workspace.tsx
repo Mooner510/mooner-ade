@@ -1,6 +1,7 @@
 import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, statusLayout, usageHue, type Settings } from './Editor';
+import { PluginBadges } from './PluginSettings';
 import { Icon, IconButton } from './Icon';
 import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
@@ -20,7 +21,7 @@ export type Command = { id: string; label: string; keys?: string; hidden?: boole
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
   root: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[]; system: SystemInfo | null;
-  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onAddProject(): void; onOpenSettings(): void; onAgentAlert(root: string, alert: AgentAlert): void;
+  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onAddProject(): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
@@ -103,7 +104,7 @@ function matches(keys: string, event: KeyboardEvent) {
   if (mods.has('mod') ? !(event.ctrlKey || event.metaKey) : mods.has('ctrl') ? !event.ctrlKey || event.metaKey : event.ctrlKey || event.metaKey) return false;
   return event.shiftKey === mods.has('shift') && event.altKey === mods.has('alt') && keyOf(event) === key;
 }
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, system, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, system, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [error, setError] = useState('');
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
@@ -739,7 +740,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     <div className="workbench">{center}{rightVisible && rightPanel}</div>
     <footer className="statusbar">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right"><PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
     {quickDialog}
   </main>;

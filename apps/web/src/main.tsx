@@ -5,6 +5,7 @@ import { agentNames, defaultSettings, migrateSettings, type Settings } from './E
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
+import { onPluginsOpen } from './PluginSettings';
 import { Modal } from './views';
 import { CacheTimer } from './Panes';
 import { Workspace, showKeys, type Command, type Hub, type SystemInfo, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
@@ -187,7 +188,7 @@ function Shell() {
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
   const [status, setStatus] = useState<Record<string, WorkspaceStatus>>({});
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState(false), [system, setSystem] = useState<SystemInfo | null>(null);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [system, setSystem] = useState<SystemInfo | null>(null);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display is a per-browser preference: expanded folders with tabs, or a narrow strip of initials.
   const [compact, setCompact] = useState(() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } });
@@ -321,7 +322,7 @@ function Shell() {
   actions.current = {
     select: index => { const entry = entriesRef.current[index === 8 ? entriesRef.current.length - 1 : index]; if (entry) setActiveRoot(entry.root); },
     cycle: step => { const list = entriesRef.current; if (list.length > 1) setActiveRoot(list[(Math.max(0, list.findIndex(entry => entry.root === current)) + step + list.length) % list.length].root); },
-    close: () => void closeProject(current), add: () => setPicker(true), toggle: () => setCompact(value => !value), settings: () => setSettingsOpen(true)
+    close: () => void closeProject(current), add: () => setPicker(true), toggle: () => setCompact(value => !value), settings: () => setSettingsOpen('default')
   };
   // Stable identity, so a project that is not being shown does not re-render when another changes.
   const projectCommands = useMemo<Command[]>(() => [
@@ -334,7 +335,9 @@ function Shell() {
     ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, keys: `mod+alt+${index + 1}`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
-  const onOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const onOpenSettings = useCallback(() => setSettingsOpen('default'), []);
+  const onOpenPlugins = useCallback(() => setSettingsOpen('plugins'), []);
+  useEffect(() => onPluginsOpen(onOpenPlugins), [onOpenPlugins]);
 
   // Dragging only moves a CSS variable; the width is committed to the settings (and saved) once the pointer is released.
   const clampWidth = (value: number) => Math.max(160, Math.min(480, Math.round(value)));
@@ -495,10 +498,10 @@ function Shell() {
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handle => { if (handle) handles.current.set(entry.root, handle); else handles.current.delete(entry.root); }}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
-        system={entry.root === current ? system : null} onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onAgentAlert={onAgentAlert} />)}
+        system={entry.root === current ? system : null} onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
-    {settingsOpen && <SettingsModal settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}
+    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>;
 }
