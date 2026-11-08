@@ -21,6 +21,7 @@ import { createRemoteAgent } from './remote-agent.js';
 import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remote-claude.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
+import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
 import { setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { readClaudeCache } from './claude-cache.js';
@@ -213,6 +214,10 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   const remoteAgent = createRemoteAgent(); remoteAgent.feed(initial);
   const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status, remoteAgent, pending: '', flushTimer: null };
   project.terminals.set(id, terminal);
+  // Every viewer draws at the PTY's real size, so each change goes to all of them (including the one that asked for it).
+  terminal.sizing = createTerminalSize(native, validSize(native.size), size => broadcast(project, { type: 'terminal/size', id, ...size }));
+  // The starting size too: a first report of the same size changes nothing, so it would never be announced otherwise.
+  if (terminal.sizing.size) broadcast(project, { type: 'terminal/size', id, ...terminal.sizing.size });
   // Output goes out in 5 ms batches (as in VS Code): a busy TUI emits many small chunks, and each one cost a message, a parse and an xterm write.
   // `sequence` still counts every chunk, so a follow-up check against it also rejects output that is not sent yet.
   terminal.flush = () => {
@@ -265,7 +270,7 @@ function watchProject(project) {
 }
 function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ui: project.state.ui,
-    terminals: [...project.terminals].map(([id, terminal]) => ({ id, exited: terminal.exited, cwd: terminal.cwd })) };
+    terminals: [...project.terminals].map(([id, terminal]) => ({ id, exited: terminal.exited, cwd: terminal.cwd, ...terminal.sizing.size })) };
 }
 // A GUI-launched app often inherits a PATH without the user's CLI install dirs (~/.local/bin, npm global), so add the usual ones.
 {
@@ -733,6 +738,8 @@ async function savePaste(bytes, name) {
   await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
   return file;
 }
+// A client that went away no longer owns any terminal's size; whoever types or resizes next takes it.
+function releaseSizes(client) { for (const project of projects.values()) for (const terminal of project.terminals.values()) terminal.sizing.release(client); }
 // One message from a client: the window's /ws socket, or a plugin's workspace session.
 async function handleClientMessage(socket, message) {
   let projectId;
@@ -749,18 +756,24 @@ async function handleClientMessage(socket, message) {
       socket.projects.add(project.id);
       const tagged = value => send(socket, { ...value, projectId: project.id });
       tagged({ type: 'snapshot', snapshot: snapshot(project) });
-      for (const [id, terminal] of project.terminals) tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
+      // The size comes before the replay, so a client draws the replayed screen at the size it was written for.
+      for (const [id, terminal] of project.terminals) {
+        if (terminal.sizing.size) tagged({ type: 'terminal/size', id, ...terminal.sizing.size });
+        tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
+      }
       for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
       for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
       for (const [id, terminal] of project.terminals) if (terminal.cache?.value) tagged({ type: 'terminal/cache', id, cache: terminal.cache.value });
     } else if (message.type === 'unsubscribe') {
       socket.projects.delete(project.id);
+      for (const terminal of project.terminals.values()) terminal.sizing.release(socket);
     } else if (socket.projects.has(project.id)) {
       const terminal = project.terminals.get(message.id);
       // Input and resize events can still arrive while the client removes an exited pane.
       if (!terminal || terminal.exited) return;
       if (message.type === 'terminal/input') {
         if (typeof message.data !== 'string' || message.data.length > 16384) throw fault('INVALID_INPUT', '잘못된 터미널 입력입니다.');
+        if (typedInput(message.data)) terminal.sizing.input(socket);
         terminal.native.write(message.data);
       } else if (message.type === 'terminal/paste-image') {
         // Agent CLIs take an image by file path; write the pasted clipboard image to a file and type its path.
@@ -768,6 +781,7 @@ async function handleClientMessage(socket, message) {
         if (!ext || typeof message.data !== 'string') throw fault('INVALID_INPUT', '지원하지 않는 이미지입니다.');
         const bytes = Buffer.from(message.data, 'base64');
         if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw fault('INVALID_INPUT', '이미지 크기가 올바르지 않습니다.');
+        terminal.sizing.input(socket);
         const name = `paste-${randomUUID()}.${ext}`;
         // Over ssh the CLI runs on the remote host, which cannot read a local path; the image goes there through the same ssh setup.
         if (terminal.ssh && terminal.sshCommand) {
@@ -782,8 +796,10 @@ async function handleClientMessage(socket, message) {
         const file = await savePaste(bytes, name);
         if (!terminal.exited) terminal.native.write(/\s/.test(file) ? (process.platform === 'win32' ? `"${file}" ` : `'${file.replaceAll("'", `'\\''`)}' `) : `${file} `);
       } else if (message.type === 'terminal/resize') {
-        if (![message.cols, message.rows].every(n => Number.isInteger(n) && n >= 1 && n <= 1000)) throw fault('INVALID_INPUT', '잘못된 터미널 크기입니다.');
-        terminal.native.resize(message.cols, message.rows);
+        // The size this client would like; terminal-size.js decides whether the PTY takes it now.
+        const size = validSize(message);
+        if (!size) throw fault('INVALID_INPUT', '잘못된 터미널 크기입니다.');
+        terminal.sizing.want(socket, size.cols, size.rows, message.claim === true);
       }
       else throw fault('INVALID_INPUT', '잘못된 메시지입니다.');
     }
@@ -792,7 +808,7 @@ async function handleClientMessage(socket, message) {
 wss.on('connection', socket => {
   socket.projects = new Set();
   clients.add(socket);
-  socket.on('close', () => clients.delete(socket));
+  socket.on('close', () => { clients.delete(socket); releaseSizes(socket); });
   socket.on('message', raw => {
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return send(socket, { type: 'error', error: errorValue(fault('INVALID_JSON', '잘못된 JSON입니다.')) }); }
@@ -823,7 +839,7 @@ function openPluginSession(plugin, session) {
     close() {
       if (closed) return;
       closed = true;
-      clients.delete(client); pluginSessions.delete(key);
+      clients.delete(client); pluginSessions.delete(key); releaseSizes(client);
       toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
     }
   };

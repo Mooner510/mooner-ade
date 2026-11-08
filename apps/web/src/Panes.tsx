@@ -62,7 +62,10 @@ export type TerminalFeed = { data: string; sequence: number; reset?: boolean; ex
 // A status from OSC 7501 itself, rather than the OSC 9;4 progress fallback. Only 7501 reports questions (`blocked`); with progress they still
 // come from the screen, and progress alone does not vouch for the follow-up queue's Claude version check.
 const fromProgramStatus = (status: TerminalFeed['status']) => Boolean(status) && !status!.source;
-export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void> };
+// The PTY's real size from the server (`terminal/size`). One PTY can be shown on several devices; its size follows the one that typed
+// last, and every device draws at that size instead of its own so nothing wraps wrongly.
+export type TerminalSize = { cols: number; rows: number };
+export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void>; sizes: Map<string, TerminalSize>; sizeListeners: Map<string, (size: TerminalSize) => void> };
 export type EditorCtx = {
   settings: Settings; gitVersion: number;
   onSelectTab(group: string, path: string): void; onCloseTab(group: string, path: string): void; onCloseGroup(group: string): void;
@@ -161,6 +164,8 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
   editingRef.current = editing !== null;
   const [tmuxPlace, setTmuxPlace] = useState<'top' | 'bottom' | null>(null);
+  // Another device's size is shown (the PTY is not this pane's size); typing here or the button brings it back.
+  const [otherSize, setOtherSize] = useState(false), claimSize = useRef<() => void>(() => {});
   const [queued, setQueued] = useState(followUp.current.items);
   const flushQueue = useRef<() => void>(() => {});
   // Called after every output chunk of a Claude pane; an unchanged queue must not re-render it.
@@ -171,7 +176,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const checkAgent = useRef<() => void>(() => {});
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
-  const term = useRef<Terminal | null>(null), fitRef = useRef<FitAddon | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {});
+  const term = useRef<Terminal | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {}), layoutRef = useRef<() => void>(() => {});
   const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
@@ -184,7 +189,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       // The server runs ConPTY (bundled conpty.dll, which reflows on its own). Telling xterm keeps its wrapped-line handling in step with
       // ConPTY's; without it, old output is mangled when the pane resizes or a long answer scrolls past the top.
       ...(/Windows/.test(navigator.userAgent) ? { windowsPty: { backend: 'conpty' as const, buildNumber: 26100 } } : {}), theme: terminalTheme(host.current!) });
-    const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!); term.current = terminal; fitRef.current = fit;
+    const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!); term.current = terminal;
     // Unicode 11 widths match what shells/TUIs assume for Hangul and emoji; the default (v6) table disagrees and leaves stale half-cells.
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     // A clipboard image is saved by the server and its file path is typed instead, which Claude Code and Codex accept as an attachment.
@@ -295,17 +300,57 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       } catch { /* malformed base64 */ }
       return true;
     });
+    // `wanted` is what fits this pane; the server applies it when this window owns the size (or nobody does) and otherwise keeps it
+    // for when this window types again. xterm itself is always drawn at `serverSize`, the PTY's real size, once the server has told it.
+    let wanted: TerminalSize | null = null, serverSize: TerminalSize | null = bus.sizes.get(id) ?? null, otherTimer = 0;
     const notifyResize = () => {
       if (replays) { pendingResize = true; return; }
+      if (!wanted) return; // never measured (a hidden pane): there is no size of its own to report yet
       pendingResize = false;
+      // A size change makes the program redraw, which repairs a replayed screen. It is only a wish like any other, so it never
+      // takes the size from another device; the step goes down so the pane never has to show a row more than fits.
       if (refreshAfterReplay) {
         refreshAfterReplay = false;
-        callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows === 1000 ? 999 : terminal.rows + 1 });
+        callbacks.current.send({ type: 'terminal/resize', id, cols: wanted.cols, rows: wanted.rows > 1 ? wanted.rows - 1 : wanted.rows + 1 });
       }
-      callbacks.current.send({ type: 'terminal/resize', id, cols: terminal.cols, rows: terminal.rows });
-      callbacks.current.onSize(id, terminal.cols, terminal.rows);
+      callbacks.current.send({ type: 'terminal/resize', id, cols: wanted.cols, rows: wanted.rows });
     };
     notifyResizeRef.current = notifyResize;
+    // Draws xterm at the PTY size. Smaller than the pane: top left on the terminal background. Larger (another device's size): the
+    // pane scrolls instead of overflowing, following the cursor. A mismatch that lasts is another device's size; a short one is
+    // this window's own report still on its way.
+    const followCursor = () => {
+      const box = host.current, element = terminal.element;
+      if (!box || box.dataset.oversized === undefined || !element || !terminal.rows || !terminal.cols) return;
+      const cellHeight = element.offsetHeight / terminal.rows, cellWidth = element.offsetWidth / terminal.cols, buffer = terminal.buffer.active;
+      const bottom = (buffer.cursorY + 2) * cellHeight, right = (buffer.cursorX + 2) * cellWidth;
+      if (bottom > box.scrollTop + box.clientHeight || bottom - cellHeight * 2 < box.scrollTop) box.scrollTop = Math.max(0, bottom - box.clientHeight);
+      if (right > box.scrollLeft + box.clientWidth || right - cellWidth * 2 < box.scrollLeft) box.scrollLeft = Math.max(0, right - box.clientWidth);
+    };
+    const layout = () => {
+      const box = host.current;
+      if (box?.clientWidth && box.clientHeight) {
+        const proposed = fit.proposeDimensions();
+        if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) wanted = { cols: proposed.cols, rows: proposed.rows };
+      }
+      const target = serverSize ?? wanted;
+      if (target && (terminal.cols !== target.cols || terminal.rows !== target.rows)) terminal.resize(target.cols, target.rows);
+      callbacks.current.onSize(id, terminal.cols, terminal.rows);
+      const differs = Boolean(serverSize && wanted && (serverSize.cols !== wanted.cols || serverSize.rows !== wanted.rows));
+      const show = () => {
+        otherTimer = 0;
+        const larger = Boolean(differs && serverSize && wanted && (serverSize.cols > wanted.cols || serverSize.rows > wanted.rows));
+        if (box) { if (larger) { box.dataset.oversized = ''; followCursor(); } else delete box.dataset.oversized; }
+        setOtherSize(differs);
+      };
+      clearTimeout(otherTimer); otherTimer = 0;
+      if (differs) otherTimer = window.setTimeout(() => { if (term.current === terminal) show(); }, 400); else show();
+    };
+    layoutRef.current = layout;
+    claimSize.current = () => {
+      if (wanted) callbacks.current.send({ type: 'terminal/resize', id, cols: wanted.cols, rows: wanted.rows, claim: true });
+      terminal.focus();
+    };
     let scrollFrame = 0;
     scrollAfterReplay.current = () => {
       cancelAnimationFrame(scrollFrame);
@@ -367,6 +412,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
             if (pendingResize || refreshAfterReplay) notifyResize();
           }
           if (!writes && replayScroll.current) scrollAfterReplay.current();
+          if (!writes) followCursor();
           watchAgent(replay);
           if (!replay) flushQueue.current();
         });
@@ -469,12 +515,18 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       element.style.marginLeft = `${shift}px`; element.style.marginRight = `${-shift}px`;
     };
     centerRef.current = center;
-    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; fit.fit(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
+    const resize = () => { if (!host.current?.clientWidth || !host.current.clientHeight) return; layout(); center(); requestAnimationFrame(center); notifyResize(); if (replayScroll.current) scrollAfterReplay.current(); };
     const observer = new ResizeObserver(resize); observer.observe(host.current!); resize();
+    bus.sizeListeners.set(id, size => {
+      serverSize = size; layout(); center(); requestAnimationFrame(center);
+      if (replayScroll.current) scrollAfterReplay.current();
+    });
+    // A size that arrived before this pane mounted (a hidden pane is never measured, so `resize` above did not draw it).
+    if (serverSize) layout();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, data: initial.data.slice(-262144), reset: true });
-    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); webglRef.current = null; terminal.dispose(); term.current = null; fitRef.current = null; };
+    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); bus.sizeListeners.delete(id); clearTimeout(otherTimer); claimSize.current = () => {}; layoutRef.current = () => {}; webglRef.current = null; terminal.dispose(); term.current = null; };
   }, [id, bus]);
-  useEffect(() => { if (visible && replayScroll.current) { fitRef.current?.fit(); scrollAfterReplay.current(); } }, [visible]);
+  useEffect(() => { if (visible && replayScroll.current) { layoutRef.current(); scrollAfterReplay.current(); } }, [visible]);
   useEffect(() => {
     // Hidden workspaces still mount terminals, so reserve WebGL contexts for visible panes.
     const terminal = term.current;
@@ -509,7 +561,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       terminal.options.theme = terminalTheme(host.current ?? undefined); terminal.options.fontSize = settings.terminalFontSize; terminal.options.fontFamily = fontStack(settings);
       terminal.options.lineHeight = settings.lineHeight; terminal.options.cursorBlink = settings.cursorBlink; terminal.options.cursorStyle = settings.cursorStyle; terminal.options.scrollback = settings.scrollback;
       if (!host.current?.clientWidth) return;
-      fitRef.current?.fit(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); notifyResizeRef.current();
+      layoutRef.current(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); notifyResizeRef.current();
     });
     return () => cancelAnimationFrame(frame);
   }, [settings.theme, settings.terminalFontSize, settings.terminalFont, settings.lineHeight, settings.cursorBlink, settings.cursorStyle, settings.scrollback]);
@@ -527,6 +579,9 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
+    {otherSize && !exited && <div className="pane-size-note" role="status">
+      <span>다른 기기 크기로 표시 중 · 입력하면 이 창 크기로 돌아옵니다</span>
+      <button onClick={() => claimSize.current()}>이 창에 맞추기</button></div>}
     {queued.length > 0 && <div className="claude-follow-up">
       <div className="follow-up-heading" role="status">Follow-up {queued.length}개 · 현재 작업 완료 후 순서대로 전송</div>
       <ol>{queued.map(item => editing?.id === item.id

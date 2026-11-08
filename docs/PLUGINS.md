@@ -111,7 +111,7 @@ MoonerADE → 플러그인
 | `{type:'workspace', op:'open', session}` | 세션을 엽니다. `session`은 `[A-Za-z0-9_-]{1,64}`로 플러그인이 정합니다 |
 | `{type:'workspace', op:'close', session}` | 세션을 닫습니다 |
 | `{type:'workspace', op:'api', session, id, action, input}` | 화면의 API와 같은 작업을 실행합니다(예: `recent`, `app/state`, `project/open`, `snapshot`, `terminal/open`, `terminal/close`). `id`는 정수 |
-| `{type:'workspace', op:'send', session, message}` | 화면이 보내는 것과 같은 메시지를 보냅니다(예: `{type:'subscribe', projectId}`, `{type:'terminal/input', projectId, id, data}`, `{type:'terminal/resize', …}`) |
+| `{type:'workspace', op:'send', session, message}` | 화면이 보내는 것과 같은 메시지를 보냅니다(예: `{type:'subscribe', projectId}`, `{type:'terminal/input', projectId, id, data}`, `{type:'terminal/resize', …}`). 터미널 크기는 [터미널 크기](#터미널-크기) |
 
 MoonerADE → 플러그인
 
@@ -126,6 +126,23 @@ MoonerADE → 플러그인
 - 알림을 읽지 않아 쌓이면 그 세션을 닫습니다.
 - 플러그인이 멈추거나 종료되면 그 플러그인의 세션을 모두 닫습니다.
 - 세션이 열려 있는 동안 자동 업데이트는 작업 중으로 보고 기다립니다.
+
+#### 터미널 크기
+
+터미널 하나를 MoonerADE 창과 여러 세션이 함께 볼 수 있지만, 터미널의 크기(열 × 행)는 하나뿐입니다. 크기는 마지막으로 입력한 쪽을
+따르고, 모두가 그 크기로 그립니다. 세션 하나가 화면 하나이므로, 기기마다 세션을 따로 여세요.
+
+- `{type:'terminal/resize', projectId, id, cols, rows}`는 "이 화면에 맞는 크기"입니다. 지금 크기를 가진 쪽이 보냈거나 아무도 크기를
+  갖지 않았으면 바로 적용되고, 보낸 쪽이 크기를 갖습니다. 다른 쪽이 크기를 갖고 있으면 기억만 해 둡니다.
+- 크기를 갖지 않은 쪽이 `terminal/input`이나 `terminal/paste-image`를 보내면 그쪽이 크기를 갖고, 기억해 둔 크기가 있으면 입력을
+  쓰기 전에 그 크기로 바꿉니다. 터미널 화면이 스스로 보내는 답(프로그램의 질의에 대한 답, 포커스 알림, 버튼 없는 마우스 이동)은
+  입력으로 치지 않습니다.
+- 크기를 가진 세션이 닫히거나 그 프로젝트 구독을 끊으면 아무도 크기를 갖지 않습니다. 크기 자체는 그대로입니다.
+- 크기가 실제로 바뀔 때마다 그 프로젝트를 구독한 모두(보낸 쪽 포함)가 `{type:'terminal/size', projectId, id, cols, rows}`를 받습니다.
+  구독하면 터미널마다 `terminal/replay` 바로 앞에 `terminal/size`가 오고, `snapshot`의 `terminals` 항목에도 `cols`·`rows`가 있습니다.
+  크기를 아직 모르는 터미널(업데이트 전부터 열려 있던 터미널 등)은 둘 다 없으니, 그때는 화면에 맞는 크기로 그리세요.
+- 받은 크기로 그리세요. 화면보다 크면 줄이거나 스크롤해서 보여 주세요.
+- 화면 키보드처럼 잠깐 바뀌는 영역 때문에 `terminal/resize`를 보내지 마세요. 크기가 바뀔 때마다 프로그램이 화면을 다시 그립니다.
 
 ## 터미널과 에이전트
 

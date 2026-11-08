@@ -5,7 +5,7 @@
 ## 구성
 
 - `apps/desktop`: Electron 메인 프로세스와 격리된 렌더러, 폴더 선택 preload. 시스템 Node(패키지 앱은 번들한 Node)로 로컬 서버를 실행하고, 종료 시 IPC로 정리를 요청합니다. 터미널은 앱과 분리된 PTY 호스트(`apps/local-server/src/pty-host.js`)가 가지며, 서버 재시작과 업데이트 재시작 사이에도 유지됩니다. 패키지 앱은 호스트를 설치 폴더 밖 `<userData>/pty-host/`의 복사본에서 실행합니다(`pty-host-files.js`). 자세한 수명은 [로컬 IDE](LOCAL_IDE.md)를 참고하세요.
-- `apps/web`: 앱 창에 표시하는 React UI. 터미널 탭·분할과 읽기 전용 Git Diff가 중심입니다. 하나의 WebSocket으로 여러 프로젝트를 구독하며 메시지의 `projectId`로 분배합니다. 파일 편집·검색·커밋 UI는 없습니다.
+- `apps/web`: 앱 창에 표시하는 React UI. 터미널 탭·분할과 읽기 전용 Git Diff가 중심입니다. 하나의 WebSocket으로 여러 프로젝트를 구독하며 메시지의 `projectId`로 분배합니다. 파일 편집·검색·커밋 UI는 없습니다. 터미널은 창이 원하는 크기를 `terminal/resize`로 알리고, 서버가 보내는 실제 크기(`terminal/size`)로 그립니다. 같은 터미널을 플러그인 세션(다른 기기)도 볼 때 크기는 마지막으로 입력한 쪽을 따릅니다(`terminal-size.js`, [플러그인](PLUGINS.md#터미널-크기)).
 - `apps/local-server`: 루프백 인증, 프로젝트 잠금, Git 상태·Diff·브랜치·저장소 worktree API, PTY와 터미널 세션 복구, 사용량·WakaTime 연동. `runtime.js`가 프로젝트 루트로 제한한 경로 검사, argv 기반 프로세스 실행, Git, PTY 포트를 제공합니다. 앱에서 커밋하는 API는 없습니다.
 
 ## 에이전트
