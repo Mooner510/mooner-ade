@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { createPluginManager, createPluginStore, pluginTerminal, scanPlugins, treeHash, validManifest, validView } from '../apps/desktop/src/plugin-core.js';
+import { createPluginManager, createPluginStore, pluginTerminal, scanPlugins, treeHash, validBadge, validManifest, validView } from '../apps/desktop/src/plugin-core.js';
 import { setAgentMcpServers, terminalAgentCommand } from '../apps/local-server/src/terminal-sessions.js';
 
 const sealer = (available = true) => ({
@@ -36,7 +36,7 @@ function fakeHost() {
   return child;
 }
 function setup(t, { answers = [], toServer } = {}) {
-  const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [];
+  const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [], notices = [];
   fs.mkdirSync(dir);
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto: sealer() });
   store.load();
@@ -44,10 +44,10 @@ function setup(t, { answers = [], toServer } = {}) {
     dir, dataRoot: path.join(root, 'plugin-data'), store, nodeBinary: '/node', appVersion: '9.9.9', log: { log() {}, warn() {}, error() {} },
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; },
-    onTerminal: config => terminals.push(config), toServer
+    onTerminal: config => terminals.push(config), toServer, notify: notice => notices.push(notice)
   });
   t.after(() => manager.close());
-  return { root, dir, store, manager, hosts, asked, terminals };
+  return { root, dir, store, manager, hosts, asked, terminals, notices };
 }
 
 test('manifests are checked strictly', () => {
@@ -336,4 +336,39 @@ test('without a server the host hears at once that nothing opened', async t => {
     { type: 'workspace', session: 's1', op: 'closed' },
     { type: 'workspace', session: 's1', op: 'api-result', id: 3, ok: false, error: { code: 'SERVER_UNAVAILABLE', message: '로컬 서버가 실행 중이 아닙니다.' } }
   ]);
+});
+
+test('a QR code and a status-bar item are plain text, limited in size', () => {
+  assert.deepEqual(validView({ qr: { label: 'Scan', value: 'mooner-ade://pair?x=1' } }).qr, { label: 'Scan', value: 'mooner-ade://pair?x=1' });
+  assert.equal(validView({ qr: { value: 'x'.repeat(1001) } }).qr, null);
+  assert.equal(validView({ qr: { value: '' } }).qr, null);
+  assert.equal(validView({}).qr, null);
+  assert.deepEqual(validBadge({ text: '폰 1대\n접속 중', tone: 'info' }), { text: '폰 1대 접속 중', tone: 'info' });
+  assert.equal(validBadge({ text: 'x'.repeat(40), tone: 'ok' }).text.length, 24);
+  assert.equal(validBadge({ text: 'a\u202Eb', tone: 'ok' }).text, 'ab');
+  for (const bad of [null, { text: 'x', tone: 'loud' }, { text: '   ', tone: 'ok' }, { text: 3, tone: 'ok' }]) assert.equal(validBadge(bad), null);
+});
+
+test('notifications carry the plugin name and are limited per minute; a badge shows only while running', async t => {
+  const { dir, manager, hosts, notices } = setup(t, { answers: [0, 0] });
+  plugin(dir);
+  await manager.setEnabled(true);
+  await manager.approve('example');
+  const { child } = hosts[0];
+  child.emit('message', { type: 'badge', badge: { text: '접속 중', tone: 'info' } });
+  assert.equal(manager.snapshot().plugins[0].badge, null); // not running yet
+  child.emit('message', { type: 'ready' });
+  assert.deepEqual(manager.snapshot().plugins[0].badge, { text: '접속 중', tone: 'info' });
+  child.emit('message', { type: 'badge', badge: null });
+  assert.equal(manager.snapshot().plugins[0].badge, null);
+  child.emit('message', { type: 'badge', badge: { text: '다시', tone: 'warn' } });
+
+  child.emit('message', { type: 'notify', title: 'MoonerADE 업데이트', body: '지금 설치하세요' });
+  assert.deepEqual(notices[0], { id: 'example', title: '플러그인: Example', body: 'MoonerADE 업데이트\n지금 설치하세요' });
+  child.emit('message', { type: 'notify', title: '', body: '' });
+  for (let index = 0; index < 20; index++) child.emit('message', { type: 'notify', title: `n${index}` });
+  assert.equal(notices.length, 10);
+
+  manager.revoke('example');
+  assert.equal(manager.snapshot().plugins[0].badge, null);
 });

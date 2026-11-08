@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import qrcode from 'qrcode-generator';
 import { Icon } from './Icon';
 
 // Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
@@ -9,11 +10,13 @@ export type PluginView = {
   info: { label: string; value: string; mono: boolean; copy: boolean }[];
   fields: { key: string; label: string; value: string; placeholder: string; hint: string }[];
   actions: { id: string; label: string; primary: boolean }[];
+  qr?: { label: string; value: string } | null;
 };
+export type PluginBadge = { text: string; tone: Tone };
 export type PluginInfo = {
   folder: string; id: string | null; name: string; version: string | null; description: string; hash: string | null;
   state: 'invalid' | 'new' | 'changed' | 'off' | 'starting' | 'running' | 'error' | 'stopped';
-  error: string | null; terminal: boolean; mcp: string | null; view: PluginView | null;
+  error: string | null; terminal: boolean; mcp: string | null; workspace?: boolean; view: PluginView | null; badge?: PluginBadge | null;
 };
 export type PluginsState = { available: boolean; problem: 'unavailable' | 'unreadable' | null; error: string | null; enabled: boolean; dir: string; plugins: PluginInfo[]; message?: string | null };
 type PluginsBridge = {
@@ -21,7 +24,7 @@ type PluginsBridge = {
   setEnabled(on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
   revoke(id: string, options?: { forget?: boolean }): Promise<PluginsState>; restart(id: string): Promise<PluginsState>;
   action(id: string, action: string, values: Record<string, string>): Promise<PluginsState>; openFolder(): Promise<PluginsState>;
-  pickZip(): Promise<PluginsState>;
+  pickZip(): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
 };
 const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
 const writeClipboard = (text: string) => {
@@ -29,6 +32,48 @@ const writeClipboard = (text: string) => {
   if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text);
 };
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+
+// The plugin state for components outside the settings page (status bar, notification clicks).
+export function usePluginsState() {
+  const [state, setState] = useState<PluginsState | null>(null);
+  useEffect(() => {
+    const bridge = pluginsBridge();
+    if (!bridge) return;
+    let live = true;
+    void bridge.state().then(value => { if (live) setState(value); }, () => {});
+    const off = bridge.onState(value => setState(value));
+    return () => { live = false; off(); };
+  }, []);
+  return state;
+}
+// A plugin's notification was clicked: the app asks for the plugins page.
+export function onPluginsOpen(listener: () => void) { return pluginsBridge()?.onOpen?.(listener) ?? (() => {}); }
+
+// Status-bar items of running plugins. Always shown (not part of the status bar layout) so that a plugin cannot work unseen.
+export function PluginBadges({ onOpen }: { onOpen(): void }) {
+  const state = usePluginsState();
+  const badges = (state?.plugins ?? []).filter(plugin => plugin.state === 'running' && plugin.badge);
+  return <>{badges.map(plugin => <button key={plugin.folder} className={`plugin-badge ${plugin.badge!.tone}`} title={`플러그인: ${plugin.name}`} onClick={onOpen}>
+    <Icon name="plugin" size={13} />{plugin.badge!.text}
+  </button>)}</>;
+}
+
+// Drawn from the module grid as SVG elements, so nothing a plugin sends is injected as markup.
+function QrCode({ text, label, size = 200 }: { text: string; label: string; size?: number }) {
+  const cells = useMemo(() => {
+    try {
+      const code = qrcode(0, 'M');
+      code.addData(text, 'Byte'); code.make();
+      const count = code.getModuleCount(), path: string[] = [];
+      for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) if (code.isDark(row, col)) path.push(`M${col + 4} ${row + 4}h1v1h-1z`);
+      return { count: count + 8, path: path.join('') };
+    } catch { return null; } // too long for a QR code
+  }, [text]);
+  if (!cells) return null;
+  return <svg className="plugin-qr" width={size} height={size} viewBox={`0 0 ${cells.count} ${cells.count}`} role="img" aria-label={label || 'QR 코드'} shapeRendering="crispEdges">
+    <rect width={cells.count} height={cells.count} fill="#fff" /><path d={cells.path} fill="#000" />
+  </svg>;
+}
 
 const stateLabel: Record<PluginInfo['state'], string> = {
   invalid: '읽을 수 없음', new: '승인 필요', changed: '파일이 바뀜 · 다시 승인 필요', off: '플러그인 꺼짐',
@@ -89,7 +134,7 @@ function PluginCard({ plugin, enabled, busy, run, bridge }: { plugin: PluginInfo
   // Fields start from what the plugin reports and keep the user's edits until the plugin sends a new value.
   useEffect(() => { setValues(Object.fromEntries((view?.fields ?? []).map(field => [field.key, field.value]))); }, [JSON.stringify(view?.fields?.map(field => [field.key, field.value]))]);
   const id = plugin.id;
-  const grants = [plugin.terminal && '터미널 명령', plugin.mcp && `에이전트 MCP 도구(${plugin.mcp})`].filter(Boolean).join(', ');
+  const grants = [plugin.terminal && '터미널 명령', plugin.mcp && `에이전트 MCP 도구(${plugin.mcp})`, plugin.workspace && '프로젝트·터미널 사용'].filter(Boolean).join(', ');
   const tone = plugin.state === 'running' ? 'ok' : ['invalid', 'error', 'changed'].includes(plugin.state) ? 'error' : 'warn';
 
   return <section className="plugin-card">
@@ -104,6 +149,7 @@ function PluginCard({ plugin, enabled, busy, run, bridge }: { plugin: PluginInfo
 
     {view && id && <div className="plugin-view">
       {view.status && <p className={`plugin-status ${view.status.tone}`}>{view.status.text}</p>}
+      {view.qr && <div className="plugin-qr-row"><QrCode text={view.qr.value} label={view.qr.label} />{view.qr.label && <p>{view.qr.label}</p>}</div>}
       {view.info.map(item => <Row key={item.label} title={item.label} hint={<span className={item.mono ? 'mono plugin-value' : 'plugin-value'}>{item.value}</span>}>
         {item.copy && item.value && <button onClick={() => writeClipboard(item.value)}><Icon name="copy" />복사</button>}
       </Row>)}
