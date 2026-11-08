@@ -50,14 +50,22 @@ if (process.platform !== 'win32') {
     await fs.chmod(helper, 0o755);
   } catch { /* no prebuilt helper (source build) or node-pty missing; the readiness check reports it */ }
 }
-// With ADE_PTY_ENDPOINT (`pnpm dev`) terminals live in a separate pty-host process, so this server can restart without killing them.
+// With ADE_PTY_ENDPOINT (set by the app) terminals live in the pty-host process, so they outlive this server and an app update restart.
 const ptyHost = process.env.ADE_PTY_ENDPOINT ? await connectPtyHost({ endpoint: process.env.ADE_PTY_ENDPOINT, token: process.env.ADE_PTY_TOKEN }).catch(error => { console.error(`pty-host 연결 실패, 서버 내부 PTY를 사용합니다: ${error.message}`); return null; }) : null;
+// Another server took the host over, or the host ended: terminals opened from now on cannot be kept through a restart.
+let ptyHostLost = false;
+ptyHost?.onClose(() => { ptyHostLost = true; });
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
 // ADE_DEV likewise: an app launched from such a terminal would start in dev mode and look for Vite.
 delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV;
 // Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
 for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
-const pty = ptyHost ? { spawn: ptyHost.factory.spawn } : await import('node-pty').catch(() => null);
+const localPty = ptyHost ? null : await import('node-pty').catch(() => null);
+// A host that went away mid-run: new terminals open in this process instead (they are then not kept through a restart).
+let fallbackPty = null;
+const pty = ptyHost
+  ? { spawn: async (...args) => ptyHostLost ? (fallbackPty ??= await import('node-pty')).spawn(...args) : ptyHost.factory.spawn(...args) }
+  : localPty;
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
 const projects = new Map();
@@ -955,30 +963,34 @@ async function busyReport() {
   const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
   // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
   const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
-  if (!live.length) return { busy: reasons.length > 0, reasons };
+  // Terminals in the pty-host keep running through an app restart; the updater then only waits for what does not.
+  const keepsTerminals = Boolean(ptyHost && !ptyHostLost);
+  const kept = [];
+  const report = () => ({ busy: reasons.length + kept.length > 0, keepsTerminals, reasons: [...reasons, ...kept.map(item => keepsTerminals ? { ...item, keeps: true } : item)] });
+  if (!live.length) return report();
   const table = await processTable(live.filter(item => item.terminal.native.pid).map(item => item.terminal.native.pid)).catch(() => null);
   const inspect = table && terminalProcesses(table);
   for (const { project, id, terminal } of live) {
     const where = { project: path.basename(project.root), terminal: terminal.cwd ? path.basename(terminal.cwd) : id.slice(0, 6) };
     const found = inspect && terminal.native.pid ? inspect(terminal.native.pid) : { agent: terminal.agent, agentPid: terminal.agentPid, ssh: Boolean(terminal.ssh), descendants: null };
     const working = terminal.status.status?.state === 'working';
-    if (found.ssh) { if (working) reasons.push({ ...where, kind: 'turn', agent: terminal.agent ?? undefined }); continue; }
+    if (found.ssh) { if (working) kept.push({ ...where, kind: 'turn', agent: terminal.agent ?? undefined }); continue; }
     if (found.agent === 'claude' && found.agentPid) {
-      if (working) { reasons.push({ ...where, kind: 'turn', agent: 'claude' }); continue; }
+      if (working) { kept.push({ ...where, kind: 'turn', agent: 'claude' }); continue; }
       const dir = await accounts.agentFolder('claude', found.agentPid, project.root).catch(() => null);
       const result = dir ? await claudeBusy(dir, found.agentPid).catch(error => ({ busy: true, kind: 'unknown', detail: error.message })) : { busy: true, kind: 'unknown', detail: 'Claude 설정 폴더를 찾지 못했습니다' };
-      if (result.busy) reasons.push({ ...where, agent: 'claude', kind: result.kind, ...(result.detail && { detail: result.detail }) });
+      if (result.busy) kept.push({ ...where, agent: 'claude', kind: result.kind, ...(result.detail && { detail: result.detail }) });
       continue;
     }
-    if (found.agent) { if (working) reasons.push({ ...where, kind: 'turn', agent: found.agent }); continue; }
-    if (!found.descendants) { reasons.push({ ...where, kind: working ? 'turn' : 'unknown', ...!working && { detail: '프로세스 목록을 읽지 못했습니다' } }); continue; }
+    if (found.agent) { if (working) kept.push({ ...where, kind: 'turn', agent: found.agent }); continue; }
+    if (!found.descendants) { kept.push({ ...where, kind: working ? 'turn' : 'unknown', ...!working && { detail: '프로세스 목록을 읽지 못했습니다' } }); continue; }
     const [command] = runningCommands(found.descendants);
     if (command) {
       const first = command.command.match(/^"([^"]*)"|^\S+/) ?? [], name = (first[1] ?? first[0] ?? '').replaceAll('\\', '/').split('/').pop().replace(/\.exe$/i, '');
-      reasons.push({ ...where, kind: 'command', detail: name });
+      kept.push({ ...where, kind: 'command', detail: name });
     }
   }
-  return { busy: reasons.length > 0, reasons };
+  return report();
 }
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
