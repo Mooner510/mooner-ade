@@ -39,12 +39,18 @@ export async function waitUntilIdle({ poll, signal, intervalMs = IDLE_POLL_MS, r
 }
 
 // The server's report is trusted only in shape: anything unreadable counts as busy, never as idle.
+// `keepsTerminals`: the server's terminals live in the pty-host and keep running through the restart; each reason they cause is
+// marked `keeps`. Only the other reasons (a plugin at work, an answer that could not be read) hold the restart back.
 export function normalizeReport(value) {
   if (!value || typeof value !== 'object' || typeof value.busy !== 'boolean') return unknownReport('작업 상태 응답을 이해하지 못했습니다');
-  const reasons = Array.isArray(value.reasons) ? value.reasons.filter(item => item && typeof item === 'object') : [];
-  return { busy: value.busy, reasons };
+  const all = Array.isArray(value.reasons) ? value.reasons.filter(item => item && typeof item === 'object') : [];
+  const keepsTerminals = value.keepsTerminals === true;
+  const reasons = keepsTerminals ? all.filter(item => item.keeps !== true) : all;
+  const kept = keepsTerminals ? all.filter(item => item.keeps === true) : [];
+  // An old server says busy without reasons; that stays busy.
+  return { busy: keepsTerminals ? reasons.length > 0 : value.busy, reasons, kept, keepsTerminals };
 }
-export const unknownReport = detail => ({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail }] });
+export const unknownReport = detail => ({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail }], kept: [], keepsTerminals: false });
 
 const KIND = {
   turn: agent => `${AGENT[agent] ?? '에이전트'}가 작업 중`,

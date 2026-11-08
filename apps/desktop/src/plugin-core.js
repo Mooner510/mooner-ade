@@ -280,7 +280,7 @@ export function pluginTerminal(manifest, dir, report, nodeBinary) {
 // ask({ title, message, detail, buttons, defaultId, cancelId }) resolves the chosen button index.
 // toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
-export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, log = console }) {
+export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -311,7 +311,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
   }
   const changed = () => onChange(snapshot());
   function emitTerminal() {
-    onTerminal({ node: nodeBinary, plugins: [...hosts.values()].filter(host => host.status === 'running' && host.terminal).map(host => host.terminal) });
+    onTerminal({ node: terminalNode, plugins: [...hosts.values()].filter(host => host.status === 'running' && host.terminal).map(host => host.terminal) });
   }
 
   // ---- hosts ------------------------------------------------------------------------------------------------------
@@ -404,7 +404,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
         break;
       }
       // `enabled: false` withdraws the additions (e.g. a plugin that is not set up yet).
-      case 'terminal': host.terminal = message.enabled === false ? null : pluginTerminal(manifest, host.item.dir, message, nodeBinary); if (host.status === 'running') emitTerminal(); break;
+      case 'terminal': host.terminal = message.enabled === false ? null : pluginTerminal(manifest, host.item.dir, message, terminalNode); if (host.status === 'running') emitTerminal(); break;
       case 'action-result': {
         const pending = host.pending.get(message.id);
         if (!pending) break;

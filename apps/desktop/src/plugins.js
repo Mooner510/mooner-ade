@@ -8,13 +8,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPluginManager, createPluginStore } from './plugin-core.js';
 
-export function setupPlugins({ userData, nodeBinary, version, getServer, getWindow, trusted }) {
+// `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
+// it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
+export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted }) {
   const dir = process.env.ADE_PLUGINS_DIR || path.join(userData, 'plugins'), stagingRoot = path.join(userData, 'plugin-staging');
   fs.mkdirSync(dir, { recursive: true });
   // Left over from an install the app did not finish.
   try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch (failure) { console.warn(`플러그인 임시 폴더를 지우지 못했습니다: ${failure.message}`); }
   const store = createPluginStore({ file: path.join(userData, 'plugins.bin'), crypto: safeStorage });
-  let terminal = { node: nodeBinary, plugins: [] }, error = null;
+  let terminal = { node: terminalNode, plugins: [] }, error = null;
 
   const publish = snapshot => {
     const window = getWindow();
@@ -60,7 +62,7 @@ export function setupPlugins({ userData, nodeBinary, version, getServer, getWind
   }
 
   const manager = createPluginManager({
-    dir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, appVersion: version,
+    dir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
     onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify
   });
 
