@@ -527,6 +527,12 @@ body.resizing .xterm-host { pointer-events: none; }
 .setting-group:first-child { margin-top: 0; }
 .setting-error { display: flex; align-items: center; gap: 6px; color: var(--error); }
 .settings-body .mono { font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+.plugin-qr-row { display: flex; gap: 14px; align-items: center; padding: 10px 0; }
+.plugin-qr-row p { margin: 0; color: var(--muted); }
+.plugin-qr { flex: none; border-radius: 8px; }
+.statusbar .plugin-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 0 6px; color: var(--accent-fg); background: var(--accent); }
+.statusbar .plugin-badge.warn { color: #1b1300; background: var(--warn); }
+.statusbar .plugin-badge.error { color: #fff; background: var(--error); }
 .plugin-card { border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 .plugin-card .setting-row { border-bottom: 0; }
 .plugin-version, .plugin-hash { color: var(--muted); font-weight: 400; }

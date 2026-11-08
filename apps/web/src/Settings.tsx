@@ -21,7 +21,7 @@ function AboutSettings() {
   </>;
 }
 
-type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'keys' | 'about';
+export type Section = 'appearance' | 'terminal' | 'ai' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
@@ -160,8 +160,8 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
   return <div className="setting-row"><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
 }
 
-export function SettingsModal({ settings, onChange, onClose, shortcuts }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; shortcuts: { label: string; keys: string }[] }) {
-  const [section, setSection] = useState<Section>('appearance'), [aiTab, setAiTab] = useState<AiTab>('common');
+export function SettingsModal({ settings, onChange, onClose, shortcuts, initialSection = 'appearance' }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; shortcuts: { label: string; keys: string }[]; initialSection?: Section }) {
+  const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>('common');
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'usageRefresh', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;

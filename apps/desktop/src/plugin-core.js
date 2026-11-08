@@ -22,6 +22,8 @@ export const MAX_FILES = 2000, MAX_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST = 64 * 1024;
 export const MAX_STORAGE = 64 * 1024;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
+// OS notifications a plugin may raise: this many per minute, more are dropped.
+const NOTIFY_PER_MINUTE = 10;
 // Workspace relay: what a host may ask for, and how much output may wait for a host that stops reading before its session is closed.
 const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
 
@@ -248,8 +250,16 @@ export function validView(view) {
     status: view.status && TONES.includes(view.status.tone) ? { tone: view.status.tone, text: text(view.status.text, 300) } : null,
     info: list(view.info, 20).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true })),
     fields: list(view.fields, 10).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => ({ key: item.key, label: item.label, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300) })),
-    actions: list(view.actions, 8).filter(item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40)).map(item => ({ id: item.id, label: item.label, primary: item.primary === true }))
+    actions: list(view.actions, 8).filter(item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40)).map(item => ({ id: item.id, label: item.label, primary: item.primary === true })),
+    // Only the text to encode; the settings page draws the code itself.
+    qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null
   };
+}
+// A short status-bar item. Single line: it sits between MoonerADE's own items.
+export function validBadge(badge) {
+  if (!badge || typeof badge !== 'object' || !TONES.includes(badge.tone) || typeof badge.text !== 'string') return null;
+  const text = plainText(badge.text).replace(/\s+/g, ' ').slice(0, 24).trim();
+  return text ? { text, tone: badge.tone } : null;
 }
 // Terminal additions are limited to what the manifest declared: its own env prefix, its own bin folder, its own MCP script.
 export function pluginTerminal(manifest, dir, report, nodeBinary) {
@@ -270,7 +280,7 @@ export function pluginTerminal(manifest, dir, report, nodeBinary) {
 // ask({ title, message, detail, buttons, defaultId, cancelId }) resolves the chosen button index.
 // toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
-export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, log = console }) {
+export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -293,7 +303,8 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
         return {
           folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
-          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null
+          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null,
+          badge: host?.status === 'running' ? host.badge : null
         };
       })
     };
@@ -312,7 +323,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
     if (hash !== item.hash) { item.hash = hash; return; }
     const dataDir = path.join(dataRoot, manifest.id);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, terminal: null, pending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
+    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
     hosts.set(manifest.id, host);
     let child;
     try { child = spawnHost({ id: manifest.id, dir: item.dir, main: path.join(item.dir, ...manifest.main.split('/')) }); }
@@ -361,6 +372,18 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
     switch (message.type) {
       case 'ready': host.status = 'running'; host.error = null; changed(); emitTerminal(); break;
       case 'view': host.view = validView(message.view); changed(); break;
+      case 'badge': host.badge = validBadge(message.badge); changed(); break;
+      case 'notify': {
+        const now = Date.now();
+        host.notices = host.notices.filter(at => now - at < 60_000);
+        if (host.notices.length >= NOTIFY_PER_MINUTE) break;
+        const title = plainText(String(message.title ?? '')).slice(0, 100), body = plainText(String(message.body ?? '')).slice(0, 300);
+        if (!title && !body) break;
+        host.notices.push(now);
+        // Titled by MoonerADE with the plugin's name, like its dialogs, so it cannot pass for MoonerADE's own.
+        notify({ id: manifest.id, title: `플러그인: ${manifest.name}`, body: [title, body].filter(Boolean).join('\n') });
+        break;
+      }
       case 'storage': {
         const text = JSON.stringify(message.value ?? null);
         if (text.length > MAX_STORAGE) { log.warn(`[plugin ${host.id}] 저장할 데이터가 너무 큽니다.`); break; }
