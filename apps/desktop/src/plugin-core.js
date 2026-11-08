@@ -13,17 +13,23 @@ const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 const FIELD_KEY = /^[a-z][a-zA-Z0-9_]{0,31}$/;
 const ACTION_ID = /^[a-z][a-z0-9-]{0,31}$/;
-// A prefix may not reach into what the app, Node or the agents read themselves.
-const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROPIC|GIT_|SSH_|PATH|HOME|USER|SHELL|TERM|LD_|DYLD_)/;
+// A prefix may not reach into what the app, Node or the agents read themselves, nor into variables that run code or move
+// trust in every shell and tool started there (shell startup, proxies, TLS trust, language runtimes).
+const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROPIC|GIT_|SSH_|PATH|HOME|USER|SHELL|TERM|LD_|DYLD_|BASH_|PROMPT_|HTTP_|HTTPS_|ALL_|FTP_|SSL_|CURL_|REQUESTS_|JAVA_|JDK_|DOTNET_|COR_|CORECLR_|PYTHON|PIP_|SUDO_|XDG_|OTEL_|MCP_|DISABLE_|MAX_|API_)/;
 const MAX_FILES = 2000, MAX_BYTES = 32 * 1024 * 1024, MAX_MANIFEST = 64 * 1024;
 export const MAX_STORAGE = 64 * 1024;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
 
 const fail = (message, code = 'PLUGIN_INVALID') => Object.assign(new Error(message), { code });
+// The name and description appear in MoonerADE's own approval dialog: no control or bidirectional formatting characters
+// that could fake its layout or reorder what it says (the description keeps single line breaks).
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const plainText = text => text.replace(/\r\n?/g, '\n').split('\n').map(line => line.replace(new RegExp(UNSAFE_TEXT.source, 'g'), '')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 const str = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && !value.includes('\0');
-// A path inside the plugin folder, written with forward slashes, never absolute and never climbing out.
+// A path inside the plugin folder, written with forward slashes, never absolute and never climbing out. No `:` anywhere:
+// besides drive letters, on NTFS `host.js:x.js` names an alternate data stream, which the tree hash never reads.
 function relative(value, what) {
-  if (!str(value, 200) || /^[\\/]|^[a-zA-Z]:|\\/.test(value)) throw fail(`${what} 경로가 올바르지 않습니다.`);
+  if (!str(value, 200) || /^[\\/]|[\\:]/.test(value)) throw fail(`${what} 경로가 올바르지 않습니다.`);
   const parts = value.split('/');
   if (parts.some(part => !part || part === '.' || part === '..')) throw fail(`${what} 경로가 올바르지 않습니다.`);
   return parts.join('/');
@@ -33,9 +39,9 @@ export function validManifest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('plugin.json이 객체가 아닙니다.');
   if (value.apiVersion !== PLUGIN_API) throw fail(`이 MoonerADE가 모르는 플러그인 API 버전입니다 (${value.apiVersion}).`);
   if (!str(value.id, 40) || !ID.test(value.id)) throw fail('플러그인 id가 올바르지 않습니다.');
-  if (!str(value.name, 60)) throw fail('플러그인 이름이 없습니다.');
+  if (!str(value.name, 60) || UNSAFE_TEXT.test(value.name) || !value.name.trim()) throw fail('플러그인 이름이 없거나 쓸 수 없는 문자가 있습니다.');
   if (!str(value.version, 32) || !/^[0-9A-Za-z.+-]+$/.test(value.version)) throw fail('플러그인 버전이 올바르지 않습니다.');
-  const manifest = { id: value.id, name: value.name, version: value.version, apiVersion: PLUGIN_API, description: typeof value.description === 'string' ? value.description.slice(0, 300) : '', main: relative(value.main, 'main') };
+  const manifest = { id: value.id, name: value.name, version: value.version, apiVersion: PLUGIN_API, description: typeof value.description === 'string' ? plainText(value.description.slice(0, 300)) : '', main: relative(value.main, 'main') };
   if (!/\.(m?js)$/.test(manifest.main)) throw fail('main은 .js 또는 .mjs 파일이어야 합니다.');
   if (value.terminal !== undefined) {
     const terminal = value.terminal;
@@ -58,6 +64,8 @@ export function validManifest(value) {
 }
 
 // SHA-256 over every file's relative path, size and bytes, in path order. Links are refused: what is hashed must be what runs.
+// So is anything that is neither a file nor a folder: Node would read a FIFO or a device found at a module path, and the
+// hash would not cover what it reads.
 export function treeHash(dir) {
   const files = [];
   let total = 0;
@@ -70,7 +78,7 @@ export function treeHash(dir) {
       else if (stat.isFile()) {
         total += stat.size;
         if (files.push({ rel, full, size: stat.size }) > MAX_FILES || total > MAX_BYTES) throw fail('플러그인 파일이 너무 많거나 큽니다.');
-      }
+      } else throw fail(`파일이나 폴더가 아닌 것은 플러그인에 넣을 수 없습니다: ${rel}`);
     }
   };
   walk(dir, '');
