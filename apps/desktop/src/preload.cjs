@@ -10,9 +10,9 @@ remote.onState = listener => {
   ipcRenderer.on('ade:remote-state', handler);
   return () => ipcRenderer.off('ade:remote-state', handler);
 };
-// Plugins: the same rule; turning them on and approving one are native dialogs.
+// Plugins: the same rule; turning them on, approving one and installing a zip are native dialogs.
 const pluginCall = name => (...args) => ipcRenderer.invoke(`ade:plugins:${name}`, ...args);
-const plugins = Object.fromEntries(['state', 'setEnabled', 'rescan', 'approve', 'revoke', 'restart', 'action', 'openFolder'].map(name => [name, pluginCall(name)]));
+const plugins = Object.fromEntries(['state', 'setEnabled', 'rescan', 'approve', 'revoke', 'restart', 'action', 'openFolder', 'pickZip'].map(name => [name, pluginCall(name)]));
 plugins.onState = listener => {
   const handler = (_event, state) => listener(state);
   ipcRenderer.on('ade:plugins-state', handler);
