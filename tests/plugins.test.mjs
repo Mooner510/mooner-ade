@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createPluginManager, createPluginStore, pluginTerminal, scanPlugins, treeHash, validManifest, validView } from '../apps/desktop/src/plugin-core.js';
@@ -50,9 +52,19 @@ function setup(t, { answers = [] } = {}) {
 test('manifests are checked strictly', () => {
   assert.equal(validManifest(manifest()).mcp.name, 'example_tools');
   for (const bad of [{ apiVersion: 2 }, { id: 'Bad Id' }, { main: '../host.js' }, { main: '/etc/x.js' }, { main: 'C:/x.js' }, { main: 'a\\b.js' }, { main: 'host.sh' },
-    { terminal: { envPrefix: 'PATH_' } }, { terminal: { envPrefix: 'ADE_X_' } }, { terminal: { envPrefix: 'lower_' } }, { mcp: { name: 'Bad-Name', script: 'bin/cli.js' } }, { mcp: { name: 'ok_name', script: 'bin/cli.js', args: ["it's"] } }]) {
+    { terminal: { envPrefix: 'PATH_' } }, { terminal: { envPrefix: 'ADE_X_' } }, { terminal: { envPrefix: 'lower_' } }, { mcp: { name: 'Bad-Name', script: 'bin/cli.js' } }, { mcp: { name: 'ok_name', script: 'bin/cli.js', args: ["it's"] } },
+    // An NTFS alternate data stream is never hashed.
+    { main: 'host.js:hidden.js' }, { mcp: { name: 'ok_name', script: 'bin/cli.js:x.js' } }, { terminal: { bin: 'bin:x' } },
+    // Prefixes that would reach shell startup, proxies, TLS trust or what the agents read.
+    // Names that would fake or reorder MoonerADE's approval dialog.
+    { name: 'Example\n\nMoonerADE' }, { name: 'abc\u202Edcba' }, { name: '   ' },
+    { terminal: { envPrefix: 'BASH_' } }, { terminal: { envPrefix: 'PROMPT_' } }, { terminal: { envPrefix: 'HTTPS_' } }, { terminal: { envPrefix: 'SSL_' } }, { terminal: { envPrefix: 'JAVA_' } }, { terminal: { envPrefix: 'MCP_' } }]) {
     assert.throws(() => validManifest(manifest(bad)), /./, JSON.stringify(bad));
   }
+});
+
+test('descriptions shown in the approval dialog are plain text', () => {
+  assert.equal(validManifest(manifest({ description: 'one\r\ntwo\n\n\n\n\u202Ethree\u0007' })).description, 'one\ntwo\n\nthree');
 });
 
 test('the tree hash covers names and bytes and refuses links', t => {
@@ -65,6 +77,15 @@ test('the tree hash covers names and bytes and refuses links', t => {
   assert.notEqual(treeHash(dir), second);
   try { fs.symlinkSync(path.join(dir, 'host.js'), path.join(dir, 'link.js')); } catch { return; } // no symlink permission on this machine
   assert.throws(() => treeHash(dir), /링크/);
+});
+
+// Node reads whatever a FIFO or socket at a module path gives it, so the hash must not skip them.
+test('the tree hash refuses what is neither a file nor a folder', { skip: process.platform === 'win32' }, async t => {
+  const dir = plugin(temp(t));
+  const server = net.createServer();
+  await new Promise(resolve => server.listen(path.join(dir, 'bin', 'cli'), resolve));
+  t.after(() => server.close());
+  assert.throws(() => treeHash(dir), /파일이나 폴더가 아닌/);
 });
 
 test('scanning lists broken folders with a reason and refuses a second id', t => {
@@ -194,4 +215,27 @@ test('agents get approved MCP servers, quoted for the shell', async t => {
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.example_tools.args, ['C:\\p\\cli.js', 'mcp']);
   setAgentMcpServers([]);
   assert.ok(!(await terminalAgentCommand(root, 'plain', 'claude')).includes('--mcp-config'));
+});
+
+// PowerShell also closes a single-quoted string at U+2018-U+201B, so a path holding one must not end the quoting.
+test('typographic quotes in plugin paths stay inside the shell quoting', async t => {
+  const root = temp(t);
+  t.after(() => setAgentMcpServers([]));
+  setAgentMcpServers([{ name: 'example_tools', command: '/node', args: ['/p/x\u2019; echo INJECTED; \u2019y/cli.js', 'a\u2018\u201A\u201Bb'] }]);
+  const command = await terminalAgentCommand(root, 'quotes', 'codex');
+  const windows = process.platform === 'win32';
+  const [shell, args] = windows
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `function codex { foreach ($a in $args) { [Console]::Out.WriteLine($a) } }; ${command}`]]
+    : ['/bin/sh', ['-c', command.replace(/^codex /, "printf '%s\\n' ")]];
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(shell, args, { windowsHide: true });
+    let out = '', errors = '';
+    child.stdout.on('data', chunk => out += chunk);
+    child.stderr.on('data', chunk => errors += chunk);
+    child.on('error', reject);
+    child.on('exit', code => code ? reject(new Error(errors)) : resolve(out));
+  });
+  const lines = output.split(/\r?\n/);
+  assert.ok(!lines.includes('INJECTED'), output);
+  assert.ok(lines.some(line => line.startsWith('mcp_servers.example_tools.args=') && line.includes('; echo INJECTED; ')), output);
 });

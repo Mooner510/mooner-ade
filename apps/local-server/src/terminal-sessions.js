@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { fault } from './files.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const quote = (value, windows = process.platform === 'win32') => `'${value.replaceAll("'", windows ? "''" : "'\"'\"'")}'`;
+// PowerShell also ends a single-quoted string at the typographic quotes U+2018-U+201B (a path such as a user or folder name
+// may hold one); any of them doubled stays literal.
+const quote = (value, windows = process.platform === 'win32') => windows ? `'${value.replace(/['\u2018-\u201B]/g, '$&$&')}'` : `'${value.replaceAll("'", "'\"'\"'")}'`;
 const folder = (directory, id) => {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(id)) throw fault('INVALID_INPUT', '잘못된 터미널 ID입니다.');
   return path.join(directory, 'terminal-sessions', id);
