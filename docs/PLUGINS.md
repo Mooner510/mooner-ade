@@ -92,4 +92,4 @@ MoonerADE → 플러그인
 - ADE 터미널에서 실행한 `claude`에는 `--mcp-config <파일>`이, `codex`에는 `-c mcp_servers.<name>.command=…`,
   `-c mcp_servers.<name>.args=[…]`가 붙습니다. 사용자 설정 파일은 바꾸지 않습니다.
 
-이미 열린 터미널은 바뀌지 않습니다. 폰에서 연 터미널(원격 접속의 `control` 권한)도 같은 터미널이므로 같은 것을 받습니다.
+이미 열린 터미널은 바뀌지 않습니다.
