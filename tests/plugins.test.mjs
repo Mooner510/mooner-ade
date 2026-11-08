@@ -31,10 +31,11 @@ function plugin(root, folder = 'example', value = manifest()) {
 // A host process stand-in: records what main sends and lets the test answer.
 function fakeHost() {
   const child = new EventEmitter();
-  Object.assign(child, { sent: [], connected: true, exitCode: null, send(message) { child.sent.push(message); }, kill() { child.exit(null); }, exit(code) { child.exitCode = code ?? 1; child.connected = false; child.emit('exit', code); } });
+  // `held` keeps send callbacks back, as a host that stopped reading its channel would.
+  Object.assign(child, { sent: [], held: null, connected: true, exitCode: null, send(message, done) { child.sent.push(message); if (child.held) child.held.push(done); else done?.(); }, kill() { child.exit(null); }, exit(code) { child.exitCode = code ?? 1; child.connected = false; child.emit('exit', code); } });
   return child;
 }
-function setup(t, { answers = [] } = {}) {
+function setup(t, { answers = [], toServer } = {}) {
   const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [];
   fs.mkdirSync(dir);
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto: sealer() });
@@ -43,7 +44,7 @@ function setup(t, { answers = [] } = {}) {
     dir, dataRoot: path.join(root, 'plugin-data'), store, nodeBinary: '/node', appVersion: '9.9.9', log: { log() {}, warn() {}, error() {} },
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; },
-    onTerminal: config => terminals.push(config)
+    onTerminal: config => terminals.push(config), toServer
   });
   t.after(() => manager.close());
   return { root, dir, store, manager, hosts, asked, terminals };
@@ -238,4 +239,101 @@ test('typographic quotes in plugin paths stay inside the shell quoting', async t
   const lines = output.split(/\r?\n/);
   assert.ok(!lines.includes('INJECTED'), output);
   assert.ok(lines.some(line => line.startsWith('mcp_servers.example_tools.args=') && line.includes('; echo INJECTED; ')), output);
+});
+
+test('workspace is an explicit permission, shown in the approval dialog', async t => {
+  assert.equal(validManifest(manifest()).workspace, undefined);
+  assert.equal(validManifest(manifest({ workspace: true })).workspace, true);
+  assert.equal(validManifest(manifest({ workspace: false })).workspace, undefined);
+  assert.throws(() => validManifest(manifest({ workspace: 'yes' })), /workspace/);
+  const { dir, manager, asked } = setup(t, { answers: [0, 1] });
+  plugin(dir, 'example', manifest({ workspace: true }));
+  await manager.setEnabled(true);
+  assert.equal(manager.snapshot().plugins[0].workspace, true);
+  await manager.approve('example');
+  assert.match(asked.at(-1).detail, /프로젝트와 터미널을 열고 조작/);
+});
+
+async function workspaceHost(t, value, { connected = true } = {}) {
+  const server = [];
+  const env = setup(t, { answers: [0, 0], toServer: message => { if (!connected) return false; server.push(message); return true; } });
+  plugin(env.dir, 'example', value);
+  await env.manager.setEnabled(true);
+  await env.manager.approve('example');
+  const { child } = env.hosts.at(-1);
+  child.emit('message', { type: 'ready' });
+  return { ...env, child, server };
+}
+
+test('a plugin without the workspace permission reaches no session', async t => {
+  const { child, server, manager } = await workspaceHost(t, manifest());
+  child.emit('message', { type: 'workspace', op: 'open', session: 's1' });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 1, action: 'recent', input: {} });
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: '{}' });
+  manager.serverReset();
+  manager.close();
+  assert.deepEqual(server, []);
+  assert.ok(!child.sent.some(message => message.type === 'workspace'));
+});
+
+test('workspace requests and answers are relayed under the plugin id, and end with the host', async t => {
+  const { child, server, manager, hosts } = await workspaceHost(t, manifest({ workspace: true }));
+  child.emit('message', { type: 'workspace', op: 'open', session: 's1' });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 7, action: 'recent', input: { x: 1 } });
+  child.emit('message', { type: 'workspace', op: 'send', session: 's1', message: { type: 'subscribe', projectId: 'p' } });
+  // Another plugin's id or a bad session never goes out.
+  child.emit('message', { type: 'workspace', op: 'open', session: '../x', plugin: 'other' });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 'x', action: 'recent' });
+  assert.deepEqual(server, [
+    { type: 'plugin/workspace', plugin: 'example', op: 'open', session: 's1' },
+    { type: 'plugin/workspace', plugin: 'example', op: 'api', session: 's1', id: 7, action: 'recent', input: { x: 1 } },
+    { type: 'plugin/workspace', plugin: 'example', op: 'send', session: 's1', message: { type: 'subscribe', projectId: 'p' } }
+  ]);
+
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'api-result', session: 's1', id: 7, ok: true, value: [{ root: '/p' }] });
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: '{"type":"snapshot"}' });
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'closed', session: 's1' });
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'nobody', op: 'closed', session: 's1' });
+  assert.deepEqual(child.sent.filter(message => message.type === 'workspace'), [
+    { type: 'workspace', op: 'api-result', session: 's1', id: 7, ok: true, value: [{ root: '/p' }] },
+    { type: 'workspace', op: 'message', session: 's1', text: '{"type":"snapshot"}' },
+    { type: 'workspace', op: 'closed', session: 's1' }
+  ]);
+  manager.serverReset();
+  assert.deepEqual(child.sent.at(-1), { type: 'workspace', op: 'reset' });
+
+  // A crashed host's sessions are closed on the server.
+  server.length = 0;
+  child.exit(1);
+  assert.deepEqual(server, [{ type: 'plugin/workspace', plugin: 'example', op: 'close-all' }]);
+  assert.equal(hosts.length, 1);
+});
+
+test('a stopped host closes its sessions, and a host that stops reading loses the session', async t => {
+  const { child, server, manager } = await workspaceHost(t, manifest({ workspace: true }));
+  child.held = [];
+  const big = 'x'.repeat(5 * 1024 * 1024);
+  for (let index = 0; index < 2; index++) manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
+  assert.equal(server.length, 0);
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
+  assert.deepEqual(server, [{ type: 'plugin/workspace', plugin: 'example', op: 'close', session: 's1' }]);
+  // Once the host reads again the backlog drains.
+  for (const done of child.held.splice(0)) done?.();
+  child.held = null;
+  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
+  assert.equal(server.length, 1);
+
+  manager.revoke('example');
+  assert.deepEqual(server.at(-1), { type: 'plugin/workspace', plugin: 'example', op: 'close-all' });
+  assert.equal(child.sent.at(-1).type, 'shutdown');
+});
+
+test('without a server the host hears at once that nothing opened', async t => {
+  const { child } = await workspaceHost(t, manifest({ workspace: true }), { connected: false });
+  child.emit('message', { type: 'workspace', op: 'open', session: 's1' });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 3, action: 'recent' });
+  assert.deepEqual(child.sent.filter(message => message.type === 'workspace'), [
+    { type: 'workspace', session: 's1', op: 'closed' },
+    { type: 'workspace', session: 's1', op: 'api-result', id: 3, ok: false, error: { code: 'SERVER_UNAVAILABLE', message: '로컬 서버가 실행 중이 아닙니다.' } }
+  ]);
 });
