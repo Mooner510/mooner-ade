@@ -138,7 +138,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
   refs.focus.current = focus; refs.project.current = project;
-  const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map() });
+  const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map(), sizes: new Map(), sizeListeners: new Map() });
   const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
   const run = (operation: () => Promise<unknown>) => { setError(''); void operation().catch(report); };
@@ -410,6 +410,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
               bus.current.buffers.set(message.id, { ...previous, status: message.status });
               bus.current.listeners.get(message.id)?.({ data: '', sequence: previous.sequence, status: message.status });
             }
+          } else if (message.type === 'terminal/size') {
+            // Kept for a pane that mounts later; the server sends it again on every (re)subscribe.
+            const size = { cols: message.cols, rows: message.rows };
+            bus.current.sizes.set(message.id, size);
+            bus.current.sizeListeners.get(message.id)?.(size);
           } else if (message.type === 'terminal/ssh') {
             setSshSet(previous => previous.has(message.id) === message.ssh ? previous : message.ssh ? new Set(previous).add(message.id) : new Set([...previous].filter(item => item !== message.id)));
           } else if (message.type === 'terminal/agent') {
@@ -515,7 +520,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (refs.activeTab.current === tabId) selectTab(rest[Math.min(index, rest.length - 1)].id);
   }
   function removeTerminalPane(id: string) {
-    refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id);
+    refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id); bus.current.sizes.delete(id); bus.current.sizeListeners.delete(id);
     const owner = tabOf(id);
     if (owner) { commitTab(owner.id, compact(owner.pane && remove(owner.pane, id))); dropEmptyTab(owner.id); }
     if (refs.focus.current === id) setFocusLeaf(leaves(activePane())[0] || '');
