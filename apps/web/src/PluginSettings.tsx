@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Icon } from './Icon';
 
-// Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on and approving one are confirmed by the
-// desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
+// Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
+// confirmed by the desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
 type Tone = 'ok' | 'warn' | 'error' | 'info';
 export type PluginView = {
   status: { tone: Tone; text: string } | null;
@@ -21,6 +21,7 @@ type PluginsBridge = {
   setEnabled(on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
   revoke(id: string, options?: { forget?: boolean }): Promise<PluginsState>; restart(id: string): Promise<PluginsState>;
   action(id: string, action: string, values: Record<string, string>): Promise<PluginsState>; openFolder(): Promise<PluginsState>;
+  pickZip(): Promise<PluginsState>;
 };
 const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
 const writeClipboard = (text: string) => {
@@ -57,20 +58,21 @@ export function PluginSettings() {
   };
 
   const intro = <p className="setting-note">
-    플러그인은 MoonerADE가 기본으로 갖고 있지 않은 기능을 더합니다. MoonerADE 릴리스에서 받은 플러그인 폴더를 플러그인 폴더에 넣고 여기서 승인하세요.
+    플러그인은 MoonerADE가 기본으로 갖고 있지 않은 기능을 더합니다. MoonerADE 릴리스에서 받은 플러그인 zip을 플러그인 폴더에 넣거나 “zip 파일 선택”으로 고르면, 확인 창에서 설치할 수 있습니다.
     플러그인은 이 컴퓨터에서 MoonerADE와 같은 권한으로 실행되므로, 믿을 수 있는 곳에서 받은 것만 승인하세요. 파일이 바뀐 플러그인은 다시 승인할 때까지 실행되지 않습니다.
   </p>;
   if (!state.available) return <>{intro}<p className="setting-note">이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.</p></>;
 
   return <>
     {intro}
-    {(message?.error || state.error) && <p className="setting-note remote-error" role="alert"><Icon name="alert" size={14} /> {message?.error ? message.text : state.error}</p>}
+    {(message?.error || state.error) && <p className="setting-note setting-error" role="alert"><Icon name="alert" size={14} /> {message?.error ? message.text : state.error}</p>}
     {message && !message.error && <p className="setting-note plugin-message" role="status"><Icon name="check" size={14} /> {message.text}</p>}
 
     <Row title="플러그인 사용" hint="켤 때 확인 창이 뜹니다. 켜도 플러그인마다 따로 승인해야 실행됩니다.">
       <input type="checkbox" role="switch" aria-label="플러그인 사용" checked={state.enabled} disabled={busy} onChange={event => run(() => bridge.setEnabled(event.target.checked))} />
     </Row>
     <Row title="플러그인 폴더" hint={<span className="mono">{state.dir}</span>}>
+      <button disabled={busy} onClick={() => run(bridge.pickZip)}><Icon name="archive" />zip 파일 선택</button>
       <button disabled={busy} onClick={() => run(bridge.openFolder)}><Icon name="folder" />열기</button>
       <button disabled={busy} onClick={() => run(bridge.rescan)}><Icon name="refresh" />다시 읽기</button>
     </Row>
@@ -97,7 +99,7 @@ function PluginCard({ plugin, enabled, busy, run, bridge }: { plugin: PluginInfo
       {id && plugin.state === 'error' && <button disabled={busy} onClick={() => run(() => bridge.restart(id))}><Icon name="refresh" />다시 시작</button>}
       {id && !['new', 'invalid'].includes(plugin.state) && <button disabled={busy} onClick={() => run(() => bridge.revoke(id))} title="승인을 거두고 멈춥니다. 플러그인이 저장한 키와 설정은 남습니다.">승인 취소</button>}
     </Row>
-    {plugin.error && <p className="setting-note remote-error"><Icon name="alert" size={14} /> {plugin.error}</p>}
+    {plugin.error && <p className="setting-note setting-error"><Icon name="alert" size={14} /> {plugin.error}</p>}
     {plugin.hash && ['new', 'changed'].includes(plugin.state) && <p className="setting-note">SHA-256 <span className="mono plugin-hash">{plugin.hash}</span></p>}
 
     {view && id && <div className="plugin-view">
