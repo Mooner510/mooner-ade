@@ -129,7 +129,7 @@ export async function connectPtyHost({ endpoint, token }) {
     async list() { return (await request({ op: 'list' })).items; },
     async attach(key) {
       const created = session(key, undefined);
-      try { const result = await request({ op: 'attach', key }); created.pid = result.pid; created.initial = result.data; return created; }
+      try { const result = await request({ op: 'attach', key }); created.pid = result.pid; created.initial = result.data; created.size = { cols: result.cols, rows: result.rows }; return created; }
       catch (error) { sessions.delete(key); throw error; }
     }
   };

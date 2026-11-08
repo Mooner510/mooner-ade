@@ -175,6 +175,8 @@ export class LocalTerminal {
     ignoreSocketErrors(pty);
     return {
       pid: pty.pid,
+      // The size it starts at; later sizes are tracked by the server (terminal-size.js).
+      size: { cols, rows },
       // Only a remote PTY can outlive this process; a local one is simply closed.
       detach: () => (pty.detach ? pty.detach() : pty.kill()),
       onData: callback => pty.onData(callback),

@@ -89,10 +89,11 @@ function handle(socket, message, role) {
   switch (op) {
     case 'spawn': { const created = spawnTerminal(socket, message); return reply(socket, { re: req, ok: true, pid: created.process.pid }); }
     case 'list': return reply(socket, { re: req, items: [...terminals].map(([id, item]) => ({ key: id, pid: item.process.pid, meta: item.meta })) });
-    // Replay and subscription happen in one step, so no output is lost or duplicated between them.
+    // Replay and subscription happen in one step, so no output is lost or duplicated between them. The size lets the next
+    // server tell its windows what the terminal is drawn at (an older host leaves it out; the server then treats it as unknown).
     case 'attach':
       if (!entry) return reply(socket, { re: req, ok: false });
-      entry.socket = socket; return reply(socket, { re: req, ok: true, pid: entry.process.pid, data: entry.buffer.text });
+      entry.socket = socket; return reply(socket, { re: req, ok: true, pid: entry.process.pid, data: entry.buffer.text, cols: entry.process.cols, rows: entry.process.rows });
     case 'detach': if (entry?.socket === socket) entry.socket = null; return;
     case 'write': return entry?.process.write(String(message.data));
     case 'resize': return entry?.process.resize(message.cols, message.rows);

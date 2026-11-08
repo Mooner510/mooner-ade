@@ -49,6 +49,7 @@ test('terminals keep running without an owner and come back with what they print
   const { terminal, output } = await spawnTicker(first);
   for (let attempt = 0; attempt < 50 && !output().includes('tick3'); attempt++) await wait(100);
   assert.match(output(), /tick3/);
+  terminal.resize(90, 30);
   first.close();
   await wait(800); // output goes on with nobody listening
 
@@ -58,6 +59,7 @@ test('terminals keep running without an owner and come back with what they print
   assert.deepEqual(item.meta, { projectId: 'p', id: 't1', cwd: os.tmpdir() });
   assert.equal(item.pid, terminal.pid);
   const adopted = await second.attach(item.key);
+  assert.deepEqual(adopted.size, { cols: 90, rows: 30 }, 'the next server learns the size the terminal is drawn at');
   const last = Number(/tick(\d+) $/.exec(adopted.initial)?.[1]);
   assert.ok(last >= 8, `replay holds what was printed while detached: ${adopted.initial.slice(-80)}`);
   let more = '';

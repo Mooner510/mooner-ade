@@ -634,3 +634,10 @@ body.resizing .xterm-host { pointer-events: none; }
 .tmux-guide kbd { color: var(--fg); background: var(--raised); }
 @keyframes tmux-guide-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .tmux-guide { animation: none; } }
+/* Another device's terminal size: the pane shows the PTY as it is (larger ones scroll inside the pane) with a small note over it that
+   leaves the layout alone, so showing or hiding it never changes the size this pane asks for */
+.xterm-host[data-oversized] { overflow: auto; }
+.pane-size-note { position: absolute; z-index: 15; right: 8px; bottom: 8px; max-width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; font-size: 11.5px; color: var(--muted);
+  background: color-mix(in srgb, var(--overlay) 88%, transparent); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); }
+.pane-size-note span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-size-note button { flex-shrink: 0; color: var(--fg); border-color: var(--border-strong); }
