@@ -1,7 +1,7 @@
 :root {
   --bg: #0c0d0f; --surface: #141518; --raised: #1b1d21; --overlay: #202227; --border: #24262b; --border-strong: #33363d;
   --fg: #e4e6ea; --muted: #8b9099; --faint: #5c616b; --accent: #5ec8e5; --accent-strong: #2fb3d6; --accent-fg: #06141a; --accent-soft: #5ec8e51f;
-  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --error: #f85149; --info: #58a6ff;
+  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
   --shadow: 0 12px 40px #000a;
   --brand-claude: #d97757; --brand-codex: #b1a7ff; --brand-cursor: #ffffff;
   --term-bg: #141518; --term-fg: #e4e6ea; --term-cursor: #5ec8e5; --term-selection: #5ec8e540;
@@ -13,7 +13,7 @@
 :root[data-theme=light] {
   --bg: #eceef1; --surface: #ffffff; --raised: #f6f7f9; --overlay: #ffffff; --border: #dfe2e7; --border-strong: #cbd0d7;
   --fg: #1d2127; --muted: #626a75; --faint: #9aa1ab; --accent: #0b8db3; --accent-strong: #087a9b; --accent-fg: #ffffff; --accent-soft: #0b8db31a;
-  --hover: #0000000a; --selected: #0b8db31f; --input: #ffffff; --focus: #0b8db3; --add: #1a7f37; --del: #cf222e; --warn: #9a6700; --done: #568b20; --ask: #bf477e; --error: #cf222e; --info: #0969da;
+  --hover: #0000000a; --selected: #0b8db31f; --input: #ffffff; --focus: #0b8db3; --add: #1a7f37; --del: #cf222e; --warn: #9a6700; --done: #568b20; --ask: #bf477e; --error: #cf222e; --info: #0969da; --beta: #0284c7;
   --shadow: 0 12px 40px #0002;
   --brand-claude: #c6613f; --brand-codex: #7b61ff; --brand-cursor: #14120b;
   --term-bg: #ffffff; --term-fg: #1d2127; --term-cursor: #0b8db3; --term-selection: #0b8db333;
@@ -469,6 +469,7 @@ dialog::backdrop { background: #0009; }
 .projects-foot { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--border); }
 .shell.compact .projects-foot { flex-direction: column; padding: 8px 0; }
 .app-version { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; user-select: text; }
+.app-version.beta { color: var(--beta); }
 .shell.compact .app-version { display: none; }
 .projects-resizer { position: absolute; z-index: 10; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; touch-action: none; }
 .projects-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background .12s; }
