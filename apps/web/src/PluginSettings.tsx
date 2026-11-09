@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import qrcode from 'qrcode-generator';
 import { Icon } from './Icon';
+import { toastCopied } from './toast';
 
 // Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
 // confirmed by the desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
@@ -30,6 +31,7 @@ const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: Plu
 const writeClipboard = (text: string) => {
   const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
   if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text);
+  toastCopied();
 };
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 

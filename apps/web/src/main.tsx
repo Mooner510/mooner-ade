@@ -8,13 +8,19 @@ import { SettingsModal } from './Settings';
 import { onPluginsOpen } from './PluginSettings';
 import { Modal } from './views';
 import { CacheTimer } from './Panes';
-import { Workspace, showKeys, type Command, type Hub, type SystemInfo, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
+import { Tutorial } from './Tutorial';
+import { Splash } from './Splash';
+import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import '@material-symbols/font-400/outlined.css';
+
+// Comet tail: 18 overlapping dashes sharing one head stack into a smooth fade (~45% of the outline); the short extras brighten the tip.
+const TRAIL: [number, number][] = [[1.5, .7], [4, .35], ...Array.from({ length: 18 }, (_, i): [number, number] => [2.5 * (i + 1), .11])];
 import './style.css';
 
 type Entry = { root: string; id: string };
 type Recent = { id?: string; root: string; pinned?: boolean };
 type TabDropMode = 'before' | 'after' | 'merge';
+type TabMenuTarget = { x: number; y: number; root: string; tabId: string; paneId?: string };
 function tabDropMode(event: React.DragEvent<Element>, sourceId: string, targetId: string): TabDropMode {
   const box = event.currentTarget.getBoundingClientRect(), ratio = (event.clientY - box.top) / box.height;
   if (sourceId === targetId) return ratio < 0.5 ? 'before' : 'after';
@@ -183,28 +189,57 @@ function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onP
     </Modal>}</>;
 }
 
+// Right-click menu for a sidebar tab or split terminal: every drag gesture has a plain menu item here, with its key.
+function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tabs: WorkspaceStatus['tabs']; handle?: WorkspaceHandle; onClose(): void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, []);
+  const index = tabs.findIndex(tab => tab.id === target.tabId), tab = tabs[index];
+  if (!tab || !handle) return null;
+  const above = tabs[index - 1], below = tabs[index + 1], pane = tab.panes.find(item => item.id === target.paneId);
+  const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
+    <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span>{keys && <kbd>{keys}</kbd>}</button>;
+  const onKey = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])], at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    buttons[(at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+  };
+  return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
+      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 340 : 260)) }}>
+      {pane && <>
+        <small className="menu-title">{pane.label}</small>
+        {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
+        {item('arrowUp', '위 탭으로 옮기기', () => handle.movePane(tab.id, pane.id, above.id, 'merge'), undefined, !above)}
+        {item('arrowDown', '아래 탭으로 옮기기', () => handle.movePane(tab.id, pane.id, below.id, 'merge'), undefined, !below)}
+        {item('x', '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
+        <hr />
+      </>}
+      <small className="menu-title">{pane ? `탭: ${tab.label}` : tab.label}</small>
+      {item('edit', '이름 바꾸기', () => handle.renameTab(tab.id), 'F2')}
+      {item('arrowUp', '위로 이동', () => handle.moveTab(tab.id, above.id, false), showKeys('alt+↑'), !above)}
+      {item('arrowDown', '아래로 이동', () => handle.moveTab(tab.id, below.id, true), showKeys('alt+↓'), !below)}
+      {item('merge', '위 탭과 분할로 합치기', () => handle.mergeTabs(tab.id, above.id), undefined, !above)}
+      {item('merge', '아래 탭과 분할로 합치기', () => handle.mergeTabs(tab.id, below.id), undefined, !below)}
+      {item('x', '탭 닫기', () => handle.closeTab(tab.id), pane ? undefined : 'Del')}
+    </div></>;
+}
+
 function Shell() {
   const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [error, setError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
   const [status, setStatus] = useState<Record<string, WorkspaceStatus>>({});
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [system, setSystem] = useState<SystemInfo | null>(null);
+  // splash: the launch animation, on every start once onboarded and when the tour ends.
+  const [splash, setSplash] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display is a per-browser preference: expanded folders with tabs, or a narrow strip of initials.
   const [compact, setCompact] = useState(() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } });
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ root: string; id: string; pane?: string } | null>(null), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
-  const dragSource = useRef<{ root: string; id: string; pane?: string; blocked: boolean; pointerId: number } | null>(null);
-  useEffect(() => {
-    const reset = (event: PointerEvent) => {
-      const source = dragSource.current;
-      if (!source || source.pointerId !== event.pointerId) return;
-      dragSource.current = null;
-    };
-    window.addEventListener('pointerup', reset);
-    window.addEventListener('pointercancel', reset);
-    return () => { window.removeEventListener('pointerup', reset); window.removeEventListener('pointercancel', reset); };
-  }, []);
+  const [menu, setMenu] = useState<TabMenuTarget | null>(null);
   const [projectDrag, setProjectDrag] = useState(''), [projectDrop, setProjectDrop] = useState<{ root: string; after: boolean } | null>(null);
   useEffect(() => { try { localStorage.setItem('ade-sidebar-compact', compact ? '1' : '0'); } catch { /* storage can be blocked */ } }, [compact]);
   const { hub, connection } = useHub(ready);
@@ -231,21 +266,24 @@ function Shell() {
       const [saved, list] = await Promise.all([api<{ openProjects: Entry[]; activeProjectId: string; settings: Settings | null }>('app/state'), api<Recent[]>('recent')]);
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
-      if (saved.settings) setSettings(migrateSettings(saved.settings));
+      const loaded = saved.settings ? migrateSettings(saved.settings) : null;
+      if (loaded) setSettings(loaded);
+      setSplash(Boolean(loaded?.onboarded));
       const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(report);
   }, [report]);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
-  // CPU and memory are only sampled while the status bar shows them.
-  const wantsSystem = settings.statusItems.includes('cpu') || settings.statusItems.includes('memory');
+  // A custom accent replaces the theme's accent family inline; an empty one removes the override so the stylesheet applies again.
   useEffect(() => {
-    if (!ready || !wantsSystem) { setSystem(null); return; }
-    let stopped = false;
-    const tick = () => void api<SystemInfo>('system/info').then(value => { if (!stopped) setSystem(value); }).catch(() => {});
-    tick(); const timer = setInterval(tick, 5000);
-    return () => { stopped = true; clearInterval(timer); };
-  }, [ready, wantsSystem]);
+    const style = document.documentElement.style, color = settings.accentColor, names = ['--accent', '--accent-strong', '--accent-fg', '--accent-soft', '--selected', '--focus'];
+    if (!/^#[0-9a-f]{6}$/i.test(color)) { names.forEach(name => style.removeProperty(name)); return; }
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+    style.setProperty('--accent', color); style.setProperty('--focus', color);
+    style.setProperty('--accent-strong', `color-mix(in srgb, ${color}, black 18%)`);
+    style.setProperty('--accent-soft', `${color}1f`); style.setProperty('--selected', `${color}26`);
+    style.setProperty('--accent-fg', (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#06141a' : '#ffffff');
+  }, [settings.accentColor]);
 
   // The open list, the active project and shared settings survive restarts.
   useEffect(() => {
@@ -318,11 +356,12 @@ function Shell() {
     setActiveRoot(rest[Math.min(index, rest.length - 1)]?.root ?? '');
     void api<Recent[]>('recent').then(setRecent).catch(() => {});
   }, [report]);
-  const actions = useRef({ select: (_index: number) => {}, cycle: (_step: number) => {}, close: () => {}, add: () => {}, toggle: () => {}, settings: () => {} });
+  const actions = useRef({ select: (_index: number) => {}, cycle: (_step: number) => {}, close: () => {}, add: () => {}, toggle: () => {}, settings: () => {}, tutorial: () => {} });
   actions.current = {
     select: index => { const entry = entriesRef.current[index === 8 ? entriesRef.current.length - 1 : index]; if (entry) setActiveRoot(entry.root); },
     cycle: step => { const list = entriesRef.current; if (list.length > 1) setActiveRoot(list[(Math.max(0, list.findIndex(entry => entry.root === current)) + step + list.length) % list.length].root); },
-    close: () => void closeProject(current), add: () => setPicker(true), toggle: () => setCompact(value => !value), settings: () => setSettingsOpen('default')
+    close: () => void closeProject(current), add: () => setPicker(true), toggle: () => setCompact(value => !value), settings: () => setSettingsOpen('default'),
+    tutorial: () => setSettings(previous => ({ ...previous, onboarded: false }))
   };
   // Stable identity, so a project that is not being shown does not re-render when another changes.
   const projectCommands = useMemo<Command[]>(() => [
@@ -330,6 +369,7 @@ function Shell() {
     { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b', run: () => actions.current.toggle() },
     { id: 'settings', label: '설정 열기', keys: 'mod+,', run: () => actions.current.settings() },
     { id: 'closeProject', label: '프로젝트 닫기', keys: 'mod+alt+w', run: () => actions.current.close() },
+    { id: 'tutorial', label: '튜토리얼 다시 보기', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', run: () => actions.current.cycle(-1) },
     ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, keys: `mod+alt+${index + 1}`, hidden: true, run: () => actions.current.select(index) }))
@@ -352,16 +392,25 @@ function Shell() {
 
   const shortcuts = [
     { label: '새 터미널 탭', keys: showKeys('mod+shift+t') }, { label: '탭 닫기', keys: showKeys('mod+shift+w') }, { label: '다음/이전 탭', keys: `${showKeys('alt+]')} / ${showKeys('alt+[')}` },
-    { label: '탭 번호로 이동', keys: showKeys('alt+1') + '…9' }, { label: '좌우 분할', keys: 'Ctrl+D' }, { label: '상하 분할', keys: 'Ctrl+Shift+D' }, { label: 'Pane 최대화', keys: showKeys('mod+shift+enter') },
-    { label: 'Pane 이동', keys: showKeys('alt+arrowleft') + ' / ' + showKeys('alt+arrowright') }, { label: '변경사항(Diff) 패널', keys: showKeys('mod+shift+g') },
+    { label: '탭 번호로 이동', keys: showKeys('alt+1') + '…9' }, { label: '좌우 분할', keys: showKeys('ctrl+d') }, { label: '상하 분할', keys: showKeys('ctrl+shift+d') }, { label: 'Pane 최대화', keys: showKeys('mod+shift+enter') },
+    { label: '탭 위/아래로 이동', keys: `${showKeys('alt+shift+[')} / ${showKeys('alt+shift+]')}` },
+    { label: 'Pane 이동', keys: showKeys('alt+shift+arrowleft') + ' / ' + showKeys('alt+shift+arrowright') }, { label: '변경사항(Diff) 패널', keys: showKeys('mod+shift+g') },
     { label: '명령 팔레트', keys: showKeys('mod+shift+p') }, { label: '프로젝트 열기', keys: showKeys('mod+alt+o') }, { label: '사이드바 접기/펼치기', keys: showKeys('mod+alt+b') },
     { label: '다음/이전 프로젝트', keys: `${showKeys('mod+alt+]')} / ${showKeys('mod+alt+[')}` }, { label: '프로젝트 번호로 이동', keys: showKeys('mod+alt+1') + '…9' }, { label: '설정', keys: showKeys('mod+,') }
   ];
   const open = new Set(entries.map(entry => entry.root));
   const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
-  if (!entries.length) return booted ? <main className="welcome"><PickerCard {...picking} /></main> : <div className="shell" />;
+  // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
+  // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
+  const touring = booted && !settings.onboarded;
+  // A replay (book button, palette, settings) skips the theme and font screen; only a user who was never onboarded sees it.
+  const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
+  // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
+  const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
+  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} shortcuts={shortcuts} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main>{tutorial}</> : <div className="shell" />;
 
-  return <div ref={shell} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
+  return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
@@ -404,82 +453,93 @@ function Shell() {
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
-              {item.tabs.map(tab => {
+              {item.tabs.map((tab, tabIndex) => {
                 const on = selected && tab.id === item.activeTab;
                 const select = () => { setActiveRoot(entry.root); owner()?.selectTab(tab.id); };
-                const row = <div role="treeitem" aria-selected={on} tabIndex={0} draggable className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={tab.asking ? 'attention' : tab.attention ? 'done' : tab.working ? 'working' : undefined} title={`${tab.label} · 더블클릭으로 이름 바꾸기`}
-                  onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}
-                  onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || (tab.panes.length ? 'layers' : 'terminal')} size={13} /></span><span className="folder-tab-label">{tab.label}</span>
-                  {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
-                  {tab.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : tab.attention && <i className="attn-dot" aria-label="확인 필요" />}
-                  <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>
-                </div>;
-                // Tabs can be dragged to reorder within their own project; a line shows where the tab will land.
-                const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, over = dropAt?.id === tab.id && drag?.root === entry.root ? `drop-${dropAt.mode}` : '';
+                const openMenu = (event: React.MouseEvent | React.KeyboardEvent, paneId?: string) => {
+                  event.preventDefault(); event.stopPropagation();
+                  const box = (event.currentTarget as HTMLElement).getBoundingClientRect(), mouse = 'clientX' in event && event.clientX ? event : null;
+                  setMenu({ x: mouse ? mouse.clientX : box.left + 24, y: mouse ? mouse.clientY : box.bottom, root: entry.root, tabId: tab.id, paneId });
+                };
+                // Keys on a focused sidebar row: F2 rename, Delete close, Alt+↑/↓ move, Shift+F10 / menu key opens the menu.
+                const rowKeys = (event: React.KeyboardEvent, onEnter: () => void, onDelete: () => void, paneId?: string) => {
+                  const neighbour = item.tabs[tabIndex + (event.key === 'ArrowUp' ? -1 : 1)];
+                  if (event.key === 'Enter' || event.key === ' ') onEnter();
+                  else if (event.key === 'F2') owner()?.renameTab(tab.id);
+                  else if (event.key === 'Delete') onDelete();
+                  else if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && neighbour) owner()?.moveTab(tab.id, neighbour.id, event.key === 'ArrowDown');
+                  else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openMenu(event, paneId);
+                  else return;
+                  event.preventDefault();
+                };
+                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
+                // Edges of a row reorder (a line shows where); the middle merges, labelled so it is never a surprise.
+                const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
+                const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
+                const startDrag = (event: React.DragEvent, pane?: string) => {
+                  if (event.target instanceof Element && event.target.closest('button')) { event.preventDefault(); return; }
+                  event.stopPropagation(); setMenu(null);
+                  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane || tab.id);
+                  setDrag({ root: entry.root, id: tab.id, ...(pane ? { pane } : {}) });
+                };
+                const endDrag = () => { setDrag(null); setDropAt(null); };
                 const dnd = {
                   draggable: true,
-                  onDragStart: (event: React.DragEvent) => {
-                    const source = dragSource.current; dragSource.current = null;
-                    if (source?.blocked || (event.target instanceof Element && event.target.closest('button'))) {
-                      event.preventDefault();
-                      return;
-                    }
-                    const pane = source?.root === entry.root && source.id === tab.id ? source.pane : undefined;
-                    event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane || tab.id);
-                    if (!pane) event.dataTransfer.setDragImage(event.currentTarget as HTMLElement, 0, 0);
-                    setDrag({ root: entry.root, id: tab.id, ...(pane ? { pane } : {}) });
-                  },
-                  onDragEnd: () => {
-                    dragSource.current = null; setDrag(null); setDropAt(null);
-                  },
+                  onDragStart: (event: React.DragEvent) => startDrag(event),
+                  onDragEnd: endDrag,
                   onDragOver: (event: React.DragEvent<HTMLLIElement>) => {
                     if (!drag || drag.root !== entry.root) return;
                     if (drag.id === tab.id) { event.dataTransfer.dropEffect = 'none'; setDropAt(null); return; }
                     event.preventDefault(); event.dataTransfer.dropEffect = 'move';
-                    // Edges reorder; the middle of a tab merges the dragged one into it.
-                    const mode = tabDropMode(event, drag.id, tab.id);
-                    setDropAt(previous => previous?.id === tab.id && previous.mode === mode ? previous : { id: tab.id, mode });
+                    const next = tabDropMode(event, drag.id, tab.id);
+                    setDropAt(previous => previous?.id === tab.id && previous.mode === next ? previous : { id: tab.id, mode: next });
                   },
                   onDrop: (event: React.DragEvent) => {
                     event.preventDefault(); event.stopPropagation();
                     if (drag && drag.root === entry.root && drag.id !== tab.id) {
-                      const mode = tabDropMode(event, drag.id, tab.id);
-                      if (drag.pane) owner()?.movePane(drag.id, drag.pane, tab.id, mode);
-                      else if (mode === 'merge') owner()?.mergeTabs(drag.id, tab.id);
-                      else owner()?.moveTab(drag.id, tab.id, mode === 'after');
+                      const next = tabDropMode(event, drag.id, tab.id);
+                      if (drag.pane) owner()?.movePane(drag.id, drag.pane, tab.id, next);
+                      else if (next === 'merge') owner()?.mergeTabs(drag.id, tab.id);
+                      else owner()?.moveTab(drag.id, tab.id, next === 'after');
                     }
-                    setDrag(null); setDropAt(null);
+                    endDrag();
                   }
                 };
-                if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${over}`} {...dnd}>{row}</li>;
-                // A split tab is one box holding its terminals.
-                return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${over}`} {...dnd}
-                  onPointerDownCapture={event => {
-                    if (event.button !== 0 || !event.isPrimary) return;
-                    const pane = event.target instanceof Element ? event.target.closest<HTMLElement>('.group-pane') : null;
-                    const targetPaneId = pane?.dataset.paneId, paneId = event.shiftKey ? targetPaneId : undefined;
-                    dragSource.current = { root: entry.root, id: tab.id, ...(paneId ? { pane: paneId } : {}), blocked: event.target instanceof Element && !!event.target.closest('button'), pointerId: event.pointerId };
-                  }}
+                const state = (pane: { asking: boolean; attention: boolean; working: boolean }) => pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined;
+                const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <svg className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}>{TRAIL.map(([len, opacity]) => <rect key={len} pathLength={100} strokeDasharray={`${len} ${100 - len}`} strokeOpacity={opacity} style={{ '--from': len, '--to': len - 100 } as React.CSSProperties} />)}</svg>; };
+                const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
+                if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
+                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 가운데에 놓으면 분할로 합치기\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
+                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
+                    onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
+                    <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
+                    {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
+                    {alert(tab)}{close}
+                  </div>{dropHint}</li>;
+                // A split tab: a header that drags the whole tab, and one row per terminal that drags just that terminal.
+                return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
+                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tab.label} · 분할 ${tab.panes.length}개\n여기를 끌면 탭 전체 이동 · 아래 터미널을 끌면 그 터미널만 이동\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
+                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
+                    <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
+                  </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
-                    {tab.panes.map(pane => <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''}`} data-agent={pane.agent} data-agent-state={pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined} title={`${pane.label} — Shift+드래그: 탭 목록 빈 공간에 놓아 단독 탭으로 분리`}
-                      // Native drag hit-testing needs the row to be draggable before pointerdown, including its text and icons.
-                      draggable data-pane-id={pane.id}
-                      onClick={() => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }}
-                      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); } }}>
-                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>
+                    {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
+                      title={`${pane.label}\n끌어서 다른 탭으로 옮기거나 탭 사이·아래 빈칸에 놓아 새 탭으로 분리\n우클릭: 메뉴`}
+                      draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
+                      onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
+                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
-                      {pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />}
+                      {alert(pane)}
                       <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
-                    </li>)}
-                  </ul>
+                    </li>; })}
+                  </ul>{dropHint}
                 </li>;
               })}
               {drag?.root === entry.root && drag.pane && <li className="pane-drop-zone" role="presentation"
                 onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
                 onDrop={event => { event.preventDefault(); event.stopPropagation(); owner()?.movePane(drag.id, drag.pane!, undefined, 'after'); setDrag(null); setDropAt(null); }}>
-                여기에 놓으면 단독 탭으로 분리
+                <Icon name="plus" size={13} />여기에 놓으면 새 탭으로 분리
               </li>}
               {item.loaded && !item.tabs.length && <li className="folder-empty">탭 없음 — <button onClick={() => owner()?.newTab()}>새 터미널</button></li>}
             </ul>}
@@ -489,7 +549,8 @@ function Shell() {
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showKeys('mod+alt+o')} onClick={onAddProject} />}
         <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} onClick={onOpenSettings} />
-        {!compact && <small className="foot-hint">{entries.length}개 프로젝트</small>}
+        <span className="spacer" />
+        <IconButton icon="book" label="튜토리얼 보기" onClick={() => actions.current.tutorial()} />
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}
         onPointerDown={startResize} onDoubleClick={() => setWidth(252)}
@@ -498,11 +559,12 @@ function Shell() {
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handle => { if (handle) handles.current.set(entry.root, handle); else handles.current.delete(entry.root); }}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
-        system={entry.root === current ? system : null} onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
+    {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
     {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
-  </div>;
+  </div>{tutorial}</>;
 }
 createRoot(document.getElementById('root')!).render(<Shell />);

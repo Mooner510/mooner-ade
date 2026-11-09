@@ -5,8 +5,12 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
+import { useHiddenAgents } from './installed-agents';
 import { DiffView, monoFont, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
+import { showKeys } from './Workspace';
+import { toastCopied, setToastAnchor, claimTip } from './toast';
+import { contextTip, queueTip, splitTip } from './tips';
 import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
@@ -51,7 +55,7 @@ const QUERY_REPLY = /^(?:\x1b\[[?>=]?[\d;]*(?:c|R|n|\$y|t)|\x1b\][^\x07\x1b]*(?:
 // GPU process until it crashes and blanks every pane. So only a few visible panes render through WebGL (the rest use the DOM
 // renderer), a freed slot goes to a waiting pane, and after repeated context losses WebGL stays off for the session.
 const WEBGL_LIMIT = 6, WEBGL_LOSSES = 3, WEBGL_LOSS_WINDOW = 60_000;
-const webgl = { active: 0, losses: [] as number[], disabled: false, waiting: new Set<() => void>() };
+const webgl = { active: 0, losses: [] as number[], disabled: false, waiting: new Set<() => void>(), idle: new Set<(handOff?: boolean) => void>() };
 function webglLost() {
   const now = Date.now();
   webgl.losses = [...webgl.losses.filter(time => now - time < WEBGL_LOSS_WINDOW), now];
@@ -133,7 +137,8 @@ export const launchers: { id: string; label: string; detail: string; command: st
 ];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
 export function Launchers({ title, onLaunch, autoFocus, hidden = [] }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[] }) {
-  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.filter(item => !hidden.includes(item.id)).map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
+  const hide = useHiddenAgents(hidden);
+  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.filter(item => !hide.includes(item.id)).map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
 }
 function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden }: { id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
   return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
@@ -146,7 +151,7 @@ function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden }: { id:
 }
 
 // xterm colors come from the CSS custom properties so the terminal follows the app theme.
-function terminalTheme(element: Element = document.documentElement): ITheme {
+export function terminalTheme(element: Element = document.documentElement): ITheme {
   const style = getComputedStyle(element), read = (name: string) => style.getPropertyValue(`--term-${name}`).trim() || undefined;
   return {
     background: read('bg'), foreground: read('fg'), cursor: read('cursor'), cursorAccent: read('bg'), selectionBackground: read('selection'),
@@ -156,6 +161,12 @@ function terminalTheme(element: Element = document.documentElement): ITheme {
   };
 }
 
+// Options that xterm reads live; applied at creation and again whenever a setting changes.
+export const xtermOptions = (settings: Settings) => ({
+  fontSize: settings.terminalFontSize, fontFamily: fontStack(settings), fontWeight: settings.terminalFontWeight, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing,
+  cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, scrollSensitivity: settings.scrollSensitivity,
+  minimumContrastRatio: settings.minimumContrast, wordSeparator: settings.wordSeparator, drawBoldTextInBrightColors: settings.boldBright, macOptionIsMeta: settings.optionAsMeta
+});
 const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
 
 function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
@@ -163,6 +174,13 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
   editingRef.current = editing !== null;
+  // A tip takes the header's title slot for 10 s (not while the agent waits on a question, whose alert sits in that slot).
+  const [tip, setTip] = useState(''), tipTimer = useRef(0);
+  const showTip = useRef((id: string, text: string, options?: { gap?: number; max?: number }) => {
+    if (!claimTip(id, options)) return;
+    setTip(text); clearTimeout(tipTimer.current); tipTimer.current = window.setTimeout(() => setTip(''), 10_000);
+  }).current;
+  useEffect(() => () => clearTimeout(tipTimer.current), []);
   const [tmuxPlace, setTmuxPlace] = useState<'top' | 'bottom' | null>(null);
   // Another device's size is shown (the PTY is not this pane's size); typing here or the button brings it back.
   const [otherSize, setOtherSize] = useState(false), claimSize = useRef<() => void>(() => {});
@@ -182,7 +200,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
   const cachesRef = useRef(caches); cachesRef.current = caches;
   useEffect(() => {
-    const terminal = new Terminal({ fontSize: settings.terminalFontSize, fontFamily: fontStack(settings), lineHeight: settings.lineHeight, cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, allowProposedApi: true,
+    const terminal = new Terminal({ ...xtermOptions(settings), allowProposedApi: true,
       // xterm's default OSC 8 link handler asks via confirm() and then opens a blank window it navigates afterwards, which the desktop
       // shell denies. Ask through the workspace's own dialog instead (open in the system browser, copy, or cancel).
       linkHandler: { allowNonHttpProtocols: false, activate: (_event, uri) => { if (/^https?:\/\//i.test(uri)) window.dispatchEvent(new CustomEvent('ade:link', { detail: uri })); } },
@@ -218,8 +236,19 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (!paths.length) return;
       terminal.paste(paths.map(quotePath).join(' ') + ' '); terminal.focus();
     };
+    // Right-click pastes the clipboard instead of opening the browser menu (the desktop shell has none of its own for the terminal).
+    const rightClick = (event: MouseEvent) => {
+      if (!settingsRef.current.rightClickPaste) return;
+      event.preventDefault();
+      if (terminal.hasSelection()) { void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); toastCopied(); terminal.clearSelection(); }
+      else void navigator.clipboard?.readText().then(text => { if (text) terminal.paste(text); }, () => {});
+    };
+    pasteHost.addEventListener('contextmenu', rightClick);
     pasteHost.addEventListener('dragover', dragFiles); pasteHost.addEventListener('drop', dropFiles);
-    terminal.onSelectionChange(() => { if (settingsRef.current.copyOnSelect && terminal.hasSelection()) void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); });
+    terminal.onSelectionChange(() => {
+      const text = settingsRef.current.copyOnSelect && terminal.hasSelection() ? terminal.getSelection() : '';
+      if (text) { void navigator.clipboard?.writeText(text).catch(() => {}); toastCopied(); }
+    });
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
     let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, working = false, asking = false, title = '';
     let status: TerminalFeed['status'], reportedState: string | undefined;
@@ -242,6 +271,14 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       const typed = claudeComposerText(screenText());
       // The last typed characters may not be echoed yet, which makes the composer look empty; err towards asking.
       return isClaudeMessageText(typed) || (!typed && Date.now() - lastTyped < 80) ? warning : undefined;
+    };
+    // Tips ride on a message about to be sent (Enter on real message text): a long context suggests /clear, and Enter while Claude is working suggests Tab.
+    const tipOnSend = () => {
+      const config = settingsRef.current, cache = cachesRef.current[id];
+      if (!config.tips || sshRef.current || replays || callbacks.current.agentOf(id) !== 'claude') return;
+      const context = !cache?.compacted && contextTip(cache?.tokens, config.contextTipK), queue = working && followUpSupported && config.followUpQueue;
+      if ((context || queue) && isClaudeMessageText(claudeComposerText(screenText())))
+        { if (context) showTip('context', context, { gap: 10 * 60_000, max: Infinity }); else showTip('queue', queueTip); }
     };
     const askBeforeSend = (warning: CacheSendWarning) => {
       sendGate = true;
@@ -297,6 +334,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         const text = new TextDecoder().decode(Uint8Array.from(atob(data), char => char.charCodeAt(0)));
         const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
         if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text).catch(error => console.warn('OSC 52 복사 실패', error));
+        if (text) toastCopied();
       } catch { /* malformed base64 */ }
       return true;
     });
@@ -373,8 +411,8 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         asking = false; question.reset(); working = false; reportedState = undefined;
         followUp.current.reset(); refreshQueue(); return;
       }
-      const screen = screenText();
-      const pending = fromProgramStatus(status) ? status!.state === 'blocked' : question.observe(screen, title);
+      // A 7501 report says outright whether the CLI asks something; only without one is the screen read (the costly part).
+      const pending = fromProgramStatus(status) ? status!.state === 'blocked' : question.observe(screenText(), title);
       if (pending !== asking) {
         asking = pending;
         if (asking) callbacks.current.onAgentEvent(id, 'attention');
@@ -394,6 +432,10 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         else if (!replay && (reportedState === 'done' || reportedState === 'error')) callbacks.current.onAgentEvent(id, 'done');
       }
     };
+    // Live output re-checks the agent at most every 50 ms: a busy TUI sends a batch every 5 ms, and each check could read the whole screen.
+    // A timer rather than an animation frame, so a window in the background still notices a finished or asking agent.
+    let watchTimer = 0;
+    const watchLater = () => { watchTimer ||= window.setTimeout(() => { watchTimer = 0; if (term.current !== terminal) return; watchAgent(); flushQueue.current(); }, 50); };
     checkAgent.current = () => { watchAgent(true); if (sshRef.current || callbacks.current.agentOf(id) !== 'claude') { followUp.current.reset(); refreshQueue(); } };
     const receive = (feed: TerminalFeed) => {
       const replay = Boolean(feed.reset);
@@ -413,8 +455,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
           }
           if (!writes && replayScroll.current) scrollAfterReplay.current();
           if (!writes) followCursor();
-          watchAgent(replay);
-          if (!replay) flushQueue.current();
+          if (replay) watchAgent(true); else watchLater();
         });
         const agent = detectBanner(feed.data, replay); if (agent) callbacks.current.onAgent(id, agent);
       } else if ('status' in feed) watchAgent(true);
@@ -429,6 +470,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (data === '\r') {
         const warning = enterWarning();
         if (warning) { askBeforeSend(warning); return; }
+        tipOnSend();
         followUp.current.submitted();
       } else if (data.charCodeAt(0) >= 32) lastTyped = Date.now();
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
@@ -458,6 +500,15 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     });
     const tmuxOnScreen = () => guideActive(settingsRef.current.tmuxGuide, () => looksLikeTmux(screenRows(terminal)));
     terminal.textarea?.addEventListener('blur', tmuxGuide.cancel);
+    // Copy/paste toasts rise from this terminal's selection end (else its text cursor) while it has focus; cell size = rendered screen / grid.
+    const cursorAnchor = () => {
+      const rect = terminal.element?.querySelector('.xterm-screen')?.getBoundingClientRect(), buffer = terminal.buffer.active, selection = terminal.getSelectionPosition();
+      if (!rect) return;
+      const col = selection ? Math.max(0, selection.end.x - .5) : buffer.cursorX + .5, row = selection ? Math.min(terminal.rows - 1, Math.max(0, selection.end.y - buffer.viewportY)) + .5 : buffer.cursorY + .5;
+      return { x: rect.left + col * rect.width / terminal.cols, y: rect.top + row * rect.height / terminal.rows, selected: !!selection };
+    };
+    const anchorToast = () => setToastAnchor(cursorAnchor), releaseToast = () => setToastAnchor(cursorAnchor, false);
+    terminal.textarea?.addEventListener('focus', anchorToast); terminal.textarea?.addEventListener('blur', releaseToast);
     terminal.attachCustomKeyEventHandler(event => {
       if (event.type === 'keydown') {
         if (isPrefixKey(event, settingsRef.current.tmuxPrefix)) { if (!event.repeat && (tmuxGuide.state !== 'idle' || !replays && tmuxOnScreen())) tmuxGuide.prefix(); }
@@ -465,6 +516,11 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       }
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
         if (event.type === 'keydown') { event.preventDefault(); callbacks.current.onSplit(id, event.shiftKey ? 'column' : 'row'); }
+        return false;
+      }
+      // Cmd+←/→ (no Shift) jumps to line start/end like macOS terminals do (^A / ^E); xterm itself sends nothing for Cmd+arrows.
+      if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        if (event.type === 'keydown') { event.preventDefault(); callbacks.current.send({ type: 'terminal/input', id, data: event.key === 'ArrowLeft' ? '\x01' : '\x05' }); }
         return false;
       }
       if (event.type !== 'keydown' || event.altKey || event.metaKey) return true;
@@ -495,7 +551,8 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       // Ctrl+C copies only while text is selected (otherwise it stays SIGINT); Ctrl+Shift+C always copies.
       if (event.ctrlKey && event.code === 'KeyC' && (event.shiftKey || terminal.hasSelection())) {
         event.preventDefault();
-        if (terminal.hasSelection()) { void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); terminal.clearSelection(); }
+        const text = terminal.hasSelection() ? terminal.getSelection() : '';
+        if (text) { void navigator.clipboard?.writeText(text).catch(() => {}); toastCopied(); terminal.clearSelection(); }
         return false;
       }
       // Leave Ctrl+V to the browser's paste event: xterm pastes text from it (bracketed paste, newline normalisation, no ^V to the shell)
@@ -524,47 +581,58 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     // A size that arrived before this pane mounted (a hidden pane is never measured, so `resize` above did not draw it).
     if (serverSize) layout();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, data: initial.data.slice(-262144), reset: true });
-    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); clearTimeout(retryTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); bus.sizeListeners.delete(id); clearTimeout(otherTimer); claimSize.current = () => {}; layoutRef.current = () => {}; webglRef.current = null; terminal.dispose(); term.current = null; };
+    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); terminal.textarea?.removeEventListener('focus', anchorToast); terminal.textarea?.removeEventListener('blur', releaseToast); releaseToast(); clearTimeout(retryTimer); clearTimeout(watchTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('contextmenu', rightClick); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); bus.sizeListeners.delete(id); clearTimeout(otherTimer); claimSize.current = () => {}; layoutRef.current = () => {}; webglRef.current = null; terminal.dispose(); term.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { layoutRef.current(); scrollAfterReplay.current(); } }, [visible]);
+  // WebGL contexts are reserved for visible panes, but a pane that is hidden keeps its context until a visible pane needs the slot:
+  // disposing it on every tab switch and rebuilding it on return swapped renderers mid-transition and blanked the terminal for a frame.
+  const gpu = useRef({ addon: null as WebglAddon | null, acquire: () => {}, release: (_handOff?: boolean) => {} });
   useEffect(() => {
-    // Hidden workspaces still mount terminals, so reserve WebGL contexts for visible panes.
-    const terminal = term.current;
-    if (!visible || !terminal) return;
-    let gl: WebglAddon | null = null, done = false;
-    const release = () => {
-      const addon = gl; if (!addon) return;
-      gl = null; webgl.active--;
+    const state = gpu.current;
+    state.release = (handOff = true) => {
+      const addon = state.addon; if (!addon) return;
+      state.addon = null; webgl.active--; webgl.idle.delete(state.release);
       if (webglRef.current === addon) webglRef.current = null;
       addon.dispose();
-      const next = webgl.waiting.values().next().value;
+      const next = handOff && webgl.waiting.values().next().value;
       if (next) { webgl.waiting.delete(next); next(); }
     };
-    const acquire = () => {
-      if (done || gl || webgl.disabled) return;
-      if (webgl.active >= WEBGL_LIMIT) { webgl.waiting.add(acquire); return; }
+    state.acquire = () => {
+      const terminal = term.current;
+      if (state.addon || webgl.disabled || !terminal || !settingsRef.current.terminalGpu) return;
+      if (webgl.active >= WEBGL_LIMIT) {
+        const idle = webgl.idle.values().next().value;
+        if (!idle) { webgl.waiting.add(state.acquire); return; }
+        idle(false);
+      }
       try {
         const addon = new WebglAddon();
         // A lost context falls back to the DOM renderer; it is not recreated while the pane stays visible.
-        addon.onContextLoss(() => { webglLost(); release(); });
-        terminal.loadAddon(addon); gl = addon; webgl.active++; webglRef.current = addon;
+        addon.onContextLoss(() => { webglLost(); state.release(); });
+        terminal.loadAddon(addon); state.addon = addon; webgl.active++; webglRef.current = addon;
       } catch { /* no WebGL: keep the DOM renderer */ }
     };
-    acquire();
-    return () => { done = true; webgl.waiting.delete(acquire); release(); };
-  }, [visible]);
+    return () => { webgl.waiting.delete(state.acquire); state.release(); };
+  }, []);
+  useEffect(() => {
+    const state = gpu.current;
+    if (!settings.terminalGpu) { webgl.waiting.delete(state.acquire); state.release(); return; }
+    if (visible) { webgl.idle.delete(state.release); state.acquire(); }
+    else { webgl.waiting.delete(state.acquire); if (state.addon) webgl.idle.add(state.release); }
+  }, [visible, settings.terminalGpu]);
   useEffect(() => { checkAgent.current(); }, [identity, isSsh]);
   useEffect(() => {
     // Next frame: the App effect that switches `data-theme` runs after this child effect.
     const frame = requestAnimationFrame(() => {
       const terminal = term.current; if (!terminal) return;
-      terminal.options.theme = terminalTheme(host.current ?? undefined); terminal.options.fontSize = settings.terminalFontSize; terminal.options.fontFamily = fontStack(settings);
-      terminal.options.lineHeight = settings.lineHeight; terminal.options.cursorBlink = settings.cursorBlink; terminal.options.cursorStyle = settings.cursorStyle; terminal.options.scrollback = settings.scrollback;
+      terminal.options.theme = terminalTheme(host.current ?? undefined);
+      Object.assign(terminal.options, xtermOptions(settings));
       if (!host.current?.clientWidth) return;
       layoutRef.current(); centerRef.current(); requestAnimationFrame(() => centerRef.current()); notifyResizeRef.current();
     });
     return () => cancelAnimationFrame(frame);
-  }, [settings.theme, settings.terminalFontSize, settings.terminalFont, settings.lineHeight, settings.cursorBlink, settings.cursorStyle, settings.scrollback]);
+  }, [settings.theme, settings.terminalFontSize, settings.terminalFont, settings.terminalFontWeight, settings.lineHeight, settings.letterSpacing, settings.cursorBlink, settings.cursorStyle, settings.scrollback,
+    settings.scrollSensitivity, settings.minimumContrast, settings.wordSeparator, settings.boldBright, settings.optionAsMeta]);
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
@@ -572,10 +640,10 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
-      <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
+      {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
-        <IconButton icon="splitH" label="좌우 분할" keys="Ctrl+D" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" label="상하 분할" keys="Ctrl+Shift+D" onClick={() => onSplit(id, 'column')} />
-        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys="Ctrl+Shift+Enter" onClick={() => onZoom(id)} />
+        <IconButton icon="splitH" label="좌우 분할" keys={showKeys('ctrl+d')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(showKeys)); }} /><IconButton icon="splitV" label="상하 분할" keys={showKeys('ctrl+shift+d')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(showKeys)); }} />
+        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys={showKeys('mod+shift+enter')} onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}

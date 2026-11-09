@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
+import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, envrcVariable, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -45,7 +45,7 @@ test('readings are cached, forced refreshes are spaced, and a 429 keeps the last
   let clock = 1_000_000, calls = 0, status = 200;
   const usage = createUsage({
     now: () => clock, claudeLogin: async () => ({ token: 't', expiresAt: 0, plan: 'pro' }),
-    fetch: async (url, { headers }) => { calls++; assert.equal(headers.Authorization, 'Bearer t'); return json({ five_hour: { utilization: calls, resets_at: null } }, status); }
+    fetch: async (url, { headers }) => { if (url.endsWith('/profile')) return json({}); calls++; assert.equal(headers.Authorization, 'Bearer t'); return json({ five_hour: { utilization: calls, resets_at: null } }, status); }
   });
   assert.equal((await usage.status('claude')).windows[0].percent, 1);
   await usage.status('claude');
@@ -83,15 +83,28 @@ test('ps -E output yields the last value of a variable, spaces included', () => 
   assert.equal(envFromPs('claude HOME=/x', 'CLAUDE_CONFIG_DIR'), null);
 });
 
-test('a project resolves to its running agent account, then its .envrc, then the server environment', async () => {
+test('a blocked .envrc still names the account through its literal export, without running anything', async () => {
+  const files = { '/h/p/.envrc': 'export DISABLE_TELEMETRY=1\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-work" # work login\n', '/q/.envrc': 'export CLAUDE_CONFIG_DIR="$PWD/.acc"', '/r/.envrc': 'export CLAUDE_CONFIG_DIR=$(whoami)' };
+  const readFile = async file => files[file] ?? Promise.reject(new Error('ENOENT'));
+  assert.equal(await envrcVariable('/h/p/src', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), '/h/.claude-work');
+  assert.equal(await envrcVariable('/q', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), '/q/.acc');
+  assert.equal(await envrcVariable('/r', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), null);
+  assert.equal(await envrcVariable('/none', 'CODEX_HOME', { home: '/h', readFile }), null);
+  const resolve = createAccountResolver({ env: {}, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => '', exists: async () => false, readFile });
+  assert.deepEqual(await resolve('claude', { root: '/h/p', terminals: new Map() }), { dir: '/h/.claude-work', from: 'direnv' });
+});
+
+test('a project resolves to its .envrc account, then its running agent, then the server environment', async () => {
   const files = new Set([path.join('/acc-b', 'sessions', '42.json')]);
   const make = (overrides = {}) => createAccountResolver({ env: { CLAUDE_CONFIG_DIR: '/acc-a' }, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => null, exists: async file => files.has(file), ...overrides });
   const project = terminals => ({ root: '/p', terminals: new Map(terminals.map((terminal, index) => [String(index), terminal])) });
   assert.deepEqual(await make()('claude', null), { dir: '/acc-a', from: 'server' });
   assert.deepEqual(await make()('claude', project([])), { dir: '/acc-a', from: 'server' });
   assert.deepEqual(await make({ exec: async () => '/acc-b' })('claude', project([])), { dir: '/acc-b', from: 'direnv' });
-  // macOS hides the environment, so the session PID file names the folder.
-  assert.deepEqual(await make({ exec: async () => '/acc-b' })('claude', project([{ agent: 'claude', agentPid: 42 }])), { dir: '/acc-b', from: 'process' });
+  // The .envrc wins over a running agent; without one, macOS hides the environment, so the session PID file names the folder.
+  assert.deepEqual(await make({ exec: async () => '/acc-b' })('claude', project([{ agent: 'claude', agentPid: 42 }])), { dir: '/acc-b', from: 'direnv' });
+  files.add(path.join('/acc-a', 'sessions', '42.json'));
+  assert.deepEqual(await make()('claude', project([{ agent: 'claude', agentPid: 42 }])), { dir: '/acc-a', from: 'process' });
   files.add(path.join('/h', '.claude', 'sessions', '7.json'));
   assert.deepEqual(await make()('claude', project([{ agent: 'codex', agentPid: 42 }, { agent: 'claude', agentPid: 7 }])), { dir: '', from: 'process' });
   // Where the environment is readable it wins outright.
@@ -103,7 +116,7 @@ test('each account folder gets its own cached reading', async () => {
   const usage = createUsage({
     now: () => 1_000_000, account: async (provider, project) => ({ dir: project?.dir ?? '', from: 'direnv' }),
     claudeLogin: async ({ env }) => { seen.push(env.CLAUDE_CONFIG_DIR); return { token: env.CLAUDE_CONFIG_DIR || 'default', expiresAt: 0, plan: '' }; },
-    fetch: async (url, { headers }) => json({ five_hour: { utilization: headers.Authorization.endsWith('/b') ? 80 : 10, resets_at: null } })
+    fetch: async (url, { headers }) => url.endsWith('/profile') ? json({}) : json({ five_hour: { utilization: headers.Authorization.endsWith('/b') ? 80 : 10, resets_at: null } })
   });
   assert.equal((await usage.status('claude', { project: { dir: '/a' } })).windows[0].percent, 10);
   const b = await usage.status('claude', { project: { dir: '/b' } });
@@ -133,4 +146,14 @@ test('the Ultra plan shows no 5-hour window, other plans keep it', async () => {
   assert.deepEqual(claudeWindowsForPlan(windows, 'Claude_Ultra').map(item => item.key), ['weekly']);
   assert.deepEqual(claudeWindowsForPlan(windows, 'max').map(item => item.key), ['session', 'weekly']);
   assert.deepEqual(claudeWindowsForPlan(windows, '').map(item => item.key), ['session', 'weekly']);
+});
+
+test('the plan comes from the profile, so an Ultra login stored as max shows as Ultra', async () => {
+  const body = url => url.endsWith('/profile') ? { organization: { organization_type: 'claude_max', plan_display_name: 'Ultra' } } : { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 79, resets_at: null } };
+  const make = fetch => createUsage({ now: () => 1_000_000, claudeLogin: async () => ({ token: 't', expiresAt: 0, plan: 'max' }), fetch });
+  const ultra = await make(async url => json(body(url))).status('claude');
+  assert.equal(ultra.plan, 'Ultra');
+  assert.deepEqual(ultra.windows.map(item => item.key), ['weekly']);
+  const down = await make(async url => url.endsWith('/profile') ? json({}, 500) : json(body(url))).status('claude');
+  assert.equal(down.plan, 'max', 'without a profile the stored plan stays');
 });

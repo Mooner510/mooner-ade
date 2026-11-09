@@ -14,7 +14,8 @@ export function Dropdown({ value, options, onChange, label, className = '' }: { 
   const root = useRef<HTMLDetailsElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const close = () => { root.current!.open = false; root.current!.querySelector('summary')!.focus(); };
-  // The list is position: fixed so it escapes scrolling/clipping ancestors such as modal bodies.
+  // The list is a manual popover (top layer): position: fixed alone is re-anchored to any ancestor with transform/translate/scale
+  // (the draggable, pop-in-animated settings dialog), which pushed the list off-screen and added scrollbars.
   const place = () => {
     const anchor = root.current!.querySelector('summary')!.getBoundingClientRect(), menu = list.current!, gap = 5, margin = 8;
     menu.style.left = `${anchor.left}px`;
@@ -35,7 +36,12 @@ export function Dropdown({ value, options, onChange, label, className = '' }: { 
     document.addEventListener('scroll', scroll, true);
     addEventListener('resize', resize);
     // toggle events are async and coalesced on rapid clicks, so watch the open attribute directly.
-    const observer = new MutationObserver(() => { if (root.current?.open) place(); });
+    const observer = new MutationObserver(() => {
+      const menu = list.current!, open = root.current!.open;
+      if (open && !menu.matches(':popover-open')) menu.showPopover();
+      if (!open && menu.matches(':popover-open')) menu.hidePopover();
+      if (open) place();
+    });
     observer.observe(root.current!, { attributes: true, attributeFilter: ['open'] });
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('scroll', scroll, true); removeEventListener('resize', resize); observer.disconnect(); };
   }, []);
@@ -53,5 +59,5 @@ export function Dropdown({ value, options, onChange, label, className = '' }: { 
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? selected : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
       buttons[next].focus();
     }}><summary aria-label={label} aria-haspopup="listbox"><span>{options.find(option => option.value === value)?.label}</span><Icon name="chevronDown" size={14} /></summary>
-    <div role="listbox" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} key={option.value} onClick={() => { onChange(option.value); close(); }}><span>{option.label}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
+    <div role="listbox" popover="manual" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} key={option.value} onClick={() => { onChange(option.value); close(); }}><span>{option.label}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
 }
