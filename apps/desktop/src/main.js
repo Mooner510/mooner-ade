@@ -27,10 +27,15 @@ if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
 let server = null, origin = '', quitting = false, restarting = false, mainWindow = null, plugins = null;
-// The dev launcher's renamed exe also reports app.isPackaged; started directly (e.g. from a pinned shortcut) it has no
-// bundled runtime/ (resources/runtime, beside resources/app), so fall back to the system Node instead of failing with ENOENT.
+// `app.isPackaged` is false whenever the executable is named electron/Electron, which is what the macOS bundle's is, so it cannot tell
+// an installed app from a dev one. The runtime/ folder (resources/runtime, beside resources/app) exists only in packaged builds; a dev
+// launcher has none and uses the system Node. A GUI launch (Finder, Dock) has no node on PATH, so never rely on the fallback there.
 const bundledNode = path.resolve(import.meta.dirname, '../../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-const nodeBinary = process.env.ADE_NODE || (app.isPackaged && fs.existsSync(bundledNode) ? bundledNode : 'node');
+const packaged = fs.existsSync(bundledNode);
+// The version comes from package.json two folders above src/: the repository root in dev, the packaged app's own package.json
+// (written by package.mjs) once installed. Electron's app.getVersion() would report Electron's own version in dev.
+const appVersion = (() => { try { return JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8')).version || app.getVersion(); } catch { return app.getVersion(); } })();
+const nodeBinary = process.env.ADE_NODE || (packaged ? bundledNode : 'node');
 
 // Terminals live in their own process, the pty-host (apps/local-server/src/pty-host.js), so they keep running while the server is
 // replaced (dev reload, a crash) and while the app restarts for an update; the next app finds the host through pty-host.json and its
@@ -61,7 +66,7 @@ async function ensurePtyHost() {
   // The packaged app runs the host from a copy in its data folder, so updating the install folder never hits its locked files.
   // `pnpm dev` runs it from the source tree with the system Node.
   const source = path.dirname(serverEntry);
-  const files = app.isPackaged && !dev
+  const files = packaged && !dev
     ? prepareHostCopy({ root: ptyRoot, serverSrc: source, nodePtyDir: path.dirname(createRequire(serverEntry).resolve('node-pty/package.json')), nodeBinary })
     : { dir: ptyRoot, entry: path.join(source, 'pty-host.js'), node: nodeBinary, key: null };
   fs.mkdirSync(ptyRoot, { recursive: true });
@@ -95,7 +100,7 @@ function usePtyHost(info) {
   // Read by the server it starts, which removes them from its own environment so terminals never see them.
   process.env.ADE_PTY_ENDPOINT = info.endpoint; process.env.ADE_PTY_TOKEN = info.token;
   // Copies of earlier versions no running host uses any more.
-  if (app.isPackaged && !dev) sweepHostCopies(ptyRoot, info.key ? [info.key] : []);
+  if (packaged && !dev) sweepHostCopies(ptyRoot, info.key ? [info.key] : []);
 }
 // Before the server goes: an update restart asks the host to keep the terminals for the next app; a normal quit ends them.
 async function releasePtyHost() {
@@ -120,7 +125,7 @@ function startServer() {
     });
     child.stderr.on('data', chunk => process.stderr.write(chunk));
     child.on('message', message => { if (message?.type === 'plugin/workspace' && server === child) plugins?.fromServer(message); });
-    child.once('error', reject);
+    child.once('error', error => { if (server === child) server = null; reject(error); });
     child.once('exit', code => {
       // A replaced server exiting late must not be mistaken for the current one dying.
       if (server !== child) return;
@@ -140,7 +145,7 @@ function stopServer() {
     // and a new server started earlier fails to open those projects. SIGTERM would only re-enter its running shutdown.
     const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
     child.once('exit', () => { clearTimeout(timer); resolve(); });
-    if (child.connected) child.send({ type: 'shutdown' }); else child.kill();
+    if (child.connected) child.send({ type: 'shutdown' }, error => { if (error) child.kill(); }); else child.kill();
   });
 }
 
@@ -278,8 +283,13 @@ function serverBusy() {
   });
 }
 // Just before the update restarts the app: keep the terminals for the new version instead of ending them.
-const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
-ipcMain.handle('ade:app-info', () => ({ version: app.getVersion() }));
+// Beta updates are the user's choice, kept beside the other app data (not in the server's settings: the updater lives in this process).
+const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
+const readBeta = () => { try { return JSON.parse(fs.readFileSync(channelFile, 'utf8')).beta === true; } catch { return false; } };
+const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, beta: readBeta(), getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
+ipcMain.handle('ade:app-info', () => ({ version: appVersion }));
+ipcMain.handle('ade:get-beta-updates', () => readBeta());
+ipcMain.handle('ade:set-beta-updates', (_event, beta) => { fs.writeFileSync(channelFile, JSON.stringify({ beta: beta === true })); return readBeta(); });
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
 
 function installMenu() {
@@ -304,7 +314,7 @@ if (!app.requestSingleInstanceLock()) {
       // used to be: nothing is kept through a restart then.
       await ensurePtyHost().catch(error => console.warn(`pty-host 없이 시작합니다: ${error.message}`));
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
-      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: app.getVersion(), getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       createWindow(await startServer());
       if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });

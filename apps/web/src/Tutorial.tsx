@@ -12,7 +12,7 @@ import { SettingsModal } from './Settings';
 import { Setup } from './Setup';
 import { Logo } from './Splash';
 import { playSound } from './sound';
-import type { GitState } from './views';
+import { AppVersion, type GitState } from './views';
 import { matches, showKeys } from './Workspace';
 import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPrompt, stepDone, steps, type Action, type Agent, type Tour, type TourProject, type TourTab } from './onboarding-steps';
 
@@ -400,7 +400,7 @@ export function Tutorial({ settings, onSettings, shortcuts, setup, onDone }: Pro
         <div className="folders" role="tree">{tour.projects.map(folder)}</div>
         <div className="projects-foot">
           <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} onClick={() => dispatch({ type: 'settings', open: true })} />
-          <span className="spacer" />
+          <span className="spacer" /><AppVersion /><span className="spacer" />
           <IconButton icon="book" label="둘러보기" onClick={() => note('지금 보고 계신 것이 둘러보기예요.')} />
         </div>
       </nav>

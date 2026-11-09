@@ -19,7 +19,7 @@ export function brandExe(exe, productName, version) {
     InternalName: `${productName}.exe`, OriginalFilename: `${productName}.exe`, LegalCopyright: ''
   });
   info.removeStringValue({ lang: 1033, codepage: 1200 }, 'SquirrelAwareVersion');
-  const [major, minor, patch] = version.split('.').map(Number);
+  const [major, minor, patch] = version.split('-')[0].split('.').map(Number); // the numeric fields cannot hold a beta tag; the string fields above keep it
   info.setFileVersion(major, minor, patch, 0, 1033);
   info.setProductVersion(major, minor, patch, 0, 1033);
   info.outputToResourceEntries(resources.entries);
