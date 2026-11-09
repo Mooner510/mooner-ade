@@ -47,7 +47,7 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 | `mod+Shift+W` / `Alt+W` | 탭 / 포커스 pane 닫기 |
 | `Alt+]` / `Alt+[` / `Alt+1…9` | 다음 / 이전 / N번째 탭 |
 | `mod+Shift+Enter` | pane 최대화 전환 |
-| `Alt+방향키` | pane 포커스 이동 |
+| `Alt+Shift+방향키` / `Cmd(Ctrl)+Shift+방향키` | pane 포커스 이동 (Shift 없는 Alt·Cmd+방향키는 터미널로 전달: 단어·줄 이동) |
 | `mod+Shift+G` / `mod+,` | Diff 패널 / 설정 |
 
 터미널에 포커스가 있을 때 일반 Ctrl 조합은 셸·CLI로 전달합니다. 분할은 pane의 도구 버튼 또는 명령 팔레트를 사용하세요. 과거 안내의 Ctrl+D 좌우 분할은 현재 터미널 입력 정책과 일치하지 않습니다.

@@ -28,7 +28,7 @@ import { readClaudeCache } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
-import { detectShells, resolveShell } from './shells.js';
+import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
@@ -476,6 +476,7 @@ async function route(action, input, project) {
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
+  if (action === 'agent/installed') return checkAgents();
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();

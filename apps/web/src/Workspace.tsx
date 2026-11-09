@@ -1,13 +1,15 @@
-import { forwardRef, Fragment, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
-import { agentArgs, statusLayout, usageHue, type Settings } from './Editor';
+import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { PluginBadges } from './PluginSettings';
 import { Icon, IconButton } from './Icon';
+import { useHiddenAgents } from './installed-agents';
 import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
 import { Dropdown, type Ask, type GitState } from './views';
+import { toastCopied } from './toast';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
@@ -20,7 +22,7 @@ export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: 
 export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
-  root: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[]; system: SystemInfo | null;
+  root: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
   onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onAddProject(): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
@@ -33,10 +35,28 @@ const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const formatBytes = (bytes: number) => bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}GB` : `${Math.round(bytes / 2 ** 20)}MB`;
 const shortPath = (path: string) => { const clean = path.replace(/\\/g, '/'), parts = clean.split('/').filter(Boolean); return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : clean; };
 // The status bar items are memoized: the workspace re-renders on every pane and agent change, and formatting dates is not free.
-const Clock = memo(function Clock() {
+const Clock = memo(function Clock({ hour12, seconds }: { hour12: boolean; seconds: boolean }) {
   const [now, setNow] = useState(() => new Date());
-  useEffect(() => { const timer = setInterval(() => setNow(new Date()), 15000); return () => clearInterval(timer); }, []);
-  return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>;
+  useEffect(() => { const timer = setInterval(() => setNow(new Date()), seconds ? 1000 : 15000); return () => clearInterval(timer); }, [seconds]);
+  return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(seconds && { second: '2-digit' }), hour12 })}</span>;
+});
+// CPU and memory, sampled every 5 s while a status item shows them and the window is visible. A store of its own, so a sample
+// re-renders only these items instead of the whole workspace; one shared poll, since the server reports CPU since the previous call.
+let systemInfo: SystemInfo | null = null, systemTimer = 0, systemEvery = 5000;
+const systemListeners = new Set<() => void>();
+// Changing the interval restarts a running poll; with no item shown the next subscribe picks it up.
+const setSystemRefresh = (seconds: number) => { systemEvery = seconds * 1000; if (systemListeners.size) { clearInterval(systemTimer); systemTimer = window.setInterval(sampleSystem, systemEvery); } };
+const sampleSystem = () => { if (!document.hidden) void api<SystemInfo>('system/info').then(value => { systemInfo = value; systemListeners.forEach(listener => listener()); }, () => {}); };
+function subscribeSystem(listener: () => void) {
+  if (!systemListeners.size) { sampleSystem(); systemTimer = window.setInterval(sampleSystem, systemEvery); }
+  systemListeners.add(listener);
+  return () => { systemListeners.delete(listener); if (!systemListeners.size) { clearInterval(systemTimer); systemInfo = null; } };
+}
+const SystemStat = memo(function SystemStat({ kind }: { kind: 'cpu' | 'memory' }) {
+  const system = useSyncExternalStore(subscribeSystem, () => systemInfo);
+  if (!system) return null;
+  return kind === 'cpu' ? <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>
+    : <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>;
 });
 // "1 hr 29 mins" → "1h 29m"; the full text stays in the tooltip.
 const compactDuration = (text: string) => text.replace(/\s*hrs?\b/g, 'h').replace(/\s*mins?\b/g, 'm').replace(/\s*secs?\b/g, 's');
@@ -64,7 +84,7 @@ const untilReset = (at: number) => {
 };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
 const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
-  const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
+  const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false), panel = `usage-${useId()}`;
   const load = useCallback((force = false) => {
     setLoading(force);
     return api<Usage>('usage/status', { provider, force, projectId }).then(setUsage, () => {}).finally(() => setLoading(false));
@@ -82,15 +102,35 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
   const main = ['session', 'weekly'].map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[];
   const peak = Math.max(0, ...windows.map(item => item.percent));
-  const lines = windows.map(item => `${item.label}: ${item.percent}%${item.resetsAt ? ` · ${untilReset(item.resetsAt)} 후 초기화 (${new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })})` : ''}`);
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
-  const account = `계정: ${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
-  const title = [`${usageNames[provider]} 사용량${usage.plan ? ` · ${usage.plan}` : ''}`, account, ...lines, from, usage.error, usage.note, '클릭: 새로고침'].filter(Boolean).join('\n');
+  const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
-  return <button className={`stat usage ${level} ${usage.error && !main.length ? 'warn' : ''}`} title={title} aria-label={title} aria-busy={loading} onClick={() => void load(true)}>
-    <Icon name={provider} size={13} />
-    {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? { '--usage-hue': usageHue(item.percent) } as CSSProperties : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
-  </button>;
+  const hue = (percent: number) => ({ '--usage-hue': usageHue(percent) } as CSSProperties);
+  // Light-dismiss popover in the top layer, so the status bar's overflow clipping never cuts it off; opened by the button, placed above it.
+  const place = (event: { newState: string; currentTarget: HTMLElement }) => {
+    if (event.newState !== 'open') return;
+    const menu = event.currentTarget, anchor = (menu.previousElementSibling as HTMLElement).getBoundingClientRect(), width = menu.offsetWidth;
+    menu.style.left = `${Math.max(8, Math.min(anchor.left, innerWidth - width - 8))}px`;
+    menu.style.bottom = `${innerHeight - anchor.top + 14}px`;
+  };
+  return <>
+    <button className={`stat usage ${level} ${usage.error && !main.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
+      <Icon name={provider} size={13} />
+      {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+    </button>
+    <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={place}>
+      <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
+        <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
+      {windows.length ? windows.map(item => <div key={item.key} className="usage-row">
+        <div><span>{item.label}</span><b className={colors ? 'graded' : ''} style={colors ? hue(item.percent) : undefined}>{item.percent}%</b></div>
+        <progress className={colors ? 'graded' : ''} style={colors ? hue(item.percent) : undefined} value={item.percent} max={100} aria-label={`${item.label} 사용률`} />
+        {item.resetsAt && <small>{untilReset(item.resetsAt)} 후 초기화 · {new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small>}
+      </div>) : <p className="usage-note">표시할 한도 정보가 없습니다.</p>}
+      <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
+      {usage.error && <p className="usage-note warn">{usage.error}</p>}
+      {usage.note && <p className="usage-note">{usage.note}</p>}
+    </div>
+  </>;
 });
 export const showKeys = (keys: string) => keys.split('+').map(part => ({ mod: mac ? '⌘' : 'Ctrl', ctrl: mac ? '⌃' : 'Ctrl', shift: mac ? '⇧' : 'Shift', alt: mac ? '⌥' : 'Alt' } as Record<string, string>)[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
 function keyOf(event: KeyboardEvent) {
@@ -99,17 +139,17 @@ function keyOf(event: KeyboardEvent) {
   if (code.startsWith('Digit')) return code.slice(5);
   return ({ Backquote: '`', Backslash: '\\', Comma: ',', BracketLeft: '[', BracketRight: ']' } as Record<string, string>)[code] || event.key.toLowerCase();
 }
-function matches(keys: string, event: KeyboardEvent) {
+export function matches(keys: string, event: KeyboardEvent) {
   const parts = keys.split('+'), key = parts[parts.length - 1], mods = new Set(parts.slice(0, -1));
   if (mods.has('mod') ? !(event.ctrlKey || event.metaKey) : mods.has('ctrl') ? !event.ctrlKey || event.metaKey : event.ctrlKey || event.metaKey) return false;
   return event.shiftKey === mods.has('shift') && event.altKey === mods.has('alt') && keyOf(event) === key;
 }
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, system, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [error, setError] = useState('');
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
-  const [rightVisible, setRightVisible] = useState(false);
+  const [rightVisible, setRightVisible] = useState(false), [reviewWide, setReviewWide] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
   const [paneTabs, setPaneTabs] = useState<PaneTab[]>([]), [activeTab, setActiveTab] = useState('');
@@ -129,6 +169,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
   const settingsRef = useRef(settings); settingsRef.current = settings;
+  useEffect(() => setSystemRefresh(settings.systemRefresh), [settings.systemRefresh]);
+  // Monaco is several MB to parse; reading it while the app is idle keeps that cost out of the moment the review panel opens.
+  useEffect(() => {
+    if (!('requestIdleCallback' in window)) return;
+    const id = requestIdleCallback(preloadMonaco, { timeout: 8000 }); return () => cancelIdleCallback(id);
+  }, []);
   const refs = {
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0), quickRequest: useRef<QuickRequest | null>(null),
@@ -161,6 +207,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
         else if (choice === 'copy') {
           const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
           if (desktop?.writeClipboard) desktop.writeClipboard(uri); else void navigator.clipboard?.writeText(uri).catch(() => {});
+          toastCopied();
         }
       });
     };
@@ -244,6 +291,28 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     setOpenError('');
     void loadProject().catch(cause => { setOpenError(cause instanceof Error ? cause.message : String(cause)); onFailed(root, cause); });
   }
+  // Pulls one pane out of a split tab: into another tab ('merge'), or out as a tab of its own before/after a tab (no target: right after its old tab).
+  function movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge') {
+    const list = refs.paneTabs.current, source = list.find(tab => tab.id === tabId), leaf = source?.pane && findLeaf(source.pane, paneId);
+    if (!source?.pane || !leaf || leafList(source.pane).length < 2 || (mode === 'merge' && targetId === tabId)) return;
+    const rest = remove(source.pane, paneId), target = targetId ? list.find(tab => tab.id === targetId) : undefined;
+    let next = list.map(tab => tab.id === tabId ? { ...tab, pane: rest } : tab), landed = '';
+    if (mode === 'merge' && target?.pane) {
+      landed = target.id;
+      next = next.map(tab => tab.id === target.id ? { ...tab, pane: equalize({ direction: 'row', children: [target.pane!, leaf], sizes: [1, 1] }) } : tab);
+    } else {
+      const fresh: PaneTab = { id: newId(), pane: leaf }, anchor = next.findIndex(tab => tab.id === (target?.id ?? tabId));
+      landed = fresh.id; next = [...next.slice(0, anchor + (mode === 'before' ? 0 : 1)), fresh, ...next.slice(anchor + (mode === 'before' ? 0 : 1))];
+    }
+    commitTabs(next); delete refs.tabFocus.current[tabId];
+    selectTab(landed); setFocusLeaf(paneId);
+  }
+  // Swaps the active tab with its neighbour (sidebar order).
+  function moveTabBy(step: number) {
+    const list = refs.paneTabs.current, at = list.findIndex(tab => tab.id === refs.activeTab.current), to = at + step;
+    if (at < 0 || to < 0 || to >= list.length) return;
+    const next = [...list]; [next[at], next[to]] = [next[to], next[at]]; commitTabs(next);
+  }
   useImperativeHandle(handleRef, () => ({
     selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
     // Reordering only changes the list order; the saved layout follows it.
@@ -256,22 +325,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       delete refs.tabFocus.current[id];
       selectTab(targetId); if (first) setFocusLeaf(first);
     },
-    // Pulls one pane out of a split tab: into another tab ('merge'), or out as a tab of its own before/after a tab (no target: right after its old tab).
-    movePane: (tabId, paneId, targetId, mode) => {
-      const list = refs.paneTabs.current, source = list.find(tab => tab.id === tabId), leaf = source?.pane && findLeaf(source.pane, paneId);
-      if (!source?.pane || !leaf || leafList(source.pane).length < 2 || (mode === 'merge' && targetId === tabId)) return;
-      const rest = remove(source.pane, paneId), target = targetId ? list.find(tab => tab.id === targetId) : undefined;
-      let next = list.map(tab => tab.id === tabId ? { ...tab, pane: rest } : tab), landed = '';
-      if (mode === 'merge' && target?.pane) {
-        landed = target.id;
-        next = next.map(tab => tab.id === target.id ? { ...tab, pane: equalize({ direction: 'row', children: [target.pane!, leaf], sizes: [1, 1] }) } : tab);
-      } else {
-        const fresh: PaneTab = { id: newId(), pane: leaf }, anchor = next.findIndex(tab => tab.id === (target?.id ?? tabId));
-        landed = fresh.id; next = [...next.slice(0, anchor + (mode === 'before' ? 0 : 1)), fresh, ...next.slice(anchor + (mode === 'before' ? 0 : 1))];
-      }
-      commitTabs(next); delete refs.tabFocus.current[tabId];
-      selectTab(landed); setFocusLeaf(paneId);
-    },
+    movePane,
     moveTab: (id, targetId, after) => {
       const list = refs.paneTabs.current, moving = list.find(tab => tab.id === id); if (!moving || id === targetId) return;
       const rest = list.filter(tab => tab.id !== id), at = rest.findIndex(tab => tab.id === targetId); if (at < 0) return;
@@ -529,7 +583,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   async function closeTerminal(id: string) {
     const info = refs.project.current?.terminals.find(terminal => terminal.id === id);
-    if (info && !info.exited && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
+    if (info && !info.exited && settingsRef.current.confirmClose && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
     if (info) await call('terminal/close', { id });
     removeTerminalPane(id);
     await refresh();
@@ -537,7 +591,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   async function closePaneTab(tabId: string) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
-    if (running.length && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
+    if (running.length && settingsRef.current.confirmClose && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     // The final tab stays open and empty, showing the launcher.
     if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); setFocusLeaf(''); setZoom(''); await refresh(); return; }
@@ -606,9 +660,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const choice = await pick('명령 팔레트', items);
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
-  const showReview = () => { setRightVisible(true); run(refreshGit); };
+  // The git poll already keeps the state fresh; the extra refresh waits out the slide-in so it does not re-render the workspace mid-animation.
+  const showReview = () => { preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
   const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
-  const launchers = allLaunchers.filter(item => !settings.agentsOff.includes(item.id));
+  const hiddenAgents = useHiddenAgents(settings.agentsOff);
+  const launchers = allLaunchers.filter(item => !hiddenAgents.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
     const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
@@ -628,6 +684,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'renameTab', label: '탭 이름 바꾸기…', run: () => renamePaneTab(refs.activeTab.current) },
     { id: 'nextTab', label: '다음 탭', keys: 'alt+]', run: () => cyclePaneTab(1) },
     { id: 'prevTab', label: '이전 탭', keys: 'alt+[', run: () => cyclePaneTab(-1) },
+    { id: 'moveTabUp', label: '탭을 위로 이동', keys: 'alt+shift+[', run: () => moveTabBy(-1) },
+    { id: 'moveTabDown', label: '탭을 아래로 이동', keys: 'alt+shift+]', run: () => moveTabBy(1) },
+    { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
     { id: 'nextTab2', label: '다음 탭', keys: 'mod+shift+]', hidden: true, run: () => cyclePaneTab(1) },
     { id: 'prevTab2', label: '이전 탭', keys: 'mod+shift+[', hidden: true, run: () => cyclePaneTab(-1) },
     ...Array.from({ length: 9 }, (_, index) => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, keys: `alt+${index + 1}`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
@@ -637,10 +696,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'preset', label: '현재 탭을 터미널 2 × 3 그리드로', run: preset },
     { id: 'zoom', label: 'Pane 최대화 전환', keys: 'mod+shift+enter', run: () => setZoom(value => value ? '' : refs.focus.current) },
     { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
-    { id: 'focusNext', label: '다음 pane으로 이동', keys: 'alt+arrowright', run: () => moveFocus(1) },
-    { id: 'focusPrev', label: '이전 pane으로 이동', keys: 'alt+arrowleft', run: () => moveFocus(-1) },
-    { id: 'focusNext2', label: '다음 pane으로 이동', keys: 'alt+arrowdown', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusPrev2', label: '이전 pane으로 이동', keys: 'alt+arrowup', hidden: true, run: () => moveFocus(-1) },
+    { id: 'focusNext', label: '다음 pane으로 이동', keys: 'alt+shift+arrowright', run: () => moveFocus(1) },
+    { id: 'focusPrev', label: '이전 pane으로 이동', keys: 'alt+shift+arrowleft', run: () => moveFocus(-1) },
+    { id: 'focusNext2', label: '다음 pane으로 이동', keys: 'alt+shift+arrowdown', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusPrev2', label: '이전 pane으로 이동', keys: 'alt+shift+arrowup', hidden: true, run: () => moveFocus(-1) },
+    { id: 'focusModright', label: '다음 pane으로 이동', keys: 'mod+shift+arrowright', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusModleft', label: '이전 pane으로 이동', keys: 'mod+shift+arrowleft', hidden: true, run: () => moveFocus(-1) },
+    { id: 'focusModdown', label: '다음 pane으로 이동', keys: 'mod+shift+arrowdown', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusModup', label: '이전 pane으로 이동', keys: 'mod+shift+arrowup', hidden: true, run: () => moveFocus(-1) },
     { id: 'review', label: '변경사항(Diff) 패널 전환', keys: 'mod+shift+g', run: toggleReview },
     { id: 'palette', label: '명령 팔레트', keys: 'mod+shift+p', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', keys: 'f1', hidden: true, run: openPalette },
@@ -649,11 +712,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     ...projectCommands
   ];
   // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
-  const commands = allCommands.filter(command => !settings.agentsOff.includes(command.id.replace(/^(?:new|split)/, '').toLowerCase()));
+  const commands = allCommands.filter(command => !hiddenAgents.includes(command.id.replace(/^(?:new|split)/, '').toLowerCase()));
   refs.commands.current = commands;
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!refs.project.current || !refs.active.current || event.isComposing) return;
+      if (document.querySelector('.tour')) return; // the tutorial's practice keys must not touch real projects
       const inTerminal = event.target instanceof Element && event.target.closest('.xterm');
       // Plain Ctrl+key belongs to the shell (readline, tmux, agent CLIs); only Cmd, Ctrl+Shift and Alt combos reach the app.
       if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey)) return;
@@ -698,10 +762,22 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
-  const rightPanel = <aside className="right-panel" aria-label="오른쪽 패널">
+  // Dragging only moves a CSS variable on the panel; the width is saved to the settings once the pointer is released.
+  const clampReview = (value: number) => Math.max(320, Math.min(1600, Math.round(value)));
+  const startReviewResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget, panel = handle.parentElement!, startX = event.clientX, startWidth = panel.getBoundingClientRect().width; let width = clampReview(startWidth);
+    handle.setPointerCapture(event.pointerId); handle.classList.add('dragging'); document.body.classList.add('resizing'); setReviewWide(false);
+    const move = (e: PointerEvent) => { width = clampReview(startWidth + startX - e.clientX); panel.style.setProperty('--review-w', `${width}px`); };
+    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing'); setSettings(previous => previous.reviewWidth === width ? previous : { ...previous, reviewWidth: width }); };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+  };
+  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''}`} aria-label="오른쪽 패널" style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
+    <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="변경사항 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
     <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
       openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
-      hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} />
+      hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
   </aside>;
   const shown = (id: string) => settings.statusItems.includes(id);
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
@@ -713,18 +789,19 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     changes: <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>,
     terminals: <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{liveTerminals}</span>,
     size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
-    cpu: system && <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>,
-    memory: system && <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>,
+    // Only items that are shown get rendered, so the system poll runs only while one of these is on.
+    cpu: <SystemStat kind="cpu" />,
+    memory: <SystemStat kind="memory" />,
     claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
     codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
     wakatime: settings.wakatime && <WakaTimeStat />,
-    clock: <Clock />,
+    clock: <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
     openproject: <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
-      : <Launchers title="새 탭" autoFocus hidden={settings.agentsOff} onLaunch={command => run(() => launch(command, 'split'))} />}
+      : <Launchers title="새 탭" autoFocus hidden={hiddenAgents} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar">
@@ -736,7 +813,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       </div>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
-      <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onClick={toggleReview}>
+      <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={onOpenSettings} />
     </header>

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 
 const exists = file => { try { return fs.statSync(file).isFile(); } catch { return false; } };
 
@@ -40,4 +41,46 @@ export function resolveShell(preferred, shells = detectShells(), { platform = pr
   if (chosen) return chosen;
   if (platform === 'win32') return shells.find(item => item.id === 'pwsh') || shells.find(item => item.id === 'powershell') || { id: 'powershell', label: 'Windows PowerShell 5.1', path: 'powershell.exe' };
   return shells.find(item => item.path === env.SHELL) || shells[0];
+}
+
+// Launcher agents and the command each one runs (apps/web/src/Panes.tsx).
+const agentCommands = { claude: 'claude', codex: 'codex', cursor: 'cursor-agent' };
+
+// Agent ids whose command is in none of `dirs`. Windows runs only these extensions from a terminal.
+export function missingAgents(dirs, { platform = process.platform, isFile = exists } = {}) {
+  const extensions = platform === 'win32' ? ['.exe', '.cmd', '.bat', '.ps1'] : [''];
+  return Object.entries(agentCommands).filter(([, command]) => !dirs.some(dir => extensions.some(ext => isFile(path.join(dir, command + ext))))).map(([id]) => id);
+}
+
+// The PATH a newly opened terminal would get right now, not the one this process started with: a CLI install edits the
+// shell profile (macOS/Linux) or the registry (Windows), which the running app never sees. null when it cannot be read.
+function freshPath(platform = process.platform) {
+  const [file, args] = platform === 'win32'
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"]]
+    : [process.env.SHELL || '/bin/sh', ['-ilc', 'printf "\\n__ADE_PATH__%s\\n" "$PATH"']];
+  return new Promise(resolve => execFile(file, args, { timeout: 8000, windowsHide: true, encoding: 'utf8' }, (_error, stdout) => {
+    const value = platform === 'win32' ? stdout?.trim() : /__ADE_PATH__(.*)/.exec(stdout || '')?.[1];
+    resolve(value || null);
+  }));
+}
+
+let agentCheck = null, lastCheck = { at: 0, value: null };
+// Each check starts an interactive login shell (profile, plugins). The UI asks on every window focus and once a minute,
+// so a reading under CHECK_REUSE_MS old is reused; concurrent calls share one shell. Directories new to
+// the fresh PATH also join this process's PATH, so terminals opened from now on can run what was just installed.
+const CHECK_REUSE_MS = 10_000;
+export function checkAgents() {
+  if (lastCheck.value && Date.now() - lastCheck.at < CHECK_REUSE_MS) return Promise.resolve(lastCheck.value);
+  agentCheck ??= freshPath().then(fresh => {
+    const key = Object.keys(process.env).find(name => name.toLowerCase() === 'path') || 'PATH';
+    const current = (process.env[key] || '').split(path.delimiter).filter(Boolean);
+    const freshDirs = (fresh || '').split(path.delimiter).filter(dir => dir && path.isAbsolute(dir));
+    const added = freshDirs.filter(dir => !current.includes(dir));
+    if (added.length) process.env[key] = [...current, ...added].join(path.delimiter);
+    // macOS/Linux terminals are shells that rebuild PATH from the profile, so that PATH decides; Windows terminals inherit ours.
+    const value = { missing: missingAgents(process.platform !== 'win32' && freshDirs.length ? freshDirs : [...current, ...added]) };
+    lastCheck = { at: Date.now(), value };
+    return value;
+  }).finally(() => { agentCheck = null; });
+  return agentCheck;
 }

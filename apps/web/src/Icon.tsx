@@ -44,7 +44,14 @@ const glyphs = {
   snowflake: 'ac_unit',
   archive: 'inventory_2',
   plugin: 'extension',
-  copy: 'content_copy'
+  copy: 'content_copy',
+  arrowUp: 'arrow_upward',
+  arrowDown: 'arrow_downward',
+  merge: 'call_merge',
+  book: 'menu_book',
+  palette: 'palette',
+  arrowRight: 'arrow_forward',
+  keyboard: 'keyboard'
 } as const;
 
 // Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's isometric cube.
