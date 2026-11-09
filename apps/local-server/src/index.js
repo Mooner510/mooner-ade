@@ -196,7 +196,7 @@ async function openProject(requested) {
       await registryWrite(async () => {
         const recent = await readJson(path.join(dataRoot, 'recent.json'), []);
         const previous = recent.find(item => item.id === id);
-        await writeJson(path.join(dataRoot, 'recent.json'), trimRecent([{ id, root, ...(previous?.pinned ? { pinned: true } : {}) }, ...recent.filter(item => item.id !== id)]));
+        await writeJson(path.join(dataRoot, 'recent.json'), trimRecent([{ id, root, openedAt: Date.now(), ...(previous?.pinned ? { pinned: true } : {}) }, ...recent.filter(item => item.id !== id)]));
       });
       project.watcher = watchProject(project);
       // Adopt before registering: a snapshot taken in between would show live host terminals as dead and the UI would reopen/prune them.
@@ -206,18 +206,25 @@ async function openProject(requested) {
     } catch (error) { await fs.unlink(lockFile); throw error; }
   });
 }
-function registerTerminal(project, id, native, cwd, initial = '') {
+function registerTerminal(project, id, native, cwd, initial = '', startedAt = Date.now()) {
   // Progress reports (OSC 9;4) name no program; they count as agent status once this terminal's agent is identified.
   const status = createTerminalStatus(data => native.write(data), () => terminal.agent);
   status.feed(initial, true);
   // Adopted terminals start above any sequence the window saw from a previous server, or it would drop their replay as stale.
   const remoteAgent = createRemoteAgent(); remoteAgent.feed(initial);
-  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? Date.now() : 0, exited: false, status, remoteAgent, pending: '', flushTimer: null };
+  // `stream` names this buffer, so a client's `since` offset is only honoured against the output it counted (an adopted
+  // terminal keeps its id but starts a new buffer). `startedAt`/`activeAt`/`inputAt` tell remote devices when it was last used.
+  const now = Date.now();
+  const terminal = { native, cwd, buffer: createTerminalBuffer(undefined, initial), sequence: initial ? now : 0, exited: false, status, remoteAgent, pending: '', flushTimer: null,
+    stream: randomUUID().slice(0, 8), startedAt: Number.isSafeInteger(startedAt) ? startedAt : now, activeAt: initial ? now : null, inputAt: null };
   project.terminals.set(id, terminal);
   // Every viewer draws at the PTY's real size, so each change goes to all of them (including the one that asked for it).
   terminal.sizing = createTerminalSize(native, validSize(native.size), size => broadcast(project, { type: 'terminal/size', id, ...size }));
   // The starting size too: a first report of the same size changes nothing, so it would never be announced otherwise.
   if (terminal.sizing.size) broadcast(project, { type: 'terminal/size', id, ...terminal.sizing.size });
+  // A client subscribed before the terminal existed gets no replay for it, only every chunk from the first: naming the
+  // buffer lets it count that output from 0 and later resubscribe with `since` (see `subscribe`).
+  broadcast(project, { type: 'terminal/stream', id, stream: terminal.stream, offset: terminal.buffer.written, sequence: terminal.sequence });
   // Output goes out in 5 ms batches (as in VS Code): a busy TUI emits many small chunks, and each one cost a message, a parse and an xterm write.
   // `sequence` still counts every chunk, so a follow-up check against it also rejects output that is not sent yet.
   terminal.flush = () => {
@@ -228,7 +235,7 @@ function registerTerminal(project, id, native, cwd, initial = '') {
   };
   native.onData(data => {
     status.feed(data); const remoteChanged = remoteAgent.feed(data);
-    terminal.buffer.append(data); terminal.sequence++; terminal.pending += data;
+    terminal.buffer.append(data); terminal.sequence++; terminal.pending += data; terminal.activeAt = Date.now();
     terminal.flushTimer ??= setTimeout(terminal.flush, 5);
     // Over ssh the output is the only evidence of the remote agent, so a start or exit is reported at once instead of on the next poll.
     if (remoteChanged && terminal.ssh && terminal.agent !== remoteAgent.agent) { terminal.agent = remoteAgent.agent; broadcast(project, { type: 'terminal/agent', id, agent: terminal.agent, ssh: true }); broadcastStatus(project, id, terminal); }
@@ -246,7 +253,7 @@ async function adoptTerminals(project) {
   if (!ptyHost) return;
   for (const item of await ptyHost.list().catch(() => [])) {
     if (item.meta?.projectId !== project.id || project.terminals.has(item.meta.id)) continue;
-    try { const native = await ptyHost.attach(item.key); registerTerminal(project, item.meta.id, native, item.meta.cwd, native.initial); } catch { /* exited in the meantime */ }
+    try { const native = await ptyHost.attach(item.key); registerTerminal(project, item.meta.id, native, item.meta.cwd, native.initial, item.meta.startedAt); } catch { /* exited in the meantime */ }
   }
 }
 // Releases everything a project holds. Without `force`, live terminals make it refuse so work is not killed by accident.
@@ -270,7 +277,7 @@ function watchProject(project) {
 }
 function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ui: project.state.ui,
-    terminals: [...project.terminals].map(([id, terminal]) => ({ id, exited: terminal.exited, cwd: terminal.cwd, ...terminal.sizing.size })) };
+    terminals: [...project.terminals].map(([id, terminal]) => ({ id, exited: terminal.exited, cwd: terminal.cwd, ...terminal.sizing.size, startedAt: terminal.startedAt, activeAt: terminal.activeAt, inputAt: terminal.inputAt })) };
 }
 // A GUI-launched app often inherits a PATH without the user's CLI install dirs (~/.local/bin, npm global), so add the usual ones.
 {
@@ -465,7 +472,7 @@ async function route(action, input, project) {
   if (action === 'recent/pin') {
     return registryWrite(async () => {
       const file = path.join(dataRoot, 'recent.json'), recent = await readJson(file, []);
-      const next = trimRecent(recent.map(item => item.root === input.root ? (input.pinned ? { ...item, pinned: true } : { id: item.id, root: item.root }) : item));
+      const next = trimRecent(recent.map(item => item.root === input.root ? (input.pinned ? { ...item, pinned: true } : { id: item.id, root: item.root, ...(item.openedAt && { openedAt: item.openedAt }) }) : item));
       await writeJson(file, next);
       return next;
     });
@@ -621,7 +628,7 @@ async function route(action, input, project) {
         const command = input.agent === undefined ? undefined : [await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked), input.args?.trim()].filter(Boolean).join(' ');
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
-        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...sessionShell.env }, meta: { projectId: project.id, id, cwd } });
+        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...sessionShell.env }, meta: { projectId: project.id, id, cwd, startedAt: Date.now() } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
@@ -758,9 +765,14 @@ async function handleClientMessage(socket, message) {
       const tagged = value => send(socket, { ...value, projectId: project.id });
       tagged({ type: 'snapshot', snapshot: snapshot(project) });
       // The size comes before the replay, so a client draws the replayed screen at the size it was written for.
+      // `since` ({[id]: {stream, offset}}) names the output a client already holds (a phone coming back to a project): it
+      // gets only what came after, as an `append` replay, instead of the whole buffer again.
+      const since = message.since && typeof message.since === 'object' && !Array.isArray(message.since) ? message.since : {};
       for (const [id, terminal] of project.terminals) {
         if (terminal.sizing.size) tagged({ type: 'terminal/size', id, ...terminal.sizing.size });
-        tagged({ type: 'terminal/replay', id, data: terminal.buffer.text, sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
+        const held = Object.hasOwn(since, id) && since[id]?.stream === terminal.stream ? terminal.buffer.since(since[id].offset) : null;
+        tagged({ type: 'terminal/replay', id, data: held ?? terminal.buffer.text, ...(held !== null && { append: true }), stream: terminal.stream, offset: terminal.buffer.written,
+          sequence: terminal.sequence, exited: terminal.exited, status: terminal.status.status });
       }
       for (const [id, terminal] of project.terminals) if (terminal.ssh) tagged({ type: 'terminal/ssh', id, ssh: true });
       for (const [id, terminal] of project.terminals) if ('agent' in terminal) tagged({ type: 'terminal/agent', id, agent: terminal.agent, ssh: terminal.ssh });
@@ -774,7 +786,7 @@ async function handleClientMessage(socket, message) {
       if (!terminal || terminal.exited) return;
       if (message.type === 'terminal/input') {
         if (typeof message.data !== 'string' || message.data.length > 16384) throw fault('INVALID_INPUT', '잘못된 터미널 입력입니다.');
-        if (typedInput(message.data)) terminal.sizing.input(socket);
+        if (typedInput(message.data)) { terminal.sizing.input(socket); terminal.inputAt = Date.now(); }
         terminal.native.write(message.data);
       } else if (message.type === 'terminal/paste-image') {
         // Agent CLIs take an image by file path; write the pasted clipboard image to a file and type its path.
@@ -782,7 +794,7 @@ async function handleClientMessage(socket, message) {
         if (!ext || typeof message.data !== 'string') throw fault('INVALID_INPUT', '지원하지 않는 이미지입니다.');
         const bytes = Buffer.from(message.data, 'base64');
         if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw fault('INVALID_INPUT', '이미지 크기가 올바르지 않습니다.');
-        terminal.sizing.input(socket);
+        terminal.sizing.input(socket); terminal.inputAt = Date.now();
         const name = `paste-${randomUUID()}.${ext}`;
         // Over ssh the CLI runs on the remote host, which cannot read a local path; the image goes there through the same ssh setup.
         if (terminal.ssh && terminal.sshCommand) {

@@ -144,6 +144,22 @@ MoonerADE → 플러그인
 - 받은 크기로 그리세요. 화면보다 크면 줄이거나 스크롤해서 보여 주세요.
 - 화면 키보드처럼 잠깐 바뀌는 영역 때문에 `terminal/resize`를 보내지 마세요. 크기가 바뀔 때마다 프로그램이 화면을 다시 그립니다.
 
+#### 이어 받기 (`since`)
+
+구독할 때마다 터미널마다 최대 256K자의 `terminal/replay`가 옵니다. 이미 받은 출력을 가진 화면은 그 뒤만 받을 수 있습니다.
+
+- 터미널의 출력 버퍼에는 이름(`stream`)이 있고, `offset`은 그 버퍼에 지금까지 쓰인 글자 수입니다. `terminal/replay`에는
+  `stream`·`offset`·`sequence`가 함께 옵니다. 구독 중에 열린 터미널은 `{type:'terminal/stream', projectId, id, stream, offset, sequence}`가
+  먼저 옵니다.
+- 화면은 터미널마다 `offset`을 셉니다. replay의 `offset`에서 시작해, 그 뒤로 받은 `terminal` 출력 중 `sequence`가 replay보다 큰
+  것의 `data` 길이를 더합니다. `terminal/exit`를 받은 터미널은 세지 않습니다.
+- 다시 구독할 때 `{type:'subscribe', projectId, since:{[terminalId]:{stream, offset}}}`를 보냅니다. 버퍼 이름이 같고 그 뒤의 출력이
+  아직 남아 있으면 replay는 `append:true`이고, `data`는 그 뒤의 출력뿐입니다(없으면 빈 문자열). 화면을 지우지 말고 이어 붙이세요.
+  그렇지 않으면(재시작, 오래되어 밀려남, 잘못된 값) `append` 없이 전체를 보냅니다.
+- `snapshot`의 `terminals` 항목에는 `startedAt`(연 시각), `activeAt`(마지막 출력), `inputAt`(어느 기기에서든 마지막으로 직접 입력한
+  시각)이 ms로 옵니다. 아직 없으면 `null`입니다. 화면이 스스로 보내는 답은 입력으로 치지 않습니다.
+- `recent` 항목에는 PC에서 마지막으로 연 시각 `openedAt`(ms)이 있습니다. 이 기능 이전에 기록된 항목에는 없습니다.
+
 ## 터미널과 에이전트
 
 승인되어 실행 중인 플러그인이 `terminal`을 보내면, 그 뒤로 여는 ADE 터미널에:
