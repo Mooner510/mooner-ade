@@ -31,7 +31,9 @@ jobs:
           git checkout -q "$TAG" 2>/dev/null || true
           version="v$(node -p "require('./package.json').version")"
           [ "$TAG" = "$version" ] || { echo "::error::$TAG does not match package.json $version"; exit 1; }
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes
+          # v1.2.3-beta1 is a prerelease: "latest" (and so the installer scripts and stable-channel updates) never points at it.
+          case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes $pre
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   build:
     needs: create

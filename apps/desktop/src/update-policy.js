@@ -10,6 +10,46 @@ export const UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 export const IDLE_POLL_MS = 15_000;
 export const IDLE_POLLS = 4;
 
+// Versions are 1.2.3 (stable) or 1.2.3-beta1 (a prerelease, offered only to users who turned beta updates on).
+export const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$/;
+export const isPrerelease = version => version.includes('-');
+
+// Digits compare as numbers inside a tag (beta2 < beta10); any other text compares as text.
+function compareTags(a, b) {
+  const x = a.match(/\d+|\D+/g) ?? [], y = b.match(/\d+|\D+/g) ?? [];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if (x[i] === undefined) return -1;
+    if (y[i] === undefined) return 1;
+    const order = /^\d+$/.test(x[i]) && /^\d+$/.test(y[i]) ? Number(x[i]) - Number(y[i]) : x[i] < y[i] ? -1 : x[i] > y[i] ? 1 : 0;
+    if (order) return Math.sign(order);
+  }
+  return 0;
+}
+
+// Negative, 0 or positive like a sort comparator. A prerelease is older than the stable release it leads up to: 1.2.3-beta2 < 1.2.3.
+export function compareVersions(a, b) {
+  const [coreA, tagA] = a.split(/-(.*)/s), [coreB, tagB] = b.split(/-(.*)/s);
+  const x = coreA.split('.').map(Number), y = coreB.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
+  if (tagA === undefined || tagB === undefined) return tagA === tagB ? 0 : tagA === undefined ? 1 : -1;
+  return compareTags(tagA, tagB);
+}
+export const isNewer = (a, b) => compareVersions(a, b) > 0;
+
+// The release to offer from GitHub's release list: the highest valid version that carries this platform's zip. Prereleases only count
+// with `beta`; a draft never does. { release, version } or null.
+export function pickRelease(releases, { beta, asset }) {
+  let best = null;
+  for (const release of releases) {
+    if (!release || release.draft) continue;
+    const version = String(release.tag_name).replace(/^v/, '');
+    if (!VERSION_PATTERN.test(version) || (isPrerelease(version) && !beta)) continue;
+    if (!(release.assets ?? []).some(item => item.name === asset)) continue;
+    if (!best || compareVersions(version, best.version) > 0) best = { release: { ...release, assets: release.assets ?? [] }, version };
+  }
+  return best;
+}
+
 // Versions the user answered "later" to. A background check does not ask about them again until the app is restarted;
 // the manual check button always asks.
 export function createDeclined() {

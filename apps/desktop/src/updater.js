@@ -6,11 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeclined, describeReasons, normalizeReport, staleUpdateDirs, unknownReport, waitUntilIdle } from './update-policy.js';
+import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, waitUntilIdle } from './update-policy.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 
-// Self-update of the packaged Windows and macOS app from the repository's latest GitHub release.
+// Self-update of the packaged Windows and macOS app from the repository's latest GitHub release (or, with beta updates turned on,
+// from the newest release including prereleases such as 1.2.3-beta1).
 // The release carries per platform a full zip, an app-only zip (just resources/app) and a small manifest naming the
 // shell key (Electron, Node, branding; see package.mjs). When the installed shell key matches, only the app zip is
 // fetched and only resources/app is replaced; otherwise the full zip replaces everything. Full update, Windows: after the app exits, a PowerShell helper mirrors the new folder
@@ -22,12 +23,6 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // (a plugin at work, or every terminal when the host could not start) holds it back: if something like that runs, the user chooses
 // between waiting for it to finish and "later"; either way the new version is not downloaded until the restart is safe.
 // The previous version is not kept (the new files are mirrored over it), and the scratch folder is removed after the helper has run.
-
-const newer = (a, b) => {
-  const x = a.split('.').map(Number), y = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
-  return false;
-};
 
 // Only a packaged copy (exe + resources/app, or MoonerADE.app/Contents/Resources/app) updates itself;
 // `pnpm dev` / `pnpm start` run from the source tree, even inside a renamed Electron bundle.
@@ -114,7 +109,7 @@ const declined = createDeclined();
 // Resolves to 'unsupported' | 'latest' | 'declined' | 'waiting' | 'updating' | 'error'. `manual` (the settings button) also answers
 // "up to date" and failures in a dialog, asks again about a version turned down earlier, and manages an update that is waiting for
 // work to finish; background checks stay silent unless a new version is there. `getBusy()` asks the server what a restart would cut off.
-export async function checkForUpdate({ repo, asset, window, manual = false, getBusy, beforeRestart }) {
+export async function checkForUpdate({ repo, asset, window, manual = false, beta = false, getBusy, beforeRestart }) {
   if (!portable()) {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치된 앱(Windows 포터블, macOS .app)에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
     return 'unsupported';
@@ -123,7 +118,7 @@ export async function checkForUpdate({ repo, asset, window, manual = false, getB
   if (pending) return manual ? manageWaiting(window) : 'waiting';
   if (running) return 'updating';
   running = true;
-  try { return await check({ repo, asset, window, manual, getBusy, beforeRestart }); }
+  try { return await check({ repo, asset, window, manual, beta, getBusy, beforeRestart }); }
   catch (error) {
     if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` });
     else throw error;
@@ -213,17 +208,18 @@ async function pickPackage(release, asset, version) {
 
 const mb = bytes => (bytes / 1048576).toFixed(1);
 
-async function check({ repo, asset, window, manual, getBusy, beforeRestart }) {
+async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
-  const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  // /releases/latest never returns a prerelease; the beta channel reads the list instead (one request either way).
+  const response = await fetch(`https://api.github.com/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`GitHub 응답 오류 (HTTP ${response.status})`);
-  const release = await response.json();
-  const version = String(release.tag_name).replace(/^v/, '');
-  release.assets ??= [];
-  if (!/^\d+\.\d+\.\d+$/.test(version) || !newer(version, app.getVersion()) || !release.assets.some(item => item.name === asset)) {
-    if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.` });
+  const body = await response.json();
+  const picked = pickRelease(beta ? body : [body], { beta, asset });
+  if (!picked || !isNewer(picked.version, app.getVersion())) {
+    if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.${beta ? ' (베타 포함)' : ''}` });
     return 'latest';
   }
+  const { release, version } = picked, label = isPrerelease(version) ? '베타 버전' : '버전';
   // The timer does not ask again about a version the user answered "later" to (and so does not even fetch its manifest).
   if (!manual && declined.has(version)) return 'declined';
   const { file, kind } = await pickPackage(release, asset, version);
@@ -232,12 +228,12 @@ async function check({ repo, asset, window, manual, getBusy, beforeRestart }) {
   const prompt = report.busy
     ? {
       type: 'warning', buttons: ['모두 중단되면 업데이트', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
-      message: `새 버전 ${version}을 사용할 수 있습니다.`,
+      message: `새 ${label} ${version}을 사용할 수 있습니다.`,
       detail: `현재 버전은 ${app.getVersion()}입니다. 지금은 아래 작업이 진행 중이라 바로 재시작하면 끊깁니다.\n\n${describeReasons(report.reasons)}\n\n"모두 중단되면 업데이트"를 고르면 위 작업이 모두 끝나고 1분쯤 지난 뒤 받아서 설치하고 재시작합니다.${report.keepsTerminals ? ' 터미널은 기다리지 않고 업데이트 중에도 계속 실행됩니다.' : ''} ${size}`,
     }
     : {
       type: 'info', buttons: ['업데이트 후 재시작', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
-      message: `새 버전 ${version}을 사용할 수 있습니다.`,
+      message: `새 ${label} ${version}을 사용할 수 있습니다.`,
       detail: report.keepsTerminals
         ? `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널과 그 안에서 실행 중인 작업은 끊기지 않고 계속되며, 다시 실행된 앱에 그대로 이어집니다.${report.kept.length ? `\n\n계속 실행되는 작업:\n${describeReasons(report.kept)}` : ''}`
         : `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널은 종료되고, Claude 대화는 다시 열 때 이어집니다.`,
