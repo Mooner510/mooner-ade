@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { IDLE_POLLS, UPDATE_CHECK_INTERVAL_MS, createDeclined, describeReasons, normalizeReport, staleUpdateDirs, unknownReport, waitUntilIdle } from '../apps/desktop/src/update-policy.js';
+import { IDLE_POLLS, UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, waitUntilIdle, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
   assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
@@ -95,4 +95,32 @@ test('with terminals kept through the restart, only what does not survive holds 
   assert.equal(normalizeReport({ busy: true, reasons: [turn] }).busy, true);
   assert.equal(normalizeReport({ busy: true, keepsTerminals: 'yes', reasons: [turn] }).busy, true);
   assert.equal(unknownReport('x').keepsTerminals, false);
+});
+
+test('versions order numerically, and a prerelease is older than its stable release', () => {
+  assert.ok(isNewer('0.10.0', '0.9.9'));
+  assert.ok(isNewer('0.4.1', '0.4.0'));
+  assert.ok(isNewer('0.4.1-beta2', '0.4.1-beta1'));
+  assert.ok(isNewer('0.4.1-beta10', '0.4.1-beta9'), 'beta10 follows beta9, not beta1');
+  assert.ok(isNewer('0.4.1', '0.4.1-beta9'), 'the stable release follows its betas');
+  assert.ok(isNewer('0.4.1-beta1', '0.4.0'), 'a beta of the next version is newer than the current stable');
+  assert.equal(isNewer('0.4.1-beta1', '0.4.1'), false);
+  assert.equal(compareVersions('0.4.1-beta1', '0.4.1-beta1'), 0);
+  assert.equal(compareVersions('1.0.0', '1.0.0'), 0);
+  assert.ok(isPrerelease('0.4.1-beta1') && !isPrerelease('0.4.1'));
+  for (const bad of ['0.4', 'v0.4.1', '0.4.1-', '0.4.1-beta_1', 'latest']) assert.equal(VERSION_PATTERN.test(bad), false, bad);
+  for (const good of ['0.4.1', '0.4.1-beta1', '0.4.1-rc.2']) assert.equal(VERSION_PATTERN.test(good), true, good);
+});
+
+test('the release to offer: betas only on the beta channel, never drafts, and only with this platform zip', () => {
+  const asset = 'MoonerADE-darwin-arm64.zip', files = [{ name: asset }];
+  const release = (tag, extra = {}) => ({ tag_name: tag, assets: files, ...extra });
+  const list = [release('v0.4.1-beta2', { prerelease: true }), release('v0.4.1-beta1', { prerelease: true }), release('v0.4.0'), release('v0.3.3')];
+  assert.equal(pickRelease(list, { beta: false, asset }).version, '0.4.0');
+  assert.equal(pickRelease(list, { beta: true, asset }).version, '0.4.1-beta2');
+  assert.equal(pickRelease([release('v0.4.1'), ...list], { beta: true, asset }).version, '0.4.1', 'the stable release wins over its betas');
+  assert.equal(pickRelease([release('v0.5.0', { draft: true }), release('v0.4.0')], { beta: true, asset }).version, '0.4.0');
+  assert.equal(pickRelease([{ tag_name: 'v0.5.0', assets: [{ name: 'other.zip' }] }, release('v0.4.0')], { beta: true, asset }).version, '0.4.0');
+  assert.equal(pickRelease([release('nightly'), release('v1.0')], { beta: true, asset }), null);
+  assert.equal(pickRelease([{ tag_name: 'v0.4.0' }], { beta: false, asset }), null, 'a release without assets is skipped');
 });

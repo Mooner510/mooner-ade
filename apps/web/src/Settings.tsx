@@ -7,16 +7,19 @@ import { useMissingAgents } from './installed-agents';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 
-type Desktop = { appInfo(): Promise<{ version: string }>; checkUpdate(): Promise<string> };
+type Desktop = { appInfo(): Promise<{ version: string }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
 
 function AboutSettings() {
-  const [version, setVersion] = useState(''), [checking, setChecking] = useState(false);
-  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.version), () => {}); }, []);
+  const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null);
+  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.version), () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); }, []);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
     <Row title="현재 버전" hint="새 버전은 실행 5초 뒤와 이후 30분마다 자동으로 확인합니다. 실행 중인 작업이 있으면 끝난 뒤에 설치하도록 고를 수 있습니다."><span>{version || '—'}</span></Row>
-    {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교합니다. 새 버전이 있으면 설치 여부를 묻습니다.">
+    {beta !== null && <Row title="베타 업데이트 받기" hint="0.4.1-beta1 같은 시험 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다. 끄면 다음 정식 버전이 나올 때까지 지금 버전을 유지합니다.">
+      <input type="checkbox" role="switch" aria-label="베타 업데이트 받기" checked={beta} onChange={event => { const next = event.target.checked; setBeta(next); void desktop()!.setBetaUpdates!(next).then(setBeta, () => setBeta(!next)); }} />
+    </Row>}
+    {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스(베타를 켰다면 베타 포함)와 비교합니다. 새 버전이 있으면 설치 여부를 묻습니다.">
       <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
   </>;
