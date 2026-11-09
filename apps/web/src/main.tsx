@@ -6,7 +6,7 @@ import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
 import { onPluginsOpen } from './PluginSettings';
-import { Modal } from './views';
+import { AppVersion, Modal } from './views';
 import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
@@ -549,7 +549,7 @@ function Shell() {
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showKeys('mod+alt+o')} onClick={onAddProject} />}
         <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} onClick={onOpenSettings} />
-        <span className="spacer" />
+        <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="튜토리얼 보기" onClick={() => actions.current.tutorial()} />
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}
