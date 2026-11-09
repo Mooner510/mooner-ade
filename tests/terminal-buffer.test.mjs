@@ -34,3 +34,18 @@ test('a busy terminal trims lazily but always replays exactly the last limit cha
   const tracker = createModeTracker(); tracker.feed(all.slice(0, -16));
   assert.equal(buffer.text, tracker.preamble() + all.slice(-16));
 });
+
+test('since(offset) gives the output after what a client counted, while it is still kept', () => {
+  const buffer = createTerminalBuffer(16, 'abc');
+  buffer.append('defgh');
+  assert.equal(buffer.written, 8);
+  assert.equal(buffer.since(8), '');
+  assert.equal(buffer.since(3), 'defgh');
+  assert.equal(buffer.since(9), null, 'ahead of the buffer');
+  assert.equal(buffer.since(-1), null);
+  assert.equal(buffer.since(1.5), null);
+  buffer.append('x'.repeat(30));
+  assert.equal(buffer.written, 38);
+  assert.equal(buffer.since(38 - 16), 'x'.repeat(16));
+  assert.equal(buffer.since(38 - 17), null, 'more than the limit is a full replay');
+});

@@ -46,13 +46,25 @@ export function createModeTracker() {
 // The last `limit` characters of output, replayed with the modes that were in effect where they start.
 export function createTerminalBuffer(limit = 262144, initial = '') {
   const head = createModeTracker();
-  let tail = '';
+  let tail = '', written = 0;
   // Trimming copies the whole tail, so a busy terminal trims once it holds twice the limit (or is read), not on every chunk.
   const trim = () => { if (tail.length > limit) { head.feed(tail.slice(0, tail.length - limit)); tail = tail.slice(-limit); } };
   const append = data => {
-    tail += data;
+    tail += data; written += data.length;
     if (tail.length > 2 * limit) trim();
   };
   append(initial);
-  return { append, get text() { trim(); return head.preamble() + tail; } };
+  return {
+    append,
+    get text() { trim(); return head.preamble() + tail; },
+    // Characters appended so far (the initial output included): a client that saw output up to here needs nothing more.
+    get written() { return written; },
+    // What came after the first `offset` characters, or null when that is no longer kept (or never existed); a client
+    // then needs the whole `text`. Past the limit a full replay is no larger, so it is not offered either.
+    since(offset) {
+      const missing = written - offset;
+      if (!Number.isSafeInteger(offset) || missing < 0 || missing > Math.min(limit, tail.length)) return null;
+      return missing ? tail.slice(tail.length - missing) : '';
+    }
+  };
 }

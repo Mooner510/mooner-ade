@@ -332,6 +332,68 @@ test('websocket: terminal agent processes survive replay, switch providers and c
   await call('terminal/close', { id });
 });
 
+test('websocket: a client that names the output it holds gets only what came after, and terminals say when they were used', async t => {
+  const { origin, cookie, call, api, projectId, repo } = await boot(t);
+  if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const connect = async since => {
+    const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } }), messages = [];
+    t.after(() => ws.close());
+    ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    ws.send(JSON.stringify({ type: 'subscribe', projectId, ...(since && { since }) }));
+    const until = async predicate => {
+      const end = Date.now() + 15000;
+      while (Date.now() < end) { const found = messages.find(predicate); if (found) return found; await new Promise(resolve => setTimeout(resolve, 30)); }
+      throw new Error('delta replay timeout');
+    };
+    return { ws, messages, until };
+  };
+  const before = Date.now();
+  const early = await connect();
+  await early.until(message => message.type === 'snapshot');
+  const { id } = await call('terminal/open');
+  // Subscribed before the terminal existed: no replay, but the buffer is named so its output can be counted from 0.
+  const named = await early.until(message => message.type === 'terminal/stream' && message.id === id);
+  assert.equal(named.offset, 0);
+  const first = await connect();
+  await first.until(message => message.type === 'terminal' && message.id === id);
+  first.ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: 'echo first-marker\r' }));
+  await first.until(message => message.type === 'terminal' && message.id === id && message.data.includes('first-marker'));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  // What this client holds: the replay it got, then every chunk after it.
+  const replay = first.messages.find(message => message.type === 'terminal/replay' && message.id === id);
+  assert.equal(typeof replay.stream, 'string');
+  assert.equal(replay.append, undefined);
+  const held = { stream: replay.stream, offset: replay.offset + first.messages.filter(message => message.type === 'terminal' && message.id === id && message.sequence > replay.sequence).reduce((sum, message) => sum + message.data.length, 0) };
+  const counted = early.messages.filter(message => message.type === 'terminal' && message.id === id).reduce((sum, message) => sum + message.data.length, 0);
+  assert.deepEqual({ stream: named.stream, offset: counted }, held, 'counting from terminal/stream reaches the same offset');
+  early.ws.close();
+  const unchanged = await connect({ [id]: held });
+  const same = await unchanged.until(message => message.type === 'terminal/replay' && message.id === id);
+  assert.deepEqual([same.append, same.data, same.offset, same.stream], [true, '', held.offset, held.stream]);
+  unchanged.ws.close();
+  first.ws.send(JSON.stringify({ type: 'terminal/input', projectId, id, data: 'echo second-marker\r' }));
+  await first.until(message => message.type === 'terminal' && message.id === id && message.data.includes('second-marker'));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const later = await connect({ [id]: held });
+  const delta = await later.until(message => message.type === 'terminal/replay' && message.id === id);
+  assert.equal(delta.append, true);
+  assert.match(delta.data, /second-marker/);
+  assert.equal(delta.offset, held.offset + delta.data.length);
+  // Another buffer's offset, or one ahead of this buffer, gets the whole screen again; the delta is exactly its end.
+  for (const since of [{ [id]: { ...held, stream: 'other' } }, { [id]: { ...held, offset: delta.offset + 10 } }, { [id]: 'junk' }]) {
+    const full = await (await connect(since)).until(message => message.type === 'terminal/replay' && message.id === id);
+    assert.equal(full.append, undefined);
+    assert.match(full.data, /first-marker/);
+    assert.ok(full.data.endsWith(delta.data) && full.data.length > delta.data.length);
+  }
+  const terminal = (await call('snapshot')).terminals.find(item => item.id === id);
+  assert.ok(terminal.startedAt >= before && terminal.activeAt >= terminal.startedAt && terminal.inputAt >= terminal.startedAt, JSON.stringify(terminal));
+  const recent = (await api('recent')).find(item => item.root === repo);
+  assert.ok(recent.openedAt >= before - 60_000, JSON.stringify(recent));
+  await call('terminal/close', { id });
+});
+
 test('terminal follow-up validates the live Claude process and output sequence, and acknowledges retries once', async t => {
   const { origin, cookie, call, projectId, repo } = await boot(t);
   if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
