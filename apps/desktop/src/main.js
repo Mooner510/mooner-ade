@@ -310,7 +310,7 @@ if (!app.requestSingleInstanceLock()) {
       if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });
       if (dev) watchServerSources();
       else {
-        // Once shortly after start, then every 30 minutes for an app that stays open for days.
+        // Once shortly after start, then every 10 minutes for an app that stays open for days.
         sweepStaleUpdates();
         const background = () => checkForUpdate(updateTarget()).catch(error => console.warn(`업데이트 확인 실패: ${error.message}`));
         setTimeout(background, 5000); setInterval(background, UPDATE_CHECK_INTERVAL_MS).unref();

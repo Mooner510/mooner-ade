@@ -7,7 +7,7 @@ function validateSettings(settings, invalid) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 8192) invalid();
   if (settings.theme !== undefined && !['dark', 'light'].includes(settings.theme)) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
-  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'followUpQueue']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();
   if (settings.scrollback !== undefined && !(Number.isInteger(settings.scrollback) && settings.scrollback >= 500 && settings.scrollback <= 100000)) invalid();
@@ -21,6 +21,12 @@ function validateSettings(settings, invalid) {
   if (settings.cacheWarn !== undefined && !(Number.isInteger(settings.cacheWarn) && settings.cacheWarn >= 5 && settings.cacheWarn <= 50)) invalid();
   if (settings.cacheSendWarnMinutes !== undefined && !(Number.isInteger(settings.cacheSendWarnMinutes) && settings.cacheSendWarnMinutes >= 1 && settings.cacheSendWarnMinutes <= 60)) invalid();
   if (settings.usageRefresh !== undefined && !(Number.isInteger(settings.usageRefresh) && settings.usageRefresh >= 60 && settings.usageRefresh <= 600)) invalid();
+  if (settings.accentColor !== undefined && !(typeof settings.accentColor === 'string' && /^(#[0-9a-fA-F]{6})?$/.test(settings.accentColor))) invalid();
+  if (settings.terminalFontWeight !== undefined && !(Number.isInteger(settings.terminalFontWeight) && settings.terminalFontWeight >= 100 && settings.terminalFontWeight <= 900)) invalid();
+  if (settings.wordSeparator !== undefined && !(typeof settings.wordSeparator === 'string' && settings.wordSeparator.length <= 64)) invalid();
+  if (settings.diffLayout !== undefined && !['auto', 'inline', 'split'].includes(settings.diffLayout)) invalid();
+  for (const [name, min, max, whole] of [['letterSpacing', 0, 5, true], ['scrollSensitivity', 0.5, 5, false], ['minimumContrast', 1, 21, false], ['diffContextLines', 1, 20, true], ['contextTipK', 50, 1000, true], ['systemRefresh', 2, 60, true], ['reviewWidth', 320, 1600, true]])
+    if (settings[name] !== undefined && !(typeof settings[name] === 'number' && settings[name] >= min && settings[name] <= max && (!whole || Number.isInteger(settings[name])))) invalid();
   for (const name of ['agentsOff', 'agentsMuted']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 8 && settings[name].every(item => ['claude', 'codex', 'cursor'].includes(item)))) invalid();
   for (const name of ['statusItems', 'statusLeft', 'statusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
 }

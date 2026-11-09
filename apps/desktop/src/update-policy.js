@@ -1,9 +1,9 @@
 // Decisions of the auto-updater that do not need Electron, kept apart so they can be tested: how often to look, which
 // versions the user already turned down, what counts as "everything stopped", and how a busy report is worded.
 
-// Background checks: shortly after start and then every 30 minutes. A check without a new release is one small API call
-// (about 7 KB, unauthenticated: 2 of the 60 requests an IP gets per hour) and writes nothing to disk.
-export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+// Background checks: shortly after start and then every 10 minutes. A check without a new release is one small API call
+// (about 7 KB, unauthenticated: 6 of the 60 requests an IP gets per hour) and writes nothing to disk.
+export const UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 // While waiting for work to finish the server is asked every 15 s, and only 4 idle answers in a row (about a minute) count:
 // a Claude between two tool calls or a build between two steps can look idle for a moment.
