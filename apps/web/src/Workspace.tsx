@@ -9,7 +9,7 @@ import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
 import { Dropdown, type Ask, type GitState } from './views';
-import { toastCopied } from './toast';
+import { copyText } from './toast';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
@@ -205,9 +205,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       void pick(`외부 링크를 열까요? 신뢰할 수 있는 주소인지 확인하세요.\n${uri}`, [{ id: 'open', label: '기본 브라우저로 열기' }, { id: 'copy', label: '링크 복사' }, { id: 'cancel', label: '취소' }]).then(choice => {
         if (choice === 'open') window.open(uri, '_blank', 'noopener');
         else if (choice === 'copy') {
-          const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
-          if (desktop?.writeClipboard) desktop.writeClipboard(uri); else void navigator.clipboard?.writeText(uri).catch(() => {});
-          toastCopied();
+          copyText(uri);
         }
       });
     };

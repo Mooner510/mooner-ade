@@ -9,7 +9,7 @@ import { useHiddenAgents } from './installed-agents';
 import { DiffView, monoFont, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
 import { showKeys } from './Workspace';
-import { toastCopied, setToastAnchor, claimTip } from './toast';
+import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
 import { contextTip, queueTip, splitTip } from './tips';
 import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
@@ -210,6 +210,12 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!); term.current = terminal;
     // Unicode 11 widths match what shells/TUIs assume for Hangul and emoji; the default (v6) table disagrees and leaves stale half-cells.
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
+    // After a copy the selection lights up in the accent color for a moment, then clears, so it is clear what was copied.
+    const copySelection = () => {
+      copyText(terminal.getSelection());
+      terminal.options.theme = { ...terminal.options.theme, selectionBackground: getComputedStyle(host.current ?? document.documentElement).getPropertyValue('--accent').trim() || undefined };
+      setTimeout(() => { terminal.clearSelection(); terminal.options.theme = terminalTheme(host.current ?? undefined); }, 220);
+    };
     // A clipboard image is saved by the server and its file path is typed instead, which Claude Code and Codex accept as an attachment.
     const pasteImage = (event: ClipboardEvent) => {
       const file = Array.from(event.clipboardData?.items ?? []).find(item => item.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(item.type))?.getAsFile();
@@ -234,20 +240,20 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       event.preventDefault(); event.stopPropagation();
       const paths = Array.from(event.dataTransfer.files, file => pathForFile(file)).filter(Boolean);
       if (!paths.length) return;
-      terminal.paste(paths.map(quotePath).join(' ') + ' '); terminal.focus();
+      terminal.paste(paths.map(quotePath).join(' ') + ' '); terminal.focus(); toastAttached(paths.length);
     };
     // Right-click pastes the clipboard instead of opening the browser menu (the desktop shell has none of its own for the terminal).
     const rightClick = (event: MouseEvent) => {
       if (!settingsRef.current.rightClickPaste) return;
       event.preventDefault();
-      if (terminal.hasSelection()) { void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {}); toastCopied(); terminal.clearSelection(); }
-      else void navigator.clipboard?.readText().then(text => { if (text) terminal.paste(text); }, () => {});
+      if (terminal.hasSelection()) copySelection();
+      else void navigator.clipboard?.readText().then(text => { if (text) { terminal.paste(text); toastPasted(text); } }, () => {});
     };
     pasteHost.addEventListener('contextmenu', rightClick);
     pasteHost.addEventListener('dragover', dragFiles); pasteHost.addEventListener('drop', dropFiles);
     terminal.onSelectionChange(() => {
       const text = settingsRef.current.copyOnSelect && terminal.hasSelection() ? terminal.getSelection() : '';
-      if (text) { void navigator.clipboard?.writeText(text).catch(() => {}); toastCopied(); }
+      if (text) copyText(text, { count: false });
     });
     const detectBanner = createBannerDetector(), question = createQuestionTracker();
     let sequence = 0, replays = 0, pendingResize = false, refreshAfterReplay = false, working = false, asking = false, title = '';
@@ -332,9 +338,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (replays || value.indexOf(';') < 0 || data === '?') return true;
       try {
         const text = new TextDecoder().decode(Uint8Array.from(atob(data), char => char.charCodeAt(0)));
-        const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
-        if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text).catch(error => console.warn('OSC 52 복사 실패', error));
-        if (text) toastCopied();
+        if (text) copyText(text);
       } catch { /* malformed base64 */ }
       return true;
     });
@@ -552,7 +556,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (event.ctrlKey && event.code === 'KeyC' && (event.shiftKey || terminal.hasSelection())) {
         event.preventDefault();
         const text = terminal.hasSelection() ? terminal.getSelection() : '';
-        if (text) { void navigator.clipboard?.writeText(text).catch(() => {}); toastCopied(); terminal.clearSelection(); }
+        if (text) copySelection();
         return false;
       }
       // Leave Ctrl+V to the browser's paste event: xterm pastes text from it (bracketed paste, newline normalisation, no ^V to the shell)
