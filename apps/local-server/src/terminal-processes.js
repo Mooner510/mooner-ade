@@ -23,7 +23,8 @@ function agentCommand(command) {
 
 export function terminalProcesses(table) {
   const children = new Map(), byPid = new Map(table.map(entry => [entry.pid, entry]));
-  for (const entry of table) children.set(entry.ppid, [...(children.get(entry.ppid) || []), entry]);
+  // Pushed, not copied: pid 1 / launchd parents hundreds of processes, and a copy per child made every 3 s poll quadratic.
+  for (const entry of table) { const list = children.get(entry.ppid); if (list) list.push(entry); else children.set(entry.ppid, [entry]); }
   return pid => {
     let agent = null, agentPid = null, ssh = false, sshCommand = null;
     const seen = new Set(), queue = [pid], underAgent = new Set(), descendants = [];

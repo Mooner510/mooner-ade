@@ -152,9 +152,30 @@ export function findDirenv({ env = process.env, exists = file => fs.access(file)
   return dirs.reduce((found, dir) => found.then(hit => hit || exists(path.join(dir, 'direnv')).then(ok => ok ? path.join(dir, 'direnv') : null)), Promise.resolve(null));
 }
 
-// A project's account is its agent CLI's config folder: the one a running agent in its terminals actually uses,
-// else what the project's .envrc sets through direnv, else the server's own environment, which terminals inherit.
-export function createAccountResolver({ env = process.env, platform = process.platform, home = os.homedir(), readVariable = processVariable, direnv = findDirenv, exec = run, exists = file => fs.access(file).then(() => true, () => false), now = Date.now } = {}) {
+// direnv refuses a blocked or denied .envrc without saying so (exec just leaves the variable unset), so the account would silently
+// fall back to the default login. This reads a plain `export NAME=value` from the nearest .envrc instead, understanding only $HOME, ~ and $PWD:
+// nothing in the file is ever executed, so an untrusted project cannot run code through a usage poll.
+// ponytail: literal exports only (no conditionals, source_up or command substitution); `direnv allow` covers those.
+export async function envrcVariable(root, name, { home = os.homedir(), readFile = fs.readFile } = {}) {
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    const text = await readFile(path.join(dir, '.envrc'), 'utf8').catch(() => null);
+    if (text !== null) {
+      let value = null;
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(new RegExp(`^\\s*export\\s+${name}=("([^"]*)"|'([^']*)'|[^\\s#;]*)`));
+        if (match) value = match[2] ?? match[3] ?? match[1];
+      }
+      if (value === null) return null;
+      const expanded = value.replace(/^~(?=\/|$)/, home).replace(/\$\{?HOME\}?/g, home).replace(/\$\{?PWD\}?/g, dir);
+      return /[$`]/.test(expanded) ? null : expanded;
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+// A project's account is its agent CLI's config folder: what the project's .envrc sets (through direnv, or read directly when direnv
+// refuses the file), else the one a running agent in its terminals actually uses, else the server's own environment, which terminals inherit.
+export function createAccountResolver({ env = process.env, platform = process.platform, home = os.homedir(), readVariable = processVariable, direnv = findDirenv, exec = run, exists = file => fs.access(file).then(() => true, () => false), readFile = fs.readFile, now = Date.now } = {}) {
   const loaded = new Map(), seen = new Set();
   let direnvPath;
   const fromDirenv = async (root, name) => {
@@ -164,7 +185,9 @@ export function createAccountResolver({ env = process.env, platform = process.pl
     direnvPath ??= direnv();
     const file = await direnvPath;
     // A blocked or missing .envrc makes direnv fail, which leaves the decision to the next source.
-    const value = file ? await exec(file, ['exec', root, '/bin/sh', '-c', `printf %s "\${${name}-}"`], { cwd: root, env: { ...env, DIRENV_LOG_FORMAT: '' } }) : null;
+    let value = file ? await exec(file, ['exec', root, '/bin/sh', '-c', `printf %s "\${${name}-}"`], { cwd: root, env: { ...env, DIRENV_LOG_FORMAT: '' } }) : null;
+    // Empty or failed: direnv may just have refused the file, so read the export itself (see envrcVariable).
+    if (!value) value = await envrcVariable(root, name, { home, readFile }).catch(() => null) ?? value;
     loaded.set(key, { at: now(), value });
     if (loaded.size > 64) loaded.delete(loaded.keys().next().value);
     return value;
@@ -191,6 +214,9 @@ export function createAccountResolver({ env = process.env, platform = process.pl
     const name = accountVariable[provider], server = env[name] || '';
     if (!project) return { dir: server, from: 'server' };
     const configured = await fromDirenv(project.root, name);
+    // A folder the project's .envrc names is the account the project is meant to use, even if an agent was started without it
+    // (a blocked .envrc is not loaded by the shell, so that agent runs on the default login).
+    if (configured) return { dir: configured, from: 'direnv' };
     for (const terminal of project.terminals?.values?.() ?? []) {
       if (terminal.exited || terminal.agent !== provider || !terminal.agentPid) continue;
       const dir = await agentDir(provider, terminal.agentPid, configured);
@@ -216,8 +242,11 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
       const login = await claudeLogin({ env });
       if (!login) throw new UsageError('Claude Code 로그인 정보를 찾지 못했습니다. claude를 실행해 로그인하세요.');
       if (login.expiresAt && login.expiresAt < now()) throw new UsageError('Claude Code 로그인 토큰이 만료되었습니다. claude를 한 번 실행하면 갱신됩니다.');
-      const body = await getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/usage', { Authorization: `Bearer ${login.token}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': userAgent });
-      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), login.plan), plan: login.plan, source: 'api', at: now() };
+      const headers = { Authorization: `Bearer ${login.token}`, 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': userAgent };
+      const [body, profile] = await Promise.all([getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/usage', headers), getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/profile', headers).catch(() => null)]);
+      // The stored subscriptionType is the org type from sign-in (Ultra is a claude_max org); the profile names the plan.
+      const plan = profile?.organization?.plan_display_name || login.plan;
+      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), plan), plan, source: 'api', at: now() };
     },
     async codex(env) {
       const login = await codexLogin({ env });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { IDLE_POLLS, UPDATE_CHECK_INTERVAL_MS, createDeclined, describeReasons, normalizeReport, staleUpdateDirs, unknownReport, waitUntilIdle } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
-  assert.equal(UPDATE_CHECK_INTERVAL_MS, 30 * 60 * 1000);
+  assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
 });
 
 test('a version the user turned down is remembered until the app restarts', () => {

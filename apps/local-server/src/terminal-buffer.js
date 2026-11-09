@@ -20,7 +20,10 @@ export function createModeTracker() {
   return {
     // Sequences may arrive split across chunks, so the parser state carries over between calls.
     feed(data) {
-      for (const char of data) {
+      for (let index = 0; index < data.length; index++) {
+        // Outside a sequence only ESC matters, so plain output is skipped in one search instead of a loop step per character.
+        if (state === 0) { index = data.indexOf('\x1b', index); if (index < 0) return; }
+        const char = data[index];
         if (state === 1) state = char === '[' ? 2 : char === '\x1b' ? 1 : (char === 'c' && reset(), 0); // ESC c: full reset
         else if (state === 2) { state = char === '?' ? 3 : char === '\x1b' ? 1 : 0; params = ''; }
         else if (state === 3) {
