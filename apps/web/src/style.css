@@ -187,7 +187,9 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .cache-timer b { min-width: 4ch; font-weight: 600; }
 /* the outlined flame/snowflake are hairlines at 12px; filling them makes them readable */
 .cache-timer .icon { font-variation-settings: 'FILL' 1; }
-.cache-timer i { position: absolute; left: 6px; bottom: 1px; height: 2px; width: calc((100% - 12px) * var(--left)); border-radius: 1px; background: currentColor; opacity: .5; transition: width 1s linear; }
+/* Scaled, not resized, and without a transition: a 1 s width transition restarted every second kept layout and paint running
+   at frame rate for every timer on screen, even with nothing else happening. One-second steps are invisible on a minutes-long bar. */
+.cache-timer i { position: absolute; left: 6px; right: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: currentColor; opacity: .5; transform: scaleX(var(--left)); transform-origin: left; }
 .pane-tools > .cache-timer { grid-column: 1; justify-self: start; margin-left: -6px; }
 .cache-timer.hot, .cache-timer.using { color: var(--brand-claude); }
 .cache-timer.warm { color: var(--warn); }
