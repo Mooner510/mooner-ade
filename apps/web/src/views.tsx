@@ -8,7 +8,8 @@ export function AppVersion() {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     void desktop?.appInfo?.().then(info => setVersion(info.version), () => {});
   }, []);
-  return version ? <span className="app-version" title="무너에이드 버전">v{version}</span> : null;
+  const beta = version.includes('-'); // 0.4.1-beta1 is a prerelease: shown in sky blue so it is never mistaken for a stable build
+  return version ? <span className={`app-version${beta ? ' beta' : ''}`} title={beta ? '무너에이드 베타 버전' : '무너에이드 버전'}>v{version}</span> : null;
 }
 
 export type Ask = { input(title: string, initial?: string): Promise<string | null>; confirm(message: string): Promise<boolean> };
