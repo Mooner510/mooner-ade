@@ -716,8 +716,11 @@ body.resizing .xterm-host { pointer-events: none; }
 .pane-size-note button { flex-shrink: 0; color: var(--fg); border-color: var(--border-strong); }
 
 /* Toast: small icon that drifts a short way up from the mouse pointer (random sideways lean via --dx/--dy) and fades out. */
-.toast { position: fixed; z-index: 100; font-size: 20px; line-height: 1; color: var(--accent); text-shadow: 0 1px 6px #0004; pointer-events: none; user-select: none; will-change: translate, opacity;
+.toast { position: fixed; display: flex; align-items: center; gap: 3px; z-index: 100; font-size: 20px; line-height: 1; color: var(--accent); text-shadow: 0 1px 6px #0004; pointer-events: none; user-select: none; will-change: translate, opacity;
   animation: toast-rise 1.2s cubic-bezier(.2, .6, .3, 1) forwards, toast-fade 1.2s ease-in forwards; }
+/* the glyph keeps its 20px; the count beside it stays small */
+.toast .material-symbols-outlined { font-size: 20px; }
+.toast small { font: 600 11px/1 var(--font-ui, system-ui); letter-spacing: 0; }
 @keyframes toast-rise { from { translate: 0 0; scale: .85; } to { translate: var(--dx) var(--dy); scale: 1; } }
 @keyframes toast-fade { 0% { opacity: 0; } 10% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: toast-fade 1.2s linear forwards; } }

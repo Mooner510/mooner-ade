@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import qrcode from 'qrcode-generator';
 import { Icon } from './Icon';
-import { toastCopied } from './toast';
+import { copyText } from './toast';
 
 // Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
 // confirmed by the desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
@@ -28,11 +28,6 @@ type PluginsBridge = {
   pickZip(): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
 };
 const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
-const writeClipboard = (text: string) => {
-  const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
-  if (desktop?.writeClipboard) desktop.writeClipboard(text); else void navigator.clipboard?.writeText(text);
-  toastCopied();
-};
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // The plugin state for components outside the settings page (status bar, notification clicks).
@@ -153,7 +148,7 @@ function PluginCard({ plugin, enabled, busy, run, bridge }: { plugin: PluginInfo
       {view.status && <p className={`plugin-status ${view.status.tone}`}>{view.status.text}</p>}
       {view.qr && <div className="plugin-qr-row"><QrCode text={view.qr.value} label={view.qr.label} />{view.qr.label && <p>{view.qr.label}</p>}</div>}
       {view.info.map(item => <Row key={item.label} title={item.label} hint={<span className={item.mono ? 'mono plugin-value' : 'plugin-value'}>{item.value}</span>}>
-        {item.copy && item.value && <button onClick={() => writeClipboard(item.value)}><Icon name="copy" />복사</button>}
+        {item.copy && item.value && <button onClick={() => copyText(item.value)}><Icon name="copy" />복사</button>}
       </Row>)}
       {view.fields.map(field => <Row key={field.key} title={field.label} hint={field.hint || undefined}>
         <input type="text" aria-label={field.label} value={values[field.key] ?? ''} placeholder={field.placeholder} spellCheck={false} onChange={event => setValues(current => ({ ...current, [field.key]: event.target.value }))} />
