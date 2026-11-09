@@ -438,8 +438,9 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     };
     // Live output re-checks the agent at most every 50 ms: a busy TUI sends a batch every 5 ms, and each check could read the whole screen.
     // A timer rather than an animation frame, so a window in the background still notices a finished or asking agent.
+    // A pane nobody sees (another tab or project) only drives sidebar badges, so it checks less often.
     let watchTimer = 0;
-    const watchLater = () => { watchTimer ||= window.setTimeout(() => { watchTimer = 0; if (term.current !== terminal) return; watchAgent(); flushQueue.current(); }, 50); };
+    const watchLater = () => { watchTimer ||= window.setTimeout(() => { watchTimer = 0; if (term.current !== terminal) return; watchAgent(); flushQueue.current(); }, visibleRef.current ? 50 : 400); };
     checkAgent.current = () => { watchAgent(true); if (sshRef.current || callbacks.current.agentOf(id) !== 'claude') { followUp.current.reset(); refreshQueue(); } };
     const receive = (feed: TerminalFeed) => {
       const replay = Boolean(feed.reset);
