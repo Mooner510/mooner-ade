@@ -1,6 +1,7 @@
 name: Release
 # `pnpm release` pushes a v<version> tag; this creates the GitHub release and adds the macOS and Windows builds.
-# Run it by hand with a tag to rebuild an existing release, or to release the chosen branch without a local checkout.
+# Run it by hand with a tag to rebuild an existing release, or to release master without a local checkout.
+# Master only: the create job fails for any commit that is not already on origin/master.
 on:
   push:
     tags: ['v*']
@@ -31,6 +32,9 @@ jobs:
           git checkout -q "$TAG" 2>/dev/null || true
           version="v$(node -p "require('./package.json').version")"
           [ "$TAG" = "$version" ] || { echo "::error::$TAG does not match package.json $version"; exit 1; }
+          # Releases come from master only. This is the real gate: it also stops a hand-pushed tag or a dispatch on a branch.
+          git fetch -q origin master
+          git merge-base --is-ancestor HEAD origin/master || { echo "::error::$TAG is not on master; merge it into master and release from there"; exit 1; }
           # v1.2.3-beta1 is a prerelease: "latest" (and so the installer scripts and stable-channel updates) never points at it.
           case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes $pre
