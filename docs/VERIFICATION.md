@@ -24,7 +24,16 @@ E2E는 모델을 호출하지 않으며 Electron 셸 대신 headless Chrome으�
 - 원격 GitHub CI 결과
 - Electron 셸 자체(창·메뉴·폴더 선택·종료 정리)의 자동 검사, Windows 앱·PTY
 - 실제 CLI의 질문·승인, follow-up과 SSH/tmux 전송, 전체 2 × 3 수용 검사
+- 채팅 탭: 2026-11-10에 claude 2.1.322의 stream-json 출력(init, 승인 control 요청, result, 중단)과 대조했습니다. 이미지 첨부, Edit/Write diff, Electron 앱 안 실행, Windows `claude.cmd`는 확인하지 않았고, 컨텍스트 창 크기는 첫 응답 전에는 추정(200k/1M)입니다.
 - 장시간 사용, 모든 파일 감시 자원 제한 환경
 - Git 전체 이력 비밀정보 검사, `pnpm package` 결과물의 서명·배포
 
 절차는 [TESTING_GUIDE](TESTING_GUIDE.md)를 따릅니다.
+
+
+## 2026-11-10 Codex·Cursor 채팅 확장
+
+- 별도 데이터 폴더에서 codex-cli 0.167.0과 Cursor 2026.10.19-6bbf2c4의 실제 모델 조회·응답·도구 승인·파일 작성·세션 재개를 확인했습니다. Codex Branch/Rewind는 첫 턴 이후의 맥락이 제외됨을 실제 응답으로 확인했습니다.
+- 브라우저에서 세 채팅 런처와 Codex·Cursor의 전송·응답·상태 표시를 확인했습니다. Cursor의 승인 대기·중단과 지원하지 않는 분기·복원 버튼도 확인했습니다.
+- 타입 검사와 채팅 관련 35개 검사 통과. 전체 Node 검사: 253개 중 248개 통과, 2개 건너뜀, 3개 실패. 실패는 변경 전에도 동일했던 dropdown 마크업·zsh 시작 환경·업데이터 프로세스 이름 검사입니다. 전체 검사 통과나 릴리스 준비 완료로 보지 않습니다.
+- 실제 이미지 해석·모든 모델/권한 조합·Electron/Windows·실시간 스티어링·터미널 전환 화면은 미검증입니다. 정확한 지원 범위와 절차는 TESTING_GUIDE의 Codex·Cursor 채팅 항목을 따릅니다.

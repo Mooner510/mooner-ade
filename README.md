@@ -1,6 +1,6 @@
 # MoonerADE (무너에이드)
 
-**Claude Code와 Codex를 한 창에서 굴리는 터미널 워크스페이스.**
+**Claude Code·Codex·Cursor Agent를 한 창에서 사용하는 개발 워크스페이스.**
 
 프로젝트마다 흩어져 있던 터미널을 한곳에 모으고, 여러 에이전트가 일하는 모습을 나란히 보면서 바뀐 코드를 바로 확인하세요. 평소 쓰던 CLI와 계정을 그대로 쓰는 macOS·Windows 데스크톱 앱입니다.
 
@@ -43,8 +43,9 @@ MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식
 | [Git](https://git-scm.com/downloads) | 필수 | — |
 | [Claude Code](https://docs.anthropic.com/claude-code) | 선택 | `claude auth login` |
 | [Codex](https://github.com/openai/codex) | 선택 | `codex login` |
+| [Cursor Agent](https://cursor.com/docs/cli/overview) | 선택 | `cursor-agent login` |
 
-그다음 앱에서 **프로젝트 열기**로 작업 폴더를 고르면 끝입니다.
+그다음 앱에서 **프로젝트 열기**로 작업 폴더를 고르면 끝입니다. 새 탭 메뉴에서 세 에이전트의 터미널 또는 채팅을 선택할 수 있습니다. 채팅은 공식 CLI의 로그인과 세션을 사용하며, CLI가 지원하지 않는 기능은 제한 이유를 표시합니다. 자세한 범위는 [채팅 검증 안내](docs/TESTING_GUIDE.md#codexcursor-agent-채팅-2026-11-10)를 참고하세요.
 
 <details>
 <summary>삭제하기</summary>
@@ -199,4 +200,4 @@ pnpm audit        # lockfile 의존성 보안 검사
 
 Copyright (C) 2026 mooner-ade contributors.
 
-이 프로젝트는 **GNU General Public License version 3 only (`GPL-3.0-only`)**로 배포합니다. GPL v3 조건에 따라 사용·수정·재배포할 수 있으며, 어떠한 보증도 제공하지 않습니다. 전문은 [LICENSE](LICENSE)를 참고하세요. 포함하거나 사용하는 외부 라이브러리·아이콘·폰트에는 각 저작권자와 라이선스의 고지가 적용됩니다.
+이 프로젝트는 **GNU General Public License version 3 only (`GPL-3.0-only`)**로 배포합니다. GPL v3 조건에 따라 사용·수정·재배포할 수 있으며, 어떠한 보증도 제공하지 않습니다. 전문은 [LICENSE](LICENSE)를 참고하세요. 포함하거나 사용하는 외부 라이브러리·아이콘·폰트에는 각 저작권자와 라이선스의 고지가 적용됩니다. 번들 글꼴(Inter, Noto Sans KR, JetBrains Mono)은 SIL OFL 1.1이며 라이선스 전문은 빌드 결과의 `licenses/`에 들어 있습니다.

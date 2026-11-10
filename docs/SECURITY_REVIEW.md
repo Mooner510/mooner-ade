@@ -58,6 +58,22 @@
 
 남은 위험: 승인한 플러그인과, 같은 사용자 권한으로 도는 악성 프로그램은 막지 못합니다. 승인한 플러그인이 터미널에 더한 도구는 그 터미널 안의 에이전트도 씁니다.
 
+## 4-2. 채팅 탭 (2026-11)
+
+서버가 공식 `claude` 바이너리를 직접 spawn합니다(모델 호출·로그인은 CLI 안에서만).
+
+| 위협 | 대응 | 검증 |
+|---|---|---|
+| 채팅 입력이 명령줄·셸로 새어 나감 | `shell:false`, 인자는 배열, 사용자 텍스트는 stdin JSON으로만 전달합니다. cwd는 열린 프로젝트로 고정됩니다. | 코드 검토 |
+| 이미지·세션 수 폭주 | 프로젝트당 채팅 16개, 메시지당 이미지 4장(PNG/JPEG/GIF/WebP, 각 base64 2.5M자 이하). | `local-server.test.mjs` 범위 밖, 수동 |
+| 모델 출력이 UI에 마크업 삽입 | Markdown은 React 요소로만 그리고(HTML 문자열 없음) http(s) 링크만 연결하며 열기 전 확인 창을 거칩니다. | 코드 검토 |
+| 승인 없이 도구 실행 | `--permission-prompts host`로 CLI가 묻는 승인을 GUI 카드에서 사용자가 직접 답합니다. `모두 허용` 모드는 사용자가 명시 선택해야 합니다. | `chat-claude.test.mjs`(변환), 실제 승인은 수동 |
+| 접근 폴더·워크트리 설정 | `--add-dir` 경로는 OS 폴더 선택창에서만 고르며 서버가 절대경로·실존 디렉터리·최대 8개를 다시 검증합니다. `--worktree`는 대화 시작 전에만 켤 수 있습니다. 인사에 쓰는 OS 사용자 이름은 로컬 UI에만 반환합니다. | 실제 claude로 수동 확인 |
+| 대화 분기·되돌리기·스티어링 | `chat/branch`·`chat/rewind`·`chat/cancel-steer`는 기존 인증된 `/api`를 거칩니다. 분기는 `seedChat`이 프로젝트 chat 폴더 아래에만 새 기록을 쓰고, 메시지 uuid는 형식을 검증한 뒤에만 `--resume-session-at`에 넘깁니다. 스티어링 취소는 CLI의 `cancel_async_message` 제어 요청만 보냅니다. 토큰·로그인 정보는 다루지 않습니다. | `chat-claude.test.mjs`(인자·uuid), 실제 동작은 수동 |
+| 모델 목록 조회 | `chat/models`는 별칭마다 `claude -p /cost`(로컬 명령, 모델 호출 없음)를 인자 배열로 실행하고 cwd는 임시 폴더입니다. `chat/model-catalog`는 CLI 캐시 파일 `~/.claude/cache/model-catalog/*-cc.json`에서 모델 ID(정규식 검증)·이름·계열·컨텍스트 창만 읽어 최대 64개를 돌려주며 그 밖의 필드와 로그인 정보는 읽지 않습니다. | `chat-claude.test.mjs`(probe), 캐시 파싱은 수동 |
+| 번들 글꼴 | Inter·Noto Sans KR·JetBrains Mono(SIL OFL 1.1)를 npm 패키지에서 빌드에 포함하며 외부 CDN을 쓰지 않습니다. 라이선스 전문은 빌드 결과 `licenses/`에 함께 배포합니다(pnpm `minimumReleaseAge` 7일 준수 버전). | 수동 |
+| 설정 값 주입 | 채팅 상태줄의 색·아이콘·형식은 `ui-state.js`에서 형식 검증하고 외부 명령은 실행하지 않습니다. | `ui-state-chat.test.mjs` |
+
 ## 5. 실행하지 않은 검증
 
 - 원격 노출 시나리오(설계상 127.0.0.1 전용이라 대상이 아님)
