@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { terminalAgentCommand, terminalSessionShell, readTerminalSession, recordClaudeSession, codexSession, syncClaudeSession } from '../apps/local-server/src/terminal-sessions.js';
+import { terminalAgentCommand, terminalSessionShell, readTerminalSession, recordClaudeSession, codexSession, syncClaudeSession, seedTerminalSession } from '../apps/local-server/src/terminal-sessions.js';
 
 const first = '11111111-1111-4111-8111-111111111111', second = '22222222-2222-4222-8222-222222222222';
 const start = id => `2026-10-20T06:39:17.163436Z  INFO session_loop{thread_id=${id}}: codex_core::session: new\n`;
@@ -139,4 +139,15 @@ test('Cursor CLI starts plainly and restores through its session picker', async 
   assert.equal(await terminalAgentCommand(root, 'one', 'cursor'), 'cursor-agent');
   assert.equal(await terminalAgentCommand(root, 'restored', 'cursor', 'one'), 'cursor-agent --resume');
   await assert.rejects(terminalAgentCommand(root, 'bad', 'gemini'), /잘못된 에이전트/);
+});
+
+
+test('chat handoff resumes the exact provider session, including Cursor', async t => {
+  const root = await directory(t);
+  for (const agent of ['claude', 'codex', 'cursor']) {
+    await seedTerminalSession(root, agent, first, agent);
+    const command = await terminalAgentCommand(root, `terminal-${agent}`, agent, agent);
+    assert.match(command, new RegExp(`^${agent === 'cursor' ? 'cursor-agent --resume' : agent === 'codex' ? 'codex resume' : 'claude --resume'} ${first}(?: |$)`));
+    assert.equal(await readTerminalSession(root, agent, agent), first);
+  }
 });

@@ -23,8 +23,9 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
-import { readClaudeCache } from './claude-cache.js';
+import { mcpServers, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, probeModels, probeAgentModels, readModelCatalog } from './chat.js';
+import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
@@ -189,7 +190,7 @@ async function openProject(requested) {
         worktreePath: path.join(directory, 'worktrees', repo.id),
         branch: `ade/repo-${repo.id}`
       }));
-      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map() };
+      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, chats: new Map(), openingChats: 0, chatOpen: serial(), mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map() };
       project.save = () => project.persist(() => writeJson(path.join(directory, 'state.json'), state));
       for (const repo of repositories) if (repo.worktreeEnabled) await repoWorktree(project, repo);
       await project.save();
@@ -263,11 +264,16 @@ function closeProject(project, { force = false, detach = false } = {}) {
     if (projects.get(project.id) !== project) return;
     const liveTerminals = [...project.terminals.values()].filter(terminal => !terminal.exited).length;
     if (!force && liveTerminals) throw fault('PROJECT_BUSY', `실행 중인 터미널 ${liveTerminals}개가 있습니다.`, 409);
+    const busyChats = [...project.chats.values()].filter(chat => ['working', 'attention'].includes(chat.state().status)).length;
+    if (!force && busyChats) throw fault('PROJECT_BUSY', `응답 중인 채팅 ${busyChats}개가 있습니다.`, 409);
     projects.delete(project.id);
     for (const socket of clients) socket.projects.delete(project.id);
     project.watcher?.close();
     for (const terminal of project.terminals.values()) detach ? terminal.native.detach() : terminal.native.close();
     project.terminals.clear();
+    // Chats keep their transcript and Claude session id on disk; closing only ends the child, and the next message resumes it.
+    await Promise.all([...project.chats.values()].map(chat => chat.close()));
+    project.chats.clear();
     await project.save();
     await fs.unlink(project.lockFile).catch(error => { if (error.code !== 'ENOENT') throw error; });
   });
@@ -277,6 +283,7 @@ function watchProject(project) {
 }
 function snapshot(project) {
   return { id: project.id, root: project.root, multiRepo: project.multiRepo, repositories: project.repositories.map(({ id, name, path: repoPath, worktreeEnabled, worktreePath, branch }) => ({ id, name, path: repoPath, worktreeEnabled, worktreePath: worktreeEnabled ? worktreePath : null, branch: worktreeEnabled ? branch : null })), ui: project.state.ui,
+    chats: [...project.chats].map(([id, chat]) => ({ id, state: chat.state() })),
     terminals: [...project.terminals].map(([id, terminal]) => ({ id, exited: terminal.exited, cwd: terminal.cwd, ...terminal.sizing.size, startedAt: terminal.startedAt, activeAt: terminal.activeAt, inputAt: terminal.inputAt })) };
 }
 // A GUI-launched app often inherits a PATH without the user's CLI install dirs (~/.local/bin, npm global), so add the usual ones.
@@ -299,6 +306,8 @@ function configurePlugins(config) {
   pluginTerminal = { node: typeof config?.node === 'string' ? config.node : null, plugins };
   setAgentMcpServers(plugins.map(plugin => plugin.mcp).filter(Boolean));
 }
+const agentModelProbes = new Map();
+let modelsProbe = null; // { at, root, promise } for chat/models; the default model can come from a project's own settings, so it is per project folder
 function pluginEnv() {
   if (!pluginTerminal.plugins.length) return {};
   const env = {}, dirs = pluginTerminal.plugins.flatMap(plugin => plugin.path);
@@ -457,6 +466,48 @@ async function createProject(input) {
 function trimRecent(list) {
   let unpinned = 0;
   return list.filter(item => item.pinned || ++unpinned <= 30);
+}
+// The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript.
+async function chatLaunchFiles(root) {
+  const servers = mcpServers();
+  if (!servers.length) return {};
+  const mcpFile = path.join(root, 'claude-mcp.json');
+  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args }])) }), { mode: 0o600 });
+  return { mcpFile };
+}
+// Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
+// Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
+// again, and the same session continues as a chat. A half-typed prompt in the composer is not detectable and is lost with the process.
+const SWITCH_BLOCKED = { turn: '응답 중입니다', background: '백그라운드 작업이 실행 중입니다', waiting: '승인 또는 질문을 기다리고 있습니다', scheduled: '예약된 작업이 남아 있습니다', unknown: '상태를 확인할 수 없습니다' };
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function terminalToChat(project, id, newId, workspace) {
+  const refuse = why => fault('CHAT_SWITCH_UNSAFE', `Chat으로 전환할 수 없습니다: ${why}`, 409);
+  const terminal = project.terminals.get(id);
+  if (!terminal || terminal.exited || !terminal.native.pid) throw fault('NOT_FOUND', '터미널을 찾을 수 없습니다.', 404);
+  const table = await processTable([terminal.native.pid]).catch(() => null);
+  const found = table && terminalProcesses(table)(terminal.native.pid);
+  if (!found || found.agent !== 'claude' || !found.agentPid) throw refuse('실행 중인 Claude Code를 찾지 못했습니다');
+  if (found.ssh) throw refuse('SSH 터미널은 지원하지 않습니다');
+  if (terminal.status.status?.state === 'working') throw refuse(SWITCH_BLOCKED.turn);
+  const pid = found.agentPid, dir = await accounts.agentFolder('claude', pid, project.root).catch(() => null);
+  if (!dir) throw refuse('Claude 설정 폴더를 찾지 못했습니다');
+  const busy = await claudeBusy(dir, pid).catch(() => ({ busy: true, kind: 'unknown' }));
+  if (busy.busy) throw refuse(SWITCH_BLOCKED[busy.kind] ?? SWITCH_BLOCKED.unknown);
+  let live;
+  try { live = JSON.parse(await fs.readFile(path.join(dir, 'sessions', `${pid}.json`), 'utf8')); } catch { throw refuse('세션 상태 파일을 읽을 수 없습니다'); }
+  if (live?.pid !== pid || !/^[0-9a-f-]{36}$/i.test(live.sessionId ?? '') || typeof live.cwd !== 'string') throw refuse('세션 정보가 올바르지 않습니다');
+  // `claude -p --resume` finds the session by its folder, and the chat opens inside the project: both must hold before anything is ended.
+  const cwd = await workspace.resolve(live.cwd).catch(() => null);
+  if (!cwd) throw refuse('Claude가 프로젝트 밖의 폴더에서 실행 중입니다');
+  const file = await transcriptOf(dir, live).catch(() => null);
+  if (!file) throw refuse('대화 기록 파일을 찾지 못했습니다');
+  process.kill(pid, 'SIGTERM');
+  for (let waited = 0; alive(pid) && waited < 3000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+  if (alive(pid)) { process.kill(pid, 'SIGKILL'); await new Promise(resolve => setTimeout(resolve, 300)); }
+  if (alive(pid)) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
+  await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
+  terminal.native.close(); project.terminals.delete(id);
+  return { cwd };
 }
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
@@ -617,7 +668,8 @@ async function route(action, input, project) {
       if ([...projects.values()].reduce((sum, item) => sum + item.terminals.size + item.openingTerminals, 0) >= 128) throw fault('TERMINAL_LIMIT', '열린 프로젝트 전체에서 최대 128개 터미널을 지원합니다.');
       project.openingTerminals++;
       try {
-        const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+        const handoff = input.restoreId && project.chats.get(input.restoreId);
+        const cwd = handoff && input.agent === handoff.agent && input.path === handoff.cwd && handoff.state().status === 'idle' ? handoff.cwd : input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
         if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
         const id = randomUUID();
         if (input.restoreId !== undefined && input.agent === undefined) throw fault('INVALID_INPUT', '복구할 에이전트를 지정하세요.');
@@ -628,7 +680,7 @@ async function route(action, input, project) {
         const command = input.agent === undefined ? undefined : [await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked), input.args?.trim()].filter(Boolean).join(' ');
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
-        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...sessionShell.env }, meta: { projectId: project.id, id, cwd, startedAt: Date.now() } });
+        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...(typeof input.configDir === 'string' && path.isAbsolute(input.configDir) && input.configDir.length <= 1024 && !input.configDir.includes('\0') && { [input.agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: input.configDir }), ...sessionShell.env }, meta: { projectId: project.id, id, cwd, startedAt: Date.now() } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
@@ -637,6 +689,106 @@ async function route(action, input, project) {
       const terminal = project.terminals.get(input.id);
       terminal?.native.close(); project.terminals.delete(input.id); return {};
     }
+    case 'chat/open': return project.chatOpen(async () => {
+      const id = text(input.id, '채팅 ID', 128);
+      if (input.agent !== undefined && !['claude', 'codex', 'cursor'].includes(input.agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+      let chat = project.chats.get(id);
+      if (!chat) {
+        if (project.chats.size + project.openingChats >= 16) throw fault('CHAT_LIMIT', '프로젝트당 최대 16개 채팅을 지원합니다.');
+        project.openingChats++;
+        try {
+          const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+          if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
+          chat = await openChatSession({ directory: project.directory, id, cwd, agent: input.agent === undefined ? 'claude' : input.agent, env: pluginEnv,
+            onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
+            prepare: chatLaunchFiles, recover: () => checkAgents(), defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
+          project.chats.set(id, chat);
+        } finally { project.openingChats--; }
+      }
+      if (input.agent !== undefined && chat.agent !== input.agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
+      return { id, agent: chat.agent, user: os.userInfo().username, ...chat.replay(input.since) };
+    });
+    case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
+    case 'chat/send': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      const images = Array.isArray(input.images) ? input.images : [];
+      const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+      if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > 2_500_000 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
+      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true });
+      return {};
+    }
+    case 'chat/branch': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await seedChat({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), ...chat.branchSnapshot(input.uuid) });
+      return {};
+    }
+    case 'chat/rewind': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.rewind(input.uuid);
+      return {};
+    }
+    case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
+    case 'chat/interrupt': await project.chats.get(input.id)?.interrupt(); return {};
+    case 'chat/approve': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.slice(0, 500) : undefined });
+      return {};
+    }
+    case 'chat/set': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode });
+      return {};
+    }
+    case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
+    case 'chat/close': {
+      const chat = project.chats.get(input.id);
+      if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true }); }
+      return {};
+    }
+    // Concrete model behind each alias (see probeModels). Cached for an hour; one probe at a time.
+    case 'chat/models': {
+      const agent = input.agent ?? 'claude';
+      if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+      if (agent !== 'claude') {
+        const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '']);
+        let cached = agentModelProbes.get(key);
+        if (!cached || input.refresh === true || Date.now() - cached.at > 3_600_000) {
+          cached = { at: Date.now(), promise: probeAgentModels({ agent, cwd: workspace.root, env: pluginEnv }) };
+          agentModelProbes.set(key, cached);
+          cached.promise.catch(() => { if (agentModelProbes.get(key) === cached) agentModelProbes.delete(key); });
+          if (agentModelProbes.size > 32) agentModelProbes.delete(agentModelProbes.keys().next().value);
+        }
+        const result = await cached.promise;
+        const chat = project.chats.get(input.id); if (chat?.agent === agent) chat.loadCatalog(result.catalog, result.models[''], result.configOptions);
+        return result;
+      }
+      if (!modelsProbe || modelsProbe.root !== workspace.root || input.refresh === true || Date.now() - modelsProbe.at > 3_600_000) {
+        const entry = { at: Date.now(), root: workspace.root, promise: probeModels({ env: pluginEnv, cwd: workspace.root }).catch(() => ({})) };
+        modelsProbe = entry;
+        entry.promise.then(models => { if (!Object.keys(models).length && modelsProbe === entry) modelsProbe = null; }); // a failed probe is retried next time
+      }
+      return { models: await modelsProbe.promise, catalog: await readModelCatalog() };
+    }
+    // Just the CLI's own model list (see readModelCatalog); cheap, so the "more models" window reads it fresh each time it opens.
+    case 'chat/model-catalog': {
+      if (input.agent && input.agent !== 'claude') return route('chat/models', input, project);
+      return { catalog: await readModelCatalog() };
+    }
+    case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
+    // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
+    case 'chat/to-terminal': {
+      const id = text(input.id, '채팅 ID', 128), chat = project.chats.get(id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      const { agent, sessionId, configDir } = await chat.handoff();
+      await seedTerminalSession(project.directory, id, sessionId, agent);
+      return { agent, restoreId: id, cwd: chat.cwd, ...(configDir && { configDir }) };
+    }
+    case 'chat/commands': if (input.agent === 'codex') return [{ name: 'compact', description: '대화 컨텍스트를 압축합니다' }]; if (input.agent === 'cursor') return []; return listCommands(input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root, os.homedir());
     case 'terminal/follow-up': {
       const prompt = text(input.prompt, '후속 입력', 16000), requestId = text(input.requestId, '요청 ID', 100);
       if (!prompt.trim() || /[\x00-\x08\x0b-\x1f\x7f]/.test(prompt) || !Number.isSafeInteger(input.sequence)) throw fault('INVALID_INPUT', '후속 입력을 확인하세요.');

@@ -4,10 +4,11 @@ import { fault } from './files.js';
 export const validAgentArgs = value => typeof value === 'string' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
 
 function validateSettings(settings, invalid) {
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 8192) invalid();
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 16384) invalid();
   if (settings.theme !== undefined && !['dark', 'light'].includes(settings.theme)) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
-  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'confirmCloseChat', 'confirmCloseProject']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  if (settings.defaultMode !== undefined && !['chat', 'cli'].includes(settings.defaultMode)) invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();
   if (settings.scrollback !== undefined && !(Number.isInteger(settings.scrollback) && settings.scrollback >= 500 && settings.scrollback <= 100000)) invalid();
@@ -28,7 +29,16 @@ function validateSettings(settings, invalid) {
   for (const [name, min, max, whole] of [['letterSpacing', 0, 5, true], ['scrollSensitivity', 0.5, 5, false], ['minimumContrast', 1, 21, false], ['diffContextLines', 1, 20, true], ['contextTipK', 50, 1000, true], ['systemRefresh', 2, 60, true], ['reviewWidth', 320, 1600, true]])
     if (settings[name] !== undefined && !(typeof settings[name] === 'number' && settings[name] >= min && settings[name] <= max && (!whole || Number.isInteger(settings[name])))) invalid();
   for (const name of ['agentsOff', 'agentsMuted']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 8 && settings[name].every(item => ['claude', 'codex', 'cursor'].includes(item)))) invalid();
-  for (const name of ['statusItems', 'statusLeft', 'statusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
+  for (const name of ['chatKeys', 'appKeys']) if (settings[name] !== undefined && !(settings[name] && typeof settings[name] === 'object' && !Array.isArray(settings[name]) && Object.entries(settings[name]).length <= (name === 'appKeys' ? 64 : 16)
+    && Object.entries(settings[name]).every(([id, combo]) => /^[a-zA-Z][a-zA-Z0-9]{0,23}$/.test(id) && typeof combo === 'string' && /^[a-z0-9+\[\]\\,.;'`=/-]{1,48}$/.test(combo)))) invalid();
+  for (const name of ['statusItems', 'statusLeft', 'statusRight', 'chatStatusItems', 'chatStatusLeft', 'chatStatusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
+  if (settings.chatStatusSeparator !== undefined && !(typeof settings.chatStatusSeparator === 'string' && settings.chatStatusSeparator.length <= 8)) invalid();
+  // bypassPermissions is deliberately not a valid default: it must be chosen per chat, never inherited.
+  for (const [name, values] of [['chatSendKey', ['enter', 'mod-enter']], ['chatThinkingOpen', ['live', 'always', 'never']], ['chatWidth', ['narrow', 'default', 'wide', 'full']], ['chatDefaultPermission', ['default', 'acceptEdits', 'plan']],
+    ['chatDefaultEffort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max']], ['terminalBell', ['off', 'visual', 'sound']]]) if (settings[name] !== undefined && !values.includes(settings[name])) invalid();
+  for (const [name, min, max] of [['chatFontSize', 11, 20], ['chatComposerMax', 120, 600], ['uiZoom', 80, 150], ['diffComputeMs', 1000, 20000]])
+    if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= min && settings[name] <= max)) invalid();
+  if (settings.diffFont !== undefined && !(typeof settings.diffFont === 'string' && settings.diffFont.length <= 200)) invalid();
 }
 
 // App-wide state: which projects are open, which one is active, and settings shared by every project.
@@ -61,7 +71,7 @@ export function validateUi(ui) {
     if ('id' in value) {
       if (typeof value.id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(value.id) || ids.has(value.id)) invalid();
       ids.add(value.id); if (ids.size > 32) invalid();
-      if (value.kind !== undefined && !['terminal', 'editor', 'launcher'].includes(value.kind)) invalid();
+      if (value.kind !== undefined && !['terminal', 'editor', 'launcher', 'chat'].includes(value.kind)) invalid();
       if (value.cwd !== undefined && (typeof value.cwd !== 'string' || value.cwd.length > 8192)) invalid();
       if (value.agent !== undefined && !['claude', 'codex', 'cursor'].includes(value.agent)) invalid();
       if (value.kind === 'editor') {

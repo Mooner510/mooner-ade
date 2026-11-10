@@ -46,6 +46,26 @@ async function boot(t) {
   return { origin, cookie, api, repo, data, projectId: project.id, call: (action, body, expected) => api(action, { projectId: project.id, ...body }, expected) };
 }
 
+test('chat API preserves agent identity and rejects unsupported Cursor settings', async t => {
+  const { call } = await boot(t);
+  await call('chat/sessions', { agent: 'invalid' }, 400);
+  for (const agent of ['claude', 'codex', 'cursor']) {
+    const opened = await call('chat/open', { id: `chat-${agent}`, agent });
+    assert.equal(opened.agent, agent); assert.equal(opened.state.agent, agent);
+    assert.deepEqual(await call('chat/sessions', { agent }), []);
+    assert.equal(opened.state.capabilities.branch, agent !== 'cursor');
+    await call('chat/open', { id: `chat-${agent}`, agent: agent === 'claude' ? 'codex' : 'claude' }, 400);
+    if (agent === 'cursor') {
+      await call('chat/set', { id: `chat-${agent}`, addDirs: [] }, 409);
+      await call('chat/set', { id: `chat-${agent}`, permissionMode: 'bypassPermissions' }, 400);
+    }
+    await call('chat/close', { id: `chat-${agent}` });
+    const restored = await call('chat/open', { id: `chat-${agent}`, agent });
+    assert.equal(restored.agent, agent);
+    await call('chat/close', { id: `chat-${agent}`, forget: true });
+  }
+});
+
 test('terminal restore keeps concurrent provider sessions separate and sends legacy terminals to the picker', async t => {
   const { call, data, projectId } = await boot(t);
   if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
