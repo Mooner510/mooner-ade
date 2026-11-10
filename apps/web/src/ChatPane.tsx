@@ -14,7 +14,7 @@ import { Dropdown, Modal, ModelLabel } from './views';
 export type ChatCtx = {
   call<T = any>(action: string, input?: object): Promise<T>;
   subscribe(id: string, handler: (message: any) => void): () => void;
-  settings: Settings; root: string; projectId: string; branch: string; switchBranch(): void;
+  settings: Settings; root: string; projectId: string;
   onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(): void;
   pick(title: string, items: { id: string; label: string }[]): Promise<string | null>; fail(cause: unknown): void;
   // Branch: opens a copy of chat `id` up to one assistant message as a new tab.
@@ -48,44 +48,47 @@ function modelOptions(model: string | null, catalog = baseCatalog(), aliases: Re
     { value: MORE_MODELS, label: '더 많은 모델…', icon: 'apps', divider: true }];
 }
 
-type SavedChat = { id: string; title: string; model: string | null; updatedAt: number };
+type SavedChat = { id: string; sessionId?: string; title: string; model: string | null; updatedAt: number };
 type CliChat = { sessionId: string; title: string; updatedAt: number; size: number; running: boolean; chatId: string | null };
-const when = (time: number) => new Date(time).toLocaleString();
+type ResumeChoice = { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string };
+type ResumeEntry = { key: string; title: string; updatedAt: number; detail?: string; code: string; running?: boolean; choice: ResumeChoice };
+const when = (time: number) => new Date(time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const sizeOf = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-// "이전 대화 불러오기": this project's saved ADE chats, and (Claude only) conversations made with the plain `claude` CLI.
-function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude' | 'codex' | 'cursor'; exclude: string; call: ChatCtx['call']; onPick(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }): void; onClose(): void }) {
-  const hasCli = agent === 'claude', panelId = useId(), search = useRef<HTMLInputElement>(null);
-  const [tab, setTab] = useState<'ade' | 'cli'>('ade'), [query, setQuery] = useState('');
-  const [saved, setSaved] = useState<SavedChat[] | null>(null), [cli, setCli] = useState<CliChat[] | null>(null), [failed, setFailed] = useState<string | null>(null);
+// "이전 대화 불러오기": one list, newest first, of everything this project can continue: ADE's saved chats plus (Claude only) conversations made
+// with the plain `claude` CLI. Where the source is does not matter to the user; a CLI conversation that already became a chat is listed once.
+function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude' | 'codex' | 'cursor'; exclude: string; call: ChatCtx['call']; onPick(choice: ResumeChoice): void; onClose(): void }) {
+  const search = useRef<HTMLInputElement>(null), [query, setQuery] = useState('');
+  const [entries, setEntries] = useState<ResumeEntry[] | null>(null), [failed, setFailed] = useState<string | null>(null);
   useEffect(() => { search.current?.focus(); }, []);
-  useEffect(() => { void call<SavedChat[]>('chat/sessions', { agent, exclude }).then(setSaved, cause => { setSaved([]); setFailed(String(cause?.message ?? cause)); }); }, [call, agent, exclude]);
   useEffect(() => {
-    if (tab !== 'cli' || cli !== null) return;
-    void call<CliChat[]>('chat/cli-sessions', {}).then(setCli, cause => { setCli([]); setFailed(String(cause?.message ?? cause)); });
-  }, [tab, cli, call]);
-  const needle = query.trim().toLowerCase(), match = (title: string) => !needle || title.toLowerCase().includes(needle);
-  const rows = tab === 'ade' ? saved?.filter(item => match(item.title)) : cli?.filter(item => match(item.title) && item.chatId !== exclude);
-  const loading = tab === 'ade' ? saved === null : cli === null;
-  const tabs = [['ade', 'ADE 대화'], ['cli', 'CLI 대화']] as const;
+    let live = true;
+    void Promise.allSettled([call<SavedChat[]>('chat/sessions', { agent, exclude }), agent === 'claude' ? call<CliChat[]>('chat/cli-sessions', {}) : Promise.resolve<CliChat[]>([])]).then(([saved, cli]) => {
+      if (!live) return;
+      if (saved.status === 'rejected' && cli.status === 'rejected') setFailed(String(saved.reason?.message ?? saved.reason));
+      const chats = saved.status === 'fulfilled' ? saved.value : [], known = new Set(chats.flatMap(chat => chat.sessionId ? [chat.sessionId] : []));
+      setEntries([
+        ...chats.map(chat => ({ key: `chat:${chat.id}`, title: chat.title, updatedAt: chat.updatedAt, detail: chat.model ? shortModel(chat.model) : undefined, code: (chat.sessionId ?? chat.id).slice(0, 8), choice: { kind: 'chat', id: chat.id } as ResumeChoice })),
+        ...(cli.status === 'fulfilled' ? cli.value : []).filter(item => item.chatId !== exclude && !known.has(item.sessionId) && !(item.chatId && chats.some(chat => chat.id === item.chatId)))
+          .map(item => ({ key: `cli:${item.sessionId}`, title: item.title, updatedAt: item.updatedAt, detail: sizeOf(item.size), code: item.sessionId.slice(0, 8), running: item.running,
+            choice: (item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId }) as ResumeChoice }))
+      ].sort((a, b) => b.updatedAt - a.updatedAt));
+    });
+    return () => { live = false; };
+  }, [call, agent, exclude]);
+  const needle = query.trim().toLowerCase(), rows = entries?.filter(item => !needle || item.title.toLowerCase().includes(needle));
   return <Modal className="models-modal resume-modal" labelledBy="resume-title" onClose={onClose}>
     <header><h2 id="resume-title">이전 대화 불러오기</h2><button type="button" className="models-close" aria-label="닫기" onClick={onClose}><Icon name="x" size={16} /></button></header>
     <div className="models-controls">
-      {hasCli && <div className="ai-tabs models-tabs" role="tablist" aria-label="대화 종류">
-        {tabs.map(([key, name], index) => <button type="button" key={key} id={`${panelId}-tab-${index}`} role="tab" aria-selected={tab === key} aria-controls={panelId} tabIndex={tab === key ? 0 : -1}
-          onClick={() => setTab(key)} onKeyDown={event => { if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); setTab(tabs[1 - index][0]); document.getElementById(`${panelId}-tab-${1 - index}`)?.focus(); } }}>{name}</button>)}
-      </div>}
       <label className="models-search"><Icon name="search" size={15} /><input ref={search} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="대화 제목 검색" aria-label="대화 제목 검색" /></label>
     </div>
-    <div className="models-list resume-list" id={panelId} role={hasCli ? 'tabpanel' : 'listbox'} aria-label="대화">
-      {tab === 'ade'
-        ? (rows as SavedChat[] | undefined)?.map(item => <button type="button" key={item.id} title={item.title} onClick={() => onPick({ kind: 'chat', id: item.id })}>
-            <span className="resume-title">{item.title}</span><span className="resume-meta">{item.model ? `${shortModel(item.model)} · ` : ''}{when(item.updatedAt)}</span></button>)
-        : (rows as CliChat[] | undefined)?.map(item => <button type="button" key={item.sessionId} title={item.title} disabled={item.running} onClick={() => onPick(item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId })}>
-            <span className="resume-title">{item.title}</span>
-            <span className="resume-meta">{item.running ? '터미널에서 실행 중' : item.chatId ? '이미 불러온 대화 · ' + when(item.updatedAt) : `${sizeOf(item.size)} · ${when(item.updatedAt)}`}</span></button>)}
-      {!rows?.length && <p className="models-empty">{loading ? '대화를 불러오는 중…' : failed ? `목록을 불러오지 못했습니다: ${failed}` : query ? '검색 결과가 없습니다.' : tab === 'ade' ? '이 프로젝트에 저장된 이전 Chat 대화가 없습니다.' : '이 프로젝트에서 CLI로 나눈 대화가 없습니다.'}</p>}
+    <div className="models-list resume-list" role="listbox" aria-label="이전 대화">
+      {rows?.map(item => <button type="button" role="option" aria-selected={false} key={item.key} className="resume-row" title={item.title} aria-disabled={item.running || undefined} data-blocked={item.running || undefined} onClick={() => { if (!item.running) onPick(item.choice); }}>
+        <span className="resume-name">{item.title}</span>
+        <span className="resume-info"><span>{when(item.updatedAt)}</span>{item.detail && <span>{item.detail}</span>}{item.running && <span className="resume-badge">터미널에서 실행 중</span>}<span className="resume-code">{item.code}</span></span>
+      </button>)}
+      {!rows?.length && <p className="models-empty">{entries === null ? '대화를 불러오는 중…' : failed ? `목록을 불러오지 못했습니다: ${failed}` : query ? '검색 결과가 없습니다.' : '이 프로젝트에서 불러올 수 있는 이전 대화가 없습니다.'}</p>}
     </div>
-    <footer><span>{rows ? `${rows.length}개 대화` : ''}</span><span>{tab === 'cli' ? 'CLI 기록은 읽기만 하고, 같은 세션을 이어서 씁니다.' : '선택하면 새 탭에서 이어집니다.'}</span></footer>
+    <footer><span>{rows ? `${rows.length}개 대화` : ''}</span><span>선택하면 새 탭에서 이어집니다.</span></footer>
   </Modal>;
 }
 
@@ -231,7 +234,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const [agentModels, setAgentModels] = useState<{ models: Record<string, string>; catalog: CatalogModel[] }>({ models: {}, catalog: [] });
   const [view, setView] = useState<ChatView>(emptyView), viewRef = useRef(view); viewRef.current = view;
   // The sidebar title, like a terminal's: the first thing asked since the last /clear (one line); empty until then so the tab keeps its default name.
-  const title = useMemo(() => { const from = view.items.map(item => item.kind).lastIndexOf('divider'), first = view.items.slice(from + 1).find(item => item.kind === 'user'); return first?.kind === 'user' ? first.text.replace(/\s+/g, ' ').trim().slice(0, 60) : ''; }, [view.items]);
+  const title = useMemo(() => { const from = view.items.map(item => item.kind).lastIndexOf('divider'), users = view.items.slice(from + 1).filter(item => item.kind === 'user'), first = users.find(item => item.kind === 'user' && !item.text.trimStart().startsWith('/')) ?? users[0]; return first?.kind === 'user' ? first.text.replace(/\s+/g, ' ').trim().slice(0, 60) : ''; }, [view.items]);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
   const [text, setText] = useState(''), [stash, setStash] = useState(''), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
   const [queueSending, setQueueSending] = useState(false);
@@ -428,12 +431,6 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} onAnswer={(allow, always, answers) => answer(approval, allow, always, answers)} />)}
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
-      {ctx.branch && <div className="chat-start-slot" inert={!empty} aria-hidden={!empty}><div className="chat-chips" role="group" aria-label="세션 설정">
-        {ctx.branch && <span className="chat-chip joined">
-          <button type="button" title="브랜치 전환" onClick={ctx.switchBranch}><Icon name="branch" size={16} />{ctx.branch}</button>
-          <label title="새 git worktree에서 이 대화를 시작합니다. 대화를 시작한 뒤에는 바꿀 수 없습니다."><input type="checkbox" checked={state.worktree} disabled={!view.ready || Boolean(state.sessionId)}
-            onChange={event => void setChat({ id, worktree: event.target.checked }).catch(ctx.fail)} />워크트리</label></span>}
-      </div></div>}
       <div className="chat-status-slot" inert={empty} aria-hidden={empty}><div><ChatStatusLine settings={ctx.settings} context={{ state }} /></div></div>
       <div className="chat-composer" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>

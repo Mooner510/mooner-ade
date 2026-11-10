@@ -1344,7 +1344,13 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-max[aria-pressed=true] { color: #f2566e; background: color-mix(in srgb, #f2566e 14%, transparent); }
 
 .chat-pane[data-agent=cursor] .chat-foot { flex-wrap: wrap; }
-.resume-list button { flex-direction: column; align-items: flex-start; gap: 2px; }
-.resume-list button:disabled { opacity: .5; cursor: not-allowed; }
-.resume-title { flex: none; color: var(--fg); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.resume-meta { color: var(--muted); font-size: 11.5px; }
+.models-list.resume-list { gap: 2px; padding-top: 6px; }
+.models-list .resume-row { flex: none; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 4px; padding: 10px 12px; border-radius: 8px; text-align: left; }
+.resume-name { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: 13px; font-weight: 500; line-height: 18px; }
+.resume-info { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font-size: 11.5px; line-height: 16px; white-space: nowrap; }
+.resume-info > span + span:not(.resume-code):not(.resume-badge)::before { content: '·'; margin-right: 10px; color: var(--faint); }
+.resume-code { margin-left: auto; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.resume-badge { padding: 0 7px; border-radius: 999px; font-size: 10.5px; line-height: 16px; color: #e8a64b; background: color-mix(in srgb, #e8a64b 16%, transparent); }
+.models-list .resume-row[data-blocked] { cursor: not-allowed; }
+.resume-row[data-blocked] .resume-name { color: var(--muted); }
+.models-list .resume-row[data-blocked]:hover { background: transparent; }
