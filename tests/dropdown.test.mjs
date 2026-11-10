@@ -26,9 +26,9 @@ test('custom dropdown exposes its label, choices and selected option', async t =
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', outfile
   });
   const { html } = require(outfile);
-  assert.match(html, /<summary aria-label="색 테마" aria-haspopup="listbox"><span>밝게<\/span>/);
+  assert.match(html, /<summary aria-label="색 테마" aria-haspopup="listbox"><span class="dd-label">밝게<\/span>/);
   assert.match(html, /role="listbox" popover="manual" aria-label="색 테마"/);
-  assert.match(html, /role="option" tabindex="-1" aria-selected="false"><span>어둡게<\/span>/);
-  assert.match(html, /role="option" tabindex="-1" aria-selected="true"><span>밝게<\/span>/);
+  assert.match(html, /role="option" tabindex="-1" aria-selected="false"><span class="dd-label">어둡게<\/span>/);
+  assert.match(html, /role="option" tabindex="-1" aria-selected="true"><span class="dd-label">밝게<\/span>/);
   assert.doesNotMatch(html, /<select|<option/);
 });
