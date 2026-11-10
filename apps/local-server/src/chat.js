@@ -57,7 +57,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   const approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images } sent into a running turn, not yet taken in by it
 
   const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, costBase: meta.costBase,
-    title: events.slice(events.findLastIndex(event => event.kind === 'divider') + 1).find(event => event.kind === 'user')?.text?.replace(/\s+/g, ' ').trim().slice(0, 80) });
+    title: (users => users.find(event => !event.text?.trimStart().startsWith('/')) ?? users[0])(events.slice(events.findLastIndex(event => event.kind === 'divider') + 1).filter(event => event.kind === 'user'))?.text?.replace(/\s+/g, ' ').trim().slice(0, 80) });
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -422,7 +422,7 @@ export async function listChatSessions({ directory, agent, exclude }) {
     try {
       const file = path.join(root, entry.name, 'meta.json'), meta = JSON.parse(await fs.readFile(file, 'utf8'));
       if (!meta || (meta.agent ?? 'claude') !== agent || typeof meta.sessionId !== 'string' || !meta.sessionId) continue;
-      sessions.push({ id: entry.name, title: typeof meta.title === 'string' && meta.title ? meta.title : `대화 ${String(meta.sessionId).slice(0, 8)}`, model: [meta.lastModel, meta.model].find(value => typeof value === 'string' && value) ?? null, updatedAt: (await fs.stat(file)).mtimeMs });
+      sessions.push({ id: entry.name, sessionId: meta.sessionId, title: typeof meta.title === 'string' && meta.title ? meta.title : `대화 ${String(meta.sessionId).slice(0, 8)}`, model: [meta.lastModel, meta.model].find(value => typeof value === 'string' && value) ?? null, updatedAt: (await fs.stat(file)).mtimeMs });
     } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   }
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
