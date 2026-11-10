@@ -36,7 +36,7 @@ import { chooseFolder } from './folder-dialog.js';
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
 // ADE_DEV=1 serves the web UI through an in-process Vite dev server (same origin, so cookie auth keeps working) instead of web/dist.
-const devWeb = process.env.ADE_DEV === '1';
+const devWeb = process.env.ADE_DEV === '1', devTokenEnv = process.env.ADE_DEV_TOKEN ?? ''; // read here: both are removed from the environment below
 const vite = devWeb ? await (async () => {
   const webDir = path.resolve(import.meta.dirname, '../../web');
   const { createServer } = await import(pathToFileURL(createRequire(path.join(webDir, 'package.json')).resolve('vite')).href);
@@ -60,7 +60,7 @@ let ptyHostLost = false;
 ptyHost?.onClose(() => { ptyHostLost = true; });
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
 // ADE_DEV likewise: an app launched from such a terminal would start in dev mode and look for Vite.
-delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV;
+delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV; delete process.env.ADE_DEV_TOKEN;
 // Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
 for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
 const localPty = ptyHost ? null : await import('node-pty').catch(() => null);
@@ -79,7 +79,11 @@ const registryWrite = serial();
 const clients = new Set();
 const sessions = new Set();
 // The app window exchanges this per-process token for a session cookie; it is never written to disk.
-const bootstrap = randomBytes(32).toString('hex');
+// ADE_DEV=1 with ADE_DEV_TOKEN (64 hex chars) keeps the URL and the browser's session valid across the restarts `node --watch` does; without it every start is new.
+const devToken = devWeb && /^[0-9a-f]{64}$/.test(devTokenEnv) ? devTokenEnv : '';
+const bootstrap = devToken || randomBytes(32).toString('hex');
+const devSession = devToken ? createHash('sha256').update(`ade-dev-session:${devToken}`).digest('hex') : '';
+if (devSession) sessions.add(devSession);
 const bootstrapMatches = token => typeof token === 'string' && token.length === bootstrap.length && timingSafeEqual(Buffer.from(token), Buffer.from(bootstrap));
 // Earlier versions kept a reusable token for browser access.
 await fs.rm(path.join(dataRoot, 'token'), { force: true });
@@ -846,7 +850,7 @@ const server = http.createServer(async (request, response) => {
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
           if (!bootstrapMatches(input.token)) throw fault('UNAUTHORIZED', '앱을 다시 시작하세요.', 401);
-          const token = randomBytes(32).toString('hex'); sessions.add(token);
+          const token = devSession || randomBytes(32).toString('hex'); sessions.add(token);
           response.setHeader('Set-Cookie', `ade_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
         }
         value = {};
