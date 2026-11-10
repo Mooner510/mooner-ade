@@ -1344,3 +1344,5 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-max[aria-pressed=true] { color: #f2566e; background: color-mix(in srgb, #f2566e 14%, transparent); }
 
 .chat-pane[data-agent=cursor] .chat-foot { flex-wrap: wrap; }
+.boot-error { position: fixed; inset: 0; margin: auto; width: min(420px, calc(100% - 32px)); height: max-content; padding: 20px 22px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay); color: var(--fg); box-shadow: var(--shadow); }
+.boot-error p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
