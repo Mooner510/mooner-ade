@@ -159,7 +159,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     async initialize(meta, cwd, servers = []) {
       config = { ...meta, cwd };
       if (agent === 'codex') {
-        await request('initialize', { clientInfo: { name: 'mooner_ade', title: 'Mooner ADE', version: '0.5.0' }, capabilities: { experimentalApi: true } });
+        await request('initialize', { clientInfo: { name: 'mooner_ade', title: 'Mooner ADE', version: '0.5.1' }, capabilities: { experimentalApi: true } });
         await send({ method: 'initialized' });
         const models = await request('model/list', { limit: 100 });
         capabilities.catalog = (models.data ?? []).map(item => ({ id: item.model, name: item.displayName, family: '', window: 0, main: true,
@@ -179,7 +179,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         sessionId = response.thread.id;
         emit({ kind: 'session', sessionId, model: response.model ?? meta.model, slashCommands: ['compact', ...skills.keys()] });
       } else {
-        const init = await request('initialize', { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.0' } });
+        const init = await request('initialize', { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.1' } });
         capabilities.images = init.agentCapabilities?.promptCapabilities?.image === true;
         capabilities.resume = init.agentCapabilities?.loadSession === true;
         if (meta.sessionId && !capabilities.resume) throw fault('CHAT_UNSUPPORTED', '이 Cursor 버전은 세션 복원을 지원하지 않습니다.', 409);
