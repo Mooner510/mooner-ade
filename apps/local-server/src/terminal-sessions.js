@@ -50,9 +50,19 @@ export async function readTerminalSession(directory, id, agent) {
   } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
 }
 
+// A chat's conversation as the restore source of a new terminal: `terminalAgentCommand(..., restoreId)` then builds `claude --resume <session>`.
+export async function seedTerminalSession(directory, id, sessionId, agent = 'claude') {
+  if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+  if (!uuid.test(sessionId ?? '')) throw fault('INVALID_INPUT', '잘못된 세션 ID입니다.');
+  const root = folder(directory, id);
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(root, 'session.json'), JSON.stringify({ agent, sessionId }), { mode: 0o600 });
+}
+
 // MCP servers approved plugins give the agents started in ADE terminals (docs/PLUGINS.md). Set by the main process only.
 let agentMcpServers = [];
 const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
+export const mcpServers = () => agentMcpServers;
 export function setAgentMcpServers(servers) {
   agentMcpServers = (Array.isArray(servers) ? servers : []).filter(server => MCP_NAME.test(server?.name ?? '') && typeof server.command === 'string' && Array.isArray(server.args)
     // Codex gets these as TOML literal strings, which cannot hold a quote; such a server is left out of both agents.
@@ -65,7 +75,10 @@ const toml = value => `'${value.replaceAll('\\', '/')}'`;
 export async function terminalAgentCommand(directory, id, agent, restoreId, shellTracksSessions = false) {
   if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
   // shortcut: Cursor CLI has no per-run hook or log option to learn its chat ID, so a restore opens its picker.
-  if (agent === 'cursor') return restoreId === undefined ? 'cursor-agent' : 'cursor-agent --resume';
+  if (agent === 'cursor') {
+    const sessionId = restoreId === undefined ? undefined : await readTerminalSession(directory, restoreId, agent);
+    return restoreId === undefined ? 'cursor-agent' : `cursor-agent --resume${sessionId ? ` ${sessionId}` : ''}`;
+  }
   const root = folder(directory, id);
   const sessionId = restoreId === undefined ? undefined : await readTerminalSession(directory, restoreId, agent);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
