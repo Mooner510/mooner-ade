@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
 
 // File.path was removed from Electron, so a dropped file's absolute path is only reachable through webUtils here.
 // OSC 52 copies arrive while the window may be unfocused, where navigator.clipboard refuses to write.
@@ -15,7 +15,7 @@ plugins.onState = listener => {
   ipcRenderer.on('ade:plugins-state', handler);
   return () => ipcRenderer.off('ade:plugins-state', handler);
 };
-contextBridge.exposeInMainWorld('adeDesktop', { pickFolder: options => ipcRenderer.invoke('ade:pick-folder', options), appInfo: () => ipcRenderer.invoke('ade:app-info'), checkUpdate: () => ipcRenderer.invoke('ade:check-update'), getBetaUpdates: () => ipcRenderer.invoke('ade:get-beta-updates'), setBetaUpdates: beta => ipcRenderer.invoke('ade:set-beta-updates', beta === true), pathForFile: file => webUtils.getPathForFile(file), writeClipboard: text => ipcRenderer.send('ade:write-clipboard', String(text)), plugins });
+contextBridge.exposeInMainWorld('adeDesktop', { pickFolder: options => ipcRenderer.invoke('ade:pick-folder', options), appInfo: () => ipcRenderer.invoke('ade:app-info'), checkUpdate: () => ipcRenderer.invoke('ade:check-update'), getBetaUpdates: () => ipcRenderer.invoke('ade:get-beta-updates'), setBetaUpdates: beta => ipcRenderer.invoke('ade:set-beta-updates', beta === true), pathForFile: file => webUtils.getPathForFile(file), writeClipboard: text => ipcRenderer.send('ade:write-clipboard', String(text)), setZoom: percent => { if (Number.isFinite(percent)) webFrame.setZoomFactor(Math.min(1.5, Math.max(0.8, percent / 100))); }, plugins });
 
 // macOS traffic lights overlay the page without supplying titlebar-area CSS env values.
 if (process.platform === 'darwin') {

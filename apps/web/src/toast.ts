@@ -60,6 +60,7 @@ document.addEventListener('paste', event => toastPasted(event.clipboardData?.get
 // Tip pacing: true (and recorded) when the tip may be shown now. The pane draws it itself, in its own header, so it never covers the terminal.
 // History lives in localStorage so a tip does not nag across restarts; `gap` is the minimum time between showings and `max` the lifetime cap.
 const TIPS = 'ade:tips';
+export const resetTips = () => { try { localStorage.removeItem(TIPS); } catch { /* storage blocked: nothing was kept */ } };
 const tipHistory = (): TipHistory => { try { return JSON.parse(localStorage.getItem(TIPS) || '{}'); } catch { return {}; } };
 export function claimTip(id: string, { gap = 864e5, max = 2 }: { gap?: number; max?: number } = {}) {
   const history = tipHistory(), now = Date.now();

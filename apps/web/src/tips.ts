@@ -14,3 +14,7 @@ export const contextTip = (tokens: number | undefined, minK: number) => tokens &
 
 export const queueTip = '💡 작업 중엔 Enter 대신 Tab: 끝나자마자 자동 전송되고 수정·취소도 돼요';
 export const splitTip = (keys: (binding: string) => string) => `💡 터미널에서 ${keys('ctrl+d')} 좌우 · ${keys('ctrl+shift+d')} 상하 분할`;
+
+// Eligibility is migrated once for existing users; closing the card clears it in shared settings.
+export const chatModeTipDue = (settings: { defaultMode: string; chatTipPending: boolean; tips: boolean }, kind: string | undefined, agent: string | undefined) =>
+  settings.tips && settings.chatTipPending && settings.defaultMode === 'cli' && (kind === 'terminal' || kind === undefined) && ['claude', 'codex', 'cursor'].includes(agent ?? '');

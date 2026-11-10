@@ -1,6 +1,7 @@
+import { showAppKey } from './shortcuts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, basename } from './api';
+import { api, basename, chooseFolder } from './api';
 import { agentNames, defaultSettings, migrateSettings, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -12,6 +13,9 @@ import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import '@material-symbols/font-400/outlined.css';
+import '@fontsource-variable/inter/wght.css';
+import '@fontsource-variable/noto-sans-kr/wght.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
 
 // Comet tail: 18 overlapping dashes sharing one head stack into a smooth fade (~45% of the outline); the short extras brighten the tip.
 const TRAIL: [number, number][] = [[1.5, .7], [4, .35], ...Array.from({ length: 18 }, (_, i): [number, number] => [2.5 * (i + 1), .11])];
@@ -87,13 +91,6 @@ const pickerTabs: { id: PickerTab; label: string; icon: IconName }[] = [
 // Where a create/clone will land, shown before it happens; the separator follows whatever the parent path already uses.
 const joinPath = (parent: string, name: string) => !parent || !name ? '' : parent.replace(/[\\/]+$/, '') + (parent.includes('\\') ? '\\' : '/') + name;
 const repoName = (url: string) => url.trim().replace(/\.git$/, '').replace(/\/+$/, '').split(/[/:]/).pop() || '';
-// Paths are only ever chosen in the OS folder dialog, never typed: the desktop app uses Electron's, the browser asks the local server to open one.
-type DesktopBridge = { pickFolder(options?: { title?: string; defaultPath?: string }): Promise<string | null> };
-async function chooseFolder(title: string, defaultPath: string) {
-  const desktop = (window as unknown as { adeDesktop?: DesktopBridge }).adeDesktop;
-  if (desktop) return desktop.pickFolder({ title, defaultPath: defaultPath || undefined });
-  return (await api<{ path: string | null }>('dialog/folder', { title, defaultPath })).path;
-}
 type FolderFieldProps = { label: string; ariaLabel: string; title: string; value: string; placeholder: string; disabled: boolean; onChange(path: string): void; onError(message: string): void };
 function FolderField({ label, ariaLabel, title, value, placeholder, disabled, onChange, onError }: FolderFieldProps) {
   const [picking, setPicking] = useState(false);
@@ -235,13 +232,12 @@ function Shell() {
   const [splash, setSplash] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false);
   const shell = useRef<HTMLDivElement>(null);
-  // Sidebar display is a per-browser preference: expanded folders with tabs, or a narrow strip of initials.
-  const [compact, setCompact] = useState(() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } });
+  // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
+  const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ root: string; id: string; pane?: string } | null>(null), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
   const [menu, setMenu] = useState<TabMenuTarget | null>(null);
   const [projectDrag, setProjectDrag] = useState(''), [projectDrop, setProjectDrop] = useState<{ root: string; after: boolean } | null>(null);
-  useEffect(() => { try { localStorage.setItem('ade-sidebar-compact', compact ? '1' : '0'); } catch { /* storage can be blocked */ } }, [compact]);
   const { hub, connection } = useHub(ready);
   const entriesRef = useRef(entries); entriesRef.current = entries;
   const handles = useRef(new Map<string, WorkspaceHandle>());
@@ -267,13 +263,18 @@ function Shell() {
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
       const loaded = saved.settings ? migrateSettings(saved.settings) : null;
-      if (loaded) setSettings(loaded);
+      // The rail state used to live only in this browser's localStorage; carry it over once.
+      const wasCompact = saved.settings?.sidebarCompact === undefined && (() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } })();
+      if (loaded) setSettings(wasCompact ? { ...loaded, sidebarCompact: true } : loaded);
+      else if (wasCompact) setSettings(all => ({ ...all, sidebarCompact: true }));
       setSplash(Boolean(loaded?.onboarded));
       const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(report);
   }, [report]);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
+  // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
+  useEffect(() => { (window as unknown as { adeDesktop?: { setZoom?(percent: number): void } }).adeDesktop?.setZoom?.(settings.uiZoom); }, [settings.uiZoom]);
   // A custom accent replaces the theme's accent family inline; an empty one removes the override so the stylesheet applies again.
   useEffect(() => {
     const style = document.documentElement.style, color = settings.accentColor, names = ['--accent', '--accent-strong', '--accent-fg', '--accent-soft', '--selected', '--focus'];
@@ -365,14 +366,14 @@ function Shell() {
   };
   // Stable identity, so a project that is not being shown does not re-render when another changes.
   const projectCommands = useMemo<Command[]>(() => [
-    { id: 'addProject', label: '프로젝트 열기…', keys: 'mod+alt+o', run: () => actions.current.add() },
-    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b', run: () => actions.current.toggle() },
-    { id: 'settings', label: '설정 열기', keys: 'mod+,', run: () => actions.current.settings() },
-    { id: 'closeProject', label: '프로젝트 닫기', keys: 'mod+alt+w', run: () => actions.current.close() },
+    { id: 'addProject', label: '프로젝트 열기…', run: () => actions.current.add() },
+    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', run: () => actions.current.toggle() },
+    { id: 'settings', label: '설정 열기', run: () => actions.current.settings() },
+    { id: 'closeProject', label: '프로젝트 닫기', run: () => actions.current.close() },
     { id: 'tutorial', label: '튜토리얼 다시 보기', run: () => actions.current.tutorial() },
-    { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', run: () => actions.current.cycle(1) },
-    { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', run: () => actions.current.cycle(-1) },
-    ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, keys: `mod+alt+${index + 1}`, hidden: true, run: () => actions.current.select(index) }))
+    { id: 'nextProject', label: '다음 프로젝트', run: () => actions.current.cycle(1) },
+    { id: 'prevProject', label: '이전 프로젝트', run: () => actions.current.cycle(-1) },
+    ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
   const onOpenSettings = useCallback(() => setSettingsOpen('default'), []);
@@ -390,14 +391,6 @@ function Shell() {
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
   };
 
-  const shortcuts = [
-    { label: '새 터미널 탭', keys: showKeys('mod+shift+t') }, { label: '탭 닫기', keys: showKeys('mod+shift+w') }, { label: '다음/이전 탭', keys: `${showKeys('alt+]')} / ${showKeys('alt+[')}` },
-    { label: '탭 번호로 이동', keys: showKeys('alt+1') + '…9' }, { label: '좌우 분할', keys: showKeys('ctrl+d') }, { label: '상하 분할', keys: showKeys('ctrl+shift+d') }, { label: 'Pane 최대화', keys: showKeys('mod+shift+enter') },
-    { label: '탭 위/아래로 이동', keys: `${showKeys('alt+shift+[')} / ${showKeys('alt+shift+]')}` },
-    { label: 'Pane 이동', keys: showKeys('alt+shift+arrowleft') + ' / ' + showKeys('alt+shift+arrowright') }, { label: '변경사항(Diff) 패널', keys: showKeys('mod+shift+g') },
-    { label: '명령 팔레트', keys: showKeys('mod+shift+p') }, { label: '프로젝트 열기', keys: showKeys('mod+alt+o') }, { label: '사이드바 접기/펼치기', keys: showKeys('mod+alt+b') },
-    { label: '다음/이전 프로젝트', keys: `${showKeys('mod+alt+]')} / ${showKeys('mod+alt+[')}` }, { label: '프로젝트 번호로 이동', keys: showKeys('mod+alt+1') + '…9' }, { label: '설정', keys: showKeys('mod+,') }
-  ];
   const open = new Set(entries.map(entry => entry.root));
   const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
   // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
@@ -407,22 +400,22 @@ function Shell() {
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
-  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} shortcuts={shortcuts} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
+  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main>{tutorial}</> : <div className="shell" />;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
-        {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showKeys('mod+alt+o')} onClick={onAddProject} />}
-        <IconButton icon={compact ? 'chevronsRight' : 'chevronsLeft'} label={`사이드바 ${compact ? '펼치기' : '접기'}`} keys={showKeys('mod+alt+b')} onClick={() => setCompact(value => !value)} />
+        {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
+        <IconButton icon={compact ? 'chevronsRight' : 'chevronsLeft'} label={`사이드바 ${compact ? '펼치기' : '접기'}`} keys={showAppKey(settings.appKeys, 'toggleProjects')} onClick={() => setCompact(value => !value)} />
       </div>
       <div className="folders" role="tree">
         {entries.map((entry, index) => {
           const item = status[entry.root] || idle, name = item.name || shortName(entry.root), selected = entry.root === current, open = !folded.has(entry.root);
           const asking = item.tabs.some(tab => tab.asking);
           const owner = () => handles.current.get(entry.root);
-          const hint = `${name}\n${entry.root}\n${showKeys(`mod+alt+${Math.min(index + 1, 9)}`)}`;
+          const hint = `${name}\n${entry.root}\n${showAppKey(settings.appKeys, `project${Math.min(index + 1, 9)}`)}`;
           const projectDnd = {
             draggable: true,
             onDragStart: (event: React.DragEvent<HTMLElement>) => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
@@ -448,8 +441,8 @@ function Shell() {
               <span className="folder-name">{name}</span>
               {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
-                <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
-                <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
+                <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
+                <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showAppKey(settings.appKeys, 'closeProject')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
@@ -509,10 +502,10 @@ function Shell() {
                 const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <svg className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}>{TRAIL.map(([len, opacity]) => <rect key={len} pathLength={100} strokeDasharray={`${len} ${100 - len}`} strokeOpacity={opacity} style={{ '--from': len, '--to': len - 100 } as React.CSSProperties} />)}</svg>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 가운데에 놓으면 분할로 합치기\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 가운데에 놓으면 분할로 합치기\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                    <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
+                    <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
                     {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
                     {alert(tab)}{close}
                   </div>{dropHint}</li>;
@@ -524,11 +517,11 @@ function Shell() {
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
-                    {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
+                    {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
                       title={`${pane.label}\n끌어서 다른 탭으로 옮기거나 탭 사이·아래 빈칸에 놓아 새 탭으로 분리\n우클릭: 메뉴`}
                       draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
-                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'editor' ? 'code' : pane.agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
+                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
                       <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
@@ -547,8 +540,8 @@ function Shell() {
         })}
       </div>
       <div className="projects-foot">
-        {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showKeys('mod+alt+o')} onClick={onAddProject} />}
-        <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} onClick={onOpenSettings} />
+        {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
+        <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} onClick={onOpenSettings} />
         <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="튜토리얼 보기" onClick={() => actions.current.tutorial()} />
       </div>
@@ -563,8 +556,10 @@ function Shell() {
     </div>
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
-    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} shortcuts={shortcuts} />}
+    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</>;
 }
-createRoot(document.getElementById('root')!).render(<Shell />);
+// xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
+const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
+void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<Shell />));
