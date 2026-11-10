@@ -35,6 +35,21 @@ test('plain CLI conversations of the project are listed, deduped against ADE cha
   await assert.rejects(importCliSession({ directory, id: 'x', sessionId: '44444444-4444-4444-8444-444444444444', cwd, configDirs: [dir] }), { code: 'NOT_FOUND' });
 });
 
+test('titles prefer the rename, then the AI title, and skip slash commands and paste wrappers', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ade-cli-title-')), dir = join(root, 'claude'), cwd = join(root, 'project');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const folder = cliProjectFolder(dir, cwd), D = '55555555-5555-4555-8555-555555555555', E = '66666666-6666-4666-8666-666666666666', F = '77777777-7777-4777-8777-777777777777';
+  await mkdir(folder, { recursive: true });
+  const ai = title => JSON.stringify({ type: 'ai-title', aiTitle: title }), custom = title => JSON.stringify({ type: 'custom-title', customTitle: title });
+  const NL = String.fromCharCode(10);
+  await writeFile(join(folder, `${A}.jsonl`), [line('user', { role: 'user', content: '/clear' }), ai('첫 제목'), transcript('질문') + ai('나중 제목')].join(NL) + NL);
+  await writeFile(join(folder, `${D}.jsonl`), [ai('AI 제목'), custom('내가 붙인 이름'), transcript('질문')].join(NL));
+  await writeFile(join(folder, `${E}.jsonl`), [line('user', { role: 'user', content: '/effort medium' }), transcript('<pasted_content id="a1"> 붙여넣은 내용 </pasted_content>')].join(NL));
+  await writeFile(join(folder, `${F}.jsonl`), line('user', { role: 'user', content: '/clear' }) + NL); // commands only: skipped
+  const titles = Object.fromEntries((await listCliSessions({ directory: join(root, 'data'), cwd, configDirs: [dir] })).map(item => [item.sessionId, item.title]));
+  assert.deepEqual(titles, { [A]: '나중 제목', [D]: '내가 붙인 이름', [E]: '붙여넣은 내용' });
+});
+
 test('a conversation still open in a running claude is refused', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ade-cli-live-')), dir = join(root, 'claude'), cwd = join(root, 'project');
   t.after(() => rm(root, { recursive: true, force: true }));

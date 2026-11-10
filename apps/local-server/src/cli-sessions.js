@@ -37,12 +37,22 @@ async function chatsBySession(directory) {
   }
   return bySession;
 }
+// The title `claude --resume` shows: the name from /rename, else the AI-written one (both are lines in the transcript, the newest wins),
+// else the first thing the user typed that is not a slash command. Only the start and the end of a large transcript are read.
+const clean = text => text.replace(/<\/?pasted_content(?:\s[^>]*)?>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 async function titleOf(file) {
   const handle = await fs.open(file, 'r');
   try {
-    const buffer = Buffer.alloc(HEAD_BYTES), { bytesRead } = await handle.read(buffer, 0, HEAD_BYTES, 0);
-    const first = transcriptEvents(buffer.toString('utf8', 0, bytesRead)).find(event => event.kind === 'user' && event.text.trim());
-    return first ? first.text.trim().replace(/\s+/g, ' ').slice(0, 120) : '';
+    const { size } = await handle.stat(), read = async (position, length) => { const buffer = Buffer.alloc(length), { bytesRead } = await handle.read(buffer, 0, length, position); return buffer.toString('utf8', 0, bytesRead); };
+    const head = await read(0, Math.min(size, HEAD_BYTES)), tail = size > HEAD_BYTES ? await read(Math.max(HEAD_BYTES, size - HEAD_BYTES), Math.min(size - HEAD_BYTES, HEAD_BYTES)) : '';
+    let custom = '', ai = '';
+    for (const text of [head, tail]) for (const line of text.split('\n')) {
+      if (!line.includes('-title"')) continue;
+      try { const raw = JSON.parse(line); if (raw.type === 'custom-title' && raw.customTitle) custom = raw.customTitle; else if (raw.type === 'ai-title' && raw.aiTitle) ai = raw.aiTitle; } catch { /* a torn line at a cut */ }
+    }
+    if (custom || ai) return clean(custom || ai);
+    const first = transcriptEvents(head).find(event => event.kind === 'user' && clean(event.text) && !clean(event.text).startsWith('/'));
+    return first ? clean(first.text) : '';
   } finally { await handle.close(); }
 }
 
