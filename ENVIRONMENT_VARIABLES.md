@@ -8,6 +8,7 @@
 | `ADE_DATA_DIR` | OS별 앱 데이터 경로 | 열린 프로젝트·레이아웃·설정, 터미널 세션 기록, 저장소 worktree 저장 |
 | `ADE_NODE` | `node` | Electron이 로컬 서버·PTY 호스트를 실행할 시스템 Node |
 | `ADE_DEV` | 꺼짐 | `1`이면 로컬 서버가 Vite를 같은 출처에서 제공. `pnpm dev`가 설정 |
+| `ADE_DEV_TOKEN` | 없음 | `ADE_DEV=1`일 때만 유효한 64자리 16진수. 접속 토큰과 세션 쿠키를 고정해, 서버가 재시작돼도 주소와 로그인이 유지된다. 설정하지 않으면 매번 새 토큰이 발급된다. 서버가 환경에서 지워 터미널에 전달되지 않는다. |
 | `CHROME_PATH` | OS의 일반 설치 경로 탐색 | E2E용 Chrome/Chromium 실행 파일 |
 | `ADE_TEST_CDP` | 없음 | 이미 실행 중인 격리 Chrome의 CDP HTTP 주소. 사이드바 드래그 테스트 전용 |
 | `ADE_PLUGINS_DIR` | `<userData>/plugins` | 플러그인 폴더. 개발·테스트용 [플러그인](docs/PLUGINS.md) |

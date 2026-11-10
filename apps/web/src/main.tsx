@@ -401,7 +401,7 @@ function Shell() {
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main>{tutorial}</> : <div className="shell" />;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main>{tutorial}</> : <div className="shell">{error && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{error}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
