@@ -24,6 +24,7 @@ import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
 import { mcpServers, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, probeModels, probeAgentModels, readModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
@@ -509,6 +510,8 @@ async function terminalToChat(project, id, newId, workspace) {
   terminal.native.close(); project.terminals.delete(id);
   return { cwd };
 }
+// Where this project's `claude` keeps its history: the account its .envrc or running agent names, and always the default folder.
+const cliConfigDirs = async project => [(await accounts('claude', project).catch(() => null))?.dir || defaultClaudeDir(), defaultClaudeDir()];
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
   if (action === 'recent/remove') {
@@ -709,6 +712,9 @@ async function route(action, input, project) {
       return { id, agent: chat.agent, user: os.userInfo().username, ...chat.replay(input.since) };
     });
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
+    // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
+    case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
+    case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/send': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
