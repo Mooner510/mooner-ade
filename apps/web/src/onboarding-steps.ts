@@ -1,7 +1,7 @@
 // First-run tutorial: a practice copy of the app (two projects, tabs, split panes, a scripted Claude) that the user drives with the real
 // gestures and keys. Each step lists flags that must be earned before "다음" unlocks. Pure state, no DOM or React, so node tests can
 // load it; Tutorial.tsx draws it with the app's own markup. Pane layouts use the real tree helpers from api.ts.
-import { findLeaf, leafList, mapLeaf, remove, split, type Leaf, type Pane } from './api';
+import { beside, findLeaf, leafList, mapLeaf, remove, split, type Leaf, type Pane } from './api';
 
 export type Agent = 'claude' | 'codex' | 'cursor';
 export type TourTab = { id: string; label: string; pane: Pane | null }; // null: the "새 탭" launcher page
@@ -153,7 +153,7 @@ export function reduce(tour: Tour, action: Action, now = 0): Tour {
     case 'merge': {
       const source = p.tabs.find(item => item.id === action.id), target = p.tabs.find(item => item.id === action.into);
       if (!source?.pane || !target?.pane || source === target || !closable(tour, source.id)) return tour;
-      const tabs = p.tabs.filter(item => item !== source).map(item => item === target ? { ...item, pane: { direction: 'row' as const, children: [target.pane!, source.pane!], sizes: [1, 1] } } : item);
+      const tabs = p.tabs.filter(item => item !== source).map(item => item === target ? { ...item, pane: beside(target.pane!, source.pane!) } : item);
       return earn(show(setProject(tour, { tabs, active: target.id })), 'reorder');
     }
     case 'closeTab': {

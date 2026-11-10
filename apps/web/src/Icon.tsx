@@ -14,6 +14,7 @@ const glyphs = {
   panelLeft: 'left_panel_open',
   search: 'search',
   branch: 'fork_right',
+  undo: 'undo',
   diff: 'difference',
   bot: 'smart_toy',
   sparkles: 'auto_awesome',
@@ -51,14 +52,20 @@ const glyphs = {
   book: 'menu_book',
   palette: 'palette',
   arrowRight: 'arrow_forward',
-  keyboard: 'keyboard'
+  keyboard: 'keyboard',
+  chat: 'chat_bubble',
+  enter: 'keyboard_return',
+  laptop: 'laptop_mac'
 } as const;
 
-// Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's isometric cube.
+// Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's filled cube logo.
 const brands = {
   claude: <path d="M12 12 12 3M12 12l3.3-6.2M12 12l7.8-5.4M12 12l7.4-1M12 12l8.5 3.1M12 12l4.7 5.2M12 12l2.5 9.2M12 12l-2.1 7.7M12 12l-6.4 7.1M12 12l-7.1 2.6M12 12l-8.9-1.2M12 12 5.9 7.7M12 12 8 3.4" />,
   codex: <><path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z" /><path d="m9 10 2.5 2L9 14M13 14.5h2.5" /></>,
-  cursor: <path d="M12 2.5 20.5 7.25v9.5L12 21.5 3.5 16.75v-9.5zM3.5 7.25 12 12l8.5-4.75M12 12v9.5" />
+  // A chat tab: a speech bubble holding Claude's asterisk, so it reads differently from a file or a terminal tab.
+  'claude-chat': <><path d="M6.5 3.5h11A2.5 2.5 0 0 1 20 6v8a2.5 2.5 0 0 1-2.5 2.5H11.5L7 20.5v-4h-.5A2.5 2.5 0 0 1 4 14V6a2.5 2.5 0 0 1 2.5-2.5z" /><path d="M12 6.6v6.8M9 8.3l6 3.4M15 8.3l-6 3.4" /></>,
+  // The cube fills the whole 24 box (the other glyphs keep a margin), so shrink it about the centre.
+  cursor: <g transform="translate(2.4 2.4) scale(.8)"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" /></g>
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof glyphs | keyof typeof brands;

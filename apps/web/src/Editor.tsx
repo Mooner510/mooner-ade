@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type * as Monaco from 'monaco-editor';
+import type { AgentMode } from './launchers';
 
 export type Settings = {
   theme: 'dark' | 'light'; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
@@ -10,6 +11,9 @@ export type Settings = {
   agentsOff: string[]; agentsMuted: string[]; claudeArgs: string; codexArgs: string; cursorArgs: string; notifyLooking: boolean;
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
   cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; usageRefresh: number;
+  // Chat composer shortcut overrides (id -> combo, see chat-model chatKeyDefs); a missing id uses its default.
+  chatKeys: Record<string, string>; appKeys: Record<string, string>;
+  defaultMode: AgentMode; chatTipPending: boolean;
   // tips: hint cards in a pane corner (long context, shortcuts for what was just done with the mouse); contextTipK = context size in thousands of tokens that triggers the /clear tip.
   tips: boolean; contextTipK: number;
   // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
@@ -21,6 +25,14 @@ export type Settings = {
   clock12h: boolean; clockSeconds: boolean; systemRefresh: number; reviewWidth: number;
   // First-run tutorial finished or skipped. Saved settings from before it existed count as done: those users are not new.
   onboarded: boolean;
+  // Chat tab status line (Claude Code's own statusLine, drawn by ADE): which items, their order and side, and a separator.
+  chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
+  // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('auto' effort = the CLI's own default).
+  chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
+  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatDefaultPermission: 'default' | 'acceptEdits' | 'plan'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
+  uiZoom: number; diffFont: string; sidebarCompact: boolean;
+  terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -36,12 +48,30 @@ export function statusLayout(settings: Pick<Settings, 'statusLeft' | 'statusRigh
   for (const id of statusItemIds) if (!seen.has(id)) (defaultLeft.includes(id) ? left : right).push(id);
   return { left, right };
 }
+// The chat tab's status line only has items that read the conversation; branch, usage, clock etc. stay in the bottom status bar so nothing shows twice.
+const chatDefaultLeft = ['status', 'tokens', 'turns'], chatDefaultRight = ['cost', 'duration', 'session', 'model', 'mode', 'context']; // model, mode and context are also controls in the composer's footer
+export const chatStatusItemIds = [...chatDefaultLeft, ...chatDefaultRight];
+export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'chatStatusRight'>) {
+  const known = new Set(chatStatusItemIds), seen = new Set<string>();
+  const keep = (list: string[] = []) => list.filter(id => known.has(id) && !seen.has(id) && seen.add(id));
+  const left = keep(settings.chatStatusLeft), right = keep(settings.chatStatusRight);
+  for (const id of chatStatusItemIds) if (!seen.has(id)) (chatDefaultLeft.includes(id) ? left : right).push(id);
+  return { left, right };
+}
 // Green at 0% through yellow to red at 100%, like Claude Code's statusline; the theme picks the lightness.
 export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, Math.min(100, percent)) / 100));
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved };
   if (saved.onboarded === undefined) next.onboarded = true;
+  // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
+  if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   if (saved.statusItems && !saved.statusLeft) next.statusItems = [...saved.statusItems.filter(id => !addedWithLayout.includes(id)), ...addedWithLayout];
+  // Chat status line: model, mode and context moved into the composer's footer, so an untouched old default (ignoring ids that no longer exist) follows the new one.
+  const known = (list?: string[]) => JSON.stringify((list ?? []).filter(id => chatStatusItemIds.includes(id)));
+  if (saved.chatStatusItems && known(saved.chatStatusItems) === JSON.stringify(['status', 'model', 'mode', 'context', 'cost'])
+    && known(saved.chatStatusLeft) === JSON.stringify(['status', 'model', 'mode', 'context']) && known(saved.chatStatusRight) === JSON.stringify(['tokens', 'cost', 'turns', 'duration', 'session'])) {
+    next.chatStatusItems = defaultSettings.chatStatusItems; next.chatStatusLeft = defaultSettings.chatStatusLeft; next.chatStatusRight = defaultSettings.chatStatusRight;
+  }
   return next;
 }
 // xterm's own default, so an empty-looking field means "unchanged".
@@ -50,14 +80,21 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120, tips: true, contextTipK: 400,
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
   diffLayout: 'auto', diffIgnoreWhitespace: false, diffFoldUnchanged: true, diffContextLines: 3,
-  clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false
+  clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false,
+  chatStatusItems: ['tokens', 'cost'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
+  chatSendKey: 'enter', chatToolsOpen: false, chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
+  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatDefaultPermission: 'default', chatDefaultEffort: 'auto',
+  uiZoom: 100, diffFont: '', sidebarCompact: false,
+  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
 };
-export const monoFont = "'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+export const monoFont = "'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+// Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
+const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => { const own = settings.diffFont.trim() || settings.terminalFont.trim(); return own ? `${own}, ${monoFont}` : monoFont; };
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';
 
 let monacoPromise: Promise<typeof Monaco> | null = null;
@@ -110,7 +147,7 @@ export function DiffView({ original, modified, path, settings, compact = false, 
       monaco.editor.setTheme(themeName(now.theme));
       const diff = monaco.editor.createDiffEditor(host.current, {
         automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: sideBySide(now), useInlineViewWhenSpaceIsLimited: now.diffLayout === 'auto', renderSideBySideInlineBreakpoint: 760,
-        ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: 2000, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: monoFont,
+        ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
       const uri = (side: string) => monaco.Uri.from({ scheme: 'diff', path: `/${side}/${path}`, query: String(Math.random()) });
@@ -136,7 +173,7 @@ export function DiffView({ original, modified, path, settings, compact = false, 
   useEffect(() => {
     const editor = live.current; if (!editor) return;
     editor.monaco.editor.setTheme(themeName(settings.theme));
-    editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide(settings), useInlineViewWhenSpaceIsLimited: settings.diffLayout === 'auto', ignoreTrimWhitespace: settings.diffIgnoreWhitespace });
-  }, [settings.theme, settings.fontSize, settings.wordWrap, settings.diffLayout, settings.diffIgnoreWhitespace]);
+    editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide(settings), useInlineViewWhenSpaceIsLimited: settings.diffLayout === 'auto', ignoreTrimWhitespace: settings.diffIgnoreWhitespace, maxComputationTime: settings.diffComputeMs, fontFamily: diffFontFamily(settings) });
+  }, [settings.theme, settings.fontSize, settings.wordWrap, settings.diffLayout, settings.diffIgnoreWhitespace, settings.diffComputeMs, settings.diffFont, settings.terminalFont]);
   return <div className={compact ? 'editor compact-diff' : 'editor'} ref={host} />;
 }

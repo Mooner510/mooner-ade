@@ -21,7 +21,10 @@ export function Modal({ children, onClose, className = '', labelledBy }: { child
   useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
   return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
 }
-export function Dropdown({ value, options, onChange, label, className = '' }: { value: string; options: { value: string; label: string }[]; onChange(value: string): void; label: string; className?: string }) {
+// A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.
+export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };
+const DdIcon = ({ name }: { name?: string }) => name ? <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{name}</span> : null;
+export function Dropdown({ value, options, onChange, label, className = '', placeholder }: { value: string; options: { value: string; label: string; color?: string; icon?: string; hint?: string; divider?: boolean }[]; onChange(value: string): void; label: string; className?: string; placeholder?: string }) {
   const root = useRef<HTMLDetailsElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const close = () => { root.current!.open = false; root.current!.querySelector('summary')!.focus(); };
@@ -34,7 +37,7 @@ export function Dropdown({ value, options, onChange, label, className = '' }: { 
     menu.style.maxHeight = '';
     const below = innerHeight - anchor.bottom - gap - margin, above = anchor.top - gap - margin;
     const up = menu.offsetHeight > below && above > below;
-    menu.style.maxHeight = `${Math.min(240, up ? above : below)}px`;
+    menu.style.maxHeight = `${Math.min(340, up ? above : below)}px`;
     menu.style.top = up ? `${anchor.top - gap - menu.offsetHeight}px` : `${anchor.bottom + gap}px`;
     const overflow = menu.getBoundingClientRect().right - (innerWidth - margin);
     if (overflow > 0) menu.style.left = `${Math.max(margin, anchor.left - overflow)}px`;
@@ -69,6 +72,6 @@ export function Dropdown({ value, options, onChange, label, className = '' }: { 
       root.current!.open = true;
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? selected : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
       buttons[next].focus();
-    }}><summary aria-label={label} aria-haspopup="listbox"><span>{options.find(option => option.value === value)?.label}</span><Icon name="chevronDown" size={14} /></summary>
-    <div role="listbox" popover="manual" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} key={option.value} onClick={() => { onChange(option.value); close(); }}><span>{option.label}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
+    }}><summary aria-label={label} aria-haspopup="listbox"><span className="dd-label" style={{ color: options.find(option => option.value === value)?.color }}><DdIcon name={options.find(option => option.value === value)?.icon} />{options.find(option => option.value === value)?.label ? <ModelLabel text={options.find(option => option.value === value)!.label} /> : placeholder}</span><Icon name="chevronDown" size={14} /></summary>
+    <div role="listbox" popover="manual" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} data-divider={option.divider || undefined} key={option.value} onClick={() => { onChange(option.value); close(); }}><span className="dd-label" style={{ color: option.color }}><DdIcon name={option.icon} /><ModelLabel text={option.label} />{option.hint && <small className="dd-hint">{option.hint}</small>}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
 }

@@ -24,8 +24,16 @@ export function Setup({ settings, onSettings, onNext }: { settings: Settings; on
   return <section className="setup" role="dialog" aria-labelledby="setup-title">
     <header className="setup-head">
       <Logo size={44} />
-      <div><h1 id="setup-title">무너에이드에 오신 걸 환영해요</h1><p>먼저 작업 환경을 취향대로 맞춰 볼까요? 나중에 설정에서 언제든 바꿀 수 있어요.</p></div>
+      <div><h1 id="setup-title">무너에이드에 오신 걸 환영해요</h1><p>먼저 작업 환경을 취향대로 맞춰 볼까요? 나중에 언제든 바꿀 수 있어요.</p></div>
     </header>
+
+    <h2>기본 모드</h2>
+    <div className="setup-themes setup-modes" role="radiogroup" aria-label="기본 모드">
+      {(['chat', 'cli'] as const).map(mode => <button key={mode} className="setup-theme" role="radio" aria-checked={settings.defaultMode === mode} onClick={() => set('defaultMode', mode)}>
+        <span className="setup-theme-label"><Icon name={mode === 'chat' ? 'chat' : 'terminal'} size={18} />{mode === 'chat' ? 'Chat 모드' : 'CLI 모드'}</span>
+        <small>{mode === 'chat' ? '대화 화면에서 요청하고 응답 확인' : '익숙한 터미널에서 CLI 직접 사용'}</small>
+      </button>)}
+    </div>
 
     <h2>테마</h2>
     <div className="setup-themes" role="radiogroup" aria-label="테마">

@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { showAppKey } from './shortcuts';
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -6,11 +7,16 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
 import { useHiddenAgents } from './installed-agents';
+import { pickGreeting } from './chat-model';
 import { DiffView, monoFont, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
-import { showKeys } from './Workspace';
+import { ChatPane, type ChatCtx } from './ChatPane';
 import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
+import { playSound } from './sound';
 import { contextTip, queueTip, splitTip } from './tips';
+import { useShells, shellLabel } from './shells';
+import { LauncherModes } from './LauncherMenu';
+import { launchersFor, type AgentMode } from './launchers';
 import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
 import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
@@ -126,27 +132,31 @@ type Props = {
   // Asks whether to send anyway while the prompt cache is cold or about to be; resolves false unless the user accepts.
   confirmSend(message: string): Promise<boolean>;
   pane: Pane; visible: boolean; onLayout(pane: Pane): void; send(message: object): boolean; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; caches: Record<string, ClaudeCache>; focus: string; zoom: string;
-  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; onLaunch(id: string, command: string): void; editor: EditorCtx;
+  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; onLaunch(id: string, command: string): void; onToChat(id: string): void; onModeChange(mode: AgentMode): void; editor: EditorCtx; chat: ChatCtx;
 };
 
-export const launchers: { id: string; label: string; detail: string; command: string; icon: IconName }[] = [
-  { id: 'shell', label: '터미널', detail: '기본 셸', command: '', icon: 'terminal' },
-  { id: 'claude', label: 'Claude Code', detail: 'claude', command: 'claude', icon: 'claude' },
-  { id: 'codex', label: 'Codex', detail: 'codex', command: 'codex', icon: 'codex' },
-  { id: 'cursor', label: 'Cursor CLI', detail: 'cursor-agent', command: 'cursor-agent', icon: 'cursor' }
-];
+export { launchers } from './launchers';
+export const CHAT_COMMAND = 'ade:chat:claude';
+export const chatAgent = (command: string): Agent | undefined => ({ 'ade:chat:claude': 'claude', 'ade:chat:codex': 'codex', 'ade:chat:cursor': 'cursor' } as Record<string, Agent>)[command];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
-export function Launchers({ title, onLaunch, autoFocus, hidden = [] }: { title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[] }) {
-  const hide = useHiddenAgents(hidden);
-  return <div className="empty-tab">{title && <h2>{title}</h2>}<div className="launchers">{launchers.filter(item => !hide.includes(item.id)).map((item, index) => <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}><Icon name={item.icon} size={20} /><strong>{item.label}</strong><small>{item.detail}</small></button>)}</div></div>;
+export function Launchers({ title, onLaunch, autoFocus, hidden = [], mode, shell, onModeChange }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[] }) {
+  const hide = useHiddenAgents(hidden), shells = useShells(), greeting = useMemo(() => pickGreeting(), []);
+  return <div className="empty-tab" data-mode={mode}>
+    <div className="launcher-heading"><LauncherModes mode={mode} onChange={onModeChange} /><h2>{greeting}</h2></div>
+    <div className="launchers">{launchersFor(mode, shellLabel(shells, shell)).filter(item => !hide.includes(item.id)).map((item, index) =>
+      <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}>
+        <span className="launcher-icon"><Icon name={item.icon} size={24} /></span><span className="launcher-copy"><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</span>
+        <span className="launcher-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></span>
+      </button>)}</div>
+  </div>;
 }
-function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden }: { id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
+function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, shell, onModeChange }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
   return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
       <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
-    <Launchers autoFocus hidden={hidden} onLaunch={command => onLaunch(id, command)} />
+    <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
 
@@ -169,7 +179,7 @@ export const xtermOptions = (settings: Settings) => ({
 });
 const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
 
-function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
@@ -208,6 +218,13 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       // ConPTY's; without it, old output is mangled when the pane resizes or a long answer scrolls past the top.
       ...(/Windows/.test(navigator.userAgent) ? { windowsPty: { backend: 'conpty' as const, buildNumber: 26100 } } : {}), theme: terminalTheme(host.current!) });
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!); term.current = terminal;
+    // BEL from a plain terminal program. An agent's own BEL is the approval request, which has its alert (and sound) in the AI settings, so it is left to that.
+    terminal.onBell(() => {
+      const { terminalBell, soundAttention, soundVolume } = settingsRef.current;
+      if (terminalBell === 'off' || callbacks.current.agentOf(id)) return;
+      if (terminalBell === 'sound') playSound(soundAttention, soundVolume);
+      else if (host.current) { host.current.classList.remove('bell'); void host.current.offsetWidth; host.current.classList.add('bell'); }
+    });
     // Unicode 11 widths match what shells/TUIs assume for Hangul and emoji; the default (v6) table disagrees and leaves stale half-cells.
     terminal.loadAddon(new Unicode11Addon()); terminal.unicode.activeVersion = '11';
     // After a copy the selection lights up in the accent color for a moment, then clears, so it is clear what was copied.
@@ -519,10 +536,6 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         if (isPrefixKey(event, settingsRef.current.tmuxPrefix)) { if (!event.repeat && (tmuxGuide.state !== 'idle' || !replays && tmuxOnScreen())) tmuxGuide.prefix(); }
         else if (!isModifierOnly(event.key)) tmuxGuide.key();
       }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyD') {
-        if (event.type === 'keydown') { event.preventDefault(); callbacks.current.onSplit(id, event.shiftKey ? 'column' : 'row'); }
-        return false;
-      }
       // Cmd+←/→ (no Shift) jumps to line start/end like macOS terminals do (^A / ^E); xterm itself sends nothing for Cmd+arrows.
       if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
         if (event.type === 'keydown') { event.preventDefault(); callbacks.current.send({ type: 'terminal/input', id, data: event.key === 'ArrowLeft' ? '\x01' : '\x05' }); }
@@ -641,14 +654,16 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
-  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle');
+  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), switchable = attention[id] !== 'attention' && !workingSet.has(id);
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
-        <IconButton icon="splitH" label="좌우 분할" keys={showKeys('ctrl+d')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(showKeys)); }} /><IconButton icon="splitV" label="상하 분할" keys={showKeys('ctrl+shift+d')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(showKeys)); }} />
-        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys={showKeys('mod+shift+enter')} onClick={() => onZoom(id)} />
+        {agent && !isSsh && <IconButton icon="claude-chat" label={agent !== 'claude' ? 'Chat으로 전환 불가 — 이 CLI의 세션과 완전한 대기 상태를 확인할 수 없습니다' : switchable ? 'Chat으로 전환 (Claude를 종료하고 같은 대화를 이어갑니다)' : 'Chat으로 전환 — 응답이 끝나고 대기 중일 때만 가능'} disabled={agent !== 'claude' || !switchable} onClick={() => onToChat(id)} />}
+        {agent === 'claude' && !isSsh && <i className="pane-sep" aria-hidden="true" />}
+        <IconButton icon="splitH" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} /><IconButton icon="splitV" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
+        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
@@ -734,7 +749,8 @@ function Tree(props: Props) {
   const { pane } = props;
   if (isLeaf(pane)) return pane.kind === 'editor'
     ? <EditorGroup leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} ctx={props.editor} onFocus={props.onFocus} onZoom={props.onZoom} />
-    : pane.kind === 'launcher' ? <LauncherPane hidden={props.editor.settings.agentsOff} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
+    : pane.kind === 'chat' ? <ChatPane leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} visible={props.visible} ctx={props.chat} onFocus={props.onFocus} onZoom={props.onZoom} onSplit={props.onSplit} />
+    : pane.kind === 'launcher' ? <LauncherPane onModeChange={props.onModeChange} shell={props.editor.settings.terminalShell} mode={props.editor.settings.defaultMode} hidden={props.editor.settings.agentsOff} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
     : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
   return <Splitter equalOnClick direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
     {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}

@@ -1,10 +1,19 @@
+import { appKey, matches, showAppKey } from './shortcuts';
+export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { api, ApiError, basename, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
+import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { PluginBadges } from './PluginSettings';
+import { accountSources, defaultAccountDir, placeAbove, UsageRows, usageHueStyle, useUsage, type Usage, type UsageWindow } from './Usage';
+import type { ChatCtx } from './ChatPane';
+import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
 import { useHiddenAgents } from './installed-agents';
-import { Launchers, launchers as allLaunchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
+import { chatAgent, Launchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
+import { useShells, shellLabel } from './shells';
+import { LauncherMenu } from './LauncherMenu';
+import { launchersFor, type AgentMode } from './launchers';
+import { chatModeTipDue } from './tips';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
@@ -14,8 +23,8 @@ import { copyText } from './toast';
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
-export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache };
-export type TabInfo = { id: string; label: string; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
+export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' | 'chat' | 'launcher'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache };
+export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
@@ -73,30 +82,10 @@ const WakaTimeStat = memo(function WakaTimeStat() {
   const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
   return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? `\n${status.lastError}` : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
 });
-type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
-type Usage = { provider: 'claude' | 'codex'; windows: UsageWindow[]; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
-const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
-const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex' };
 const usageNames = { claude: 'Claude Code', codex: 'Codex' };
-const untilReset = (at: number) => {
-  const minutes = Math.max(0, Math.round((at - Date.now()) / 60000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
-  return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
-};
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
 const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
-  const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false), panel = `usage-${useId()}`;
-  const load = useCallback((force = false) => {
-    setLoading(force);
-    return api<Usage>('usage/status', { provider, force, projectId }).then(setUsage, () => {}).finally(() => setLoading(false));
-  }, [provider, projectId]);
-  useEffect(() => {
-    // Hidden projects keep their last reading; switching back refreshes it, since its agent may have changed accounts.
-    if (!active) return;
-    let live = true;
-    const tick = () => { if (live) void load(); };
-    tick(); const timer = setInterval(tick, refresh * 1000);
-    return () => { live = false; clearInterval(timer); };
-  }, [load, active, refresh]);
+  const { usage, loading, load } = useUsage(provider, projectId, active, refresh), panel = `usage-${useId()}`;
   if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
   const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
@@ -105,45 +94,24 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
-  const hue = (percent: number) => ({ '--usage-hue': usageHue(percent) } as CSSProperties);
-  // Light-dismiss popover in the top layer, so the status bar's overflow clipping never cuts it off; opened by the button, placed above it.
-  const place = (event: { newState: string; currentTarget: HTMLElement }) => {
-    if (event.newState !== 'open') return;
-    const menu = event.currentTarget, anchor = (menu.previousElementSibling as HTMLElement).getBoundingClientRect(), width = menu.offsetWidth;
-    menu.style.left = `${Math.max(8, Math.min(anchor.left, innerWidth - width - 8))}px`;
-    menu.style.bottom = `${innerHeight - anchor.top + 14}px`;
-  };
+  const hue = usageHueStyle;
   return <>
     <button className={`stat usage ${level} ${usage.error && !main.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
       {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
     </button>
-    <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={place}>
+    <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
         <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
-      {windows.length ? windows.map(item => <div key={item.key} className="usage-row">
-        <div><span>{item.label}</span><b className={colors ? 'graded' : ''} style={colors ? hue(item.percent) : undefined}>{item.percent}%</b></div>
-        <progress className={colors ? 'graded' : ''} style={colors ? hue(item.percent) : undefined} value={item.percent} max={100} aria-label={`${item.label} 사용률`} />
-        {item.resetsAt && <small>{untilReset(item.resetsAt)} 후 초기화 · {new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small>}
-      </div>) : <p className="usage-note">표시할 한도 정보가 없습니다.</p>}
+      <UsageRows windows={windows} colors={colors} />
       <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
     </div>
   </>;
 });
-export const showKeys = (keys: string) => keys.split('+').map(part => ({ mod: mac ? '⌘' : 'Ctrl', ctrl: mac ? '⌃' : 'Ctrl', shift: mac ? '⇧' : 'Shift', alt: mac ? '⌥' : 'Alt' } as Record<string, string>)[part] || (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
-function keyOf(event: KeyboardEvent) {
-  const code = event.code;
-  if (code.startsWith('Key')) return code.slice(3).toLowerCase();
-  if (code.startsWith('Digit')) return code.slice(5);
-  return ({ Backquote: '`', Backslash: '\\', Comma: ',', BracketLeft: '[', BracketRight: ']' } as Record<string, string>)[code] || event.key.toLowerCase();
-}
-export function matches(keys: string, event: KeyboardEvent) {
-  const parts = keys.split('+'), key = parts[parts.length - 1], mods = new Set(parts.slice(0, -1));
-  if (mods.has('mod') ? !(event.ctrlKey || event.metaKey) : mods.has('ctrl') ? !event.ctrlKey || event.metaKey : event.ctrlKey || event.metaKey) return false;
-  return event.shiftKey === mods.has('shift') && event.altKey === mods.has('alt') && keyOf(event) === key;
-}
+export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
+
 export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [error, setError] = useState('');
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
@@ -151,6 +119,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [gitVersion, setGitVersion] = useState(0);
   const [rightVisible, setRightVisible] = useState(false), [reviewWide, setReviewWide] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
+  const launcherButton = useRef<HTMLButtonElement>(null);
+  const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
   const [paneTabs, setPaneTabs] = useState<PaneTab[]>([]), [activeTab, setActiveTab] = useState('');
   const [focus, setFocus] = useState(''), [zoom, setZoom] = useState('');
@@ -168,6 +138,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const shells = useShells();
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => setSystemRefresh(settings.systemRefresh), [settings.systemRefresh]);
   // Monaco is several MB to parse; reading it while the app is idle keeps that cost out of the moment the review panel opens.
@@ -184,6 +155,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
   refs.focus.current = focus; refs.project.current = project;
+  // Chat panes listen here for their own `chat/event` / `chat/state` messages; `chatPrev` remembers each chat's last status to tell "finished" from "started".
+  const chatBus = useRef(new Map<string, (message: any) => void>()), chatPrev = useRef(new Map<string, ChatState['status']>());
   const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map(), sizes: new Map(), sizeListeners: new Map() });
   const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
@@ -297,7 +270,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     let next = list.map(tab => tab.id === tabId ? { ...tab, pane: rest } : tab), landed = '';
     if (mode === 'merge' && target?.pane) {
       landed = target.id;
-      next = next.map(tab => tab.id === target.id ? { ...tab, pane: equalize({ direction: 'row', children: [target.pane!, leaf], sizes: [1, 1] }) } : tab);
+      next = next.map(tab => tab.id === target.id ? { ...tab, pane: beside(target.pane!, leaf) } : tab);
     } else {
       const fresh: PaneTab = { id: newId(), pane: leaf }, anchor = next.findIndex(tab => tab.id === (target?.id ?? tabId));
       landed = fresh.id; next = [...next.slice(0, anchor + (mode === 'before' ? 0 : 1)), fresh, ...next.slice(anchor + (mode === 'before' ? 0 : 1))];
@@ -318,7 +291,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     mergeTabs: (id, targetId) => {
       const list = refs.paneTabs.current, source = list.find(tab => tab.id === id), target = list.find(tab => tab.id === targetId);
       if (!source?.pane || !target?.pane || id === targetId) return;
-      const merged = equalize({ direction: 'row', children: [target.pane, source.pane], sizes: [1, 1] }), first = leafList(source.pane)[0]?.id || '';
+      const merged = beside(target.pane, source.pane), first = leafList(source.pane)[0]?.id || '';
       commitTabs(list.filter(tab => tab.id !== id).map(tab => tab.id === targetId ? { ...tab, pane: merged } : tab));
       delete refs.tabFocus.current[id];
       selectTab(targetId); if (first) setFocusLeaf(first);
@@ -338,7 +311,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       catch (cause) {
         if (!(cause instanceof ApiError)) throw cause;
         if (cause.code === 'PROJECT_BUSY') {
-          if (!(await ask.confirm(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
+          if (settingsRef.current.confirmCloseProject && !(await ask.confirm(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
           await api('project/close', { projectId, force: true });
         } else if (cause.code !== 'NOT_FOUND') throw cause;
       }
@@ -348,6 +321,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const leafLabel = (leaf: Leaf, fallbackTitle?: string) => {
     if (leaf.kind === 'editor') return leaf.active ? basename(leaf.active.split(':').pop() || leaf.active) : '편집기';
     if (leaf.kind === 'launcher') return '새 창';
+    if (leaf.kind === 'chat') return titles[leaf.id] || `${leaf.agent === 'codex' ? 'Codex' : leaf.agent === 'cursor' ? 'Cursor' : 'Claude'} 채팅`;
     const title = titles[leaf.id] || fallbackTitle, cwd = project?.terminals.find(terminal => terminal.id === leaf.id)?.cwd;
     // Windows shells title themselves with their executable path; show just the program name.
     const clean = title && /^[A-Za-z]:[\\/]|^\//.test(title) ? basename(title.replace(/\\/g, '/')).replace(/\.exe$/i, '') : title;
@@ -371,8 +345,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
-    return { id: tab.id, label: tabLabel(tab), count: list.length, agent: current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined,
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : 'terminal', agent: leaf.kind === 'editor' ? undefined : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id) })) : [] };
+    return { id: tab.id, label: tabLabel(tab), kind: current?.kind === 'chat' ? 'chat' : !current || current.kind === 'launcher' ? 'launcher' : undefined, count: list.length, agent: current?.kind === 'chat' ? current.agent ?? 'claude' : current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined,
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : leaf.kind === 'chat' ? 'chat' : leaf.kind === 'launcher' ? 'launcher' : 'terminal', agent: leaf.kind === 'editor' ? undefined : leaf.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id) })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, tabs: JSON.parse(tabInfo), activeTab });
@@ -436,7 +410,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
 
   refs.onMessage.current = message => {
     try {
-          if (message.type === 'snapshot') setProject(message.snapshot);
+          if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); }
+          else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
           // A stream of file events (an agent at work) refreshes Git at most twice a second.
           else if (message.type === 'fs') {
             if (refs.active.current && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
@@ -498,11 +473,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const savedAgent = (id: string) => sshSet.has(id) ? undefined : agentOf(id);
   const remember = (tree: Pane | null): Pane | null => leafList(tree).reduce<Pane | null>((next, leaf) => {
     if (leaf.kind === 'launcher') return next && remove(next, leaf.id);
-    if (leaf.kind === 'editor' || !next) return next;
+    if (leaf.kind === 'editor' || leaf.kind === 'chat' || !next) return next;
     const cwd = cwds[leaf.id] ?? leaf.cwd, agent = savedAgent(leaf.id);
     return mapLeaf(next, leaf.id, item => ({ ...item, ...(cwd ? { cwd } : {}), agent }));
   }, tree);
-  const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' ? '' : savedAgent(leaf.id) ?? '').join(',');
+  const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' || leaf.kind === 'chat' ? '' : savedAgent(leaf.id) ?? '').join(',');
   useEffect(() => {
     if (!project?.id || restoring) return;
     const timer = setTimeout(() => {
@@ -522,7 +497,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
 
   // ---- terminals ----
+  // A chat leaf has no server-side process of its own: the pane asks the server to open its session (chat/open) when it mounts.
+  function addChatLeaf(anchorId: string, direction: 'row' | 'column', path?: string, agent: Agent = 'claude') {
+    const leaf = chatLeaf(path, agent), current = activePane();
+    const anchor = leaves(current).includes(anchorId) ? anchorId : leaves(current)[0];
+    commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
+  }
   async function openTerminalLeaf(anchorId: string, direction: 'row' | 'column' = 'row', path?: string, command = '') {
+    if (chatAgent(command)) return addChatLeaf(anchorId, direction, path, chatAgent(command));
     const agent = detectAgent(command);
     const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent, args: agentArgs(settings, agent) } : {}) });
     if (command) {
@@ -541,6 +523,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
   }
   async function fillLauncher(id: string, command: string) {
+    if (chatAgent(command)) {
+      const tree = treeOf(id), leaf = chatLeaf(undefined, chatAgent(command));
+      if (tree) { commitFor(id, mapLeaf(tree, id, () => leaf)); setFocusLeaf(leaf.id); }
+      return;
+    }
     const agent = detectAgent(command);
     const result = await call<{ id: string; command?: string }>('terminal/open', agent ? { agent, args: agentArgs(settings, agent) } : {});
     if (command) {
@@ -552,12 +539,52 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     else await call('terminal/close', { id: result.id });
     await refresh();
   }
+  // Terminal -> chat. The server agrees only while that Claude is completely at rest, then ends it and seeds the chat from its transcript (same session).
+  async function terminalToChat(id: string) {
+    const leaf = chatLeaf(), { cwd } = await call<{ cwd: string }>('terminal/to-chat', { id, newId: leaf.id }), tree = treeOf(id);
+    if (tree) commitFor(id, mapLeaf(tree, id, () => ({ ...leaf, cwd })));
+    refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id); bus.current.sizes.delete(id); bus.current.sizeListeners.delete(id);
+    clearAttention(id); setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+    setFocusLeaf(leaf.id); await refresh();
+  }
+  // Chat -> terminal: the server ends the chat's child, then the same session opens in a terminal in the chat's place; the stored chat is dropped last.
+  async function chatToTerminal(id: string) {
+    const info = await call<{ agent: Agent; restoreId: string; cwd: string; configDir?: string }>('chat/to-terminal', { id });
+    const result = await call<{ id: string; command?: string }>('terminal/open', { path: info.cwd, agent: info.agent, args: agentArgs(settings, info.agent), restoreId: info.restoreId, ...(info.configDir && { configDir: info.configDir }) });
+    refs.pending.current.set(result.id, result.command || (info.agent === 'cursor' ? 'cursor-agent' : info.agent)); setLaunched(previous => ({ ...previous, [result.id]: info.agent }));
+    const tree = treeOf(id);
+    if (!tree) { await call('terminal/close', { id: result.id }); return; }
+    commitFor(id, mapLeaf(tree, id, () => ({ id: result.id, kind: 'terminal' })));
+    await call('chat/close', { id, forget: true }).catch(report);
+    chatBus.current.delete(id); chatPrev.current.delete(id); clearAttention(id); setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+    setFocusLeaf(result.id); await refresh();
+  }
   // A plain new tab opens empty, showing the launcher; a command or folder opens its terminal right away.
   async function newTab(command = '', path?: string) {
     const tab: PaneTab = { id: newId(), pane: null };
     commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom('');
     if (!command && !path) { setFocusLeaf(''); return; }
     await openTerminalLeaf('', 'row', path, command);
+  }
+  // Branch: the server seeds a new chat from an old one up to one message; it opens in its own tab and opens its session like any chat.
+  async function branchChat(sourceId: string, uuid: string, cwd?: string) {
+    const leaf = chatLeaf(cwd, findLeaf(treeOf(sourceId), sourceId)?.agent ?? 'claude');
+    await call('chat/branch', { id: sourceId, uuid, newId: leaf.id });
+    const tab: PaneTab = { id: newId(), pane: leaf };
+    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
+  }
+  async function resumeChat(id: string, agent: Agent) {
+    const existing = tabOf(id);
+    if (existing) { selectTab(existing.id); setFocusLeaf(id); return; }
+    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+    // Open first: invalid or missing stored sessions must not create an empty tab.
+    const sessions = await call<{ id: string }[]>('chat/sessions', { agent });
+    if (!sessions.some(session => session.id === id)) throw new Error('저장된 대화를 찾을 수 없습니다.');
+    await call('chat/open', { id, agent });
+    const opened = tabOf(id);
+    if (opened) { selectTab(opened.id); setFocusLeaf(id); return; }
+    const tab: PaneTab = { id: newId(), pane: { id, kind: 'chat', agent } };
+    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(id);
   }
   async function launch(command: string, where: 'tab' | 'split') {
     if (where === 'tab') await newTab(command);
@@ -579,7 +606,23 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     clearAttention(id);
     setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
   }
+  // Closing a chat ends its child process and keeps the transcript for /resume.
+  async function closeChat(id: string) {
+    if (working.has(id) && settingsRef.current.confirmCloseChat && !(await ask.confirm('응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.'))) return;
+    await call('chat/close', { id }).catch(report);
+    chatBus.current.delete(id); chatPrev.current.delete(id);
+    removeTerminalPane(id);
+  }
+  // Status of a chat for the sidebar: working while it answers, attention while it waits for an approval, done (once) when it finishes.
+  function onChatState(id: string, state: ChatState) {
+    const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
+    paneProps.onAgentWorking(id, state.status === 'working' || state.status === 'attention');
+    if (state.status === 'attention' && before !== 'attention') paneProps.onAgentEvent(id, 'attention');
+    else if (before === 'attention' && state.status !== 'attention') clearAttention(id);
+    if (state.status === 'idle' && before === 'working') paneProps.onAgentEvent(id, 'done');
+  }
   async function closeTerminal(id: string) {
+    if (findLeaf(treeOf(id), id)?.kind === 'chat') return closeChat(id);
     const info = refs.project.current?.terminals.find(terminal => terminal.id === id);
     if (info && !info.exited && settingsRef.current.confirmClose && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
     if (info) await call('terminal/close', { id });
@@ -589,7 +632,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   async function closePaneTab(tabId: string) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
-    if (running.length && settingsRef.current.confirmClose && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개가 종료됩니다.`))) return;
+    const answering = leafList(tab.pane).filter(leaf => leaf.kind === 'chat' && working.has(leaf.id));
+    if (((running.length && settingsRef.current.confirmClose) || (answering.length && settingsRef.current.confirmCloseChat)) && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개, 응답 중인 채팅 ${answering.length}개가 종료됩니다.`))) return;
+    for (const leaf of leafList(tab.pane)) if (leaf.kind === 'chat') { await call('chat/close', { id: leaf.id }).catch(report); chatBus.current.delete(leaf.id); chatPrev.current.delete(leaf.id); }
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     // The final tab stays open and empty, showing the launcher.
     if (refs.paneTabs.current.length < 2) { commitTab(tabId, null); setFocusLeaf(''); setZoom(''); await refresh(); return; }
@@ -605,10 +650,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const title = await ask.input('탭 이름 (비우면 자동)', tab.title || ''); if (title === null) return;
     commitTabs(refs.paneTabs.current.map(item => item.id === tabId ? { ...item, title: title.trim().slice(0, 200) || undefined } : item));
   }
-  const withoutTerminals = (tree: Pane | null) => leafList(tree).filter(leaf => leaf.kind !== 'editor').reduce<Pane | null>((rest, leaf) => rest && remove(rest, leaf.id), tree);
+  const withoutTerminals = (tree: Pane | null) => leafList(tree).filter(leaf => leaf.kind !== 'editor' && leaf.kind !== 'chat').reduce<Pane | null>((rest, leaf) => rest && remove(rest, leaf.id), tree);
   const join = (rest: Pane | null, grid: Pane): Pane => rest ? { direction: 'row', children: [rest, grid], sizes: [1, 2] } : grid;
   async function preset() {
-    const terminalsInTree = leafList(activePane()).filter(leaf => leaf.kind !== 'editor');
+    const terminalsInTree = leafList(activePane()).filter(leaf => leaf.kind !== 'editor' && leaf.kind !== 'chat');
     if (terminalsInTree.length && !(await ask.confirm('현재 탭의 터미널을 닫고 6개 새 터미널(2 × 3)로 바꿀까요? 기존 프로세스는 종료됩니다.'))) return;
     for (const leaf of terminalsInTree) if (refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     commitPane(withoutTerminals(activePane()));
@@ -662,65 +707,63 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const showReview = () => { preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
   const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
   const hiddenAgents = useHiddenAgents(settings.agentsOff);
-  const launchers = allLaunchers.filter(item => !hiddenAgents.includes(item.id));
+  const launchers = launchersFor(settings.defaultMode, shellLabel(shells, settings.terminalShell)).filter(item => !hiddenAgents.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
     const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
     if (item) await launch(item.command, where);
   }
   const allCommands: Command[] = [
-    { id: 'newTab', label: '새 탭', keys: 'mod+shift+t', run: () => newTab() },
-    { id: 'newTab2', label: '새 탭', keys: 'alt+t', hidden: true, run: () => newTab() },
-    { id: 'newClaude', label: '새 탭에서 Claude Code 실행', run: () => launch('claude', 'tab') },
-    { id: 'newCodex', label: '새 탭에서 Codex 실행', run: () => launch('codex', 'tab') },
-    { id: 'newCursor', label: '새 탭에서 Cursor CLI 실행', run: () => launch('cursor-agent', 'tab') },
-    { id: 'splitClaude', label: '오른쪽 pane에서 Claude Code 실행', run: () => launch('claude', 'split') },
-    { id: 'splitCodex', label: '오른쪽 pane에서 Codex 실행', run: () => launch('codex', 'split') },
-    { id: 'splitCursor', label: '오른쪽 pane에서 Cursor CLI 실행', run: () => launch('cursor-agent', 'split') },
-    { id: 'launcher', label: '새 탭에서 실행…', keys: 'mod+shift+n', run: () => pickLauncher('tab') },
-    { id: 'closeTab', label: '탭 닫기', keys: 'mod+shift+w', run: () => closePaneTab(refs.activeTab.current) },
+    { id: 'newTab', label: '새 탭', run: () => newTab() },
+    { id: 'newTab2', label: '새 탭', hidden: true, run: () => newTab() },
+    ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
+      { id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, run: () => launch(item.command, 'tab') },
+      { id: `split${item.id}`, label: `오른쪽 pane에서 ${item.label} 실행`, run: () => launch(item.command, 'split') }
+    ]),
+    { id: 'launcher', label: '새 탭에서 실행…', run: () => pickLauncher('tab') },
+    { id: 'closeTab', label: '탭 닫기', run: () => closePaneTab(refs.activeTab.current) },
     { id: 'renameTab', label: '탭 이름 바꾸기…', run: () => renamePaneTab(refs.activeTab.current) },
-    { id: 'nextTab', label: '다음 탭', keys: 'alt+]', run: () => cyclePaneTab(1) },
-    { id: 'prevTab', label: '이전 탭', keys: 'alt+[', run: () => cyclePaneTab(-1) },
-    { id: 'moveTabUp', label: '탭을 위로 이동', keys: 'alt+shift+[', run: () => moveTabBy(-1) },
-    { id: 'moveTabDown', label: '탭을 아래로 이동', keys: 'alt+shift+]', run: () => moveTabBy(1) },
+    { id: 'nextTab', label: '다음 탭', run: () => cyclePaneTab(1) },
+    { id: 'prevTab', label: '이전 탭', run: () => cyclePaneTab(-1) },
+    { id: 'moveTabUp', label: '탭을 위로 이동', run: () => moveTabBy(-1) },
+    { id: 'moveTabDown', label: '탭을 아래로 이동', run: () => moveTabBy(1) },
     { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
-    { id: 'nextTab2', label: '다음 탭', keys: 'mod+shift+]', hidden: true, run: () => cyclePaneTab(1) },
-    { id: 'prevTab2', label: '이전 탭', keys: 'mod+shift+[', hidden: true, run: () => cyclePaneTab(-1) },
-    ...Array.from({ length: 9 }, (_, index) => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, keys: `alt+${index + 1}`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
+    { id: 'nextTab2', label: '다음 탭', hidden: true, run: () => cyclePaneTab(1) },
+    { id: 'prevTab2', label: '이전 탭', hidden: true, run: () => cyclePaneTab(-1) },
+    ...Array.from({ length: 9 }, (_, index) => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
     { id: 'splitRight', label: '오른쪽으로 분할', run: () => splitTerminal(refs.focus.current, 'row') },
     { id: 'splitDown', label: '아래로 분할', run: () => splitTerminal(refs.focus.current, 'column') },
-    { id: 'closePane', label: '포커스된 pane 닫기', keys: 'alt+w', run: closeFocused },
+    { id: 'closePane', label: '포커스된 pane 닫기', run: closeFocused },
     { id: 'preset', label: '현재 탭을 터미널 2 × 3 그리드로', run: preset },
-    { id: 'zoom', label: 'Pane 최대화 전환', keys: 'mod+shift+enter', run: () => setZoom(value => value ? '' : refs.focus.current) },
+    { id: 'zoom', label: 'Pane 최대화 전환', run: () => setZoom(value => value ? '' : refs.focus.current) },
     { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
-    { id: 'focusNext', label: '다음 pane으로 이동', keys: 'alt+shift+arrowright', run: () => moveFocus(1) },
-    { id: 'focusPrev', label: '이전 pane으로 이동', keys: 'alt+shift+arrowleft', run: () => moveFocus(-1) },
-    { id: 'focusNext2', label: '다음 pane으로 이동', keys: 'alt+shift+arrowdown', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusPrev2', label: '이전 pane으로 이동', keys: 'alt+shift+arrowup', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModright', label: '다음 pane으로 이동', keys: 'mod+shift+arrowright', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModleft', label: '이전 pane으로 이동', keys: 'mod+shift+arrowleft', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModdown', label: '다음 pane으로 이동', keys: 'mod+shift+arrowdown', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModup', label: '이전 pane으로 이동', keys: 'mod+shift+arrowup', hidden: true, run: () => moveFocus(-1) },
-    { id: 'review', label: '변경사항(Diff) 패널 전환', keys: 'mod+shift+g', run: toggleReview },
-    { id: 'palette', label: '명령 팔레트', keys: 'mod+shift+p', hidden: true, run: openPalette },
-    { id: 'palette2', label: '명령 팔레트(F1)', keys: 'f1', hidden: true, run: openPalette },
+    { id: 'focusNext', label: '다음 pane으로 이동', run: () => moveFocus(1) },
+    { id: 'focusPrev', label: '이전 pane으로 이동', run: () => moveFocus(-1) },
+    { id: 'focusNext2', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusPrev2', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
+    { id: 'focusModright', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusModleft', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
+    { id: 'focusModdown', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
+    { id: 'focusModup', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
+    { id: 'review', label: '변경사항(Diff) 패널 전환', run: toggleReview },
+    { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
+    { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', run: switchBranch },
     { id: 'theme', label: '색 테마 전환', run: () => setSettings(previous => ({ ...previous, theme: previous.theme === 'dark' ? 'light' : 'dark' })) },
     ...projectCommands
   ];
   // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
-  const commands = allCommands.filter(command => !hiddenAgents.includes(command.id.replace(/^(?:new|split)/, '').toLowerCase()));
+  const commands = allCommands.filter(command => !hiddenAgents.includes(command.id.replace(/^(?:new|split)/, '').replace(/Chat$/, '').toLowerCase())).map(command => ({ ...command, keys: appKey(settings.appKeys, command.id) }));
   refs.commands.current = commands;
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!refs.project.current || !refs.active.current || event.isComposing) return;
-      if (document.querySelector('.tour')) return; // the tutorial's practice keys must not touch real projects
+      if (document.querySelector('.tour, dialog[open]')) return; // the tutorial's practice keys must not touch real projects
       const inTerminal = event.target instanceof Element && event.target.closest('.xterm');
-      // Plain Ctrl+key belongs to the shell (readline, tmux, agent CLIs); only Cmd, Ctrl+Shift and Alt combos reach the app.
-      if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey)) return;
       const command = refs.commands.current.find(item => item.keys && matches(item.keys, event));
       if (!command) return;
+      // Preserve shell Ctrl bindings unless the user explicitly assigned one to an app action.
+      if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['splitRight', 'splitDown'].includes(command.id) && !settingsRef.current.appKeys?.[command.id]) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);
@@ -741,7 +784,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   const live = new Set(project.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
+  const onModeChange = (defaultMode: AgentMode) => setSettings(previous => ({ ...previous, defaultMode }));
   const paneProps = {
+    onModeChange,
     followUpInput: async (id: string, prompt: string, sequence: number, requestId: string) => (await call<{ accepted: boolean }>('terminal/follow-up', { id, prompt, sequence, requestId })).accepted,
     // "취소" comes first so it is the preselected entry: the Enter that triggered this must not also accept it.
     confirmSend: async (message: string) => (await pick(message, [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }])) === 'yes',
@@ -749,14 +794,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, caches, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),
     onAgentEvent: (id: string, kind: AgentEventKind) => {
-      const agent = agentOf(id), owner = refs.paneTabs.current.find(tab => leaves(tab.pane).includes(id)); if (!agent || !owner) return;
+      const owner = refs.paneTabs.current.find(tab => leaves(tab.pane).includes(id)), agent = findLeaf(owner?.pane ?? null, id)?.kind === 'chat' ? findLeaf(owner?.pane ?? null, id)?.agent ?? 'claude' : agentOf(id); if (!agent || !owner) return;
       const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
       if (kind === 'done' && looking) return;
       setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
       // Needing an answer is worth a sound even while you watch the pane; the popup is only for when you are away.
       if (!looking || kind === 'attention') onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
     }, focus, zoom, onFocus: setFocusLeaf, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
-    onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)),
+    onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)), onToChat: (id: string) => run(() => terminalToChat(id)),
     onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
@@ -795,25 +840,29 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
-    openproject: <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
+    openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
+  };
+  const chatCtx: ChatCtx = {
+    call, settings, root: project.root, projectId: project.id, branch: git.branch, switchBranch: () => run(switchBranch), onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: id => run(() => chatToTerminal(id)), onOpenSettings, pick, fail: report, branchChat, resumeChat,
+    subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
-    {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} zoom={tab.id === activeTab ? zoom : ''} />
-      : <Launchers title="새 탭" autoFocus hidden={hiddenAgents} onLaunch={command => run(() => launch(command, 'split'))} />}
+    {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} chat={chatCtx} zoom={tab.id === activeTab ? zoom : ''} />
+      : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar">
       <div className="split-button">
-        <button className="bar-button new-tab" title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
-        <button className="bar-button caret" title="Claude Code · Codex · Cursor CLI로 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><Icon name="chevronDown" size={14} /></button>
-        {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={() => setMenuOpen(false)} />
-          <div className="menu" role="menu">{launchers.map(item => <button role="menuitem" key={item.id} onClick={() => { setMenuOpen(false); run(() => launch(item.command, 'tab')); }}><Icon name={item.icon} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></button>)}</div></>}
+        <button className="bar-button new-tab" title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
+        <button ref={launcherButton} className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
+        {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
+          <LauncherMenu mode={settings.defaultMode} items={launchers} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
       <span className="drag-space" />
-      <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
-      <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
+      <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
+      <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
-      <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={onOpenSettings} />
+      <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
     </header>
     {errorBanner}
     {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
@@ -822,6 +871,16 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right"><PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
+    {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="새 Chat 모드 안내">
+      <img src="/chat-mode-preview.png" alt="Chat 모드에서 요청과 응답, 코드 변경 내용을 대화로 보는 화면" width="480" height="300" />
+      <div className="chat-mode-tip-body"><strong>새로운 Chat 모드를 만나보세요</strong><p>CLI 대신 대화 화면에서 요청하고 코드 변경을 확인해 보세요. 같은 Provider로 새 대화를 시작합니다.</p>
+        <button className="primary" onClick={() => run(async () => {
+          await launch(`ade:chat:${agentOf(focus)}`, 'tab');
+          setSettings(previous => ({ ...previous, defaultMode: 'chat', chatTipPending: false }));
+        })}>Chat 모드 사용하기<Icon name="arrowRight" size={14} /></button>
+      </div>
+      <IconButton icon="x" label="Chat 모드 안내 다시 보지 않기" onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))} />
+    </aside>}
     {quickDialog}
   </main>;
 }));
