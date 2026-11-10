@@ -1286,8 +1286,6 @@ button.chat-chip:hover { transform: translateY(-1px); }
   .chat-composer:focus-within, .chat-send:hover:not(:disabled), button.chat-chip:hover { transform: none; }
 }
 
-.setup-modes .setup-theme { padding: 14px 10px; }
-.setup-modes small { padding: 0 4px; color: var(--muted); }
 .chat-mode-tip { position: absolute; z-index: 12; bottom: 44px; right: 20px; width: min(420px, calc(100% - 40px)); border: 1px solid var(--border-strong); border-radius: 14px; background: var(--raised); box-shadow: 0 12px 40px #0004; overflow: hidden; }
 .chat-mode-tip > img { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; object-fit: cover; border-bottom: 1px solid var(--border); }
 .chat-mode-tip-body { padding: 16px; }
