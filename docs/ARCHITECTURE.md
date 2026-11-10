@@ -10,7 +10,7 @@
 
 ## 에이전트
 
-Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승인은 CLI 자체 화면을 따르며, 서버는 CLI가 보내는 OSC 7501 상태 보고와 프로세스 트리로 작업 상태·SSH 여부·세션 ID를 추적합니다. 로컬 Claude Code는 `<config>/sessions/<pid>.json`과 대화 transcript의 마지막 메인 요청(`api-request` 시작 시각, 요청한 캐시 TTL)으로 프롬프트 캐시 만료 시각을 계산해 해당 pane 헤더의 타이머에 보냅니다. 서버가 직접 모델을 호출하는 경로는 없습니다. 준비 상태 확인만 `claude auth status`와 `codex app-server`의 계정 조회를 사용합니다.
+Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승인은 CLI 자체 화면을 따르며, 서버는 CLI가 보내는 OSC 7501 상태 보고와 프로세스 트리로 작업 상태·SSH 여부·세션 ID를 추적합니다. 로컬 Claude Code는 `<config>/sessions/<pid>.json`과 대화 transcript의 마지막 메인 요청(`api-request` 시작 시각, 요청한 캐시 TTL)으로 프롬프트 캐시 만료 시각을 계산해 해당 pane 헤더의 타이머에 보냅니다. 서버가 직접 모델을 호출하는 경로는 없습니다. 예외로 채팅 탭(`chat` 리프)은 서버(`apps/local-server/src/chat.js`, `chat-claude.js`)가 공식 `claude -p --input-format stream-json --output-format stream-json`를 pane마다 자식 프로세스 하나로 직접 spawn하고(`shell:false`, 프로젝트 cwd 고정), stdout JSONL을 이벤트로 정규화해 `chat/event` WebSocket 메시지로 보냅니다. 로그인 토큰은 읽거나 전달하지 않고 모델 호출은 CLI 안에서만 일어납니다. 대화 기록은 `<프로젝트 데이터>/chat/<id>/events.jsonl`에 저장되고, 재시작은 `--resume <session id>`입니다. 응답이 없으면 10분 뒤 프로세스를 닫습니다. 터미널의 로컬 Claude는 완전히 쉬는 상태(작업·승인 대기·백그라운드 task·예약 wakeup 없음, `claudeBusy`로 확인)일 때만 채팅으로 옮길 수 있습니다(`terminal/to-chat`). 서버가 그 프로세스를 종료하고 `<config>/projects/.../<session>.jsonl`을 채팅 이벤트로 바꿔 저장한 뒤 같은 세션을 `--resume`으로 이어받습니다. 확인할 수 없는 상태는 거절하며 SSH 터미널은 제외합니다. 반대로 쉬고 있는 채팅은 `chat/to-terminal`로 child를 종료한 뒤 같은 세션을 `claude --resume`으로 연 터미널로 옮길 수 있습니다(Rewind 직후는 제외). 준비 상태 확인만 `claude auth status`와 `codex app-server`의 계정 조회를 사용합니다.
 
 ## 인증과 연결
 
@@ -27,3 +27,14 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 파일 감시는 최적화입니다. 생성 실패나 실행 중 오류가 나면 감시기를 닫고 Git 폴링을 유지합니다. 폴링은 현재 표시 중인 프로젝트에만 적용되며 전환 시 즉시 확인합니다.
 
 검증 상태는 [VERIFICATION](VERIFICATION.md), 보안 검토는 [SECURITY_REVIEW](SECURITY_REVIEW.md)를 참고하세요.
+
+
+### Codex·Cursor 채팅 (2026-11-10)
+
+채팅은 `chat.js`의 저장·재생·상태 관리와 `chat-rpc.js`의 CLI별 JSON-RPC 처리를 공유합니다. Codex는 `codex app-server`, Cursor는 `cursor-agent acp`를 `shell:false`로 실행합니다. 인증과 모델 호출은 공식 CLI가 담당하며 앱이 인증 토큰을 읽지 않습니다. 모델 목록은 CLI에서 조회하고 에이전트·프로젝트·설정 폴더별로 최대 1시간 캐시합니다. Cursor는 목록 조회 시 빈 ACP 세션을 하나 생성하지만 모델 호출은 하지 않습니다.
+
+`chat/open`에 `agent`를 전달하며, 상태의 `agent`와 `capabilities`가 화면과 서버의 지원 범위를 결정합니다. `meta.json`에 에이전트·실제 cwd·CLI 세션 ID를 보관하고, 기존 agent 없는 기록은 Claude로 해석합니다. 메타데이터는 이벤트와 같은 쓰기 큐에서 임시 파일 후 rename으로 저장합니다. Codex의 message ID와 turn ID는 구분하며 Branch/Rewind는 선택한 완료 턴까지 `thread/fork(lastTurnId)`로 이어갑니다. 원본 CLI 기록과 작업 파일은 수정하지 않습니다.
+
+Codex 권한은 기본(untrusted/workspace-write), 편집 허용(on-request/workspace-write), 계획(on-request/read-only), 모두 허용(never/danger-full-access)입니다. 추가 폴더는 writableRoots로 전달합니다. Cursor는 ACP의 Agent·Plan·Ask 모드를 사용하고, 승인은 CLI가 제시한 옵션 ID로 응답합니다. 질문·계획 승인도 응답까지 연결합니다. 제공되지 않은 비용·토큰·컨텍스트는 0으로 추정하지 않습니다.
+
+Codex·Cursor 워크트리는 기존 Git 실행 보안 규칙을 재사용해 데이터 폴더 아래에 생성하고 cwd를 저장합니다. 탭을 닫아도 워크트리는 삭제하지 않습니다. Chat→터미널은 child 종료 확인 뒤 에이전트별 정확한 session ID로 복원합니다. 터미널→Chat은 Claude만 지원하며, Codex·Cursor는 완전한 대기 상태를 검증할 수 없어 전환하지 않습니다. Cursor의 Branch/Rewind·스티어링·추가 폴더는 지원하지 않습니다. Cursor는 ACP의 `parameterizedModelPicker`를 선언하고 `configOptions`의 Fast·Context·Thinking·Effort·Auto 최적화 등 모델별 선택지를 표시합니다. `session/set_config_option` 응답과 알림으로 현재 값·지원 목록을 갱신하고, 선택값을 채팅 메타데이터에 저장해 재접속 시 복원합니다. 설정은 응답 대기 상태에서 적용하며 CLI가 제공하는 값만 허용합니다. 모델 선택은 First Party/Third Party 탭 안에서 Provider별로 묶고 표시 이름과 요청용 ID를 구분합니다.
