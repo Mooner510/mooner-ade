@@ -1344,3 +1344,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-max[aria-pressed=true] { color: #f2566e; background: color-mix(in srgb, #f2566e 14%, transparent); }
 
 .chat-pane[data-agent=cursor] .chat-foot { flex-wrap: wrap; }
+.resume-list button { flex-direction: column; align-items: flex-start; gap: 2px; }
+.resume-list button:disabled { opacity: .5; cursor: not-allowed; }
+.resume-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.resume-meta { color: var(--muted); font-size: 11.5px; }

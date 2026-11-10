@@ -22,6 +22,8 @@ export type ChatCtx = {
   // Continue this conversation in a terminal (`claude --resume`); the server refuses unless the chat is idle.
   toTerminal(id: string): void;
   resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor'): Promise<void>;
+  // Continue a conversation made with the plain `claude` CLI as a new chat tab.
+  importCliChat(sessionId: string): Promise<void>;
 };
 type Props = { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: ChatCtx; onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void };
 type Attachment = { mime: string; data: string; url: string };
@@ -44,6 +46,47 @@ function modelOptions(model: string | null, catalog = baseCatalog(), aliases: Re
   return [...quick.map(row => ({ value: row.value, label: row.label, ...modelAppearance(`${row.family} ${row.id} ${row.label}`, agent) })),
     ...(current && !quick.some(row => row.value === current) ? [{ value: current, label: known?.label ?? shortModel(model), ...modelAppearance(`${known?.family ?? ''} ${model}`, agent) }] : []),
     { value: MORE_MODELS, label: '더 많은 모델…', icon: 'apps', divider: true }];
+}
+
+type SavedChat = { id: string; title: string; model: string | null; updatedAt: number };
+type CliChat = { sessionId: string; title: string; updatedAt: number; size: number; running: boolean; chatId: string | null };
+const when = (time: number) => new Date(time).toLocaleString();
+const sizeOf = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+// "이전 대화 불러오기": this project's saved ADE chats, and (Claude only) conversations made with the plain `claude` CLI.
+function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude' | 'codex' | 'cursor'; exclude: string; call: ChatCtx['call']; onPick(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }): void; onClose(): void }) {
+  const hasCli = agent === 'claude', panelId = useId(), search = useRef<HTMLInputElement>(null);
+  const [tab, setTab] = useState<'ade' | 'cli'>('ade'), [query, setQuery] = useState('');
+  const [saved, setSaved] = useState<SavedChat[] | null>(null), [cli, setCli] = useState<CliChat[] | null>(null), [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => { search.current?.focus(); }, []);
+  useEffect(() => { void call<SavedChat[]>('chat/sessions', { agent, exclude }).then(setSaved, cause => { setSaved([]); setFailed(String(cause?.message ?? cause)); }); }, [call, agent, exclude]);
+  useEffect(() => {
+    if (tab !== 'cli' || cli !== null) return;
+    void call<CliChat[]>('chat/cli-sessions', {}).then(setCli, cause => { setCli([]); setFailed(String(cause?.message ?? cause)); });
+  }, [tab, cli, call]);
+  const needle = query.trim().toLowerCase(), match = (title: string) => !needle || title.toLowerCase().includes(needle);
+  const rows = tab === 'ade' ? saved?.filter(item => match(item.title)) : cli?.filter(item => match(item.title) && item.chatId !== exclude);
+  const loading = tab === 'ade' ? saved === null : cli === null;
+  const tabs = [['ade', 'ADE 대화'], ['cli', 'CLI 대화']] as const;
+  return <Modal className="models-modal resume-modal" labelledBy="resume-title" onClose={onClose}>
+    <header><h2 id="resume-title">이전 대화 불러오기</h2><button type="button" className="models-close" aria-label="닫기" onClick={onClose}><Icon name="x" size={16} /></button></header>
+    <div className="models-controls">
+      {hasCli && <div className="ai-tabs models-tabs" role="tablist" aria-label="대화 종류">
+        {tabs.map(([key, name], index) => <button type="button" key={key} id={`${panelId}-tab-${index}`} role="tab" aria-selected={tab === key} aria-controls={panelId} tabIndex={tab === key ? 0 : -1}
+          onClick={() => setTab(key)} onKeyDown={event => { if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); setTab(tabs[1 - index][0]); document.getElementById(`${panelId}-tab-${1 - index}`)?.focus(); } }}>{name}</button>)}
+      </div>}
+      <label className="models-search"><Icon name="search" size={15} /><input ref={search} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="대화 제목 검색" aria-label="대화 제목 검색" /></label>
+    </div>
+    <div className="models-list resume-list" id={panelId} role={hasCli ? 'tabpanel' : 'listbox'} aria-label="대화">
+      {tab === 'ade'
+        ? (rows as SavedChat[] | undefined)?.map(item => <button type="button" key={item.id} title={item.title} onClick={() => onPick({ kind: 'chat', id: item.id })}>
+            <span className="resume-title">{item.title}</span><span className="resume-meta">{item.model ? `${shortModel(item.model)} · ` : ''}{when(item.updatedAt)}</span></button>)
+        : (rows as CliChat[] | undefined)?.map(item => <button type="button" key={item.sessionId} title={item.title} disabled={item.running} onClick={() => onPick(item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId })}>
+            <span className="resume-title">{item.title}</span>
+            <span className="resume-meta">{item.running ? '터미널에서 실행 중' : item.chatId ? '이미 불러온 대화 · ' + when(item.updatedAt) : `${sizeOf(item.size)} · ${when(item.updatedAt)}`}</span></button>)}
+      {!rows?.length && <p className="models-empty">{loading ? '대화를 불러오는 중…' : failed ? `목록을 불러오지 못했습니다: ${failed}` : query ? '검색 결과가 없습니다.' : tab === 'ade' ? '이 프로젝트에 저장된 이전 Chat 대화가 없습니다.' : '이 프로젝트에서 CLI로 나눈 대화가 없습니다.'}</p>}
+    </div>
+    <footer><span>{rows ? `${rows.length}개 대화` : ''}</span><span>{tab === 'cli' ? 'CLI 기록은 읽기만 하고, 같은 세션을 이어서 씁니다.' : '선택하면 새 탭에서 이어집니다.'}</span></footer>
+  </Modal>;
 }
 
 // "더 많은 모델": every model the CLI lists (read fresh on open), newest version first, the current one checked.
@@ -239,7 +282,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     try { return await ctx.call('chat/set', input); }
     finally { setting.current = false; setConfiguring(false); }
   }
-  const [modelsOpen, setModelsOpen] = useState(false), [resuming, setResuming] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false), [resuming, setResuming] = useState(false), [resumeOpen, setResumeOpen] = useState(false);
   const selectedModel = state.model || aliases[''] || null;
   useEffect(() => { let alive = true;
     void ctx.call('chat/models', { agent, id }).then(result => { if (alive) setAgentModels(result); }, ctx.fail);
@@ -332,16 +375,15 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers }).catch(ctx.fail);
   const interrupt = () => void ctx.call('chat/interrupt', { id }).catch(ctx.fail);
-  async function resume() {
+  function resume() {
     if (resuming) return;
     if (busy) { ctx.fail(new Error('응답이 끝난 뒤 이전 대화를 불러올 수 있습니다.')); return; }
-    setResuming(true);
-    try {
-      const sessions = await ctx.call<{ id: string; title: string; model: string | null; updatedAt: number }[]>('chat/sessions', { agent, exclude: id });
-      if (!sessions.length) { await ctx.pick('이 프로젝트에 저장된 이전 Chat 대화가 없습니다', []); return; }
-      const chosen = await ctx.pick('이전 대화 불러오기', sessions.map(session => ({ id: session.id, label: `${session.title} · ${new Date(session.updatedAt).toLocaleString()}`, detail: session.model ?? undefined })));
-      if (chosen) await ctx.resumeChat(chosen, agent);
-    } catch (cause) { ctx.fail(cause); }
+    setResumeOpen(true);
+  }
+  async function pickResume(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }) {
+    setResumeOpen(false); setResuming(true);
+    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent) : ctx.importCliChat(choice.sessionId)); }
+    catch (cause) { ctx.fail(cause); }
     finally { setResuming(false); }
   }
 
@@ -376,6 +418,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {state.error && state.status === 'idle' && !view.items.some(item => item.kind === 'error') && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{state.error}</span></div>}
       </div>
     </div>
+    {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
     {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} fallback={catalog} aliases={aliases} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void setChat({ id, model: value }).catch(ctx.fail); }} />}
     <div className="chat-start-slot chat-greeting" inert={!empty} aria-hidden={!empty}>
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span>{greeting}</h2></div></div>

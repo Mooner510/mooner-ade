@@ -586,6 +586,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const tab: PaneTab = { id: newId(), pane: { id, kind: 'chat', agent } };
     commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(id);
   }
+  // A conversation made with the plain `claude` CLI becomes a new chat tab; the server writes its transcript into the chat first.
+  async function importCliChat(sessionId: string) {
+    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+    const leaf = chatLeaf(undefined, 'claude');
+    await call('chat/import-cli', { sessionId, newId: leaf.id });
+    const tab: PaneTab = { id: newId(), pane: leaf };
+    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
+  }
   async function launch(command: string, where: 'tab' | 'split') {
     if (where === 'tab') await newTab(command);
     else await openTerminalLeaf(refs.focus.current, 'row', undefined, command);
@@ -843,7 +851,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const chatCtx: ChatCtx = {
-    call, settings, root: project.root, projectId: project.id, branch: git.branch, switchBranch: () => run(switchBranch), onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: id => run(() => chatToTerminal(id)), onOpenSettings, pick, fail: report, branchChat, resumeChat,
+    call, settings, root: project.root, projectId: project.id, branch: git.branch, switchBranch: () => run(switchBranch), onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: id => run(() => chatToTerminal(id)), onOpenSettings, pick, fail: report, branchChat, resumeChat, importCliChat,
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
