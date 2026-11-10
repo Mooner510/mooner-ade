@@ -1286,8 +1286,6 @@ button.chat-chip:hover { transform: translateY(-1px); }
   .chat-composer:focus-within, .chat-send:hover:not(:disabled), button.chat-chip:hover { transform: none; }
 }
 
-.setup-modes .setup-theme { padding: 14px 10px; }
-.setup-modes small { padding: 0 4px; color: var(--muted); }
 .chat-mode-tip { position: absolute; z-index: 12; bottom: 44px; right: 20px; width: min(420px, calc(100% - 40px)); border: 1px solid var(--border-strong); border-radius: 14px; background: var(--raised); box-shadow: 0 12px 40px #0004; overflow: hidden; }
 .chat-mode-tip > img { display: block; width: 100%; height: auto; aspect-ratio: 8 / 5; object-fit: cover; border-bottom: 1px solid var(--border); }
 .chat-mode-tip-body { padding: 16px; }
@@ -1346,3 +1344,13 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-pane[data-agent=cursor] .chat-foot { flex-wrap: wrap; }
 .boot-error { position: fixed; inset: 0; margin: auto; width: min(420px, calc(100% - 32px)); height: max-content; padding: 20px 22px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay); color: var(--fg); box-shadow: var(--shadow); }
 .boot-error p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.models-list.resume-list { gap: 2px; padding-top: 6px; }
+.models-list .resume-row { flex: none; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 4px; padding: 10px 12px; border-radius: 8px; text-align: left; }
+.resume-name { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: 13px; font-weight: 500; line-height: 18px; }
+.resume-info { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font-size: 11.5px; line-height: 16px; white-space: nowrap; }
+.resume-info > span + span:not(.resume-code):not(.resume-badge)::before { content: '·'; margin-right: 10px; color: var(--faint); }
+.resume-code { margin-left: auto; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.resume-badge { padding: 0 7px; border-radius: 999px; font-size: 10.5px; line-height: 16px; color: #e8a64b; background: color-mix(in srgb, #e8a64b 16%, transparent); }
+.models-list .resume-row[data-blocked] { cursor: not-allowed; }
+.resume-row[data-blocked] .resume-name { color: var(--muted); }
+.models-list .resume-row[data-blocked]:hover { background: transparent; }
