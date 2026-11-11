@@ -56,3 +56,32 @@ test('Cursor model modal renders party tabs, provider groups and readable names'
   assert.match(firstParty, /role="tab" aria-selected="true"[^>]*>First Party/);
   for (const name of ['Grok 4.7', 'Composer 2.5']) assert.ok(firstParty.includes(`color:var(--provider-cursor)">${name}</span>`));
 });
+
+test('chat dev draft storage is compiled out when import.meta.env.DEV is false', async t => {
+  const require = createRequire(import.meta.url);
+  const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
+  const directory = await mkdtemp(join(tmpdir(), 'ade-chat-draft-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bundle = async (dev) => {
+    const outfile = join(directory, dev ? 'dev.cjs' : 'prod.cjs');
+    await build({
+      stdin: {
+        contents: `
+          globalThis.localStorage = { store: new Map(), getItem(k) { return this.store.get(k) ?? null; }, setItem(k, v) { this.store.set(k, v); }, removeItem(k) { this.store.delete(k); } };
+          import { loadChatDevDraft, saveChatDevDraft, clearChatDevDraft } from './chat-dev-draft';
+          saveChatDevDraft('p', 'c', 'hello');
+          export const loaded = loadChatDevDraft('p', 'c');
+          clearChatDevDraft('p', 'c');
+          export const cleared = loadChatDevDraft('p', 'c');
+        `,
+        resolveDir: fileURLToPath(new URL('../apps/web/src', import.meta.url))
+      },
+      bundle: true, platform: 'node', format: 'cjs', outfile,
+      define: { 'import.meta.env.DEV': dev ? 'true' : 'false' }
+    });
+    return require(outfile);
+  };
+  assert.deepEqual(await bundle(true), { loaded: 'hello', cleared: null });
+  assert.deepEqual(await bundle(false), { loaded: null, cleared: null });
+  assert.equal(globalThis.localStorage?.store?.size ?? 0, 0);
+});
