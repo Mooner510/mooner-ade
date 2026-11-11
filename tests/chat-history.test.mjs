@@ -24,7 +24,8 @@ for (const agent of ['claude', 'codex', 'cursor']) {
     await chat.close();
     let sessions = await listChatSessions({ directory, agent });
     assert.equal(sessions.length, 1); assert.equal(sessions[0].id, 'previous');
-    assert.equal(sessions[0].title, '첫 요청 두 번째 줄'); assert.ok(sessions[0].updatedAt > 0);
+    const expectedTitle = agent === 'claude' ? 'AI가 붙인 제목' : agent === 'codex' ? 'Codex 테스트 1' : 'Cursor 테스트 1';
+    assert.equal(sessions[0].title, expectedTitle); assert.ok(sessions[0].updatedAt > 0);
     assert.deepEqual(await listChatSessions({ directory, agent, exclude: 'previous' }), []);
     assert.deepEqual(await listChatSessions({ directory, agent: agent === 'claude' ? 'codex' : 'claude' }), []);
     chat = await open(); assert.equal(chat.state().sessionId, sessionId);

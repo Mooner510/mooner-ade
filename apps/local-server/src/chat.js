@@ -5,8 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
-import { approvalLine, buildClaudeArgs, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, transcriptEvents, userLine, validMessageUuid } from './chat-claude.js';
+import { approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, transcriptEvents, uiPermissionMode, userLine, validMessageUuid } from './chat-claude.js';
+import { readCursorStoreUsage } from './cursor-context.js';
+import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
+import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
+import { readAutoCompact, readClaudeSettingsLayers } from './claude-auto-compact.js';
 import { createLocalRuntime } from './runtime.js';
 import { mcpServers } from './terminal-sessions.js';
 
@@ -17,6 +21,15 @@ export const chatFolder = (directory, id) => {
   return path.join(directory, 'chat', id);
 };
 const zero = () => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
+// Normal child end and intentional idle kill must not read as a failed agent. macOS often reports SIGTERM as exit 143 (128+15) with no signal name.
+export const agentExitBenign = (code, signal) => code === 0 || signal === 'SIGTERM' || signal === 'SIGINT' || code === 143 || code === 130;
+const addTokens = (base, extra) => ({ input: base.input + extra.input, output: base.output + extra.output, cacheRead: base.cacheRead + extra.cacheRead, cacheCreate: base.cacheCreate + extra.cacheCreate });
+const mergeTurnUsage = (current, patch) => ({
+  input: patch.input || current?.input || 0,
+  output: patch.output || current?.output || 0,
+  cacheRead: patch.cacheRead || current?.cacheRead || 0,
+  cacheCreate: patch.cacheCreate || current?.cacheCreate || 0,
+});
 
 // One chat tab = one transcript + (while a turn or an approval is open) one `claude -p` child. The child starts on the first
 // message and is resumed with `--resume <session id>` when it ended in between, so closing the app never loses the conversation.
@@ -26,11 +39,12 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const metaFile = path.join(root, 'meta.json'), logFile = path.join(root, 'events.jsonl');
   const saved = await fs.readFile(metaFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: 'default', costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
-  // Settings' defaults for a brand-new Claude chat only; a saved chat keeps what it has. bypassPermissions is never a default.
-  if (saved === null && agent === 'claude' && defaults) {
-    if (['default', 'acceptEdits', 'plan'].includes(defaults.permissionMode)) meta.permissionMode = defaults.permissionMode;
-    if (chatCapabilities(agent).efforts.includes(defaults.effort)) meta.effort = defaults.effort;
+  const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: 'default', sandbox: null, network: false, runEverything: false, costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
+  // Settings' defaults for a brand-new chat; a saved chat keeps what it has. Only modes this agent can apply, and never bypassPermissions.
+  if (saved === null && defaults) {
+    const caps = chatCapabilities(agent);
+    if (caps.permissionModes.includes(defaults.permissionMode) && defaults.permissionMode !== 'bypassPermissions') meta.permissionMode = defaults.permissionMode;
+    if (EFFORTS.includes(defaults.effort)) meta.effort = defaults.effort;
   }
   if (saved !== null && (meta.agent ?? 'claude') !== agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
   cwd = meta.cwd ?? cwd;
@@ -40,30 +54,107 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   events = events.slice(-KEEP_EVENTS);
 
-  const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
-    contextTokens: 0, contextWindow: null, tokens: zero(), slashCommands: [], tools: [], pending: 0, error: null, startedAt: Date.now() };
+  const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode, sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
+    contextTokens: 0, contextWindow: null, autoCompact: null, tokens: zero(), slashCommands: [], commandInfo: [], tools: [], pending: 0, error: null, startedAt: Date.now(),
+    segmentTitles: { custom: '', ai: '', agent: '' }, chatTitle: '' };
+  let turnUsage = null, thinkingTokens = 0;
+  // The transcript with rewinds applied, and the last request not yet answered. Both are read on every state publish (token updates included),
+  // so they are kept until the next stored event instead of being rebuilt from up to 6000 events each time. Callers must not mutate them.
+  let retainedCache = null, unansweredCache;
+  const invalidate = () => { retainedCache = null; unansweredCache = undefined; };
   function retainedEvents() {
+    if (retainedCache) return retainedCache;
     let kept = [];
     for (const event of events) {
       if (event.kind === 'rewind') { const at = kept.findIndex(item => item.kind === 'message' && item.uuid === event.uuid); if (at >= 0) kept = kept.slice(0, at + 1); }
       else kept.push(event);
     }
-    return kept;
+    return retainedCache = kept;
   }
-  for (const event of retainedEvents()) fold(event, true);
-  state.sessionId = meta.sessionId ?? null;
-  let configuring = false;
-  let child = null, protocol = null, closed = false, turnOpen = false, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve();
+  // An alias ("sonnet") has no catalog row of its own: the family's first (newest) row stands in, else Auto Compact would be judged against 200k and switched off.
+  const maxContextForModel = model => (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (state.capabilities.catalog?.find(item => item.id === model) ?? state.capabilities.catalog?.find(item => item.family === model))?.window) || state.contextWindow || 200_000;
+  // Several refreshes can be in flight (open, catalog, init, result); only the newest one's answer is applied.
+  let compactGeneration = 0;
+  const refreshAutoCompact = async (model = state.model) => {
+    if (agent !== 'claude') { if (state.autoCompact) { state.autoCompact = null; publish(); } return; }
+    const generation = ++compactGeneration, configDir = meta.configDir || path.join(os.homedir(), '.claude');
+    const next = await readAutoCompact(configDir, cwd, model, maxContextForModel(model));
+    if (generation !== compactGeneration) return;
+    const prev = JSON.stringify(state.autoCompact), ready = JSON.stringify(next);
+    if (prev !== ready) { state.autoCompact = next; publish(); }
+  };
+  void refreshAutoCompact();
+  // Cursor setting changes run one after another on the ACP session (they never wait for the running turn); `configuring` is true while any is in flight.
+  let configuring = false, configChain = Promise.resolve(), configCount = 0;
+  let child = null, protocol = null, closed = false, turnOpen = false, turnSeq = 0, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve(), publishTimer = null, lastCommandOutput = null;
+  // Claude: the message streaming right now per subagent ('' = main thread). Text deltas name no message; they belong to the latest start of their own stream.
+  const streamIds = new Map(), toolInputSize = new Map();
   const approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images } sent into a running turn, not yet taken in by it
+  let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0;
+  const stopCursorStorePoll = () => { if (cursorStorePoll) { clearInterval(cursorStorePoll); cursorStorePoll = null; } };
+  const noteCursorAcpUsage = event => {
+    if (agent !== 'cursor' || event.contextSource === 'store') return;
+    if (event.contextTokens > 0) cursorAcpUsageAt = Date.now();
+  };
+  const refreshCursorStoreContext = async () => {
+    if (agent !== 'cursor' || closed || process.env.CURSOR_STORE_CONTEXT === '0') return;
+    const sessionId = state.sessionId ?? meta.sessionId;
+    if (!sessionId) return;
+    if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 5_000) return;
+    const reading = await readCursorStoreUsage(sessionId).catch(() => null);
+    if (!reading) return;
+    if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
+    if (reading.contextTokens === state.contextTokens && (reading.contextWindow ?? state.contextWindow) === state.contextWindow) return;
+    emit({ kind: 'usage', contextTokens: reading.contextTokens, contextWindow: reading.contextWindow ?? state.contextWindow, contextSource: 'store' });
+  };
+  const startCursorStorePoll = (untilMs = Date.now() + 90_000) => {
+    if (agent !== 'cursor' || process.env.CURSOR_STORE_CONTEXT === '0') return;
+    cursorStoreUntil = Math.max(cursorStoreUntil, untilMs);
+    if (cursorStorePoll) return;
+    void refreshCursorStoreContext();
+    cursorStorePoll = setInterval(() => {
+      if (Date.now() > cursorStoreUntil) { stopCursorStorePoll(); return; }
+      void refreshCursorStoreContext();
+    }, 8_000);
+    cursorStorePoll.unref?.();
+  };
 
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, costBase: meta.costBase,
-    title: (users => users.find(event => !event.text?.trimStart().startsWith('/')) ?? users[0])(events.slice(events.findLastIndex(event => event.kind === 'divider') + 1).filter(event => event.kind === 'user'))?.text?.replace(/\s+/g, ' ').trim().slice(0, 80) });
+  const refreshChatTitle = () => {
+    const kept = retainedEvents();
+    const since = kept.findLastIndex(event => event.kind === 'divider');
+    state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
+  };
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, costBase: meta.costBase, title: state.chatTitle });
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
     writing = saved.catch(reportStorage); return saved;
   };
-  const publish = () => onState?.({ ...state, tokens: { ...state.tokens }, pending: approvals.size });
+  const tokensShown = () => {
+    const live = turnUsage ?? (thinkingTokens > 0 ? { input: 0, output: thinkingTokens, cacheRead: 0, cacheCreate: 0 } : null);
+    return live ? addTokens(state.tokens, live) : { ...state.tokens };
+  };
+  const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }); };
+  // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
+  const publishSoon = () => { if (publishTimer) return; publishTimer = setTimeout(publish, 150); publishTimer.unref?.(); };
+  // The last request since the last /clear, unless a successful result answered it.
+  function lastUnansweredUser() {
+    if (unansweredCache !== undefined) return unansweredCache;
+    const kept = retainedEvents();
+    let answered = false;
+    for (let at = kept.length - 1; at >= 0; at--) {
+      const event = kept[at];
+      if (event.kind === 'divider') break;
+      if (event.kind === 'result' && event.status === 'success') answered = true;
+      else if (event.kind === 'user') return unansweredCache = answered ? null : event;
+    }
+    return unansweredCache = null;
+  }
+  function canRetryTurn() {
+    if (closed || turnOpen || approvals.size || configuring) return false;
+    const last = lastUnansweredUser();
+    return Boolean(last?.text?.trim() && !last.images);
+  }
   const setStatus = () => {
     state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; publish();
     // An idle child holds a few hundred MB; the conversation resumes from its session id, so it can go.
@@ -74,13 +165,20 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   function fold(event, replay = false) {
     if (event.kind === 'session') {
       state.sessionId = event.sessionId ?? state.sessionId; state.model = event.model ?? state.model;
-      if (event.slashCommands?.length) state.slashCommands = event.slashCommands;
+      if (event.permissionMode !== undefined) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; meta.permissionMode = mode; }
+      if (event.slashCommands?.length) state.slashCommands = event.slashCommands.map(item => typeof item === 'string' ? item : item?.name).filter(name => typeof name === 'string');
+      if (Array.isArray(event.commands)) state.commandInfo = event.commands.flatMap(item => {
+        if (!item || typeof item.name !== 'string' || !/^[\w:.-]+$/.test(item.name)) return [];
+        const hint = typeof item.hint === 'string' ? item.hint.slice(0, 120) : '';
+        return [{ name: item.name, description: typeof item.description === 'string' ? item.description.slice(0, 200) : '', ...(hint ? { hint } : {}) }];
+      });
       if (event.tools?.length) state.tools = event.tools;
     } else if (event.kind === 'capabilities') state.capabilities = event.capabilities;
     else if (event.kind === 'settings') { if (event.permissionMode !== undefined) state.permissionMode = event.permissionMode; if (event.effort !== undefined) state.effort = event.effort; }
     else if (event.kind === 'usage') {
       if (event.tokens) state.tokens = event.tokens;
       state.contextTokens = event.contextTokens ?? state.contextTokens; state.contextWindow = event.contextWindow ?? state.contextWindow;
+      if (event.contextSource === 'acp' || event.contextSource === 'store') state.contextUsageSource = event.contextSource;
       state.capabilities = { ...state.capabilities, context: true, tokens: Boolean(event.tokens) || state.capabilities.tokens };
     } else if (event.kind === 'message' && event.usage && !event.parentToolUseId) {
       state.contextTokens = event.usage.input + event.usage.cacheRead + event.usage.cacheCreate + event.usage.output;
@@ -90,13 +188,27 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
       if (!replay && event.costUsd != null) state.costUsd = meta.costBase + event.costUsd;
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
-    } else if (event.kind === 'divider') { state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; }
+    } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens; turnUsage = null; thinkingTokens = 0;
+    } else if (event.kind === 'divider') {
+      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; turnUsage = null; thinkingTokens = 0;
+      state.segmentTitles = { custom: '', ai: '', agent: '' }; refreshChatTitle();
+      if (!replay) void refreshAutoCompact();
+    } else if (event.kind === 'title') {
+      const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
+      const text = cleanChatTitle(event.text);
+      if (text) state.segmentTitles = { ...state.segmentTitles, [source]: text };
+      refreshChatTitle();
+    } else if (event.kind === 'user') refreshChatTitle();
     else if (event.kind === 'error') state.error = event.message;
   }
+  for (const event of retainedEvents()) fold(event, true);
+  refreshChatTitle();
+  state.sessionId = meta.sessionId ?? null;
   function emit(event, { store = true } = {}) {
     const stamped = store ? { ...event, seq: ++seq, at: Date.now() } : event;
     if (store) {
       events.push(stamped); if (events.length > KEEP_EVENTS * 1.5) events = events.slice(-KEEP_EVENTS);
+      invalidate();
       writing = writing.then(() => fs.appendFile(logFile, JSON.stringify(stamped) + '\n', { mode: 0o600 })).catch(reportStorage);
       fold(stamped);
     }
@@ -109,10 +221,17 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     for (const [uuid, item] of steers) if (emitCancelled) emit({ kind: 'steer', phase: 'cancelled', uuid, text: item.text });
     steers.clear();
   }
+  // Approvals that can no longer be answered (interrupt, child gone, /clear) are withdrawn on the screen too, not only forgotten here.
+  function clearApprovals() {
+    for (const requestId of approvals.keys()) emit({ kind: 'approval', phase: 'cancel', requestId });
+    approvals.clear();
+  }
   function handleRaw(raw) {
     if (raw?.type === 'user' && raw.isReplay === true) {
       const steer = steers.get(raw.uuid);
-      if (steer) { steers.delete(raw.uuid); emit({ kind: 'steer', phase: 'applied', uuid: raw.uuid, text: steer.text, images: steer.images }); }
+      if (steer) { steers.delete(raw.uuid); emit({ kind: 'steer', phase: 'applied', uuid: raw.uuid, text: steer.text, images: steer.images }); return; }
+      // Any other echo is our own message coming back; only what a local slash command printed in it is new.
+      for (const event of normalizeClaude(raw)) if (event.kind === 'command_output') handleEvent(event);
       return;
     }
     // A reply to something we asked (set_model, interrupt, ...).
@@ -121,28 +240,60 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     for (const event of normalizeClaude(raw)) handleEvent(event);
   }
   function handleEvent(event) {
+      if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (event.kind === 'approval') {
         if (event.phase === 'request') approvals.set(event.requestId, event); else approvals.delete(event.requestId);
         emit(event); setStatus(); return;
       }
-      if (event.kind === 'delta') { emit(event, { store: false }); return; }
+      if (event.kind === 'delta') {
+        if (!protocol) {
+          const stream = event.parentToolUseId ?? '';
+          if (event.phase === 'start') { if (event.messageId) streamIds.set(stream, event.messageId); if (!stream) { turnUsage = null; thinkingTokens = 0; } }
+          else if (event.phase === 'thinkingTokens') { thinkingTokens = Number(event.tokens) || 0; publishSoon(); }
+          else if (event.phase === 'usage') {
+            // A subagent's usage is not this conversation's context; the status line only follows the main thread. Usage itself is not drawn, so it is not sent.
+            if (event.usage && !stream) { turnUsage = mergeTurnUsage(turnUsage, event.usage); thinkingTokens = 0; publishSoon(); }
+            return;
+          } else if (event.messageId === undefined && streamIds.has(stream)) event = { ...event, messageId: streamIds.get(stream) };
+          // A Write's whole file arrives as tool input; the card only needs the first few KB for its summary.
+          if (event.phase === 'toolInput') {
+            const slot = `${event.messageId}:${event.index}`, size = (toolInputSize.get(slot) ?? 0) + (event.text?.length ?? 0);
+            toolInputSize.set(slot, size); if (size > 8192 + (event.text?.length ?? 0)) return;
+          }
+        }
+        emit(event, { store: false }); return;
+      }
       if (event.kind === 'raw') { emit(event, { store: false }); return; }
+      // The CLI may print the same command output both in its echo and as a message of its own: it is shown once.
+      if (event.kind === 'command_output') { const same = `${turnSeq}\0${event.isError}\0${event.text}`; if (lastCommandOutput === same) return; lastCommandOutput = same; }
       emit(event);
-      if (event.kind === 'session') { meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false; void saveMeta().catch(reportStorage); publish(); }
-      if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings') publish();
+      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { turnUsage = { ...event.usage }; thinkingTokens = 0; publishSoon(); }
+      if (event.kind === 'session') {
+        meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
+        if (agent === 'claude') void refreshAutoCompact(event.model ?? state.model);
+        void saveMeta().catch(reportStorage); publish();
+      }
+      if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings' || event.kind === 'compact') publish();
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
-      if (event.kind === 'result') { turnOpen = steers.size > 0; setStatus(); if (!turnOpen && restartAfterTurn) restart(); }
+      if (event.kind === 'result') {
+        streamIds.clear(); toolInputSize.clear(); turnUsage = null; thinkingTokens = 0; turnOpen = steers.size > 0; setStatus();
+        if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
+        if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
+        if (!turnOpen && restartAfterTurn) restart();
+      }
   }
   const reportStorage = error => { state.error = `채팅 저장 실패: ${error.message}`; publish(); };
 
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
   function restart() {
-    restartAfterTurn = false;
+    restartAfterTurn = false; state.restartPending = false;
     if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; proc.kill('SIGTERM'); }
     setStatus();
   }
-  async function start() {
-    if (child) return;
+  // One start at a time: warm-up, a setting change and a send may arrive together, and none may use the child before it is initialized.
+  let starting = null;
+  function start() { if (starting) return starting; if (child) return Promise.resolve(); return starting = startNow().finally(() => { starting = null; }); }
+  async function startNow() {
     if (closed) throw fault('NOT_FOUND', '닫힌 채팅입니다.', 404);
     if (agent !== 'claude' && meta.worktree && !meta.worktreePath) {
       const target = path.join(directory, 'worktrees', `chat-${id}`);
@@ -151,7 +302,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       meta.worktreePath = target; cwd = target; await saveMeta();
     }
     const extra = agent === 'claude' && prepare ? await prepare(root) : {};
-    const args = [...executableArgs, ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : ['acp'])];
+    const args = [...executableArgs, ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     // shell:false and argv only: the message text never reaches a shell.
     const run = () => {
@@ -168,7 +319,28 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       else throw fault('AGENT_UNAVAILABLE', `${executable} 명령을 시작하지 못했습니다. 설치와 로그인을 확인하세요.`, 503);
     }
     attach(proc);
-    if (protocol) { try { await protocol.initialize(meta, cwd, mcpServers()); await saveMeta(); } catch (error) { restart(); throw error; } }
+    if (protocol) {
+      try {
+        await protocol.initialize(meta, cwd, mcpServers());
+        await saveMeta();
+        if (agent === 'cursor') startCursorStorePoll();
+      } catch (error) { restart(); throw error; }
+    }
+  }
+  async function resendLastUser() {
+    live();
+    if (configuring) await configChain;
+    if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 다시 시도하세요.', 409);
+    const last = lastUnansweredUser();
+    if (!last?.text?.trim()) throw fault('INVALID_INPUT', '다시 시도할 메시지가 없습니다.', 409);
+    if (last.images > 0) throw fault('CHAT_UNSUPPORTED', '이미지가 포함된 요청은 자동 복구할 수 없습니다. 같은 내용을 다시 보내세요.', 409);
+    state.error = null; turnOpen = true; turnSeq += 1;
+    try {
+      await start();
+      if (protocol) await protocol.send(last.text, []);
+      else await write(userLine(last.text));
+    } catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
+    setStatus();
   }
   function attach(proc) {
     child = proc;
@@ -191,9 +363,20 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     proc.stdin.on('error', () => {}); // EPIPE once the child is gone; the exit handler reports it
     proc.once('close', (code, signal) => {
       if (child !== proc) return;
-      child = null; protocol?.dispose(); protocol = null; turnOpen = false; meta.costBase = state.costUsd; approvals.clear(); controls.clear(); dropSteers();
-      // A clean end after an interrupt/close is not an error.
-      if (!closed && code !== 0 && signal !== 'SIGTERM') emit({ kind: 'error', message: `${agent}가 종료되었습니다 (${code ?? signal}). 설치와 로그인을 확인하세요.` });
+      const wasTurn = turnOpen;
+      child = null; protocol?.dispose(); protocol = null; turnOpen = false; meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear();
+      const abort = !closed && !agentExitBenign(code, signal);
+      const fail = (message, { store = true } = {}) => {
+        state.error = message;
+        if (store) emit({ kind: 'error', message, recoverable: canRetryTurn() });
+        publish();
+      };
+      if (abort) {
+        const recoverable = Boolean(wasTurn && meta.sessionId && canRetryTurn());
+        fail(recoverable
+          ? `${agent} 연결이 끊겼습니다 (${code ?? signal ?? '오류'}). 세션 복구를 시도하거나 다시 보내세요.`
+          : `${agent}가 종료되었습니다 (${code ?? signal}). 설치와 로그인을 확인하세요.`, { store: true });
+      } else if (state.error) { state.error = null; publish(); }
       void saveMeta().catch(reportStorage); setStatus();
     });
     setStatus();
@@ -218,18 +401,21 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         const effort = cursorEffortOption(state.capabilities.configOptions ?? []);
         state.capabilities.efforts = effort?.options.map(item => item.value) ?? [];
         state.effort = effort?.currentValue ?? null;
-      } else state.capabilities.efforts = selected?.efforts ?? [];
+      } else state.capabilities.efforts = selected?.efforts ?? (agent === 'claude' ? chatCapabilities('claude').efforts : []);
       state.capabilities.images = selected?.images !== false;
       publish();
+      // The window comes from this catalog; without a refresh the gauge stayed on the full window (e.g. 9% of 1M) until the first turn finished.
+      if (agent === 'claude') void refreshAutoCompact();
     },
-    state: () => ({ ...state, tokens: { ...state.tokens }, pending: approvals.size }),
-    replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: { ...state, tokens: { ...state.tokens }, pending: approvals.size },
+    retry: () => resendLastUser(),
+    state: () => ({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }),
+    replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: { ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() },
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
     async send(text, images = [], { steer = false } = {}) {
       live();
-      if (configuring) throw fault('CHAT_BUSY', '모델 설정이 끝난 뒤 보내세요.', 409);
+      if (configuring && !(turnOpen && steer)) await configChain;
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
@@ -239,8 +425,43 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         return;
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
-      state.error = null; turnOpen = true;
-      try { await start(); emit({ kind: 'user', text, images: images.length }); await saveMeta(); if (protocol) await protocol.send(text, images); else await write(userLine(text, images)); }
+      state.error = null; turnOpen = true; turnSeq += 1;
+      // The message is shown right away; starting the process (slow on the first turn) must not delay it.
+      emit({ kind: 'user', text, images: images.length });
+      try {
+        await start(); await saveMeta();
+        if (agent === 'cursor') startCursorStorePoll(Date.now() + 600_000);
+        if (agent === 'cursor' && isCursorSummarizeCommand(text) && protocol) {
+          if (images.length) throw fault('CHAT_UNSUPPORTED', '컨텍스트 압축 명령에는 이미지를 붙일 수 없습니다.', 409);
+          const sessionId = state.sessionId ?? meta.sessionId;
+          const preTokens = state.contextTokens, startedAt = Date.now();
+          emit({ kind: 'delta', phase: 'compacting', active: true });
+          restart();
+          try {
+            const output = await runCursorSummarize({ executable, executableArgs, sessionId, cwd, env, spawnProcess });
+            const after = await readCursorStoreUsage(sessionId).catch(() => null);
+            emit({ kind: 'delta', phase: 'compacting', active: false });
+            emit({ kind: 'compact', trigger: 'manual', preTokens: preTokens || null, postTokens: after?.contextTokens ?? null });
+            const cleaned = cleanCursorSummarizeOutput(output);
+            if (cleaned) emit({ kind: 'command_output', text: cleaned, isError: false });
+            emit({ kind: 'result', status: 'success', text: '', costUsd: null, durationMs: Date.now() - startedAt });
+            if (after?.contextTokens) emit({ kind: 'usage', contextTokens: after.contextTokens, contextWindow: after.contextWindow ?? state.contextWindow, contextSource: 'store' });
+          } catch (error) {
+            emit({ kind: 'delta', phase: 'compacting', active: false });
+            emit({ kind: 'result', status: 'failed', text: error.message ?? '컨텍스트 압축이 실패했습니다.', costUsd: null, durationMs: Date.now() - startedAt });
+            turnOpen = false;
+            try { await start(); } catch { restart(); }
+            setStatus();
+            throw error;
+          }
+          turnOpen = false;
+          setStatus();
+          if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
+          return;
+        }
+        if (protocol) await protocol.send(text, images);
+        else await write(userLine(text, images));
+      }
       catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
       setStatus();
     },
@@ -265,19 +486,26 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       live();
       if (!child) return;
       if (protocol) { await protocol.interrupt(); return; }
-      approvals.clear(); dropSteers();
-      const response = await control({ subtype: 'interrupt' }, 3000);
-      // No answer from the CLI: end the child; the next message resumes the session.
-      if (!response) child?.kill('SIGTERM');
-      turnOpen = false; setStatus();
+      clearApprovals(); dropSteers();
+      const proc = child, turn = turnSeq, response = await control({ subtype: 'interrupt' }, 3000);
+      // The turn closes with the `result` the CLI sends for the interrupt; closing it here let that late result end the *next* turn instead.
+      // No answer, or no result soon after: end the child; the close handler ends the turn and the next message resumes the session.
+      if (!response) { if (child === proc) proc.kill('SIGTERM'); }
+      else setTimeout(() => { if (child === proc && turnOpen && turnSeq === turn) proc.kill('SIGTERM'); }, 5000).unref();
+      setStatus();
     },
-    async set({ model, effort, worktree, addDirs, permissionMode, configOption }) {
+    // Starts the agent process ahead of the first setting change or message (a no-op when it is running).
+    async warm() { live(); if (agent === 'cursor' && !closed && !child && !turnOpen) await start(); },
+    async set({ model, effort, worktree, addDirs, permissionMode, configOption, sandbox, network, runEverything }) {
       live();
+      if (runEverything !== undefined && (agent !== 'cursor' || typeof runEverything !== 'boolean')) throw fault(agent === 'cursor' ? 'INVALID_INPUT' : 'CHAT_UNSUPPORTED', agent === 'cursor' ? 'Run Everything 설정을 확인하세요.' : 'Run Everything은 Cursor에서만 설정할 수 있습니다.', agent === 'cursor' ? 400 : 409);
       if (configOption !== undefined && (agent !== 'cursor' || !configOption || typeof configOption !== 'object' || typeof configOption.configId !== 'string' || typeof configOption.value !== 'string' || configOption.configId.length > 200 || configOption.value.length > 200)) throw fault('INVALID_INPUT', '모델 옵션을 확인하세요.');
-      if (configuring) throw fault('CHAT_BUSY', '모델 설정을 적용 중입니다.', 409);
       if (agent !== 'claude') {
         const caps = state.capabilities;
         if (worktree !== undefined && typeof worktree !== 'boolean') throw fault('INVALID_INPUT', '워크트리 설정을 확인하세요.');
+        if ((network !== undefined && agent !== 'codex') || (sandbox !== undefined && !caps.sandboxes?.length)) throw fault('CHAT_UNSUPPORTED', '이 설정은 Codex(샌드박스·네트워크)와 Cursor(샌드박스)에서만 바꿀 수 있습니다.', 409);
+        if (sandbox !== undefined && sandbox !== null && !caps.sandboxes?.includes(sandbox)) throw fault('INVALID_INPUT', '지원하지 않는 샌드박스입니다.');
+        if (network !== undefined && typeof network !== 'boolean') throw fault('INVALID_INPUT', '네트워크 설정을 확인하세요.');
         if (permissionMode !== undefined && !caps.permissionModes.includes(permissionMode)) throw fault('INVALID_INPUT', '지원하지 않는 권한 모드입니다.');
         if (model !== undefined && model !== null && !(typeof model === 'string' && /^[\w.\[\],=:-]{1,200}$/.test(model))) throw fault('INVALID_INPUT', '잘못된 모델입니다.');
         if (effort != null && !caps.efforts.includes(effort)) throw fault('INVALID_INPUT', '선택한 모델이 지원하지 않는 Effort입니다.');
@@ -287,11 +515,20 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
           if (!Array.isArray(addDirs) || addDirs.length > 8 || !addDirs.every(item => typeof item === 'string' && path.isAbsolute(item) && item.length <= 1024 && !item.includes('\0'))) throw fault('INVALID_INPUT', '잘못된 폴더 목록입니다.');
           for (const dir of addDirs) if (!(await fs.stat(dir).then(info => info.isDirectory(), () => false))) throw fault('INVALID_INPUT', `폴더를 찾을 수 없습니다: ${dir}`);
         }
+        // Run Everything is answered by this app (the ACP permission requests are accepted), so it applies at once, even mid-turn. Sandbox is a launch
+        // flag: it is stored now and the process is replaced when the turn ends (or now, when idle).
+        if (agent === 'cursor' && (sandbox !== undefined || runEverything !== undefined)) {
+          if ([model, effort, configOption, permissionMode, worktree, addDirs].some(value => value !== undefined)) throw fault('INVALID_INPUT', '모델 설정은 한 번에 하나씩 바꾸세요.');
+          if (runEverything !== undefined) { meta.runEverything = state.runEverything = runEverything; protocol?.setRunEverything?.(runEverything); }
+          if (sandbox !== undefined) {
+            meta.sandbox = state.sandbox = sandbox ?? null;
+            if (child) { if (turnOpen || approvals.size) { restartAfterTurn = true; state.restartPending = true; } else restart(); }
+          }
+          await saveMeta(); publish(); return;
+        }
         if (agent === 'cursor' && (model !== undefined || effort !== undefined || configOption !== undefined || permissionMode !== undefined)) {
-          if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 모델 설정을 바꾸세요.', 409);
           if ([model, effort, configOption, permissionMode].filter(value => value !== undefined).length > 1 || worktree !== undefined || addDirs !== undefined) throw fault('INVALID_INPUT', '모델 설정은 한 번에 하나씩 바꾸세요.');
-          configuring = true;
-          try {
+          const apply = async () => {
             await start();
             await protocol.configure({ model, permissionMode, configOption: effort !== undefined ? { configId: state.capabilities.effortConfigId, value: effort } : configOption });
             if (model !== undefined) { meta.model = model ?? undefined; meta.configValues = {}; meta.effort = undefined; }
@@ -301,18 +538,29 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
               const option = configOption ?? { configId: state.capabilities.effortConfigId, value: effort };
               meta.configValues = { ...meta.configValues, [option.configId]: option.value };
             }
-            await saveMeta(); publish(); return;
-          } finally { configuring = false; }
+            await saveMeta();
+          };
+          configCount += 1; configuring = state.configuring = true; publish();
+          const run = configChain.then(apply);
+          configChain = run.catch(() => {});
+          try { await run; } finally { if (--configCount === 0) { configuring = false; state.configuring = false; } publish(); }
+          return;
         }
-        for (const [key, value] of Object.entries({ model, effort, worktree, addDirs, permissionMode })) if (value !== undefined) { meta[key] = value ?? undefined; state[key] = value; }
+        for (const [key, value] of Object.entries({ model, effort, worktree, addDirs, permissionMode, sandbox, network })) if (value !== undefined) { meta[key] = value ?? undefined; state[key] = value; }
+        // Codex gets the approval policy, reviewer and sandbox with every turn, so those never need a restart (which would also wait for the running turn).
+        const permissionOnly = agent === 'codex' && [model, effort, worktree, addDirs].every(value => value === undefined) && [permissionMode, sandbox, network].some(value => value !== undefined);
+        if (agent === 'codex' && [permissionMode, sandbox, network].some(value => value !== undefined)) await protocol?.setPermissions({ permissionMode, sandbox, network });
         if (model !== undefined) { const chosen = caps.catalog.find(item => item.id === model) ?? (model === null ? caps.catalog[0] : undefined); caps.efforts = chosen?.efforts ?? []; caps.images = chosen?.images !== false; meta.effort = undefined; state.effort = null; }
-        if (child) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+        if (child && !permissionOnly) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
         await saveMeta(); publish(); return;
       }
       if (permissionMode !== undefined) {
         if (!PERMISSION_MODES.includes(permissionMode)) throw fault('INVALID_INPUT', '잘못된 권한 모드입니다.');
+        if (child) {
+          const response = await control({ subtype: 'set_permission_mode', mode: cliPermissionMode(permissionMode) });
+          if (!response || response.subtype !== 'success') throw fault('AGENT_PROTOCOL', '권한 모드를 적용하지 못했습니다. Claude Code 버전과 설정을 확인하세요.', 502);
+        }
         meta.permissionMode = state.permissionMode = permissionMode;
-        if (child) await control({ subtype: 'set_permission_mode', mode: permissionMode });
       }
       if (model !== undefined) {
         if (model !== null && !(typeof model === 'string' && /^[\w.\[\]-]{1,100}$/.test(model))) throw fault('INVALID_INPUT', '잘못된 모델입니다.');
@@ -343,6 +591,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         meta.addDirs = state.addDirs = [...new Set(addDirs)];
         if (child) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
       }
+      if (model !== undefined) void refreshAutoCompact(state.model);
       await saveMeta(); publish();
     },
     // The state to start a Branch from: the transcript up to one assistant message, and the settings that make `claude` resume there as a fork.
@@ -397,12 +646,12 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
-      approvals.clear(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); state.turns = 0; state.durationMs = 0;
+      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
     async close({ forget = false } = {}) {
       if (closed) return;
-      closed = true; clearTimeout(idleTimer);
+      closed = true; clearTimeout(idleTimer); stopCursorStorePoll();
       if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; proc.kill('SIGTERM'); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
@@ -469,50 +718,43 @@ export async function seedFromTranscript({ directory, id, file, sessionId, confi
   return events.length;
 }
 
-// Slash commands the CLI would offer before its first reply: user and project commands and skills. The live list from the
-// session's init message replaces this once the child has started.
-export async function listCommands(cwd, home) {
-  const out = new Map();
-  const add = (name, file, source) => fs.readFile(file, 'utf8').then(body => {
-    const description = /^description:\s*(.+)$/m.exec(body.slice(0, 1500))?.[1]?.replace(/^["']|["']$/g, '').trim();
-    if (!out.has(name)) out.set(name, { name, description: description ?? '', source });
-  }, () => {});
-  async function walk(dir, prefix, source) {
-    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      if (entry.isDirectory()) await walk(path.join(dir, entry.name), `${prefix}${entry.name}:`, source);
-      else if (entry.name.endsWith('.md')) await add(prefix + entry.name.slice(0, -3), path.join(dir, entry.name), source);
-    }
+export { collectCommandMetadata, listCommands, lookupCommandMeta, mergeCommandCatalog, parseCommandFrontmatter, probeInit, probeSlashCommands } from './slash-commands.js';
+
+// What each alias means comes from the CLI's own catalog (`provider_alias_targets`, fetched with the user's login):
+// { alias: { default, perProvider: { bedrock, vertex, ... } } }. Read from the file, so it costs no CLI start.
+const idLike = value => typeof value === 'string' && /^[\w.-]{1,100}$/.test(value);
+export async function readAliasTargets(home = os.homedir()) {
+  const dir = path.join(home, '.claude', 'cache', 'model-catalog');
+  let best = null;
+  for (const name of await fs.readdir(dir).catch(() => [])) {
+    if (!name.endsWith('-cc.json')) continue;
+    try {
+      const file = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')), targets = file?.catalog?.config?.provider_alias_targets;
+      if (targets && typeof targets === 'object' && Number(file.fetchedAt) > (best?.at ?? 0)) best = { at: Number(file.fetchedAt), targets };
+    } catch {}
   }
-  for (const [base, source] of [[path.join(cwd, '.claude'), 'project'], [path.join(home, '.claude'), 'user']]) {
-    await walk(path.join(base, 'commands'), '', source);
-    for (const entry of await fs.readdir(path.join(base, 'skills'), { withFileTypes: true }).catch(() => [])) if (entry.isDirectory()) await add(entry.name, path.join(base, 'skills', entry.name, 'SKILL.md'), source);
-  }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return Object.fromEntries(Object.entries(best?.targets ?? {}).flatMap(([alias, item]) => idLike(item?.default)
+    ? [[alias, { default: item.default, perProvider: Object.fromEntries(Object.entries(item.per_provider ?? {}).filter(([, id]) => idLike(id))) }]] : []));
 }
 
-// Which concrete model each alias means right now. The CLI answers this for free: a local slash command (`/cost`) makes `claude -p` print
-// its init event (with the resolved model) and finish with no model call (cost 0, 0 turns). No login data is read; the child is stopped at init.
-// Result: { '': default model, opus: id, sonnet: id, haiku: id } (an alias that failed is left out).
-export async function probeModels({ env = {}, spawnProcess = spawn, executable = 'claude', cwd = os.tmpdir(), aliases = ['', 'opus', 'sonnet', 'haiku'], timeoutMs = 25_000 } = {}) {
-  const one = alias => new Promise(resolve => {
-    let proc, buffer = '', done = false;
-    const finish = model => { if (done) return; done = true; clearTimeout(timer); try { proc?.kill(); } catch {} resolve(model); };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    try {
-      proc = spawnProcess(executable, ['-p', '/cost', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', ...(alias ? ['--model', alias] : [])],
-        { cwd, env: { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch { return finish(null); }
-    proc.once('error', () => finish(null)); proc.once('close', () => finish(null));
-    proc.stdout.on('data', chunk => {
-      buffer += chunk;
-      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
-        const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
-        try { const event = JSON.parse(line); if (event.type === 'system' && event.subtype === 'init') return finish(typeof event.model === 'string' ? event.model : null); } catch {}
-      }
-    });
-  });
-  const found = await Promise.all(aliases.map(async alias => [alias, await one(alias)]));
-  return Object.fromEntries(found.filter(([, model]) => model));
+const PROVIDER_FLAGS = { CLAUDE_CODE_USE_BEDROCK: 'bedrock', CLAUDE_CODE_USE_VERTEX: 'vertex', CLAUDE_CODE_USE_FOUNDRY: 'foundry' };
+
+// { '': default model, opus, sonnet, haiku }, one way for everything and no helper child for the aliases: an ANTHROPIC_DEFAULT_*_MODEL override wins,
+// then the catalog entry for the provider in use. The default is the `model` setting (alias or id); only when none is set does `init()` (one CLI start,
+// the same answer the command menu uses) name the account's default. An alias nothing resolves is left out; the picker then shows its plain name.
+export async function resolveModels({ env = {}, cwd = os.tmpdir(), home = os.homedir(), init } = {}) {
+  const merged = { ...process.env, ...(typeof env === 'function' ? env() : env) };
+  const [targets, layers] = await Promise.all([readAliasTargets(home), readClaudeSettingsLayers(merged.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), cwd)]);
+  const get = key => merged[key] ?? layers.env[key];
+  const provider = Object.entries(PROVIDER_FLAGS).find(([flag]) => ['1', 'true'].includes(String(get(flag)).toLowerCase()))?.[1];
+  const target = alias => (provider && targets[alias]?.perProvider[provider]) || targets[alias]?.default;
+  const models = {};
+  for (const alias of ['opus', 'sonnet', 'haiku']) { const id = get(`ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL`) ?? target(alias); if (id) models[alias] = id; }
+  const wanted = get('ANTHROPIC_MODEL') ?? layers.settings.model;
+  const known = typeof wanted === 'string' ? models[wanted] ?? target(wanted) ?? (/^claude-[\w.-]+$/.test(wanted) ? wanted : null) : null;
+  const model = known ?? (await init?.())?.model;
+  if (model) models[''] = model;
+  return models;
 }
 
 // Every model the CLI offers right now. The CLI keeps its own catalog (fetched with the user's login, refreshed about hourly while it runs) in

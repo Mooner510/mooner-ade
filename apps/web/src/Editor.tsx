@@ -29,7 +29,7 @@ export type Settings = {
   chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('auto' effort = the CLI's own default).
   chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
-  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatDefaultPermission: 'default' | 'acceptEdits' | 'plan'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'default' | 'acceptEdits' | 'plan' | 'auto'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean;
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
@@ -37,10 +37,10 @@ export type Settings = {
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
 // statusItems is the shown set; statusLeft/statusRight hold every item's side and order, shown or not, so hiding one keeps its place.
-const defaultLeft = ['connection', 'path', 'branch', 'changes'], defaultRight = ['terminals', 'size', 'cpu', 'memory', 'claudeusage', 'codexusage', 'wakatime', 'clock', 'readiness', 'openproject'];
+const defaultLeft = ['connection', 'path', 'branch', 'changes'], defaultRight = ['terminals', 'size', 'cpu', 'memory', 'claudeusage', 'codexusage', 'cursorusage', 'wakatime', 'clock', 'readiness', 'openproject'];
 export const statusItemIds = [...defaultLeft, ...defaultRight];
 // Items that were fixed or did not exist before the layout could be edited; saved settings from then get them shown.
-const addedWithLayout = ['connection', 'readiness', 'openproject', 'claudeusage', 'codexusage'];
+const addedWithLayout = ['connection', 'readiness', 'openproject', 'claudeusage', 'codexusage', 'cursorusage'];
 export function statusLayout(settings: Pick<Settings, 'statusLeft' | 'statusRight'>) {
   const known = new Set(statusItemIds), seen = new Set<string>();
   const keep = (list: string[] = []) => list.filter(id => known.has(id) && !seen.has(id) && seen.add(id));
@@ -61,7 +61,7 @@ export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'ch
 // Green at 0% through yellow to red at 100%, like Claude Code's statusline; the theme picks the lightness.
 export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, Math.min(100, percent)) / 100));
 export function migrateSettings(saved: Partial<Settings>): Settings {
-  const next = { ...defaultSettings, ...saved };
+  const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
   if (saved.onboarded === undefined) next.onboarded = true;
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
@@ -88,7 +88,7 @@ export const defaultSettings: Settings = {
   clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false,
   chatStatusItems: ['tokens', 'cost'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
-  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatDefaultPermission: 'default', chatDefaultEffort: 'auto',
+  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'default', chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
 };

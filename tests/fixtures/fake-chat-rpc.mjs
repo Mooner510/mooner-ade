@@ -1,5 +1,7 @@
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const cursor = process.argv.includes('cursor'), send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const reply = (id, result) => send({ id, result });
@@ -21,12 +23,16 @@ const configOptions = () => [
 const cursorInfo = () => ({ sessionId, models: { currentModelId: currentModel, availableModels: catalog }, configOptions: configOptions(), modes: { availableModes: [{ id: 'agent' }, { id: 'plan' }, { id: 'ask' }] } });
 function finish(status = 'completed') {
   if (cursor) {
-    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' } } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' + (process.argv.includes('--force') ? ' [force]' : '') + (process.argv.includes('--sandbox') ? ` [sandbox:${process.argv[process.argv.indexOf('--sandbox') + 1]}]` : '') } } });
+    const size = values.context === '1m' ? 1_000_000 : 300_000;
+    notify('session/update', { sessionId, update: { sessionUpdate: 'usage_update', used: 12_000 + count * 2_000, size } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', title: `Cursor 테스트 ${count}` } });
     reply(promptId, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' });
   } else {
     notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: `m${count}`, delta: '안녕' });
     notify('item/completed', { threadId: sessionId, turnId, item: { id: `m${count}`, type: 'agentMessage', text: '안녕' } });
     notify('thread/tokenUsage/updated', { threadId: sessionId, turnId, tokenUsage: { total: { inputTokens: count * 10, cachedInputTokens: count, outputTokens: count * 2 }, last: { totalTokens: 12 }, modelContextWindow: 1000 } });
+    notify('thread/name/updated', { threadId: sessionId, threadName: `Codex 테스트 ${count}` });
     notify('turn/completed', { threadId: sessionId, turn: { id: turnId, status } });
   }
 }
@@ -56,6 +62,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (text === 'hold') return;
     if (cursor && text === 'empty') { reply(promptId, { stopReason: 'end_turn' }); return; }
     if (text === 'crash') { process.exit(2); return; }
+    if (text === 'retry-once') {
+      const flag = path.join(process.cwd(), '.ade-retry-once');
+      if (!fs.existsSync(flag)) { fs.writeFileSync(flag, '1'); process.exit(2); }
+      finish();
+      return;
+    }
     if (text === 'approval' || text === 'question') {
       requestId = `approval-${count}`;
       if (text === 'question') send({ id: requestId, method: cursor ? 'cursor/ask_question' : 'item/tool/requestUserInput', params: { threadId: sessionId, questions: cursor ? [{ id: 'q1', prompt: '선택', options: [{ id: 'a', label: 'A' }] }] : [{ id: 'q1', question: '선택', options: [{ label: 'A' }] }] } });
