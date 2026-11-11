@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
 import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
@@ -25,8 +25,9 @@ type PluginsBridge = {
   setEnabled(on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
   revoke(id: string, options?: { forget?: boolean }): Promise<PluginsState>; restart(id: string): Promise<PluginsState>;
   action(id: string, action: string, values: Record<string, string>): Promise<PluginsState>; openFolder(): Promise<PluginsState>;
-  pickZip(): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
+  pickZip(): Promise<PluginsState>; installZip(file: string): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
 };
+const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
 const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
@@ -98,14 +99,18 @@ function BusyButton({ busy, running, className, onClick, icon, children, title }
   </button>;
 }
 
-function Row({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children?: ReactNode }) {
+function Row({ title, hint, query = '', children }: { title: ReactNode; hint?: ReactNode; query?: string; children?: ReactNode }) {
+  const text = `${typeof title === 'string' ? title : ''} ${typeof hint === 'string' ? hint : ''}`;
+  if (query.trim() && !text.toLowerCase().includes(query.trim().toLowerCase())) return null;
   return <div className="setting-row"><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
 }
 
-export function PluginSettings() {
+export function PluginSettings({ query = '' }: { query?: string }) {
   const bridge = pluginsBridge();
   const [state, setState] = useState<PluginsState | null>(null);
   const [busy, setBusy] = useState(''), [notice, setNotice] = useState<(Notice & { where: string }) | null>(null);
+  const [dropOver, setDropOver] = useState(false);
+  const matches = (text: string) => !query.trim() || text.toLowerCase().includes(query.trim().toLowerCase());
   useEffect(() => {
     if (!bridge) return;
     let live = true;
@@ -113,9 +118,18 @@ export function PluginSettings() {
     const off = bridge.onState(value => setState(value));
     return () => { live = false; off(); };
   }, [bridge]);
-  if (!bridge) return <p className="setting-note">플러그인은 데스크톱 앱에서만 쓸 수 있습니다.</p>;
-  if (!state) return <p className="setting-note">불러오는 중…</p>;
-  if (!state.available) return <Callout tone="error">이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.</Callout>;
+  if (!bridge) {
+    const text = '플러그인은 데스크톱 앱에서만 쓸 수 있습니다.';
+    return matches(text) ? <p className="setting-note setting-hit">{text}</p> : null;
+  }
+  if (!state) {
+    const text = '불러오는 중…';
+    return matches(text) ? <p className="setting-note setting-hit">{text}</p> : null;
+  }
+  if (!state.available) {
+    const text = '이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.';
+    return matches(text) ? <div className="setting-hit"><Callout tone="error">{text}</Callout></div> : null;
+  }
 
   const run: Run = (key, step) => {
     const where = key.slice(0, key.lastIndexOf(':'));
@@ -126,17 +140,46 @@ export function PluginSettings() {
   const noticeFor = (where: string) => notice?.where === where ? notice : null;
   const global = noticeFor('global');
   const plugins = [...state.plugins].sort((a, b) => Number(needsUser(b)) - Number(needsUser(a)));
+  const shown = plugins.filter(plugin => matches(`${plugin.name} ${plugin.description ?? ''}`));
+  const filtering = query.trim() !== '';
   const working = Boolean(busy);
+  const canDrop = Boolean(pathForFile());
+  const installPaths = (paths: string[]) => {
+    if (!paths.length) return Promise.resolve(state!);
+    return paths.reduce((chain, file) => chain.then(() => bridge.installZip(file)), Promise.resolve(state!) as Promise<PluginsState>);
+  };
+  const onDragOver = (event: DragEvent) => {
+    if (!canDrop || working || !event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault(); event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropOver(true);
+  };
+  const onDragLeave = (event: DragEvent) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropOver(false);
+  };
+  const onDrop = (event: DragEvent) => {
+    setDropOver(false);
+    if (!canDrop || working) return;
+    event.preventDefault(); event.stopPropagation();
+    const resolve = pathForFile()!;
+    const zips = Array.from(event.dataTransfer.files).filter(file => /\.zip$/i.test(file.name));
+    if (!zips.length) { setNotice({ where: 'global', text: '플러그인 zip 파일만 놓을 수 있습니다.', error: true }); return; }
+    const paths = zips.map(file => resolve(file)).filter(Boolean);
+    if (!paths.length) return;
+    run('global:zip', () => installPaths(paths));
+  };
 
-  return <div className="plugins">
-    <p className="setting-note plugins-lead">MoonerADE에 없는 기능을 더합니다. 플러그인은 이 컴퓨터에서 MoonerADE와 같은 권한으로 실행되니, 믿을 수 있는 곳에서 받은 것만 설치하세요.</p>
-    {state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
-    {global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
+  return <div className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+    {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
+    {!filtering && <p className="setting-note plugins-lead">MoonerADE에 없는 기능을 더합니다. 플러그인은 이 컴퓨터에서 MoonerADE와 같은 권한으로 실행되니, 믿을 수 있는 곳에서 받은 것만 설치하세요.</p>}
+    {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
+    {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
 
-    <Row title="플러그인 사용" hint={state.enabled ? '승인한 플러그인만 실행됩니다.' : '꺼져 있으면 어떤 플러그인도 실행되지 않습니다. 켤 때 확인 창이 뜹니다.'}>
+    <Row query={query} title="플러그인 사용" hint={state.enabled ? '승인한 플러그인만 실행됩니다.' : '꺼져 있으면 어떤 플러그인도 실행되지 않습니다. 켤 때 확인 창이 뜹니다.'}>
       <input type="checkbox" role="switch" aria-label="플러그인 사용" checked={state.enabled} disabled={working} onChange={event => { const on = event.target.checked; run('global:enable', () => bridge.setEnabled(on)); }} />
     </Row>
 
+    {(!filtering || shown.length > 0) && <>
     <div className="plugin-list-head">
       <h4 className="setting-group">설치된 플러그인{state.plugins.length > 0 && <span className="plugin-count">{state.plugins.length}</span>}</h4>
       <div className="plugin-toolbar">
@@ -146,15 +189,16 @@ export function PluginSettings() {
       </div>
     </div>
 
-    {plugins.length === 0
+    {shown.length === 0
       ? <div className="plugin-empty">
           <Icon name="plugin" size={28} />
           <strong>설치된 플러그인이 없습니다</strong>
-          <p>MoonerADE 릴리스에서 받은 플러그인 zip을 <b>zip으로 설치</b>로 고르거나 플러그인 폴더에 넣으세요. 확인 창에서 설치하면 바로 실행됩니다.</p>
+          <p>MoonerADE 릴리스에서 받은 플러그인 zip을 여기로 끌어다 놓거나 <b>zip으로 설치</b>로 고르세요. 확인 창에서 설치하면 바로 실행됩니다.</p>
         </div>
-      : <div className="plugin-list">{plugins.map(plugin => <PluginCard key={plugin.folder} plugin={plugin} enabled={state.enabled} busy={busy} notice={noticeFor(plugin.folder)} run={run} bridge={bridge} />)}</div>}
+      : <div className="plugin-list">{shown.map(plugin => <PluginCard key={plugin.folder} plugin={plugin} enabled={state.enabled} busy={busy} notice={noticeFor(plugin.folder)} run={run} bridge={bridge} />)}</div>}
+    </>}
 
-    <details className="plugin-about">
+    {!filtering && <details className="plugin-about">
       <summary><Icon name="chevronRight" size={14} />설치 방법과 보안 안내</summary>
       <ul>
         <li>zip을 플러그인 폴더에 넣어도 확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인이면 업데이트되고, 저장된 데이터는 남습니다.</li>
@@ -163,7 +207,7 @@ export function PluginSettings() {
         <li>확인 창의 SHA-256을 배포처의 <span className="mono">SHA256SUMS</span>와 맞춰 보면 받은 파일이 그대로인지 알 수 있습니다.</li>
       </ul>
       <p>플러그인 폴더 <span className="mono">{state.dir}</span></p>
-    </details>
+    </details>}
   </div>;
 }
 
@@ -195,7 +239,7 @@ function PluginCard({ plugin, enabled, busy, notice, run, bridge }: { plugin: Pl
   else if (plugin.state === 'stopped' && id) callout = <Callout tone="info" action={button('restart', '시작', () => bridge.restart(id), { icon: 'refresh' })}>실행하고 있지 않습니다.</Callout>;
   else if (plugin.state === 'off') callout = <Callout tone="info">플러그인 사용이 꺼져 있어 실행하지 않습니다. 위의 <b>플러그인 사용</b>을 켜면 바로 실행됩니다.</Callout>;
 
-  return <article className="plugin-card" data-tone={tone} aria-label={plugin.name}>
+  return <article className="plugin-card setting-hit" data-tone={tone} aria-label={plugin.name}>
     <header className="plugin-head">
       <span className="plugin-mark"><Icon name="plugin" size={18} /></span>
       <div className="plugin-title">

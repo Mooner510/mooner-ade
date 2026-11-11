@@ -4,9 +4,21 @@ import { usageHue } from './Editor';
 
 // The plan-limit readings of the login a project's agent CLI uses. Shared by the bottom status bar and the chat tab's usage ring.
 export type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
-export type Usage = { provider: 'claude' | 'codex'; windows: UsageWindow[]; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
+export type Usage = { provider: 'claude' | 'codex' | 'cursor'; windows: UsageWindow[]; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
 export const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
-export const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex' };
+export const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex', cursor: 'Cursor 로그인(기기)' };
+export const usageStatusKeys: Record<Usage['provider'], string[]> = { claude: ['session', 'weekly'], codex: ['session', 'weekly'], cursor: ['auto', 'api', 'total', 'grok'] };
+export const usageStatusShort: Record<string, string> = { session: '5h', weekly: '주', total: '전체', grok: 'Grok', auto: 'Cursor', api: '기타', 'on-demand': '추가' };
+
+/** Cursor 상태바: 모델 풀( Cursor / 기타 ) 우선, Grok는 Cursor·전체와 %가 같으면 생략. */
+export function cursorUsageCompact(windows: UsageWindow[]): UsageWindow[] {
+  const byKey = Object.fromEntries(windows.map(item => [item.key, item]));
+  const auto = byKey.auto, total = byKey.total, grok = byKey.grok;
+  const grokDistinct = grok && grok.percent !== auto?.percent && grok.percent !== total?.percent;
+  const order = ['auto', 'api', 'total', ...(grokDistinct ? ['grok' as const] : [])];
+  const picked = order.map(key => byKey[key]).filter(Boolean) as UsageWindow[];
+  return (picked.length ? picked : windows).slice(0, 3);
+}
 export const untilReset = (at: number) => {
   const minutes = Math.max(0, Math.round((at - Date.now()) / 60000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
   return days ? `${days}일 ${hours}시간` : hours ? `${hours}시간 ${minutes % 60}분` : `${minutes}분`;
