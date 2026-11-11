@@ -23,12 +23,16 @@ const configOptions = () => [
 const cursorInfo = () => ({ sessionId, models: { currentModelId: currentModel, availableModels: catalog }, configOptions: configOptions(), modes: { availableModes: [{ id: 'agent' }, { id: 'plan' }, { id: 'ask' }] } });
 function finish(status = 'completed') {
   if (cursor) {
-    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' } } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' + (process.argv.includes('--force') ? ' [force]' : '') + (process.argv.includes('--sandbox') ? ` [sandbox:${process.argv[process.argv.indexOf('--sandbox') + 1]}]` : '') } } });
+    const size = values.context === '1m' ? 1_000_000 : 300_000;
+    notify('session/update', { sessionId, update: { sessionUpdate: 'usage_update', used: 12_000 + count * 2_000, size } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', title: `Cursor 테스트 ${count}` } });
     reply(promptId, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' });
   } else {
     notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: `m${count}`, delta: '안녕' });
     notify('item/completed', { threadId: sessionId, turnId, item: { id: `m${count}`, type: 'agentMessage', text: '안녕' } });
     notify('thread/tokenUsage/updated', { threadId: sessionId, turnId, tokenUsage: { total: { inputTokens: count * 10, cachedInputTokens: count, outputTokens: count * 2 }, last: { totalTokens: 12 }, modelContextWindow: 1000 } });
+    notify('thread/name/updated', { threadId: sessionId, threadName: `Codex 테스트 ${count}` });
     notify('turn/completed', { threadId: sessionId, turn: { id: turnId, status } });
   }
 }

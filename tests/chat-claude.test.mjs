@@ -28,7 +28,7 @@ test('a user line carries images before the text', () => {
 
 test('init, text delta, assistant message, tool result and result normalize', () => {
   assert.equal(normalizeClaude({ type: 'system', subtype: 'init', session_id: 's1', model: 'm', slash_commands: ['compact'] })[0].slashCommands[0], 'compact');
-  assert.deepEqual(normalizeClaude({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a' } } }), [{ kind: 'delta', phase: 'text', index: 0, text: 'a' }]);
+  assert.deepEqual(normalizeClaude({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a' } } }), [{ kind: 'delta', phase: 'text', index: 0, text: 'a', parentToolUseId: null }]);
   const [message] = normalizeClaude({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'x' }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls' } }], usage: { input_tokens: 3, output_tokens: 4 } } });
   assert.equal(message.blocks[1].name, 'Bash'); assert.equal(message.usage.output, 4);
   const [result] = normalizeClaude({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'out' }] }] } });
@@ -44,6 +44,8 @@ test('approval request and its answers', () => {
 });
 
 test('unknown types pass through as raw instead of being dropped', () => {
+  assert.deepEqual(normalizeClaude({ type: 'custom-title', customTitle: '내 이름' }), [{ kind: 'title', source: 'custom', text: '내 이름' }]);
+  assert.deepEqual(normalizeClaude({ type: 'ai-title', aiTitle: 'AI 제목' }), [{ kind: 'title', source: 'ai', text: 'AI 제목' }]);
   assert.deepEqual(normalizeClaude({ type: 'mystery' }), [{ kind: 'raw', original: 'mystery' }]);
 });
 
@@ -58,10 +60,10 @@ test('the thinking token estimate becomes a live-only delta', () => {
 test('message_start and message_delta usage become live-only usage deltas', () => {
   assert.deepEqual(normalizeClaude({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: { input_tokens: 9, output_tokens: 0 } } } }), [
     { kind: 'delta', phase: 'start', messageId: 'm1', parentToolUseId: null },
-    { kind: 'delta', phase: 'usage', usage: { input: 9, output: 0, cacheRead: 0, cacheCreate: 0 } },
+    { kind: 'delta', phase: 'usage', usage: { input: 9, output: 0, cacheRead: 0, cacheCreate: 0 }, parentToolUseId: null },
   ]);
   assert.deepEqual(normalizeClaude({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 12 } } }), [
-    { kind: 'delta', phase: 'usage', usage: { input: 0, output: 12, cacheRead: 0, cacheCreate: 0 } },
+    { kind: 'delta', phase: 'usage', usage: { input: 0, output: 12, cacheRead: 0, cacheCreate: 0 }, parentToolUseId: null },
   ]);
 });
 
@@ -122,7 +124,7 @@ test('resolveModels needs no child for aliases: override, then the provider\'s c
   assert.equal(asked, 1, 'no model setting: the account default comes from init');
 });
 
-test('a terminal transcript becomes chat events: text, tool result, commands; noise and subagents are dropped', () => {
+test('a terminal transcript becomes chat events: text, tool result, commands and their output; noise and subagents are dropped', () => {
   const line = value => JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', ...value });
   const events = transcriptEvents([
     line({ type: 'user', message: { content: '안녕' } }),
@@ -136,7 +138,16 @@ test('a terminal transcript becomes chat events: text, tool result, commands; no
     line({ type: 'api-request', id: 'r' }),
     '{"torn":'
   ].join('\n'));
-  assert.deepEqual(events.map(event => event.kind), ['user', 'user', 'message', 'tool_result', 'compact']);
-  assert.deepEqual(events[4], { kind: 'compact', trigger: 'auto', preTokens: 900, postTokens: 40, at: Date.parse('2026-01-01T00:00:00Z') });
-  assert.equal(events[0].text, '안녕'); assert.equal(events[1].text, '/review main'); assert.equal(events[2].uuid, 'u1');
+  assert.deepEqual(events.map(event => event.kind), ['user', 'command_output', 'user', 'message', 'tool_result', 'compact']);
+  assert.deepEqual(events[5], { kind: 'compact', trigger: 'auto', preTokens: 900, postTokens: 40, at: Date.parse('2026-01-01T00:00:00Z') });
+  assert.equal(events[0].text, '안녕'); assert.equal(events[1].text, 'x'); assert.equal(events[2].text, '/review main'); assert.equal(events[3].uuid, 'u1');
+});
+
+test('streamed tool input, subagent deltas and local command output are normalized', () => {
+  assert.deepEqual(normalizeClaude({ type: 'stream_event', parent_tool_use_id: 'task-1', event: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"command":"ls' } } }),
+    [{ kind: 'delta', phase: 'toolInput', index: 1, text: '{"command":"ls', parentToolUseId: 'task-1' }]);
+  assert.deepEqual(normalizeClaude({ type: 'user', isReplay: true, message: { role: 'user', content: '<local-command-stdout>\x1b[1mContext\x1b[0m 12k</local-command-stdout>' } }),
+    [{ kind: 'command_output', text: 'Context 12k', isError: false }]);
+  assert.deepEqual(normalizeClaude({ type: 'user', message: { content: [{ type: 'text', text: '<local-command-stderr>nope</local-command-stderr>' }] } }), [{ kind: 'command_output', text: 'nope', isError: true }]);
+  assert.deepEqual(normalizeClaude({ type: 'user', message: { content: 'plain echo' } }), []);
 });
