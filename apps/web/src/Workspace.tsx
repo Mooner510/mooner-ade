@@ -4,7 +4,7 @@ import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativ
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { PluginBadges } from './PluginSettings';
-import { accountSources, defaultAccountDir, placeAbove, UsageRows, usageHueStyle, useUsage, type Usage, type UsageWindow } from './Usage';
+import { accountSources, cursorUsageCompact, defaultAccountDir, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
@@ -16,6 +16,8 @@ import { launchersFor, type AgentMode } from './launchers';
 import { chatModeTipDue } from './tips';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
+import { errorText, pushError } from './errors';
+import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { ReviewPanel } from './Review';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
@@ -82,23 +84,25 @@ const WakaTimeStat = memo(function WakaTimeStat() {
   const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
   return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? `\n${status.lastError}` : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
 });
-const usageNames = { claude: 'Claude Code', codex: 'Codex' };
+const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
 const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
   const { usage, loading, load } = useUsage(provider, projectId, active, refresh), panel = `usage-${useId()}`;
   if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
-  const windows = showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session');
-  const main = ['session', 'weekly'].map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[];
+  const windows = provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  const preferred = usageStatusKeys[provider];
+  const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
+  const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
   const peak = Math.max(0, ...windows.map(item => item.percent));
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
   const hue = usageHueStyle;
   return <>
-    <button className={`stat usage ${level} ${usage.error && !main.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
+    <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
-      {main.length ? main.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{item.key === 'session' ? '5h' : '주'}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+      {compact.length ? compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
     </button>
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
@@ -113,11 +117,10 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
 export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
-  const [error, setError] = useState('');
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
-  const [rightVisible, setRightVisible] = useState(false), [reviewWide, setReviewWide] = useState(false);
+  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [reviewWide, setReviewWide] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
   const launcherButton = useRef<HTMLButtonElement>(null);
   const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
@@ -159,8 +162,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const chatBus = useRef(new Map<string, (message: any) => void>()), chatPrev = useRef(new Map<string, ChatState['status']>());
   const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map(), sizes: new Map(), sizeListeners: new Map() });
   const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
-  const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
-  const run = (operation: () => Promise<unknown>) => { setError(''); void operation().catch(report); };
+  const report = useCallback((cause: unknown) => pushError(root, errorText(cause)), [root]);
+  const switching = useRef(new Set<string>());
+  const run = (operation: () => Promise<unknown>) => { void operation().catch(report); };
   const refresh = useCallback(async () => { const state = await call<Snapshot>('snapshot'); setProject(state); return state; }, [call]);
   const send = useCallback((message: object) => hub.send({ ...message, projectId: refs.project.current?.id }), [hub]);
   // A dialog that replaces another one cancels it: its caller (e.g. a terminal holding an Enter back) would otherwise wait forever.
@@ -541,6 +545,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   // Terminal -> chat. The server agrees only while that Claude is completely at rest, then ends it and seeds the chat from its transcript (same session).
   async function terminalToChat(id: string) {
+    if (switching.current.has(id)) return;
+    switching.current.add(id);
+    try { await terminalToChatNow(id); } finally { switching.current.delete(id); }
+  }
+  async function terminalToChatNow(id: string) {
     const leaf = chatLeaf(), { cwd } = await call<{ cwd: string }>('terminal/to-chat', { id, newId: leaf.id }), tree = treeOf(id);
     if (tree) commitFor(id, mapLeaf(tree, id, () => ({ ...leaf, cwd })));
     refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id); bus.current.sizes.delete(id); bus.current.sizeListeners.delete(id);
@@ -548,9 +557,18 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     setFocusLeaf(leaf.id); await refresh();
   }
   // Chat -> terminal: the server ends the chat's child, then the same session opens in a terminal in the chat's place; the stored chat is dropped last.
-  async function chatToTerminal(id: string) {
-    const info = await call<{ agent: Agent; restoreId: string; cwd: string; configDir?: string }>('chat/to-terminal', { id });
-    const result = await call<{ id: string; command?: string }>('terminal/open', { path: info.cwd, agent: info.agent, args: agentArgs(settings, info.agent), restoreId: info.restoreId, ...(info.configDir && { configDir: info.configDir }) });
+  // An empty chat (nothing said yet) has no session to continue: it becomes a fresh CLI of the same provider, like a new tab would.
+  async function chatToTerminal(id: string, fresh = false) {
+    if (switching.current.has(id)) return;
+    switching.current.add(id);
+    try { await chatToTerminalNow(id, fresh); } finally { switching.current.delete(id); }
+  }
+  async function chatToTerminalNow(id: string, fresh: boolean) {
+    const leafNow = findLeaf(treeOf(id), id), chosen: Agent = leafNow?.kind === 'chat' ? leafNow.agent ?? 'claude' : 'claude';
+    const info = fresh
+      ? { agent: chosen, restoreId: '', cwd: leafNow?.kind === 'chat' ? leafNow.cwd ?? '' : '', configDir: undefined as string | undefined }
+      : await call<{ agent: Agent; restoreId: string; cwd: string; configDir?: string }>('chat/to-terminal', { id });
+    const result = await call<{ id: string; command?: string }>('terminal/open', { ...(info.cwd ? { path: info.cwd } : {}), agent: info.agent, args: agentArgs(settings, info.agent), ...(info.restoreId ? { restoreId: info.restoreId } : {}), ...(info.configDir && { configDir: info.configDir }) });
     refs.pending.current.set(result.id, result.command || (info.agent === 'cursor' ? 'cursor-agent' : info.agent)); setLaunched(previous => ({ ...previous, [result.id]: info.agent }));
     const tree = treeOf(id);
     if (!tree) { await call('terminal/close', { id: result.id }); return; }
@@ -613,6 +631,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (refs.focus.current === id) setFocusLeaf(leaves(activePane())[0] || '');
     clearAttention(id);
     setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+  }
+  // Start screen only: the same pane becomes a fresh chat of another provider. A chat with earlier (cleared) history keeps its transcript for /resume.
+  async function switchChatAgent(id: string, agent: Agent, forget: boolean) {
+    const tree = treeOf(id), old = findLeaf(tree, id);
+    if (!tree || old?.kind !== 'chat' || old.agent === agent) return;
+    await call('chat/close', { id, forget });
+    chatBus.current.delete(id); chatPrev.current.delete(id);
+    commitFor(id, mapLeaf(tree, id, leaf => leaf.kind === 'chat' ? { ...leaf, agent } : leaf)); setFocusLeaf(id);
   }
   // Closing a chat ends its child process and keeps the transcript for /resume.
   async function closeChat(id: string) {
@@ -712,8 +738,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
   // The git poll already keeps the state fresh; the extra refresh waits out the slide-in so it does not re-render the workspace mid-animation.
-  const showReview = () => { preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
-  const toggleReview = () => { if (rightVisible) setRightVisible(false); else showReview(); };
+  const showReview = () => { setErrorsOpen(false); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
+  const toggleReview = () => { if (errorsOpen) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
+  const toggleErrors = () => setErrorsOpen(value => !value);
   const hiddenAgents = useHiddenAgents(settings.agentsOff);
   const launchers = launchersFor(settings.defaultMode, shellLabel(shells, settings.terminalShell)).filter(item => !hiddenAgents.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
@@ -779,9 +806,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }, []);
 
   // ---- render ----
-  const errorBanner = error && <div role="alert" className="error">{error}<button onClick={() => setError('')}>닫기</button></div>;
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
-  if (!project) return <main className="app loading" hidden={!active}>{errorBanner}{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
+  if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
   const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 변경을 기본 저장소에 fast-forward 통합할까요?`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
@@ -808,7 +834,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
       // Needing an answer is worth a sound even while you watch the pane; the popup is only for when you are away.
       if (!looking || kind === 'attention') onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
-    }, focus, zoom, onFocus: setFocusLeaf, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
+    }, focus, zoom, onFocus: (id: string) => { setFocusLeaf(id); if (attention[id] === 'done') clearAttention(id); }, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
     onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)), onToChat: (id: string) => run(() => terminalToChat(id)),
     onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
@@ -823,12 +849,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing'); setSettings(previous => previous.reviewWidth === width ? previous : { ...previous, reviewWidth: width }); };
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
   };
-  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''}`} aria-label="오른쪽 패널" style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
+  const reviewShown = rightVisible && !errorsOpen;
+  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''}`} aria-label={errorsOpen ? '오류' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
     <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="변경사항 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
-    <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
-      openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
-      hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
+    {errorsOpen ? <ErrorPanel scope={root} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
+      : <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
+        openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
+        hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />}
   </aside>;
   const shown = (id: string) => settings.statusItems.includes(id);
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
@@ -845,13 +873,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     memory: <SystemStat kind="memory" />,
     claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
     codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
+    cursorusage: <UsageStat provider="cursor" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
     wakatime: settings.wakatime && <WakaTimeStat />,
     clock: <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
     openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const chatCtx: ChatCtx = {
-    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: id => run(() => chatToTerminal(id)), onOpenSettings, pick, fail: report, branchChat, resumeChat, importCliChat,
+    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => run(() => switchChatAgent(id, agent, forget)),
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
@@ -868,13 +897,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       </div>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
-      <button className={`bar-button ${rightVisible ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={rightVisible} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
+      <button className={`bar-button ${reviewShown ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
+      <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
     </header>
-    {errorBanner}
+    <ErrorToast scope={root} active={active} />
     {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
-    <div className="workbench">{center}{rightVisible && rightPanel}</div>
+    <div className="workbench">{center}{(rightVisible || errorsOpen) && rightPanel}</div>
     <footer className="statusbar">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right"><PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>

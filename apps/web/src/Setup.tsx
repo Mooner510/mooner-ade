@@ -2,15 +2,11 @@ import { useMemo, type CSSProperties } from 'react';
 import { monoFont, type Settings } from './Editor';
 import { Icon } from './Icon';
 import { Logo } from './Splash';
+import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
+import { Dropdown } from './views';
 
 // First-run setup, before the tour: theme, accent and terminal font, each applied at once to the practice app behind it.
 const accents = [['', '#5ec8e5', '기본'], ['#7c9cff', '#7c9cff', '블루'], ['#a78bfa', '#a78bfa', '바이올렛'], ['#f472b6', '#f472b6', '핑크'], ['#fb8b5b', '#fb8b5b', '오렌지'], ['#f5c04a', '#f5c04a', '옐로'], ['#4ade80', '#4ade80', '그린']] as const;
-const fonts = ['JetBrains Mono', 'D2Coding', 'Cascadia Code', 'Fira Code', 'SF Mono', 'Menlo', 'Consolas', 'Source Code Pro', 'Monaco'];
-// A font is installed when text set in it measures differently from both generic fallbacks.
-function installed(name: string) {
-  const context = document.createElement('canvas').getContext('2d')!, sample = 'mmmmmmmmmmlli1WW가나다';
-  return ['monospace', 'serif'].some(base => { context.font = `40px ${base}`; const plain = context.measureText(sample).width; context.font = `40px "${name}", ${base}`; return context.measureText(sample).width !== plain; });
-}
 const themes = [
   { id: 'dark', label: '다크', bg: '#0c0d0f', surface: '#141518', line: '#24262b', fg: '#e4e6ea', muted: '#5c616b' },
   { id: 'light', label: '라이트', bg: '#eceef1', surface: '#ffffff', line: '#dfe2e7', fg: '#1d2127', muted: '#9aa1ab' }
@@ -18,7 +14,7 @@ const themes = [
 
 export function Setup({ settings, onSettings, onNext }: { settings: Settings; onSettings(next: Settings): void; onNext(): void }) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onSettings({ ...settings, [key]: value });
-  const available = useMemo(() => fonts.filter(installed), []);
+  const fontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedTerminalFonts(), '기본'), [settings.terminalFont]);
   const accent = settings.accentColor || (settings.theme === 'light' ? '#0b8db3' : '#5ec8e5');
   const font = settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
   return <section className="setup" role="dialog" aria-labelledby="setup-title">
@@ -44,10 +40,8 @@ export function Setup({ settings, onSettings, onNext }: { settings: Settings; on
 
     <h2>터미널 글꼴</h2>
     <div className="setup-fonts">
-      <div className="setup-font-list" role="radiogroup" aria-label="터미널 글꼴">
-        {['', ...available].map(name => <button key={name || 'default'} role="radio" aria-checked={settings.terminalFont === name} onClick={() => set('terminalFont', name)}
-          style={{ fontFamily: name ? `"${name}", monospace` : monoFont }}>{name || '기본'}</button>)}
-      </div>
+      <p className="setup-font-hint">이 컴퓨터에 설치된 글꼴만 목록에 나옵니다.</p>
+      <Dropdown className="setup-font-dropdown" label="터미널 글꼴" value={settings.terminalFont} options={fontOptions} onChange={value => set('terminalFont', value)} />
       <div className="setup-size"><span>크기</span><input type="range" min={10} max={20} aria-label="터미널 글꼴 크기" value={settings.terminalFontSize} onChange={event => set('terminalFontSize', Number(event.target.value))} /><output>{settings.terminalFontSize}px</output></div>
       <pre className="setup-preview" style={{ fontFamily: font, fontSize: settings.terminalFontSize }}>
         <span className="p">~/my-app</span> <span className="g">$</span> claude{'\n'}<span className="o">✻</span> <b>Claude Code</b> <span className="d">· ~/my-app</span>{'\n'}<span className="o">&gt;</span> 포트를 환경 변수로 바꿔 줘{'\n'}<span className="o">⏺</span> Update(<b>src/server.ts</b>) <span className="g">+1</span> <span className="r">−1</span>
