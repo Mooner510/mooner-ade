@@ -5,17 +5,21 @@ import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
-import { approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, transcriptEvents, uiPermissionMode, userLine, validMessageUuid } from './chat-claude.js';
+import { spawnAgent } from './agent-spawn.js';
+import { ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, transcriptEvents, uiPermissionMode, userLine, validMessageUuid } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
 import { readAutoCompact, readClaudeSettingsLayers } from './claude-auto-compact.js';
+import { readSessionCache } from './claude-cache.js';
+import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
-import { mcpServers } from './terminal-sessions.js';
+import { chatMcpServers } from './terminal-sessions.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
+const BACKGROUND_QUIET_MS = 3 * 60_000;
 export const chatFolder = (directory, id) => {
   if (typeof id !== 'string' || !ID.test(id)) throw fault('INVALID_INPUT', '잘못된 채팅 ID입니다.');
   return path.join(directory, 'chat', id);
@@ -33,13 +37,14 @@ const mergeTurnUsage = (current, patch) => ({
 
 // One chat tab = one transcript + (while a turn or an approval is open) one `claude -p` child. The child starts on the first
 // message and is resumed with `--resume <session id>` when it ended in between, so closing the app never loses the conversation.
-export async function openChatSession({ directory, id, cwd, agent = 'claude', env = {}, spawnProcess = spawn, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, quietMs = BACKGROUND_QUIET_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const metaFile = path.join(root, 'meta.json'), logFile = path.join(root, 'events.jsonl');
   const saved = await fs.readFile(metaFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: 'default', sandbox: null, network: false, runEverything: false, costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
+  // Claude: meta holds only what the user picked in this chat. Unset model/effort/permissionMode mean "whatever a plain `claude` would use" (settings.json), so no flag is passed.
+  const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: agent === 'claude' ? undefined : 'default', sandbox: null, network: false, runEverything: false, costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
   // Settings' defaults for a brand-new chat; a saved chat keeps what it has. Only modes this agent can apply, and never bypassPermissions.
   if (saved === null && defaults) {
     const caps = chatCapabilities(agent);
@@ -54,7 +59,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   events = events.slice(-KEEP_EVENTS);
 
-  const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode, sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
+  const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode ?? 'default', sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
     contextTokens: 0, contextWindow: null, autoCompact: null, tokens: zero(), slashCommands: [], commandInfo: [], tools: [], pending: 0, error: null, startedAt: Date.now(),
     segmentTitles: { custom: '', ai: '', agent: '' }, chatTitle: '' };
   let turnUsage = null, thinkingTokens = 0;
@@ -73,20 +78,53 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   }
   // An alias ("sonnet") has no catalog row of its own: the family's first (newest) row stands in, else Auto Compact would be judged against 200k and switched off.
   const maxContextForModel = model => (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (state.capabilities.catalog?.find(item => item.id === model) ?? state.capabilities.catalog?.find(item => item.family === model))?.window) || state.contextWindow || 200_000;
+  // Where this chat's Claude Code keeps its settings and transcripts: the chat's own account, else the one a plain `claude` in this environment would use.
+  const configDirOf = () => meta.configDir || (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   // Several refreshes can be in flight (open, catalog, init, result); only the newest one's answer is applied.
-  let compactGeneration = 0;
+  // "auto" is the one window ADE works out itself. Claude Code tunes its own "auto" per account and, for a 1M model, may not compact before the full window,
+  // so the window the gauge shows is handed to the CLI (CLAUDE_CODE_AUTO_COMPACT_WINDOW) at launch. A window the user set in settings or env is left to the CLI.
+  let compactGeneration = 0, launchedWindow = null;
+  const handedWindow = compact => (compact?.source === 'auto' ? compact.window : null);
   const refreshAutoCompact = async (model = state.model) => {
     if (agent !== 'claude') { if (state.autoCompact) { state.autoCompact = null; publish(); } return; }
-    const generation = ++compactGeneration, configDir = meta.configDir || path.join(os.homedir(), '.claude');
+    const generation = ++compactGeneration, configDir = configDirOf();
     const next = await readAutoCompact(configDir, cwd, model, maxContextForModel(model));
     if (generation !== compactGeneration) return;
     const prev = JSON.stringify(state.autoCompact), ready = JSON.stringify(next);
     if (prev !== ready) { state.autoCompact = next; publish(); }
+    // The running child was started with another window (the model turned out different): the next message resumes the session with the right one.
+    if (child && handedWindow(next) !== launchedWindow) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
   };
   void refreshAutoCompact();
+  // The prompt cache's clock, read from the session's transcript (the same reading the terminal's cache timer uses): `state.cache` = the last main-thread
+  // request, its cache lifetime and the context size it read. Read when a turn ends or the context is compacted, not on a timer: the countdown itself runs in the page.
+  let cacheReading = null, cacheBusy = false, cacheLater = null;
+  const refreshCache = async () => {
+    if (agent !== 'claude' || closed || !state.sessionId || cacheBusy) return;
+    cacheBusy = true;
+    try {
+      const configDir = configDirOf();
+      cacheReading = await readSessionCache(configDir, { sessionId: state.sessionId, cwd: meta.worktreePath ?? cwd }, cacheReading, { idle: false });
+      const next = cacheReading?.value ?? null;
+      if (!closed && JSON.stringify(next) !== JSON.stringify(state.cache ?? null)) { state.cache = next; publish(); }
+    } catch { /* an unreadable transcript keeps the last reading */ } finally { cacheBusy = false; }
+  };
+  // The CLI writes the transcript a moment after it reports the result.
+  const refreshCacheSoon = () => { clearTimeout(cacheLater); cacheLater = setTimeout(() => void refreshCache(), 500); cacheLater.unref?.(); };
+  // Until the CLI's init event names the real model and mode, show what a plain `claude` would use here (settings.json). Never stored, never passed as a flag.
+  if (agent === 'claude') void readClaudeDefaults(configDirOf(), cwd).then(found => {
+    if (closed) return;
+    let changed = false;
+    if (meta.effort === undefined && state.effort === null && found.effort) { state.effort = found.effort; changed = true; }
+    if (meta.permissionMode === undefined && !state.sessionId && found.permissionMode && state.permissionMode === 'default') { state.permissionMode = found.permissionMode; changed = true; }
+    if (!meta.model && !state.model && found.model) { state.model = found.model; changed = true; }
+    if (changed) publish();
+  });
   // Cursor setting changes run one after another on the ACP session (they never wait for the running turn); `configuring` is true while any is in flight.
   let configuring = false, configChain = Promise.resolve(), configCount = 0;
   let child = null, protocol = null, closed = false, turnOpen = false, turnSeq = 0, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve(), publishTimer = null, lastCommandOutput = null;
+  let reopened = false, activityTimer = null; // reopened: the turn is "open" only because background output arrived after a `result`
+  if (agent === 'claude' && state.sessionId) void refreshCache(); // a reopened chat shows the cache clock it had
   // Claude: the message streaming right now per subagent ('' = main thread). Text deltas name no message; they belong to the latest start of their own stream.
   const streamIds = new Map(), toolInputSize = new Map();
   const approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images } sent into a running turn, not yet taken in by it
@@ -165,7 +203,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
   function fold(event, replay = false) {
     if (event.kind === 'session') {
       state.sessionId = event.sessionId ?? state.sessionId; state.model = event.model ?? state.model;
-      if (event.permissionMode !== undefined) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; meta.permissionMode = mode; }
+      if (event.permissionMode !== undefined) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; if (agent !== 'claude') meta.permissionMode = mode; }
       if (event.slashCommands?.length) state.slashCommands = event.slashCommands.map(item => typeof item === 'string' ? item : item?.name).filter(name => typeof name === 'string');
       if (Array.isArray(event.commands)) state.commandInfo = event.commands.flatMap(item => {
         if (!item || typeof item.name !== 'string' || !/^[\w:.-]+$/.test(item.name)) return [];
@@ -190,7 +228,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens; turnUsage = null; thinkingTokens = 0;
     } else if (event.kind === 'divider') {
-      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; turnUsage = null; thinkingTokens = 0;
+      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; turnUsage = null; thinkingTokens = 0; state.cache = null; cacheReading = null;
       state.segmentTitles = { custom: '', ai: '', agent: '' }; refreshChatTitle();
       if (!replay) void refreshAutoCompact();
     } else if (event.kind === 'title') {
@@ -267,6 +305,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       // The CLI may print the same command output both in its echo and as a message of its own: it is shown once.
       if (event.kind === 'command_output') { const same = `${turnSeq}\0${event.isError}\0${event.text}`; if (lastCommandOutput === same) return; lastCommandOutput = same; }
       emit(event);
+      noteBackgroundActivity(event);
       if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { turnUsage = { ...event.usage }; thinkingTokens = 0; publishSoon(); }
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
@@ -274,20 +313,36 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         void saveMeta().catch(reportStorage); publish();
       }
       if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings' || event.kind === 'compact') publish();
+      if (event.kind === 'compact' && agent === 'claude') refreshCacheSoon();
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
+        clearTimeout(activityTimer); reopened = false;
         streamIds.clear(); toolInputSize.clear(); turnUsage = null; thinkingTokens = 0; turnOpen = steers.size > 0; setStatus();
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
+        if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
         if (!turnOpen && restartAfterTurn) restart();
       }
   }
+  // Background sub-agents keep running after a turn's `result`, and their hand-back starts a new turn on its own (no user line, no steer). Their output is
+  // activity: without this the chat showed "idle" (no stop button, no working indicator) while messages kept arriving. The next `result` closes it again;
+  // if none comes (a silent child) the quiet timer drops back to idle, and any later output reopens it.
+  function noteBackgroundActivity(event) {
+    if (protocol || closed || !child || !['message', 'tool_result', 'session'].includes(event.kind)) return;
+    if (!turnOpen) { turnOpen = true; reopened = true; setStatus(); }
+    if (reopened) { clearTimeout(activityTimer); activityTimer = setTimeout(() => { if (reopened && turnOpen && !approvals.size) { reopened = false; turnOpen = steers.size > 0; setStatus(); } }, quietMs); activityTimer.unref(); }
+  }
   const reportStorage = error => { state.error = `채팅 저장 실패: ${error.message}`; publish(); };
+
+  // total_cost_usd restarts at 0 in every process, so what a replaced child had cost is carried by costBase. The child's own close handler does not run
+  // this (it sees it was already replaced), hence every place that drops the child calls it.
+  let prePlanMode = 'default';
+  const carryCost = () => { if (typeof state.costUsd === 'number') meta.costBase = state.costUsd; };
 
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
   function restart() {
     restartAfterTurn = false; state.restartPending = false;
-    if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; proc.kill('SIGTERM'); }
+    if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM'); }
     setStatus();
   }
   // One start at a time: warm-up, a setting change and a send may arrive together, and none may use the child before it is initialized.
@@ -301,12 +356,19 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       await createLocalRuntime({ root: cwd }).git.createWorktree(target, `ade/chat-${id}`);
       meta.worktreePath = target; cwd = target; await saveMeta();
     }
-    const extra = agent === 'claude' && prepare ? await prepare(root) : {};
+    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent }) : {};
     const args = [...executableArgs, ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
+    if (agent === 'claude') {
+      // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the CLI starts with the window the gauge shows.
+      const model = meta.model ?? state.model, compactNow = await readAutoCompact(configDirOf(), cwd, model, maxContextForModel(model));
+      launchedWindow = handedWindow(compactNow);
+      if (JSON.stringify(state.autoCompact) !== JSON.stringify(compactNow)) { state.autoCompact = compactNow; publish(); }
+    }
     // shell:false and argv only: the message text never reaches a shell.
     const run = () => {
       const launchEnv = { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' };
+      if (agent === 'claude' && launchedWindow) launchEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(launchedWindow);
       if (agent === 'codex') { meta.configDir ??= launchEnv.CODEX_HOME || path.join(os.homedir(), '.codex'); launchEnv.CODEX_HOME = meta.configDir; }
       if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
       return spawnProcess(executable, args, { cwd, env: launchEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -321,7 +383,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     attach(proc);
     if (protocol) {
       try {
-        await protocol.initialize(meta, cwd, mcpServers());
+        await protocol.initialize(meta, cwd, chatMcpServers({ chatId: id, projectId, agent }));
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -334,7 +396,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     const last = lastUnansweredUser();
     if (!last?.text?.trim()) throw fault('INVALID_INPUT', '다시 시도할 메시지가 없습니다.', 409);
     if (last.images > 0) throw fault('CHAT_UNSUPPORTED', '이미지가 포함된 요청은 자동 복구할 수 없습니다. 같은 내용을 다시 보내세요.', 409);
-    state.error = null; turnOpen = true; turnSeq += 1;
+    state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
     try {
       await start();
       if (protocol) await protocol.send(last.text, []);
@@ -364,7 +426,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     proc.once('close', (code, signal) => {
       if (child !== proc) return;
       const wasTurn = turnOpen;
-      child = null; protocol?.dispose(); protocol = null; turnOpen = false; meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear();
+      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear();
       const abort = !closed && !agentExitBenign(code, signal);
       const fail = (message, { store = true } = {}) => {
         state.error = message;
@@ -425,7 +487,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         return;
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
-      state.error = null; turnOpen = true; turnSeq += 1;
+      state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
       // The message is shown right away; starting the process (slow on the first turn) must not delay it.
       emit({ kind: 'user', text, images: images.length });
       try {
@@ -473,11 +535,18 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
         if (!answer.answers || typeof answer.answers !== 'object' || Array.isArray(answer.answers)) throw fault('INVALID_INPUT', '질문에 답변하세요.');
         for (const question of pending.questions) {
           const values = answer.answers[question.id];
-          if (!Array.isArray(values) || !values.length || values.length > (question.allowMultiple ? 32 : 1) || values.some(value => typeof value !== 'string' || !value.trim() || value.length > 4000 || value.includes('\0') || (question.options?.length && !question.options.some(option => option.id === value)))) throw fault('INVALID_INPUT', '질문 답변을 확인하세요.');
+          if (!Array.isArray(values) || !values.length || values.length > (question.allowMultiple ? 32 : 1) || values.some(value => typeof value !== 'string' || !value.trim() || value.length > 4000 || value.includes('\0') || (question.options?.length && !question.allowOther && !question.options.some(option => option.id === value)))) throw fault('INVALID_INPUT', '질문 답변을 확인하세요.');
         }
       }
       if (protocol) await protocol.approve(requestId, answer);
-      else await write(approvalLine(requestId, { allow: answer.allow === true, input: pending.input, message: answer.message, suggestions: answer.always === true ? pending.suggestions : [] }));
+      else {
+        // A Claude question is answered inside the tool input; skipping it tells the model so, instead of the generic "rejected, STOP" refusal.
+        const asking = pending.tool === 'AskUserQuestion' && pending.questions;
+        await write(approvalLine(requestId, { allow: answer.allow === true, input: asking && answer.allow ? askUserInput(pending.input, pending.questions, answer.answers) : pending.input,
+          message: answer.message ?? (asking ? ASK_SKIPPED : undefined), suggestions: answer.always === true ? pending.suggestions : [] }));
+      }
+      // Approving a plan makes the CLI leave plan mode (back to what it was before); it says nothing about it, so the mode chip is moved here.
+      if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = prePlanMode; publish(); }
       approvals.delete(requestId);
       emit({ kind: 'approval', phase: 'answer', requestId, tool: pending.tool, allow: answer.allow === true });
       setStatus();
@@ -560,6 +629,7 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
           const response = await control({ subtype: 'set_permission_mode', mode: cliPermissionMode(permissionMode) });
           if (!response || response.subtype !== 'success') throw fault('AGENT_PROTOCOL', '권한 모드를 적용하지 못했습니다. Claude Code 버전과 설정을 확인하세요.', 502);
         }
+        if (permissionMode === 'plan' && state.permissionMode !== 'plan') prePlanMode = state.permissionMode;
         meta.permissionMode = state.permissionMode = permissionMode;
       }
       if (model !== undefined) {
@@ -620,13 +690,15 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
       if (!meta.sessionId) throw fault('INVALID_INPUT', '아직 시작하지 않은 대화입니다. 새 터미널을 여세요.', 409);
       if (meta.resumeAt) throw fault('INVALID_INPUT', '되돌린 직후에는 전환할 수 없습니다. 메시지를 한 번 보낸 뒤 전환하세요.', 409);
       if (child) {
-        const proc = child; child = null; protocol?.dispose(); protocol = null; proc.kill('SIGTERM');
+        const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM');
         await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 3000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
         if (proc.exitCode === null && !proc.signalCode) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
       }
       setStatus();
       return { agent, sessionId: meta.sessionId, configDir: meta.configDir };
     },
+    // Where this conversation's transcript lives, for the statistics view.
+    sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
     async cancelSteer() {
       live();
@@ -651,8 +723,8 @@ export async function openChatSession({ directory, id, cwd, agent = 'claude', en
     },
     async close({ forget = false } = {}) {
       if (closed) return;
-      closed = true; clearTimeout(idleTimer); stopCursorStorePoll();
-      if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; proc.kill('SIGTERM'); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
+      closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
+      if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM'); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
       else { await saveMeta(); }
@@ -687,7 +759,7 @@ export async function seedChat({ directory, id, events, meta }) {
 }
 
 // Cursor publishes its catalog on a new ACP session; this empty session makes no model call.
-export async function probeAgentModels({ agent, cwd, env = {}, spawnProcess = spawn, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], timeoutMs = 30_000 }) {
+export async function probeAgentModels({ agent, cwd, env = {}, spawnProcess = spawnAgent, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], timeoutMs = 30_000 }) {
   if (!['codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
   const proc = spawnProcess(executable, [...executableArgs, agent === 'codex' ? 'app-server' : 'acp'], { cwd, env: { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let buffer = '', catalog = [], configOptions = [], model = null;

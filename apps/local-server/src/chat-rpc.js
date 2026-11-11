@@ -50,7 +50,7 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
 export function createChatProtocol(agent, { write, emit, fail }) {
-  let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false;
+  let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
@@ -188,6 +188,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     approvals.delete(id); if (announced) emit({ kind: 'approval', phase: 'cancel', requestId: id });
     await send({ id: raw.id, result: response });
   }
+  // A built-in plugin's MCP tool (the agent bus) needs no prompt. Cursor names an MCP tool in the request's title; shell, file and fetch kinds never match.
+  const autoApprovedTool = toolCall => autoServers.length > 0 && [undefined, 'other'].includes(toolCall?.kind) && typeof toolCall?.title === 'string' && autoServers.some(name => toolCall.title.includes(name));
   // Run Everything: accept the request once (never "always", so turning it off takes effect on the next request).
   function autoAllowCursor(raw) {
     const option = raw.params?.options?.find(o => o.kind === 'allow_once'); if (!option) return false;
@@ -202,11 +204,12 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         const choices = p.availableDecisions;
         approval(raw, raw.method.includes('commandExecution') ? 'Bash' : 'Patch', { command: p.command, description: p.reason, changes: p.changes },
           { suggestions: !choices || choices.includes('acceptForSession') ? ['session'] : [], toolUseId: p.itemId });
-      } else if (raw.method === 'item/tool/requestUserInput') approval(raw, '질문', {}, { questions: p.questions.map(q => ({ id: q.id, prompt: q.question, secret: q.isSecret, options: (q.options ?? []).map(o => ({ id: o.label, label: o.label, description: o.description })) })) });
+      } else if (raw.method === 'item/tool/requestUserInput') approval(raw, '질문', {}, { questions: p.questions.map(q => ({ id: q.id, prompt: q.question, ...(q.header && { header: q.header }), allowOther: q.isOther === true, secret: q.isSecret, options: (q.options ?? []).map(o => ({ id: o.label, label: o.label, description: o.description })) })) });
       else if (raw.method === 'item/permissions/requestApproval') approval(raw, '추가 권한', p.permissions, { suggestions: ['session'] });
       else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
     } else if (p.sessionId && p.sessionId !== sessionId) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
     else if (raw.method === 'session/request_permission' && runEverything && autoAllowCursor(raw)) return;
+    else if (raw.method === 'session/request_permission' && autoApprovedTool(p.toolCall) && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission') approval(raw, p.toolCall?.title ?? '도구 실행', p.toolCall?.rawInput ?? {}, { suggestions: p.options?.some(o => o.kind === 'allow_always') ? ['session'] : [] });
     else if (raw.method === 'cursor/ask_question') approval(raw, p.title ?? '질문', {}, { questions: p.questions });
     else if (raw.method === 'cursor/create_plan') approval(raw, '계획 승인', { description: p.overview, plan: p.plan });
@@ -241,7 +244,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         const permissions = codexPermissions(meta.permissionMode, cwd, meta.addDirs, meta.sandbox, meta.network);
         const params = { cwd, model: meta.model ?? null, approvalPolicy: permissions.approvalPolicy, approvalsReviewer: permissions.approvalsReviewer, sandbox: permissions.sandboxMode,
           config: { ...(config.effort && { model_reasoning_effort: config.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs], 'sandbox_workspace_write.network_access': meta.network === true,
-            ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args }])) } };
+            ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args, ...(s.env && { env: s.env }), ...(s.autoApprove && { default_tools_approval_mode: 'approve' }), ...(s.disabledTools?.length && { disabled_tools: s.disabledTools }) }])) } };
         const response = await request(meta.resumeAt ? 'thread/fork' : meta.sessionId ? 'thread/resume' : 'thread/start', {
           ...params, ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
         sessionId = response.thread.id;
@@ -258,7 +261,9 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         if (meta.sessionId && !capabilities.resume) throw fault('CHAT_UNSUPPORTED', '이 Cursor 버전은 세션 복원을 지원하지 않습니다.', 409);
         await request('authenticate', { methodId: 'cursor_login' });
         const response = await request(meta.sessionId ? 'session/load' : 'session/new', { cwd, ...(meta.sessionId && { sessionId: meta.sessionId }),
-          mcpServers: servers.map(s => ({ name: s.name, command: s.command, args: s.args, env: [] })) });
+          // ACP cannot leave single tools out, so a plugin server with tools turned off is not given to Cursor at all.
+          mcpServers: servers.filter(s => !s.disabledTools?.length).map(s => ({ name: s.name, command: s.command, args: s.args, env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) })) });
+        autoServers = servers.filter(s => s.autoApprove && !s.disabledTools?.length).map(s => s.name);
         sessionId = meta.sessionId ?? response.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
         if (meta.model) await this.configure({ model: meta.model });
         if (meta.permissionMode !== 'default') await request('session/set_mode', { sessionId, modeId: modeOf(meta.permissionMode) });
