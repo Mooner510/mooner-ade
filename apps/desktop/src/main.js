@@ -159,7 +159,12 @@ function watchServerSources() {
     // The host is not reloaded (that would kill the terminals it protects); changing it needs a full restart of the app.
     if (!name || /pty-host\.js$|\.(md|d\.ts)$|\.stackdump$/.test(name)) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { console.log('[dev] 서버 코드가 변경되어 서버만 다시 시작합니다 (터미널 유지)'); restartQueue = restartQueue.then(restartServer).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`)); }, 400);
+    timer = setTimeout(() => {
+      // One waiting reload covers every change made while it waits; a change after it has started queues the next one.
+      if (reloadPending) return;
+      reloadPending = true;
+      restartQueue = restartQueue.then(restartWhenIdle).catch(error => dialog.showErrorBox('무너에이드', `서버 재시작 실패: ${error.message}`));
+    }, 400);
   };
   const watchError = error => console.warn(`개발 모드 파일 감시 오류 (${error.code || 'WATCH_FAILED'}). 변경 반영은 앱을 직접 재시작하세요.`);
   for (const dir of dirs) try {
@@ -181,6 +186,21 @@ function watchServerSources() {
     });
     watcher.on('error', error => { watcher.close(); clearTimeout(preloadTimer); watchError(error); });
   } catch (error) { watchError(error); }
+}
+// Replacing the server ends every chat turn it runs (the turn is a child of the server). Editing server files from inside a chat therefore cut that very chat
+// off after each edit, with no closing message. The reload waits until nothing is working; terminals kept by the pty-host do not count, they survive it.
+let reloadPending = false;
+async function restartWhenIdle() {
+  try {
+    for (let announced = false; !quitting; announced = true) {
+      const report = await serverBusy().catch(() => null); // no answer means a stuck server: reloading is the cure, not a reason to wait
+      if (!report?.reasons.some(reason => !reason.keeps)) break;
+      if (!announced) console.log('[dev] 서버 코드가 변경되었습니다. 진행 중인 작업(채팅 턴 등)이 끝나면 서버만 다시 시작합니다');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  } finally { reloadPending = false; }
+  console.log('[dev] 서버 코드가 변경되어 서버만 다시 시작합니다 (터미널 유지)');
+  await restartServer();
 }
 async function restartServer() {
   if (quitting || !mainWindow) return;
@@ -331,11 +351,28 @@ if (!app.requestSingleInstanceLock()) {
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
   app.on('quit', () => { plugins?.close(); });
-  app.on('before-quit', event => {
-    if (quitting) return;
-    event.preventDefault(); quitting = true;
+  let asking = false;
+  const quitNow = () => {
+    quitting = true;
     // Linger is set before the server lets go of the terminals; shutdown after it has saved the sessions it reads from them.
     const steps = keepTerminalsOnQuit ? [releasePtyHost, stopServer] : [stopServer, releasePtyHost];
     void steps.reduce((chain, step) => chain.then(step).catch(error => console.warn(error.message)), Promise.resolve()).finally(() => app.quit());
+  };
+  // Terminals survive a quit in the pty-host; a chat turn is a child of the server and ends with it, so quitting in the middle of one asks first.
+  // An update restart already asked (and waits for chat turns to finish), so it skips this. A server that does not answer is not a reason to hold the quit.
+  async function confirmQuit() {
+    if (keepTerminalsOnQuit) return true;
+    const report = await serverBusy().catch(() => null), turns = report?.reasons.filter(reason => reason.kind === 'turn' && !reason.keeps && reason.agent) ?? [];
+    if (!turns.length) return true;
+    const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const { response } = await dialog.showMessageBox(...(window ? [window] : []), { type: 'question', buttons: ['종료', '취소'], defaultId: 1, cancelId: 1, message: `진행 중인 채팅 응답이 ${turns.length}개 있습니다.`, detail: '지금 종료하면 응답이 중단됩니다. 대화는 저장되며, 중단된 마지막 요청은 다시 열어 ‘세션 복구’로 이어서 보낼 수 있습니다.' });
+    return response === 0;
+  }
+  app.on('before-quit', event => {
+    if (quitting) return;
+    event.preventDefault();
+    if (asking) return;
+    asking = true;
+    void confirmQuit().catch(() => true).then(go => { asking = false; if (go) quitNow(); });
   });
 }
