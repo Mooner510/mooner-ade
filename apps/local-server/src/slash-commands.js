@@ -231,6 +231,20 @@ export function mergeCommandCatalog(names, metadata) {
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export const CURSOR_BUILTIN_COMMANDS = [
+  { name: 'summarize', description: 'Cursor CLI로 대화 컨텍스트를 압축합니다' },
+  { name: 'compact', description: '/summarize와 같습니다' },
+];
+
+export function mergeCursorCommands(commands = []) {
+  const map = new Map();
+  for (const item of commands) if (item && typeof item.name === 'string') map.set(item.name, item);
+  for (const item of CURSOR_BUILTIN_COMMANDS) if (!map.has(item.name)) map.set(item.name, item);
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+const builtinCommandNames = agent => (agent === 'cursor' ? CURSOR_BUILTIN_COMMANDS : agent === 'codex' ? [{ name: 'compact', description: '대화 컨텍스트를 압축합니다', hint: '[지침]' }] : []).map(item => item.name);
+
 // The CLI's init event is the authoritative slash-command list for cwd + login + enabled plugins, and names the model it resolved for that folder.
 // A local slash command (`/cost`) makes `claude -p` print the init event and finish with no model call; the child is stopped at init. This is the only
 // kind of helper child the server starts: one answer serves both the command menu and the default model (see claudeInit in index.js).
@@ -269,9 +283,11 @@ export const probeSlashCommands = async options => (await probeInit(options))?.s
 export async function listCommands(cwd, home = os.homedir(), { env = {}, probe = true, names, spawnProcess = spawn, agent = 'claude' } = {}) {
   const metadata = await collectCommandMetadata(cwd, home, env, agent);
   if (agent === 'codex') putMeta(metadata, 'compact', { description: '대화 컨텍스트를 압축합니다', hint: '[지침]' });
+  if (agent === 'cursor') for (const item of CURSOR_BUILTIN_COMMANDS) putMeta(metadata, item.name, item);
   const probed = agent === 'claude' && probe ? await probeSlashCommands({ env, cwd, spawnProcess }) : [];
   const extra = Array.isArray(names) ? names : [];
   let catalogNames = [...new Set([...probed, ...extra])];
   if (!catalogNames.length) catalogNames = [...metadata.keys()];
+  catalogNames = [...new Set([...catalogNames, ...builtinCommandNames(agent)])];
   return mergeCommandCatalog(catalogNames, metadata);
 }

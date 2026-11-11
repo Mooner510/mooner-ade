@@ -521,13 +521,14 @@ async function terminalToChat(project, id, newId, workspace) {
   // `claude -p --resume` finds the session by its folder, and the chat opens inside the project: both must hold before anything is ended.
   const cwd = await workspace.resolve(live.cwd).catch(() => null);
   if (!cwd) throw refuse('Claude가 프로젝트 밖의 폴더에서 실행 중입니다');
+  // No transcript on disk (nothing said yet, or it moved): the chat simply opens empty instead of refusing.
   const file = await transcriptOf(dir, live).catch(() => null);
-  if (!file) throw refuse('대화 기록 파일을 찾지 못했습니다');
   process.kill(pid, 'SIGTERM');
   for (let waited = 0; alive(pid) && waited < 3000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
   if (alive(pid)) { process.kill(pid, 'SIGKILL'); await new Promise(resolve => setTimeout(resolve, 300)); }
   if (alive(pid)) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
-  await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
+  if (file) await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
+  else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [], permissionMode: 'default' } });
   terminal.native.close(); project.terminals.delete(id);
   return { cwd };
 }
@@ -774,9 +775,10 @@ async function route(action, input, project) {
     case 'chat/set': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode });
+      await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
       return {};
     }
+    case 'chat/warm': await project.chats.get(input.id)?.warm(); return {};
     case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
     case 'chat/close': {
       const chat = project.chats.get(input.id);
