@@ -6,8 +6,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { createPluginManager, createPluginStore, pluginTerminal, scanPlugins, treeHash, validBadge, validManifest, validView } from '../apps/desktop/src/plugin-core.js';
-import { setAgentMcpServers, terminalAgentCommand } from '../apps/local-server/src/terminal-sessions.js';
+import { binCommands, createPluginManager, createPluginStore, pluginTerminal, probeMcpTools, scanPlugins, treeHash, validBadge, validManifest, validPluginState, validTools, validView } from '../apps/desktop/src/plugin-core.js';
+import { deniedMcpTools, setAgentMcpServers, terminalAgentCommand } from '../apps/local-server/src/terminal-sessions.js';
 
 const sealer = (available = true) => ({
   isEncryptionAvailable: () => available,
@@ -35,8 +35,8 @@ function fakeHost() {
   Object.assign(child, { sent: [], held: null, connected: true, exitCode: null, send(message, done) { child.sent.push(message); if (child.held) child.held.push(done); else done?.(); }, kill() { child.exit(null); }, exit(code) { child.exitCode = code ?? 1; child.connected = false; child.emit('exit', code); } });
   return child;
 }
-function setup(t, { answers = [], toServer } = {}) {
-  const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [], notices = [];
+function setup(t, { answers = [], toServer, probeMcp = async () => [] } = {}) {
+  const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [], notices = [], probes = [];
   fs.mkdirSync(dir);
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto: sealer() });
   store.load();
@@ -44,10 +44,11 @@ function setup(t, { answers = [], toServer } = {}) {
     dir, dataRoot: path.join(root, 'plugin-data'), store, nodeBinary: '/node', appVersion: '9.9.9', log: { log() {}, warn() {}, error() {} },
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; },
-    onTerminal: config => terminals.push(config), toServer, notify: notice => notices.push(notice)
+    onTerminal: config => terminals.push(config), toServer, notify: notice => notices.push(notice),
+    probeMcp: options => { probes.push(options); return probeMcp(options); }
   });
   t.after(() => manager.close());
-  return { root, dir, store, manager, hosts, asked, terminals, notices };
+  return { root, dir, store, manager, hosts, asked, terminals, notices, probes };
 }
 
 test('manifests are checked strictly', () => {
@@ -371,4 +372,127 @@ test('notifications carry the plugin name and are limited per minute; a badge sh
 
   manager.revoke('example');
   assert.equal(manager.snapshot().plugins[0].badge, null);
+});
+
+// A tiny stdio MCP server, as a plugin would ship one.
+const MCP_SERVER = `
+let buffer = '';
+const send = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n');
+process.stdin.on('data', chunk => {
+  buffer += chunk;
+  let end;
+  while ((end = buffer.indexOf('\\n')) >= 0) {
+    const message = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+    if (message.method === 'initialize') { send({ method: 'roots/list', id: 'server-1' }); send({ id: message.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'x', version: '1' } } }); }
+    else if (message.method === 'tools/list' && !message.params?.cursor) send({ id: message.id, result: { tools: [{ name: 'run', description: 'Runs ' + process.argv[2], inputSchema: { type: 'object', properties: { command: {}, cwd: {} }, required: ['command'] }, annotations: { destructiveHint: true } }], nextCursor: 'p2' } });
+    else if (message.method === 'tools/list') send({ id: message.id, result: { tools: [{ name: 'info', title: 'Info', annotations: { readOnlyHint: true, destructiveHint: true } }] } });
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+`;
+
+test('an MCP server is asked for its tools the way an agent would, page by page', async t => {
+  // Windows keeps the folder of a just-killed process busy for a moment.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-mcp-')), script = path.join(dir, 'server.js');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+  fs.writeFileSync(script, MCP_SERVER);
+  const tools = validTools(await probeMcpTools({ command: process.execPath, args: [script, 'commands'], cwd: dir }));
+  assert.deepEqual(tools.map(tool => tool.name), ['run', 'info']);
+  assert.equal(tools[0].description, 'Runs commands');
+  assert.deepEqual(tools[0].params, [{ name: 'command', required: true }, { name: 'cwd', required: false }]);
+  assert.equal(tools[0].destructive, true);
+  assert.deepEqual([tools[1].title, tools[1].readOnly, tools[1].destructive], ['Info', true, false]);
+  // A server that never answers, or exits first, fails instead of hanging.
+  fs.writeFileSync(path.join(dir, 'silent.js'), 'setInterval(() => {}, 1000); process.stdin.resume();');
+  await assert.rejects(probeMcpTools({ command: process.execPath, args: [path.join(dir, 'silent.js')], cwd: dir, timeoutMs: 300 }), /응답하지 않습니다/);
+  fs.writeFileSync(path.join(dir, 'exit.js'), 'process.exit(3);');
+  await assert.rejects(probeMcpTools({ command: process.execPath, args: [path.join(dir, 'exit.js')], cwd: dir }), /exit 3/);
+});
+
+test('tool lists are plain text with valid names only', () => {
+  const tools = validTools([{ name: 'ok_tool', description: 'a‮b' }, { name: 'bad name' }, { name: 'ok_tool' }, null, { name: "it's" }, { name: 'x'.repeat(129) }]);
+  assert.deepEqual(tools.map(tool => tool.name), ['ok_tool']);
+  assert.equal(tools[0].description, 'ab');
+  assert.deepEqual(validTools('nope'), []);
+});
+
+test('the commands a plugin adds are named from its bin folder', t => {
+  const dir = plugin(temp(t));
+  for (const name of ['tool', 'tool.cmd', 'tool.ps1', 'other.sh', 'lib.js', '.hidden']) fs.writeFileSync(path.join(dir, 'bin', name), '');
+  assert.deepEqual(binCommands(dir, validManifest(manifest())), ['other', 'tool']);
+  assert.deepEqual(binCommands(dir, validManifest(manifest({ terminal: undefined }))), []);
+});
+
+test('MCP servers and single tools can be turned off; the choice is sealed and reaches new terminals', async t => {
+  const { dir, manager, hosts, terminals, store, probes } = setup(t, { answers: [0, 0], probeMcp: async () => [{ name: 'run', description: 'Runs' }, { name: 'info' }] });
+  plugin(dir);
+  fs.writeFileSync(path.join(dir, 'example', 'bin', 'example'), '');
+  await manager.setEnabled(true);
+  await manager.approve('example');
+  const { child } = hosts[0];
+  assert.deepEqual(manager.snapshot().plugins[0].commands, ['example']);
+  child.emit('message', { type: 'ready' });
+  // Not offered yet: nothing is asked.
+  assert.equal(manager.snapshot().plugins[0].tools.offered, false);
+  assert.equal(probes.length, 0);
+  child.emit('message', { type: 'terminal', env: { EXAMPLE_CONNECT: '/c' }, mcpArgs: ['--connect', '/c'] });
+  assert.equal(manager.snapshot().plugins[0].tools.status, 'loading');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(probes.length, 1);
+  assert.deepEqual(probes[0].env, { EXAMPLE_CONNECT: '/c' });
+  assert.deepEqual(probes[0].args, [path.join(dir, 'example', 'bin', 'cli.js'), 'mcp', '--connect', '/c']);
+  let tools = manager.snapshot().plugins[0].tools;
+  assert.equal(tools.status, 'ok');
+  assert.deepEqual(tools.list.map(tool => [tool.name, tool.enabled]), [['run', true], ['info', true]]);
+  assert.deepEqual(manager.snapshot().plugins[0].env, ['EXAMPLE_CONNECT']);
+  // The same server again is not asked again.
+  child.emit('message', { type: 'terminal', env: { EXAMPLE_CONNECT: '/c' }, mcpArgs: ['--connect', '/c'] });
+  assert.equal(probes.length, 1);
+
+  manager.setMcp('example', { tool: 'run', enabled: false });
+  assert.deepEqual(terminals.at(-1).plugins[0].mcp.disabledTools, ['run']);
+  tools = manager.snapshot().plugins[0].tools;
+  assert.deepEqual(tools.list.map(tool => [tool.name, tool.enabled]), [['run', false], ['info', true]]);
+  assert.deepEqual(store.state.mcp.example, { off: false, disabled: ['run'] });
+  manager.setMcp('example', { enabled: false });
+  assert.equal(terminals.at(-1).plugins[0].mcp, null);
+  assert.deepEqual(terminals.at(-1).plugins[0].env, { EXAMPLE_CONNECT: '/c' }); // the rest of the terminal additions stay
+  manager.setMcp('example', { enabled: true });
+  manager.setMcp('example', { tool: 'run', enabled: true });
+  assert.equal(terminals.at(-1).plugins[0].mcp.disabledTools, undefined);
+  assert.equal(store.state.mcp.example, undefined);
+  assert.throws(() => manager.setMcp('example', { tool: "it's", enabled: false }), /도구 이름/);
+  assert.throws(() => manager.setMcp('missing', { enabled: false }), /MCP/);
+
+  manager.refreshTools('example');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(probes.length, 2);
+  // A stopped plugin keeps showing what it had.
+  manager.setMcp('example', { tool: 'info', enabled: false });
+  manager.revoke('example');
+  assert.deepEqual(manager.snapshot().plugins[0].tools.list.map(tool => [tool.name, tool.enabled]), [['run', true], ['info', false]]);
+  assert.throws(() => manager.refreshTools('example'), /실행 중/);
+});
+
+test('saved MCP choices are checked when read', () => {
+  const state = validPluginState({ version: 1, mcp: { example: { off: true, disabled: ['a', 'a', "b'c", 3] }, 'Bad Id': { off: true }, empty: { off: false, disabled: [] } } });
+  assert.deepEqual(state.mcp, { example: { off: true, disabled: ['a'] } });
+  assert.deepEqual(validPluginState({ version: 1, mcp: 'x' }).mcp, {});
+});
+
+test('agents leave out the plugin tools the user turned off', async t => {
+  const root = temp(t);
+  t.after(() => setAgentMcpServers([]));
+  setAgentMcpServers([{ name: 'example_tools', command: '/node', args: ['/p/cli.js'], disabledTools: ['run', 'bad name'] }, { name: 'other', command: '/node', args: [] }]);
+  assert.deepEqual(deniedMcpTools(), ['mcp__example_tools__run']);
+  const codex = await terminalAgentCommand(root, 'off-codex', 'codex');
+  assert.match(codex, /mcp_servers\.example_tools\.disabled_tools=\[\W*run\W*\]/);
+  assert.ok(!codex.includes('mcp_servers.other.disabled_tools'), codex);
+  const claude = await terminalAgentCommand(root, 'off-claude', 'claude');
+  const settings = JSON.parse(fs.readFileSync(claude.match(/--settings '([^']+)'/)[1], 'utf8'));
+  assert.deepEqual(settings.permissions.deny, ['mcp__example_tools__run']);
+  assert.ok(settings.hooks.SessionStart);
+  setAgentMcpServers([{ name: 'example_tools', command: '/node', args: [] }]);
+  const plain = JSON.parse(fs.readFileSync((await terminalAgentCommand(root, 'on-claude', 'claude')).match(/--settings '([^']+)'/)[1], 'utf8'));
+  assert.equal(plain.permissions, undefined);
 });
