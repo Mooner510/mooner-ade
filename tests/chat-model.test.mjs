@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contextEnds, contextPercent, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelRows, modelValue, reduce, shortModel } from '../apps/web/src/chat-model.ts';
+import { contextEnds, contextGauge, contextPercent, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelRows, modelValue, parseChatSlashCommand, permissionModeColor, reduce, shortModel, streamBlocks, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
 
 test('interrupted tools stay interrupted when a later turn starts', () => {
   let view = reduce(emptyView(), { kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'tool', name: 'Bash', input: {} }] });
@@ -13,19 +13,52 @@ test('interrupted tools stay interrupted when a later turn starts', () => {
 test('clear removes live approvals, steering and partial output', () => {
   let view = reduce(emptyView(), { kind: 'approval', phase: 'request', requestId: 'r', tool: 'Bash', input: {} });
   view = reduce(view, { kind: 'steer', phase: 'queued', uuid: 'u', text: 'next' });
-  view = reduce(view, { kind: 'delta', phase: 'text', text: 'partial' });
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'live-0', index: 0, text: 'partial' });
   view = reduce(view, { kind: 'divider', reason: 'clear' });
   assert.equal(view.stream, null); assert.deepEqual(view.approvals, []); assert.deepEqual(view.steers, []);
 });
 
 test('a streamed reply is replaced by the complete message and a replayed seq is ignored', () => {
-  let view = reduce(emptyView(), { kind: 'delta', phase: 'start' });
-  view = reduce(view, { kind: 'delta', phase: 'text', index: 0, text: 'He' });
-  view = reduce(view, { kind: 'delta', phase: 'text', index: 0, text: 'llo' });
-  assert.equal(view.stream[0].text, 'Hello');
+  let view = reduce(emptyView(), { kind: 'delta', phase: 'start', messageId: 'm' });
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'm', index: 0, text: 'He' });
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'm', index: 0, text: 'llo' });
+  assert.equal(view.stream.m[0].text, 'Hello');
   view = reduce(view, { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'text', text: 'Hello' }] });
   assert.equal(view.stream, null); assert.equal(view.items.length, 1);
   assert.equal(reduce(view, { seq: 1, kind: 'message', id: 'm2', blocks: [] }).items.length, 1);
+});
+
+test('tool messages keep other streamed text and thinking', () => {
+  let view = reduce(emptyView(), { kind: 'delta', phase: 'start', messageId: 'main' });
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'main', index: 0, text: 'Looking into it' });
+  view = reduce(view, { kind: 'delta', phase: 'thinking', messageId: 'main', index: 1, text: 'Need grep' });
+  view = reduce(view, { seq: 1, kind: 'message', id: 'tool-1', blocks: [{ type: 'tool_use', id: 'tool-1', name: 'Grep', input: { pattern: 'foo' } }] });
+  assert.deepEqual(streamBlocks(view).map(block => block.type), ['text', 'thinking']);
+  view = reduce(view, { seq: 2, kind: 'message', id: 'main', blocks: [{ type: 'text', text: 'Done' }] });
+  assert.equal(view.items.length, 2);
+  assert.equal(view.items.at(-1).blocks.some(block => block.type === 'thinking' && block.text.includes('grep')), true);
+});
+
+test('a later tool on the same message keeps the text said before it', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'thinking', text: '' }] });
+  view = reduce(view, { seq: 2, kind: 'message', id: 'm', blocks: [{ type: 'thinking', text: '확인할 파일을 고른다.' }] });
+  view = reduce(view, { seq: 3, kind: 'message', id: 'm', blocks: [{ type: 'text', text: '파일을 확인합니다.' }] });
+  view = reduce(view, { seq: 4, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] });
+  assert.deepEqual(view.items[0].blocks.map(block => block.type === 'tool_use' ? block.name : block.text), ['확인할 파일을 고른다.', '파일을 확인합니다.', 'Bash']);
+});
+
+test('text said before the final answer is kept when the final message is different', () => {
+  let view = reduce(emptyView(), { kind: 'delta', phase: 'start', messageId: 'main' });
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'main', index: 0, text: '먼저 파일을 볼게' });
+  view = reduce(view, { kind: 'message', id: 'main', blocks: [{ type: 'text', text: '수정까지 끝냈어' }] });
+  assert.deepEqual(view.items[0].blocks.map(block => block.text), ['먼저 파일을 볼게', '수정까지 끝냈어']);
+});
+
+test('streamed thinking survives a final assistant message without thinking', () => {
+  let view = reduce(emptyView(), { kind: 'delta', phase: 'start', messageId: 'm' });
+  view = reduce(view, { kind: 'delta', phase: 'thinking', messageId: 'm', index: 0, text: 'Plan first' });
+  view = reduce(view, { kind: 'message', id: 'm', blocks: [{ type: 'text', text: 'Answer' }] });
+  assert.deepEqual(view.items[0].blocks.map(block => block.type), ['thinking', 'text']);
 });
 
 test('approvals are added by request and removed when answered', () => {
@@ -40,10 +73,39 @@ test('replay rebuilds items and keeps the server state', () => {
   assert.deepEqual(view.items.map(item => item.kind), ['user', 'divider']); assert.equal(view.ready, true);
 });
 
+test('chat slash commands are distinguished from file paths', () => {
+  for (const text of ['/clear', '/compact keep plan', '/model opus', '/']) assert.equal(isChatSlashCommand(text), true, text);
+  for (const text of ['fix tests', '/usr/bin/env run', 'go to /src/foo']) assert.equal(isChatSlashCommand(text), false, text);
+  assert.deepEqual(parseChatSlashCommand('/compact keep plan'), { name: 'compact', args: 'keep plan' });
+  assert.deepEqual(parseChatSlashCommand('/clear'), { name: 'clear', args: '' });
+  assert.equal(parseChatSlashCommand('/usr/bin/env x'), null);
+});
+
+test('slash command replies without inference skip message actions', () => {
+  const plain = [{ kind: 'user', key: 'u', text: 'hello', images: 0 }, { kind: 'assistant', key: 'a', id: 'm', uuid: '11111111-1111-4111-8111-111111111111', blocks: [{ type: 'text', text: 'ok' }], sub: false }];
+  const slashText = [{ kind: 'user', key: 'u', text: '/cost', images: 0 }, { kind: 'assistant', key: 'a', id: 'm', blocks: [{ type: 'text', text: '$0.01' }], sub: false }];
+  const slashTool = [{ kind: 'user', key: 'u', text: '/review main', images: 0 }, { kind: 'assistant', key: 'a', id: 'm', blocks: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }], sub: false }];
+  assert.equal(turnAllowsMessageActions(plain), true);
+  assert.equal(turnAllowsMessageActions(slashText), false);
+  assert.equal(turnAllowsMessageActions(slashTool), true);
+});
+
 test('status numbers and templates', () => {
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x' }), 50);
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x[1m]' }), 10);
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 100);
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 1_000_000 }] } }), 26);
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 200_000 }] } }), 26);
+  const withAuto = { contextTokens: 175_000, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, autoCompact: { window: 350_000, maxWindow: 1_000_000, auto: false, source: 'modelSettings' } };
+  assert.equal(contextPercent(withAuto), 50);
+  assert.deepEqual(contextGauge(withAuto), { percent: 50, used: 175_000, basis: 350_000, max: 1_000_000, autoCompact: true, autoEstimated: false });
   assert.equal(fillFormat('{a}/{b}', { a: '1' }), '1/{b}');
+});
+
+test('permission mode colors resolve to agent-scoped CSS variables', () => {
+  assert.equal(permissionModeColor('default'), 'var(--mode-default, var(--muted))');
+  assert.equal(permissionModeColor('acceptEdits'), 'var(--mode-acceptEdits, var(--muted))');
+  assert.equal(permissionModeColor('ask'), 'var(--mode-ask, var(--muted))');
 });
 
 test('every model family has its own color and unknown models have none', () => {
@@ -83,19 +145,24 @@ test('a steering message waits, then becomes an ordinary user message or disappe
   assert.equal(reduce(view, { kind: 'steer', phase: 'cancelled', uuid: 'u1' }).steers.length, 0);
 });
 
-test('model rows: Fable first, then newest version first, then family, Opus/Sonnet 1M rows right behind their model', () => {
+test('model rows: Fable first, then newest version first; (1M) only for Opus 4.6 / Sonnet before 5', () => {
   const catalog = [
     { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', family: 'haiku', window: 200000, main: false },
     { id: 'claude-opus-4-8', name: 'Opus 4.8', family: 'opus', window: 1000000, main: false },
+    { id: 'claude-opus-4-6', name: 'Opus 4.6', family: 'opus', window: 200000, main: false },
+    { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6', family: 'sonnet', window: 200000, main: false },
     { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', family: 'sonnet', window: 1000000, main: true },
     { id: 'claude-fable-5-2', name: 'Fable 5.2', family: 'fable', window: 1000000, main: true },
     { id: 'claude-opus-5-5', name: 'Opus 5.5', family: 'opus', window: 1000000, main: true },
     { id: 'claude-haiku-5-5', name: 'Haiku 5.5', family: 'haiku', window: 1000000, main: true },
   ];
   const rows = modelRows(catalog, { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' });
-  assert.deepEqual(rows.map(row => row.label), ['Fable 5.2', 'Opus 5.5', 'Opus 5.5 (1M)', 'Sonnet 5.5', 'Sonnet 5.5 (1M)', 'Haiku 5.5', 'Opus 4.8', 'Opus 4.8 (1M)', 'Haiku 4.5']);
-  assert.deepEqual(rows.slice(0, 4).map(row => row.value), ['claude-fable-5-2', 'opus', 'opus[1m]', 'sonnet']);
-  assert.equal(rows.find(row => row.label === 'Opus 4.8 (1M)').value, 'claude-opus-4-8[1m]');
+  assert.deepEqual(rows.map(row => row.label), [
+    'Fable 5.2', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Opus 4.8', 'Opus 4.6', 'Opus 4.6 (1M)', 'Sonnet 4.6', 'Sonnet 4.6 (1M)', 'Haiku 4.5',
+  ]);
+  assert.deepEqual(rows.slice(0, 4).map(row => row.value), ['claude-fable-5-2', 'opus', 'sonnet', 'haiku']);
+  assert.equal(rows.find(row => row.label === 'Opus 4.6 (1M)').value, 'claude-opus-4-6[1m]');
+  assert.equal(rows.find(row => row.label === 'Sonnet 4.6 (1M)').value, 'claude-sonnet-4-6[1m]');
   assert.equal(modelValue('claude-opus-5-5', { opus: 'claude-opus-5-5' }), 'opus');
   assert.equal(modelValue('claude-opus-4-8', { opus: 'claude-opus-5-5' }), 'claude-opus-4-8');
   assert.equal(modelValue(null, {}), '');
@@ -182,4 +249,16 @@ test('Cursor effort, fast and max context stay distinct settings', () => {
   assert.deepEqual(contextEnds({ options: [{ value: '500k' }, { value: '256k' }] }), { off: '256k', on: '500k' });
   assert.equal(contextEnds({ options: [{ value: 'true' }, { value: 'false' }] }), null);
   assert.equal(cursorSettingName({ id: 'context', name: 'Context' }), '컨텍스트');
+});
+
+test("compacting shows while the CLI compacts and leaves a marker that keeps the history", () => {
+  let view = reduce(emptyView(), { kind: "user", text: "/compact" });
+  view = reduce(view, { kind: "delta", phase: "compacting", active: true });
+  assert.equal(view.compacting, true);
+  view = reduce(view, { kind: "compact", trigger: "manual", preTokens: 231097, postTokens: 14613 });
+  assert.equal(view.compacting, false);
+  assert.deepEqual(view.items.map(item => item.kind), ["user", "compact"]);
+  assert.deepEqual([view.items[1].preTokens, view.items[1].postTokens], [231097, 14613]);
+  view = reduce(reduce(view, { kind: "delta", phase: "compacting", active: true }), { kind: "result", status: "interrupted" });
+  assert.equal(view.compacting, false, "an interrupted compaction does not leave the spinner on");
 });
