@@ -56,7 +56,19 @@ const glyphs = {
   keyboard: 'keyboard',
   chat: 'chat_bubble',
   enter: 'keyboard_return',
-  laptop: 'laptop_mac'
+  laptop: 'laptop_mac',
+  feedback: 'rate_review',
+  person: 'person',
+  image: 'image',
+  chevronLeft: 'chevron_left',
+  draw: 'draw',
+  restore: 'settings_backup_restore',
+  trash: 'delete',
+  captureElement: 'highlight_alt',
+  captureWindow: 'screenshot_monitor',
+  captureRange: 'screenshot_region',
+  shapeRect: 'crop_square',
+  shapeArrow: 'north_east'
 } as const;
 
 // Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's filled cube logo.

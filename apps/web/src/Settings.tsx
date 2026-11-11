@@ -12,9 +12,17 @@ import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 import { resetTips } from './toast';
 import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
+import { useFeedback } from './feedback-store';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
+
+// Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
+function FeedbackAvailabilityRow() {
+  const { available, loaded, error } = useFeedback();
+  const text = !loaded ? '확인 중…' : error ? error : available?.ok ? (available.account ? `보낼 수 있음 · ${available.account}` : '보낼 수 있음') : available?.reason || '보낼 수 없음';
+  return <Row title="제출 상태" hint="피드백은 원격 접속 플러그인의 로그인으로 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다."><span className={`feedback-availability${available?.ok ? ' ok' : ''}`}>{text}</span></Row>;
+}
 
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null);
@@ -31,7 +39,7 @@ function AboutSettings() {
   </>;
 }
 
-export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'keys' | 'about';
+export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'feedback' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
@@ -41,6 +49,7 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'plugins', label: '플러그인', icon: 'plugin' },
+  { id: 'feedback', label: '피드백', icon: 'feedback' },
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
 ];
@@ -329,7 +338,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -392,7 +401,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
     </>}
   </>;
-  return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" onClose={onClose}>
+  return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" region="설정" onClose={onClose}>
     <settingsQuery.Provider value={query}>
     <lookHover.Provider value={lookApi}>
     <div className={`settings${searching ? ' settings-searching' : ''}`} ref={root}>
@@ -575,6 +584,11 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
         {(searching || section === 'wakatime') && <SectionFrame label="WakaTime" searching={searching}><WakaTimeSettings settings={settings} set={set} onChange={onChange} /></SectionFrame>}
         {(searching || section === 'plugins') && <SectionFrame label="플러그인" searching={searching}><PluginSettings query={query} /></SectionFrame>}
+        {(searching || section === 'feedback') && <SectionFrame label="피드백" searching={searching}>
+          <FeedbackAvailabilityRow />
+          <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 ADE 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
+          <Row title="AI 초안에 화면 정보 포함" hint="AI 초안에 화면 구성·최근 오류 정보 포함. 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+        </SectionFrame>}
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>
           <ShortcutKeys settings={settings} onChange={onChange} />

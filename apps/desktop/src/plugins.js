@@ -22,7 +22,10 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     const window = getWindow();
     if (window && !window.isDestroyed()) window.webContents.send('ade:plugins-state', { ...snapshot, error });
   };
-  const push = () => { const child = getServer(); if (child?.connected) child.send({ type: 'plugins/terminal', config: terminal }); };
+  // Whether feedback can be submitted (a running plugin that declared `feedback` and is signed in); the server shows it in the feedback inbox.
+  let feedback = null;
+  const pushFeedback = () => { const child = getServer(); if (child?.connected && feedback) child.send({ type: 'feedback/status', status: feedback }); };
+  const push = () => { const child = getServer(); if (child?.connected) child.send({ type: 'plugins/terminal', config: terminal }); pushFeedback(); };
   const toServer = message => { const child = getServer(); if (!child?.connected) return false; child.send(message); return true; };
   // A click brings the window forward on the plugins page. Shown ones are kept referenced, or the click handler can be collected.
   const shown = new Set();
@@ -63,7 +66,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
 
   const manager = createPluginManager({
     dir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
-    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify
+    onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify
   });
 
   const installPickedZip = file => manager.installZip(String(file), { picked: true });
@@ -120,6 +123,8 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     push: () => { push(); manager.serverReset(); },
     // Workspace session traffic from the server for a plugin host.
     fromServer: message => manager.fromServer(message),
+    // A feedback submission from the server: { meta, images:[{path, mime}] } -> { ok, issueUrl?, issueNumber?, error? }.
+    submitFeedback: ({ meta, images }) => manager.submitFeedback({ meta, images }),
     close: () => manager.close()
   };
 }

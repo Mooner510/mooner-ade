@@ -41,6 +41,15 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   assert.ok(combosOverlap('ctrl+shift+[', 'shift+ctrl+bracketleft'));
   assert.ok(!combosOverlap('meta+t', 'ctrl+t'));
   assert.doesNotMatch(showAppKey({ nextTab: 'ctrl+bracketright' }, 'nextTab'), /Bracketright/);
+  // Feedback inbox keys, and no two default bindings collide; ids must pass the server's appKeys id check.
+  assert.equal(appKey({}, 'feedback'), 'mod+alt+f');
+  assert.equal(appKey({}, 'feedbackCapture'), 'mod+alt+shift+f');
+  assert.ok(matches(appKey({}, 'feedbackCapture'), key('KeyF', { ctrlKey: true, altKey: true, shiftKey: true })));
+  assert.ok(!matches(appKey({}, 'feedback'), key('KeyF', { ctrlKey: true, altKey: true, shiftKey: true })));
+  for (const [index, def] of appKeyDefs.entries()) {
+    assert.match(def.id, /^[a-zA-Z][a-zA-Z0-9]{0,23}$/);
+    for (const other of appKeyDefs.slice(index + 1)) assert.ok(!combosOverlap(def.keys, other.keys), `${def.id} / ${other.id}`);
+  }
 });
 
 test('app shortcut overrides survive persistence validation; malformed values are rejected', () => {
