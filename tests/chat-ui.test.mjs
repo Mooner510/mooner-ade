@@ -37,12 +37,12 @@ test('Cursor model modal renders party tabs, provider groups and readable names'
   await build({ stdin: { contents: `import { useState, useEffect, useMemo, useId, useRef } from 'react';
     import { Icon } from './Icon';
     import { Modal, ModelLabel } from './views';
-    import { modelRows, modelValue, modelAppearance, modelProvider, cursorModelGroups } from './chat-model';
+    import { modelRows, modelValue, modelAppearance, modelProvider, cursorModelGroups, modelQuickDefaults, modelQuickRows } from './chat-model';
   ` + source.slice(source.indexOf('function ModelsModal('), source.indexOf('// Handled here')) + `
     import { renderToStaticMarkup } from 'react-dom/server';
     const ids = ['composer-2.5', 'grok-4.7', 'claude-sonnet-4', 'claude-opus-5-5', 'glm-5p3', 'muse-wonder-1.0'];
     const fallback = ids.map(id => ({id, name:id, family:'', window:0, main:true}));
-    const render = current => renderToStaticMarkup(<ModelsModal current={current} agent="cursor" fallback={fallback} aliases={{}} call={async () => ({})} onPick={() => {}} onClose={() => {}} />);
+    const render = current => renderToStaticMarkup(<ModelsModal current={current} agent="cursor" fallback={fallback} aliases={{}} settings={{chatModelPins: {}}} onSettingsChange={() => {}} call={async () => ({})} onPick={() => {}} onClose={() => {}} />);
     export const thirdParty = render('glm-5p3');
     export const firstParty = render('grok-4.7');
   `, loader: 'tsx', resolveDir: fileURLToPath(new URL('../apps/web/src', import.meta.url)) }, bundle: true, external: ['monaco-editor'], platform: 'node', format: 'cjs', jsx: 'automatic', outfile });
