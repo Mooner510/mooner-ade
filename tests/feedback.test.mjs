@@ -10,6 +10,9 @@ import { join } from 'node:path';
 import { createFeedbackStore, imageInfo, MAX_IMAGES } from '../apps/local-server/src/feedback-store.js';
 import { feedbackPrompt, parseFeedbackDraft, runFeedbackDraft } from '../apps/local-server/src/feedback-agent.js';
 import { createFeedbackMcp, writeDraft } from '../apps/local-server/src/feedback-mcp.js';
+import { backoffMs, createFeedbackQueue, nextStep, surelyNotCreated } from '../apps/local-server/src/feedback-queue.js';
+import { ANONYMOUS_INTERVAL_MS, anonymousDeviceId, postAnonymousFeedback } from '../apps/local-server/src/feedback-hub.js';
+import http from 'node:http';
 
 // A valid 2x3 PNG header is all imageInfo reads; the rest of the bytes do not matter to the store.
 const png = (w = 2, h = 3) => {
@@ -91,7 +94,88 @@ test('recover settles work the app was doing when it stopped', async t => {
   await store.setStatus(a.id, 'drafting'); await store.setStatus(b.id, 'submitting');
   await store.recover();
   assert.equal((await store.get(a.id)).status, 'draft');
-  assert.equal((await store.get(b.id)).status, 'failed');
+  // An attempt whose answer was lost goes back to the queue (the Hub's idempotency key makes the resend safe).
+  assert.equal((await store.get(b.id)).status, 'queued');
+});
+
+test('the queue backs off by error kind and gives up only on answers that waiting cannot change', () => {
+  assert.deepEqual(nextStep({ code: 'bad_request' }, 1, 0), { fail: true });
+  assert.deepEqual(nextStep({ code: 'too_large' }, 1, 0), { fail: true });
+  assert.deepEqual(nextStep({ code: 'rate_limited', retryAfter: 120 }, 1, 0), { retryAt: 120_000 });
+  assert.deepEqual(nextStep({ code: 'rate_limited' }, 1, 0), { retryAt: ANONYMOUS_INTERVAL_MS });
+  assert.deepEqual(nextStep({ code: 'not_logged_in' }, 1, 0), { retryAt: 5_000 });
+  assert.deepEqual(nextStep({ code: 'network_error' }, 1, 0), { retryAt: 30_000 });
+  assert.deepEqual(nextStep({ code: 'network_error' }, 3, 0), { retryAt: 120_000 });
+  assert.equal(backoffMs(40), 30 * 60_000);
+});
+
+// A queue on a real store with a hand-driven clock and timers.
+async function tempQueue(t, { mode = 'anonymous', results = [] } = {}) {
+  const way = { mode };
+  const env = await tempStore(t);
+  let clock = 1_000_000;
+  const timers = [], sent = [];
+  const queue = createFeedbackQueue({
+    store: env.store, stateFile: join(env.root, 'queue.json'), now: () => clock,
+    availability: () => ({ ok: true, mode: way.mode }), metaOf: item => ({ clientKey: item.id }),
+    sendAccount: async meta => { sent.push(['account', meta.clientKey]); return results.shift() ?? { ok: true, issueUrl: 'https://github.com/o/r/issues/1', issueNumber: 1 }; },
+    sendAnonymous: async meta => { sent.push(['anonymous', meta.clientKey]); return results.shift() ?? { ok: true, issueUrl: 'https://github.com/o/r/issues/2', issueNumber: 2 }; },
+    setTimer: (fn, ms) => { const timer = { at: clock + ms, fn }; timers.push(timer); return timer; },
+    clearTimer: timer => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index, 1); },
+    log: { warn() {} }
+  });
+  t.after(() => queue.stop());
+  // Moves the clock and fires what is due, then lets the run finish.
+  const advance = async ms => {
+    clock += ms;
+    for (const timer of timers.filter(item => item.at <= clock)) { timers.splice(timers.indexOf(timer), 1); timer.fn(); }
+    await settle();
+  };
+  // The queue works on real files: give a run time to finish.
+  const settle = () => new Promise(resolve => setTimeout(resolve, 250));
+  const draft = async title => env.store.create({ title, body: 'b' });
+  return { ...env, queue, sent, timers, advance, settle, draft, way, now: () => clock };
+}
+
+test('anonymous submissions leave one per 5 minutes, in order, and the wait survives a restart', async t => {
+  const { store, queue, sent, advance, settle, draft, root, now } = await tempQueue(t);
+  const a = await draft('a'), b = await draft('b'), c = await draft('c');
+  await queue.enqueue(a.id); await queue.enqueue(b.id); await queue.enqueue(c.id);
+  await settle();
+  assert.deepEqual(sent, [['anonymous', a.id]]);
+  assert.equal((await store.get(a.id)).status, 'submitted');
+  assert.equal((await store.get(b.id)).status, 'queued');
+  assert.deepEqual(await queue.info(), { size: 2, nextAt: now() + ANONYMOUS_INTERVAL_MS });
+  await advance(ANONYMOUS_INTERVAL_MS - 1000);
+  assert.equal(sent.length, 1);
+  await advance(1000);
+  assert.deepEqual(sent.map(([, id]) => id), [a.id, b.id]);
+  // Cancelling takes an item out; it can be edited again.
+  assert.equal((await queue.cancel(c.id)).status, 'draft');
+  await advance(ANONYMOUS_INTERVAL_MS);
+  assert.equal(sent.length, 2);
+  // The last anonymous send time is kept on disk.
+  assert.equal(JSON.parse(await readFile(join(root, 'queue.json'), 'utf8')).lastAnonymousAt, now() - ANONYMOUS_INTERVAL_MS);
+});
+
+test('a refused attempt waits as told, a permanent refusal fails, and an account sends without the anonymous wait', async t => {
+  const { store, queue, sent, advance, settle, draft } = await tempQueue(t, { mode: 'account', results: [
+    { ok: false, error: { code: 'rate_limited', message: '잠시 뒤에', retryAfter: 60 } }, undefined,
+    { ok: false, error: { code: 'bad_request', message: '잘못됨' } }
+  ] });
+  const a = await draft('a'), b = await draft('b');
+  await queue.enqueue(a.id); await settle();
+  let item = await store.get(a.id);
+  assert.equal(item.status, 'queued'); assert.equal(item.error, '잠시 뒤에'); assert.equal(item.attempts, 1);
+  await assert.rejects(store.update(a.id, { body: 'x' }), /전송 대기 중/);
+  await advance(60_000);
+  assert.equal((await store.get(a.id)).status, 'submitted');
+  await queue.enqueue(b.id); await settle();
+  item = await store.get(b.id);
+  assert.equal(item.status, 'failed'); assert.equal(item.error, '잘못됨');
+  assert.deepEqual(sent.map(([way]) => way), ['account', 'account', 'account']);
+  // A failed item can be queued again; a deleted queued item is skipped.
+  await queue.enqueue(b.id); await store.remove(b.id).catch(() => {});
 });
 
 test('the MCP tool drops a draft that the store imports as an unreviewed agent draft', async t => {
@@ -147,10 +231,46 @@ test('runFeedbackDraft runs claude -p with only Read and the prompt on stdin', a
   assert.equal(call.options.cwd, '/x'); assert.equal(call.options.shell, false);
 });
 
-// ---- the server: API routes and the submit round trip through the app ------------------------------------------------
-async function boot(t) {
+
+// ---- anonymous submission to the Hub ---------------------------------------------------------------------------------
+// A stand-in Hub for /v1/feedback/anonymous: records requests and answers what the test queued (201 by default).
+async function fakeHub(t) {
+  const requests = [], answers = [];
+  const server = http.createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const form = await new Request('http://x', { method: 'POST', headers: { 'content-type': request.headers['content-type'] }, body: Buffer.concat(chunks) }).formData();
+    requests.push({ url: request.url, device: request.headers['x-ade-device'], meta: JSON.parse(form.get('meta')), images: form.getAll('image') });
+    const answer = answers.shift() ?? { status: 201, body: { id: 'h', issueNumber: requests.length, issueUrl: `https://github.com/o/r/issues/${requests.length}` } };
+    response.writeHead(answer.status, { 'content-type': 'application/json', ...answer.headers });
+    response.end(JSON.stringify(answer.body));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return { url: `http://127.0.0.1:${server.address().port}`, requests, answers };
+}
+
+test('anonymous posts carry the install id and the multipart body, and map refusals', async t => {
+  const hub = await fakeHub(t), { root } = await tempStore(t);
+  const deviceId = await anonymousDeviceId(root);
+  assert.match(deviceId, /^[A-Za-z0-9_-]{32}$/);
+  assert.equal(await anonymousDeviceId(root), deviceId);
+  const shot = join(root, 'a.png'); await writeFile(shot, png());
+  const ok = await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: { clientKey: 'k', title: 't' }, images: [{ path: shot, mime: 'image/png' }] });
+  assert.deepEqual(ok, { ok: true, issueUrl: 'https://github.com/o/r/issues/1', issueNumber: 1 });
+  assert.equal(hub.requests[0].url, '/v1/feedback/anonymous'); assert.equal(hub.requests[0].device, deviceId);
+  assert.deepEqual(hub.requests[0].meta, { clientKey: 'k', title: 't' });
+  assert.equal(hub.requests[0].images[0].name, 'image-1.png'); assert.equal(hub.requests[0].images[0].type, 'image/png');
+  hub.answers.push({ status: 429, headers: { 'retry-after': '170' }, body: { error: { code: 'rate_limited', message: '천천히' } } });
+  assert.deepEqual(await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: {}, images: [] }), { ok: false, error: { code: 'rate_limited', message: '천천히', retryAfter: 170 } });
+  hub.answers.push({ status: 503, body: { error: { code: 'auth-unavailable', message: 'x' } } });
+  assert.equal((await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: {}, images: [] })).error.code, 'feedback_disabled');
+  assert.equal((await postAnonymousFeedback({ hubUrl: 'http://127.0.0.1:9', deviceId, meta: {}, images: [] })).error.code, 'network_error');
+});
+
+// ---- the server: API routes and both submit ways ---------------------------------------------------------------------
+async function boot(t, env = {}) {
   const data = await mkdtemp(join(tmpdir(), 'ade-data-'));
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit', 'ipc'] });
+  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env }, stdio: ['ignore', 'pipe', 'inherit', 'ipc'] });
   const messages = [];
   child.on('message', message => messages.push(message));
   t.after(async () => {
@@ -173,50 +293,89 @@ async function boot(t) {
     if (!reply.ok) throw Object.assign(new Error(reply.error.message), { code: reply.error.code });
     return reply.value;
   };
-  return { child, data, until, api };
+  const eventually = async (action, input, predicate) => {
+    for (let tries = 0; tries < 200; tries++) { const value = await api(action, input); if (predicate(value)) return value; await new Promise(resolve => setTimeout(resolve, 25)); }
+    throw new Error(`timeout waiting on ${action}`);
+  };
+  return { child, data, until, api, eventually };
 }
 
-test('the server submits through the app only when a plugin says it can, and records the issue', async t => {
-  const { child, data, until, api } = await boot(t);
-  const listed = await api('feedback/list');
-  assert.equal(listed.available.ok, false); assert.match(listed.available.reason, /원격 접속 플러그인/);
+test('signed in, the queue submits through the app and records the issue; a rate limit waits and retries', async t => {
+  const { child, data, until, api, eventually } = await boot(t);
+  child.send({ type: 'feedback/status', status: { ok: true, account: 'tester', plugin: 'mooner-remote' } });
+  await eventually('feedback/status', {}, value => value.mode === 'account');
+  assert.deepEqual(await api('feedback/status'), { ok: true, mode: 'account', account: 'tester' });
   const item = await api('feedback/create', { title: '상태바 글자가 겹침', body: '## 문제\n겹칩니다' });
   await api('feedback/image/add', { id: item.id, data: png().toString('base64'), mime: 'image/png' });
-  await assert.rejects(api('feedback/submit', { id: item.id }), error => error.code === 'FEEDBACK_UNAVAILABLE');
 
-  child.send({ type: 'feedback/status', status: { ok: true, account: 'tester', plugin: 'mooner-remote' } });
-  for (let tries = 0; !(await api('feedback/status')).ok && tries < 50; tries++) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(await api('feedback/status'), { ok: true, account: 'tester' });
-
-  const submitting = api('feedback/submit', { id: item.id });
+  assert.equal((await api('feedback/submit', { id: item.id })).status, 'queued');
   const request = await until(message => message.type === 'feedback/submit');
   assert.equal(request.meta.clientKey, item.id); assert.equal(request.meta.source, 'human');
-  assert.equal(request.images.length, 1); assert.equal(request.images[0].mime, 'image/png');
   assert.equal(request.images[0].path, join(data, 'feedback', item.id, 'img-1.png'));
   assert.deepEqual(await readFile(request.images[0].path), png());
-  child.send({ type: 'feedback/result', id: request.id, ok: true, issueUrl: 'https://github.com/o/r/issues/7', issueNumber: 7 });
-  const done = await submitting;
-  assert.equal(done.status, 'submitted'); assert.equal(done.issueNumber, 7);
+  child.send({ type: 'feedback/result', id: request.id, ok: false, error: { code: 'rate_limited', message: '잠시 뒤에', retryAfter: 1 } });
+  const waiting = await eventually('feedback/get', { id: item.id }, value => value.status === 'queued' && value.attempts === 1);
+  assert.equal(waiting.error, '잠시 뒤에');
+  const again = await until(message => message.type === 'feedback/submit', 10000);
+  assert.equal(again.meta.clientKey, item.id);
+  child.send({ type: 'feedback/result', id: again.id, ok: true, issueUrl: 'https://github.com/o/r/issues/7', issueNumber: 7 });
+  const done = await eventually('feedback/get', { id: item.id }, value => value.status === 'submitted');
+  assert.equal(done.issueNumber, 7); assert.equal(done.via, 'account');
   await assert.rejects(api('feedback/submit', { id: item.id }), error => error.code === 'FEEDBACK_LOCKED');
-
-  // A failed submit is recorded and can be tried again.
-  const second = await api('feedback/create', { title: 't', body: 'b' });
-  const failing = api('feedback/submit', { id: second.id });
-  const request2 = await until(message => message.type === 'feedback/submit');
-  child.send({ type: 'feedback/result', id: request2.id, ok: false, error: { code: 'rate_limited', message: '잠시 뒤에' } });
-  const failed = await failing;
-  assert.equal(failed.status, 'failed'); assert.equal(failed.error, '잠시 뒤에');
 });
 
-test('agent drafts need a human look before they can be submitted', async t => {
-  const { child, data, api } = await boot(t);
-  child.send({ type: 'feedback/status', status: { ok: true } });
+test('without an account, feedback goes to the Hub anonymously, one per 5 minutes, the rest waiting in the queue', async t => {
+  const hub = await fakeHub(t);
+  const { api, eventually } = await boot(t, { ADE_HUB_URL: hub.url });
+  assert.deepEqual(await api('feedback/status'), { ok: true, mode: 'anonymous' });
+  const a = await api('feedback/create', { title: 'a', body: 'a' }), b = await api('feedback/create', { title: 'b', body: 'b' });
+  await api('feedback/submit', { id: a.id }); await api('feedback/submit', { id: b.id });
+  const sent = await eventually('feedback/get', { id: a.id }, value => value.status === 'submitted');
+  assert.equal(sent.via, 'anonymous'); assert.equal(sent.issueNumber, 1);
+  assert.equal(hub.requests.length, 1); assert.equal(hub.requests[0].meta.clientKey, a.id);
+  const listed = await api('feedback/list');
+  assert.equal(listed.queue.size, 1); assert.ok(listed.queue.nextAt > Date.now() + 4 * 60_000);
+  assert.equal(listed.items.find(item => item.id === b.id).status, 'queued');
+  assert.equal((await api('feedback/unqueue', { id: b.id })).status, 'draft');
+  assert.equal((await api('feedback/list')).queue.size, 0);
+});
+
+test('anonymous submission can be turned off, and agent drafts need a human look before they can be submitted', async t => {
+  const { data, api } = await boot(t, { ADE_FEEDBACK_ANONYMOUS: '0' });
+  assert.equal((await api('feedback/status')).ok, false);
   await writeFile(join(data, 'feedback', 'incoming', 'abcdefgh12.json'), JSON.stringify({ title: '에이전트 초안', body: '내용', images: [] }));
   const { items } = await api('feedback/list');
   const draft = items.find(item => item.title === '에이전트 초안');
   assert.equal(draft.source, 'agent'); assert.equal(draft.reviewed, false);
   await assert.rejects(api('feedback/submit', { id: draft.id }), error => error.code === 'FEEDBACK_UNREVIEWED');
   assert.equal((await api('feedback/update', { id: draft.id, reviewed: true })).reviewed, true);
+  await assert.rejects(api('feedback/submit', { id: draft.id }), error => error.code === 'FEEDBACK_UNAVAILABLE');
   await api('feedback/delete', { id: draft.id });
   assert.equal((await api('feedback/list')).items.length, 0);
+});
+
+test('after a lost answer the retry goes the same way, so a sign-in in between cannot open a second issue', async t => {
+  const { store, queue, sent, advance, settle, draft, way } = await tempQueue(t, { results: [
+    { ok: false, error: { code: 'network_error', message: '끊김' } }, undefined,
+    { ok: false, error: { code: 'rate_limited', message: '천천히', retryAfter: 1 } }, undefined
+  ] });
+  const a = await draft('a');
+  await queue.enqueue(a.id); await settle();
+  assert.equal((await store.get(a.id)).pinnedVia, 'anonymous');
+  way.mode = 'account'; // signed in meanwhile
+  await advance(ANONYMOUS_INTERVAL_MS);
+  assert.deepEqual(sent.map(([via]) => via), ['anonymous', 'anonymous']);
+  const done = await store.get(a.id);
+  assert.equal(done.status, 'submitted'); assert.equal(done.pinnedVia, undefined); assert.equal(done.via, 'anonymous');
+  // A refusal that surely made nothing frees the item to go the way available now.
+  const b = await draft('b');
+  await queue.enqueue(b.id); await settle();
+  assert.equal(sent.at(-1)[0], 'account');
+  assert.equal((await store.get(b.id)).pinnedVia, undefined);
+  way.mode = 'anonymous';
+  await advance(ANONYMOUS_INTERVAL_MS);
+  assert.equal(sent.at(-1)[0], 'anonymous'); assert.equal((await store.get(b.id)).status, 'submitted');
+  // An item pinned to the account waits while signed out.
+  assert.equal(surelyNotCreated({ code: 'PLUGIN_STOPPED' }), false);
+  assert.equal(surelyNotCreated({ code: 'upstream_failed' }), true);
 });

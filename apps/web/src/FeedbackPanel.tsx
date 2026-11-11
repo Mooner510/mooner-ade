@@ -2,11 +2,11 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from
 import { api } from './api';
 import { Icon, IconButton, type IconName } from './Icon';
 import { Markdown } from './Markdown';
-import { copyText } from './toast';
+import { copyText, toast } from './toast';
 import type { Ask } from './views';
 import { AnnotateImage } from './AnnotateImage';
-import { base64Bytes, canSubmit, isEditable, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackSource } from './feedback-model';
-import { canCapture, createFeedback, feedbackCall, openFeedback, removeLocal, requestCapture, useFeedback, type CaptureMode } from './feedback-store';
+import { base64Bytes, canSubmit, isEditable, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackQueue, type FeedbackSource } from './feedback-model';
+import { canCapture, createFeedback, feedbackCall, openFeedback, removeLocal, requestCapture, useFeedback, useQueueClock, type CaptureMode } from './feedback-store';
 
 export const feedbackFileUrl = (item: Pick<Feedback, 'id' | 'updatedAt'>, name: string) => `/feedback-file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}?v=${item.updatedAt}`;
 const sourceIcons: Record<FeedbackSource, IconName> = { human: 'person', ai: 'sparkles', agent: 'bot' };
@@ -32,11 +32,12 @@ async function imagePayload(file: File): Promise<{ data: string; mime: 'image/pn
 type PanelProps = { ask: Ask; fail(cause: unknown): void; wide: boolean; toggleWide(): void; onClose(): void; aiContext(): Promise<string | undefined> };
 
 export function FeedbackPanel(props: PanelProps) {
-  const { items, available, loaded, error, currentId } = useFeedback();
+  const { items, available, queue, loaded, error, currentId } = useFeedback();
   const current = items.find(item => item.id === currentId);
+  const now = useQueueClock(items.some(item => item.status === 'queued' || item.status === 'submitting'));
   return <div className="review-panel feedback-panel">
-    {current ? <FeedbackDetail key={current.id} item={current} available={available} {...props} />
-      : <FeedbackList items={items} available={available} loaded={loaded} error={error} {...props} />}
+    {current ? <FeedbackDetail key={current.id} item={current} available={available} queue={queue} now={now} {...props} />
+      : <FeedbackList items={items} available={available} queue={queue} now={now} loaded={loaded} error={error} {...props} />}
   </div>;
 }
 
@@ -45,13 +46,16 @@ function AvailabilityNote({ available }: { available: FeedbackAvailability | nul
   return <p className="feedback-note warn" role="status"><Icon name="info" size={14} />{available.reason || '지금은 피드백을 보낼 수 없습니다.'}</p>;
 }
 
-function FeedbackList({ items, available, loaded, error, fail, wide, toggleWide, onClose }: PanelProps & { items: Feedback[]; available: FeedbackAvailability | null; loaded: boolean; error: string }) {
+// "전송 대기 n건" next to the panel title while the server still has items to send.
+const QueueChip = ({ queue }: { queue: FeedbackQueue }) => queue.size > 0 ? <span className="feedback-queue-chip" title="제출한 피드백이 순서대로 자동 전송됩니다">전송 대기 {queue.size}건</span> : null;
+
+function FeedbackList({ items, available, queue, now, loaded, error, fail, wide, toggleWide, onClose }: PanelProps & { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; now: number; loaded: boolean; error: string }) {
   const [creating, setCreating] = useState(false);
   const create = () => { setCreating(true); void createFeedback().catch(fail).finally(() => setCreating(false)); };
   const when = (at: number) => new Date(at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   return <>
     <header className="panel-head">
-      <Icon name="feedback" /><strong>피드백 창고</strong>
+      <Icon name="feedback" /><strong>피드백 창고</strong><QueueChip queue={queue} />
       <span className="spacer" />
       <button type="button" className="primary feedback-new" disabled={creating} onClick={create}><Icon name="plus" size={14} />새 피드백</button>
       <IconButton icon={wide ? 'minimize' : 'maximize'} label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
@@ -70,6 +74,7 @@ function FeedbackList({ items, available, loaded, error, fail, wide, toggleWide,
             <small>
               <span className="feedback-source" title={sourceLabels[item.source]}><Icon name={sourceIcons[item.source]} size={13} /></span>
               <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>
+              {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
               {item.images.length > 0 && <span className="feedback-count" title={`이미지 ${item.images.length}장`}><Icon name="image" size={12} />{item.images.length}</span>}
               <time dateTime={new Date(item.updatedAt).toISOString()}>{when(item.updatedAt)}</time>
             </small>
@@ -81,7 +86,7 @@ function FeedbackList({ items, available, loaded, error, fail, wide, toggleWide,
   </>;
 }
 
-function FeedbackDetail({ item, available, ask, fail, wide, toggleWide, onClose, aiContext }: PanelProps & { item: Feedback; available: FeedbackAvailability | null }) {
+function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWide, onClose, aiContext }: PanelProps & { item: Feedback; available: FeedbackAvailability | null; queue: FeedbackQueue; now: number }) {
   const editable = isEditable(item);
   const [title, setTitle] = useState(item.title), [body, setBody] = useState(item.body), [tab, setTab] = useState<'edit' | 'preview'>(editable ? 'edit' : 'preview');
   const [busy, setBusy] = useState(''), [noteOpen, setNoteOpen] = useState(false), [note, setNote] = useState(''), [annotating, setAnnotating] = useState('');
@@ -133,8 +138,12 @@ function FeedbackDetail({ item, available, ask, fail, wide, toggleWide, onClose,
   const drafting = item.status === 'drafting' || busy === 'ai';
   const submit = () => run('submit', async () => {
     await flush();
-    if (!(await ask.confirm('피드백을 제출할까요? 스크린샷에 코드나 비밀 정보가 보일 수 있으니 확인하세요. 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다.'))) return;
-    await feedbackCall('feedback/submit', { id });
+    const how = available?.mode === 'anonymous'
+      ? '로그인하지 않아 익명으로 보냅니다. 익명 제출은 이 기기에서 5분에 1건씩, 순서대로 자동 전송됩니다(앱을 껐다 켜도 이어서 보냅니다).'
+      : `${available?.account ? `${available.account} 계정으로` : '로그인한 계정으로'} 개발자의 비공개 GitHub 저장소에 이슈로 올립니다.`;
+    if (!(await ask.confirm(`피드백을 제출할까요? ${how} 스크린샷에 코드나 비밀 정보가 보일 수 있으니 확인하세요.`))) return;
+    const sent = await feedbackCall('feedback/submit', { id });
+    toast('schedule_send', sent.status === 'submitted' ? '제출했습니다' : '전송 대기열에 넣었습니다');
   });
   const draft = () => run('ai', async () => {
     await flush();
@@ -160,8 +169,14 @@ function FeedbackDetail({ item, available, ask, fail, wide, toggleWide, onClose,
       <IconButton icon="x" label="피드백 창고 닫기" onClick={onClose} />
     </header>
     <div className="feedback-detail" onPaste={onPaste} onDragOver={event => { if (editable) event.preventDefault(); }} onDrop={onDrop}>
+      {(item.status === 'queued' || item.status === 'submitting') && <div className="feedback-note queued" role="status">
+        <Icon name={item.status === 'submitting' ? 'send' : 'clock'} size={14} />
+        <span>{item.status === 'submitting' ? '전송 중…' : `전송 대기 · ${queueEta(item, queue, now)}`}{item.attempts ? <small> · {item.attempts}번 시도함</small> : null}</span>
+        {item.status === 'queued' && <button type="button" disabled={!!busy} onClick={() => run('unqueue', () => feedbackCall('feedback/unqueue', { id }))}><Icon name="x" size={13} />대기 취소</button>}
+        {item.status === 'queued' && item.error && <small className="feedback-last-error">마지막 시도: {item.error}</small>}
+      </div>}
       {item.status === 'submitted' && <div className="feedback-note ok">
-        <Icon name="check" size={14} /><span>제출했습니다{item.issueNumber ? ` · 이슈 #${item.issueNumber}` : ''}</span>
+        <Icon name="check" size={14} /><span>{item.via === 'anonymous' ? '익명으로 제출됨' : '제출했습니다'}{item.issueNumber ? ` · 이슈 #${item.issueNumber}` : ''}</span>
         {item.issueUrl && <button type="button" onClick={() => window.open(item.issueUrl, '_blank', 'noopener')}><Icon name="externalLink" size={13} />이슈 열기</button>}
       </div>}
       {item.status === 'failed' && item.error && <p className="feedback-note warn" role="alert"><Icon name="alert" size={14} />{item.error}</p>}
@@ -211,17 +226,17 @@ function FeedbackDetail({ item, available, ask, fail, wide, toggleWide, onClose,
           </li>)}</ol>}
       </section>
     </div>
-    <AvailabilityNote available={item.status === 'submitted' ? null : available} />
+    <AvailabilityNote available={editable ? available : null} />
     <footer className="feedback-actions">
       <button type="button" onClick={() => run('folder', () => api('feedback/open-folder', { id }))}><Icon name="folder" size={14} />폴더 열기</button>
       <button type="button" onClick={() => run('copy', async () => { await flush(); copyText((await api<{ markdown: string }>('feedback/markdown', { id })).markdown); })}><Icon name="copy" size={14} />마크다운 복사</button>
       {item.status !== 'submitting' && <button type="button" className="danger" disabled={drafting} onClick={remove}><Icon name="trash" size={14} />삭제</button>}
       <span className="spacer" />
-      {item.status !== 'submitted' && <span title={verdict.ok ? '제출' : verdict.reason}>
-        <button type="button" className="primary" disabled={!verdict.ok || !!busy} onClick={submit}><Icon name="send" size={14} />{item.status === 'submitting' || busy === 'submit' ? '제출 중…' : item.status === 'failed' ? '다시 제출' : '제출'}</button>
+      {editable && <span title={verdict.ok ? (available?.mode === 'anonymous' ? '익명으로 제출' : '제출') : verdict.reason}>
+        <button type="button" className="primary" disabled={!verdict.ok || !!busy} onClick={submit}><Icon name="send" size={14} />{busy === 'submit' ? '제출 중…' : item.status === 'failed' ? '다시 제출' : '제출'}</button>
       </span>}
     </footer>
-    {!verdict.ok && item.status !== 'submitted' && <p className="feedback-reason">{verdict.reason}</p>}
+    {!verdict.ok && editable && <p className="feedback-reason">{verdict.reason}</p>}
     {annotating && <AnnotateImage src={feedbackFileUrl(item, annotating)} name={annotating} onClose={() => setAnnotating('')}
       onSave={async data => { try { await feedbackCall('feedback/image/replace', { id, name: annotating, data }); } catch (cause) { fail(cause); throw cause; } }} />}
   </>;

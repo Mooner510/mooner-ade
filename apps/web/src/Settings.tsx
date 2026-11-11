@@ -13,6 +13,7 @@ import { playSound, soundIds, sounds } from './sound';
 import { resetTips } from './toast';
 import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
 import { useFeedback } from './feedback-store';
+import { submitModeText } from './feedback-model';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -20,8 +21,8 @@ const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).a
 // Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
 function FeedbackAvailabilityRow() {
   const { available, loaded, error } = useFeedback();
-  const text = !loaded ? '확인 중…' : error ? error : available?.ok ? (available.account ? `보낼 수 있음 · ${available.account}` : '보낼 수 있음') : available?.reason || '보낼 수 없음';
-  return <Row title="제출 상태" hint="피드백은 원격 접속 플러그인의 로그인으로 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다."><span className={`feedback-availability${available?.ok ? ' ok' : ''}`}>{text}</span></Row>;
+  const text = !loaded ? '확인 중…' : error || submitModeText(available);
+  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 익명으로 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다. 제출한 피드백은 순서대로 자동 전송됩니다."><span className={`feedback-availability${available?.ok ? ' ok' : ''}`}>{text}</span></Row>;
 }
 
 function AboutSettings() {

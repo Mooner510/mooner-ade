@@ -15,7 +15,8 @@ export const ID = /^[a-z0-9]{6,16}-[a-f0-9]{12}$/;
 const IMAGE = /^img-(\d{1,6})\.(png|jpg)$/;
 const INCOMING = /^[\w-]{8,64}\.json$/;
 const SOURCES = new Set(['human', 'ai', 'agent']);
-const LOCKED = new Set(['drafting', 'submitting', 'submitted']);
+// Waiting in the submit queue counts as locked too: cancel it (feedback-queue.js) to edit again.
+const LOCKED = new Set(['drafting', 'queued', 'submitting', 'submitted']);
 const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg' };
 export const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg' };
 
@@ -56,10 +57,17 @@ function cleanBody(value) {
   return body;
 }
 
+// On Windows a rename onto a file someone is reading at that moment (e.g. the list being fetched) fails with EPERM/EBUSY
+// for a few milliseconds; it is tried again briefly.
 async function writeAtomic(file, data) {
   const tmp = `${file}.${randomUUID()}.tmp`;
-  try { await fs.writeFile(tmp, data, { flag: 'wx', mode: 0o600 }); await fs.rename(tmp, file); }
-  finally { await fs.rm(tmp, { force: true }); }
+  try {
+    await fs.writeFile(tmp, data, { flag: 'wx', mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try { await fs.rename(tmp, file); break; }
+      catch (error) { if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 20) throw error; await new Promise(resolve => setTimeout(resolve, 10 + attempt * 10)); }
+    }
+  } finally { await fs.rm(tmp, { force: true }); }
 }
 
 // onChange(id?) is called after every change (the server broadcasts `feedback/changed`).
@@ -92,7 +100,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
   function change(id, mutate, { allow = [] } = {}) {
     return locked(id, async () => {
       const item = await read(id);
-      if (LOCKED.has(item.status) && !allow.includes(item.status)) throw fault('FEEDBACK_LOCKED', item.status === 'submitted' ? '제출한 피드백은 고칠 수 없습니다.' : '작업이 끝난 뒤에 다시 시도하세요.', 409);
+      if (LOCKED.has(item.status) && !allow.includes(item.status)) throw fault('FEEDBACK_LOCKED', item.status === 'submitted' ? '제출한 피드백은 고칠 수 없습니다.' : item.status === 'queued' ? '전송 대기 중입니다. 대기를 취소한 뒤에 고치세요.' : '작업이 끝난 뒤에 다시 시도하세요.', 409);
       const next = await mutate(item);
       next.updatedAt = now();
       return changed(id, await write(next));
@@ -126,6 +134,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
     return locked(id, async () => {
       const item = await read(id);
       if (item.status === 'drafting' || item.status === 'submitting') throw fault('FEEDBACK_LOCKED', '작업이 끝난 뒤에 지우세요.', 409);
+      // A queued item may simply be deleted: the queue skips what is gone.
       await fs.rm(folder(id), { recursive: true, force: true });
       locks.delete(id);
       return changed(id, { ok: true });
@@ -222,7 +231,8 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
   async function recover() {
     for (const item of await list()) {
       if (item.status === 'drafting') await setStatus(item.id, item.source === 'human' ? 'draft' : 'review', { error: 'AI 초안을 만드는 중에 앱이 종료되었습니다.' });
-      else if (item.status === 'submitting') await setStatus(item.id, 'failed', { error: '제출 결과를 확인하지 못했습니다. 다시 제출하면 같은 이슈로 이어집니다.' });
+      // Sent again from the queue: the Hub answers the same key with the same issue, so nothing is doubled.
+      else if (item.status === 'submitting') await setStatus(item.id, 'queued', { nextAttemptAt: now(), error: '전송 결과를 확인하지 못해 다시 보냅니다.' });
     }
   }
   // Drafts an agent left in incoming/ (feedback-mcp.js writes the images first and the .json last).

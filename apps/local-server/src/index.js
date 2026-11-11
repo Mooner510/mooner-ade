@@ -34,6 +34,8 @@ import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore } from './feedback-store.js';
 import { runFeedbackDraft } from './feedback-agent.js';
+import { createFeedbackQueue } from './feedback-queue.js';
+import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -80,14 +82,17 @@ const projects = new Map();
 const feedback = createFeedbackStore({ root: path.join(dataRoot, 'feedback'), onChange: id => { for (const socket of clients) send(socket, { type: 'feedback/changed', ...(id && { id }) }); } });
 const feedbackIncoming = feedback.incomingDir;
 await fs.mkdir(feedbackIncoming, { recursive: true, mode: 0o700 });
-// Whether a plugin can submit now (pushed by the app as `feedback/status`). Without the app (a plain browser) nothing can.
-let feedbackAvailability = process.connected
-  ? { ok: false, reason: '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.' }
-  : { ok: false, reason: 'MoonerADE 앱에서만 피드백을 제출할 수 있습니다.' };
+// Whether a plugin can submit for a signed-in account (pushed by the app as `feedback/status`). Without one, feedback goes to
+// the Hub anonymously (feedback-hub.js), unless ADE_FEEDBACK_ANONYMOUS=0.
+let pluginFeedback = { ok: false };
+const feedbackAnonymous = process.env.ADE_FEEDBACK_ANONYMOUS !== '0', feedbackHubUrl = process.env.ADE_HUB_URL || DEFAULT_HUB_URL;
+const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'account', ...(pluginFeedback.account && { account: pluginFeedback.account }) }
+  : feedbackAnonymous ? { ok: true, mode: 'anonymous' }
+  : { ok: false, reason: pluginFeedback.reason || '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.' };
 const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
 let feedbackRequestId = 0;
 function submitThroughApp(meta, images) {
-  if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: feedbackAvailability.reason } });
+  if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: 'MoonerADE 앱이 아니어서 계정으로 제출할 수 없습니다.' } });
   const id = ++feedbackRequestId;
   return new Promise(resolve => {
     // A little longer than the app's own wait for the plugin, so its answer (even a timeout) arrives first.
@@ -97,23 +102,24 @@ function submitThroughApp(meta, images) {
     process.send({ type: 'feedback/submit', id, meta, images }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: error.message } }); });
   });
 }
-const feedbackRunning = new Set(); // ids with an AI draft or a submit in flight in this process
+const feedbackRunning = new Set(); // ids with an AI draft in flight in this process
+let feedbackDevice = null;
+// "제출" puts the item in the persistent queue (feedback-queue.js), which sends it when it can: through the signed-in plugin,
+// or anonymously at most once per 5 minutes. The item id is the Hub's idempotency key, so a resend never doubles an issue.
+const feedbackQueue = createFeedbackQueue({
+  store: feedback, stateFile: path.join(feedback.root, 'queue.json'), availability: feedbackAvailability,
+  metaOf: item => ({ clientKey: item.id, title: item.title, body: item.body, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` }),
+  sendAccount: submitThroughApp,
+  sendAnonymous: async (meta, images) => postAnonymousFeedback({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), meta, images })
+});
 async function feedbackSubmit(id) {
   if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
   const item = await feedback.get(id);
   if (!item.title.trim() || !item.body.trim()) throw fault('INVALID_INPUT', '제목과 본문을 쓴 뒤 제출하세요.');
   if (item.source !== 'human' && !item.reviewed) throw fault('FEEDBACK_UNREVIEWED', 'AI가 쓴 초안은 직접 확인한 뒤에 제출할 수 있습니다.', 409);
-  if (!feedbackAvailability.ok) throw fault('FEEDBACK_UNAVAILABLE', feedbackAvailability.reason || '지금은 피드백을 제출할 수 없습니다.', 503);
-  feedbackRunning.add(id);
-  try {
-    await feedback.setStatus(id, 'submitting', { error: undefined }, { from: ['draft', 'review', 'failed'] });
-    // The item id is the Hub's idempotency key: submitting again after a lost answer finds the same issue.
-    const meta = { clientKey: item.id, title: item.title, body: item.body, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` };
-    const result = await submitThroughApp(meta, feedback.imagesOf(item));
-    return result.ok
-      ? feedback.setStatus(id, 'submitted', { issueUrl: result.issueUrl, issueNumber: result.issueNumber, error: undefined, submittedAt: Date.now() })
-      : feedback.setStatus(id, 'failed', { error: result.error?.message || '피드백을 보내지 못했습니다.' });
-  } finally { feedbackRunning.delete(id); }
+  const available = feedbackAvailability();
+  if (!available.ok) throw fault('FEEDBACK_UNAVAILABLE', available.reason || '지금은 피드백을 제출할 수 없습니다.', 503);
+  return feedbackQueue.enqueue(id);
 }
 async function feedbackAiDraft(id, input) {
   if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
@@ -143,6 +149,7 @@ async function watchFeedback() {
     watcher.unref();
   } catch (error) { console.warn(`피드백 폴더를 감시할 수 없습니다: ${error.message}`); }
   void importFeedback();
+  feedbackQueue.kick();
 }
 // Opening and closing are serialized per project only, so restoring many projects at startup does not queue them behind each other.
 const openings = new Map();
@@ -619,7 +626,7 @@ async function feedbackRoute(action, input) {
     return Buffer.from(input.data, 'base64');
   };
   switch (action) {
-    case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability };
+    case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability(), queue: await feedbackQueue.info() };
     case 'feedback/get': return feedback.get(id());
     case 'feedback/create': return feedback.create({ title: input.title, body: input.body });
     case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, reviewed: input.reviewed });
@@ -631,8 +638,9 @@ async function feedbackRoute(action, input) {
     case 'feedback/image/move': return feedback.moveImage(id(), input.name, input.to);
     case 'feedback/ai-draft': return feedbackAiDraft(id(), input);
     case 'feedback/submit': return feedbackSubmit(id());
+    case 'feedback/unqueue': return feedbackQueue.cancel(id());
     case 'feedback/markdown': return feedback.markdown(id());
-    case 'feedback/status': return feedbackAvailability;
+    case 'feedback/status': return feedbackAvailability();
     case 'feedback/open-folder': {
       const folder = feedback.folder(id());
       await fs.access(path.join(folder, 'feedback.json')).catch(() => { throw fault('NOT_FOUND', '피드백을 찾을 수 없습니다.', 404); });
@@ -1373,7 +1381,7 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
@@ -1396,10 +1404,11 @@ process.on('message', message => {
   else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
   else if (message?.type === 'feedback/status' && message.status && typeof message.status === 'object') {
     const status = message.status;
-    feedbackAvailability = status.ok === true
+    pluginFeedback = status.ok === true
       ? { ok: true, ...(typeof status.account === 'string' && { account: status.account.slice(0, 100) }) }
-      : { ok: false, reason: typeof status.reason === 'string' ? status.reason.slice(0, 200) : '지금은 피드백을 제출할 수 없습니다.' };
+      : { ok: false, ...(typeof status.reason === 'string' && { reason: status.reason.slice(0, 200) }) };
     for (const socket of clients) send(socket, { type: 'feedback/changed' });
+    feedbackQueue.kick();
   }
   else if (message?.type === 'feedback/result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
   // A plugin host (in the main process) relays its workspace sessions to this process this way.
