@@ -1,9 +1,9 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
-export type ChatStatusContext = { state: ChatState };
+export type ChatStatusContext = { state: ChatState; share?: string | null };
 type Def = {
   label: string; hint?: string; icon: string; format: string;
   // `{token}` values for the template; the item is hidden when this returns null.
@@ -29,7 +29,9 @@ export const chatStatusDefs: Record<string, Def> = {
     hint: '마지막 응답까지 쌓인 토큰 ÷ 기준 창. Auto Compact가 켜져 있으면 %는 Auto Compact 창 기준(게이지·상세와 동일), 아니면 최대 컨텍스트(CLI 보고값, 첫 응답 전에는 추정). {percent} {used} {window}' },
   tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), total: compact(state.tokens.input + state.tokens.output) }),
     hint: '이 채팅의 누적. {input} {output} {cache}(캐시 읽기) {total}' },
-  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: state.costUsd?.toFixed(2) ?? '미제공' }), hint: 'CLI가 보고한 세션 비용(USD)' },
+  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)' },
+  share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ share }) => share ? { share: `기여도 ${share}` } : null,
+    hint: '이 채팅이 플랜 한도(5h·주)에서 차지한 %p. 서버가 정수 %만 알려 주므로 비용 ÷ (1%p당 비용)으로 추정하고, 턴마다 한도 변화를 읽어 1%p당 비용을 보정합니다. 다른 사용이 겹치면 오차가 생길 수 있습니다.' },
   turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }) },
   duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }) },
   session: { label: '세션 ID', icon: 'tag', format: '{short}', values: ({ state }) => state.sessionId ? { short: state.sessionId.slice(0, 8), id: state.sessionId } : null },

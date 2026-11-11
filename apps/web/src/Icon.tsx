@@ -53,9 +53,12 @@ const glyphs = {
   book: 'menu_book',
   palette: 'palette',
   arrowRight: 'arrow_forward',
+  arrowLeft: 'arrow_back',
+  tool: 'build',
   keyboard: 'keyboard',
   chat: 'chat_bubble',
   enter: 'keyboard_return',
+  chart: 'monitoring',
   laptop: 'laptop_mac'
 } as const;
 

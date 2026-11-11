@@ -34,7 +34,7 @@ function validateSettings(settings, invalid) {
   for (const name of ['statusItems', 'statusLeft', 'statusRight', 'chatStatusItems', 'chatStatusLeft', 'chatStatusRight']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
   if (settings.chatStatusSeparator !== undefined && !(typeof settings.chatStatusSeparator === 'string' && settings.chatStatusSeparator.length <= 8)) invalid();
   // bypassPermissions is deliberately not a valid default: it must be chosen per chat, never inherited.
-  for (const [name, values] of [['chatSendKey', ['enter', 'mod-enter']], ['chatThinkingOpen', ['live', 'always', 'never']], ['chatWidth', ['narrow', 'default', 'wide', 'full']], ['chatDefaultPermission', ['default', 'acceptEdits', 'plan', 'auto']],
+  for (const [name, values] of [['chatSendKey', ['enter', 'mod-enter']], ['chatThinkingOpen', ['live', 'always', 'never']], ['chatToolDisplay', ['summary', 'detail']], ['chatWidth', ['narrow', 'default', 'wide', 'full']], ['chatDefaultPermission', ['cli', 'default', 'acceptEdits', 'plan', 'auto']],
     ['chatDefaultEffort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max']], ['terminalBell', ['off', 'visual', 'sound']]]) if (settings[name] !== undefined && !values.includes(settings[name])) invalid();
   for (const [name, min, max] of [['chatFontSize', 11, 20], ['chatComposerMax', 120, 600], ['uiZoom', 80, 150], ['diffComputeMs', 1000, 20000]])
     if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= min && settings[name] <= max)) invalid();

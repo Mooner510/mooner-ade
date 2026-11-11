@@ -72,6 +72,7 @@ try {
   mkdirSync(path.join(stage, 'apps', 'web'), { recursive: true });
   cpSync(path.join(import.meta.dirname, 'src'), path.join(stage, 'apps/desktop/src'), { recursive: true });
   cpSync(path.join(import.meta.dirname, 'assets'), path.join(stage, 'apps/desktop/assets'), { recursive: true });
+  cpSync(path.join(import.meta.dirname, 'builtin-plugins'), path.join(stage, 'apps/desktop/builtin-plugins'), { recursive: true });
   cpSync(path.join(root, 'apps/local-server/src'), path.join(stage, 'apps/local-server/src'), { recursive: true });
   cpSync(path.join(root, 'apps/web/dist'), path.join(stage, 'apps/web/dist'), { recursive: true });
   cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));

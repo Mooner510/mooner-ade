@@ -30,7 +30,7 @@ export function useUsage(provider: Usage['provider'], projectId: string, active:
   const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
-    return api<Usage>('usage/status', { provider, force, projectId }).then(setUsage, () => {}).finally(() => setLoading(false));
+    return api<Usage>('usage/status', { provider, force, projectId }).then(value => { setUsage(value); return value; }, () => undefined).finally(() => setLoading(false));
   }, [provider, projectId]);
   useEffect(() => {
     if (!active) return;
