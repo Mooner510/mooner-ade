@@ -797,7 +797,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {((maxOption && maxSelected(maxOption)) || (!maxOption && maxContext && contextOption?.currentValue === maxContext.on)) && <span className="tune-ico" style={{ color: '#f2566e' }}><SettingGlyph icon="local_fire_department" size={15} /></span>}</button>
     <div id={tunePanel} popover="auto" className="chat-tune-panel" role="dialog" aria-label="채팅 옵션" onToggle={event => placeAbove(event, 'right')}>{panelItems}</div>
   </span>;
-  return <section className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth] } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
+  return <section className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth] } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       <span className="pane-title" title={cwd}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
@@ -833,7 +833,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       <div className="chat-status-slot" inert={empty} aria-hidden={empty}><div><ChatStatusLine settings={ctx.settings} context={{ state }} /></div></div>
-      <div className="chat-composer" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
+      <div className="chat-composer" data-feedback-region="채팅 입력창" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); complete(item.name); }}>
             <span className="chat-command-head"><b>/{item.name}</b>{item.hint && <code className="chat-command-hint">{item.hint}</code>}</span>

@@ -17,10 +17,11 @@ export type Ask = { input(title: string, initial?: string): Promise<string | nul
 export type GitChange = { path: string; status: string; original?: string; added?: number; deleted?: number };
 export type GitState = { branch: string; changes: GitChange[]; additions: number; deletions: number };
 
-export function Modal({ children, onClose, className = '', labelledBy }: { children: ReactNode; onClose(): void; className?: string; labelledBy: string }) {
+// `region` names the dialog for the feedback element capture (data-feedback-region).
+export function Modal({ children, onClose, className = '', labelledBy, region = '대화상자' }: { children: ReactNode; onClose(): void; className?: string; labelledBy: string; region?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
-  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
+  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} data-feedback-region={region} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
 }
 // A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.
 export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };

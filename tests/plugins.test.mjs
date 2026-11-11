@@ -35,7 +35,7 @@ function fakeHost() {
   Object.assign(child, { sent: [], held: null, connected: true, exitCode: null, send(message, done) { child.sent.push(message); if (child.held) child.held.push(done); else done?.(); }, kill() { child.exit(null); }, exit(code) { child.exitCode = code ?? 1; child.connected = false; child.emit('exit', code); } });
   return child;
 }
-function setup(t, { answers = [], toServer } = {}) {
+function setup(t, { answers = [], toServer, onFeedback } = {}) {
   const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [], notices = [];
   fs.mkdirSync(dir);
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto: sealer() });
@@ -44,7 +44,7 @@ function setup(t, { answers = [], toServer } = {}) {
     dir, dataRoot: path.join(root, 'plugin-data'), store, nodeBinary: '/node', appVersion: '9.9.9', log: { log() {}, warn() {}, error() {} },
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; },
-    onTerminal: config => terminals.push(config), toServer, notify: notice => notices.push(notice)
+    onTerminal: config => terminals.push(config), onFeedback, toServer, notify: notice => notices.push(notice)
   });
   t.after(() => manager.close());
   return { root, dir, store, manager, hosts, asked, terminals, notices };
@@ -371,4 +371,53 @@ test('notifications carry the plugin name and are limited per minute; a badge sh
 
   manager.revoke('example');
   assert.equal(manager.snapshot().plugins[0].badge, null);
+});
+
+test('feedback is an explicit permission; only a declaring, signed-in plugin submits, and every request gets one answer', async t => {
+  assert.equal(validManifest(manifest()).feedback, undefined);
+  assert.equal(validManifest(manifest({ feedback: true })).feedback, true);
+  assert.throws(() => validManifest(manifest({ feedback: 1 })), /feedback/);
+  const statuses = [];
+  const env = setup(t, { answers: [0, 0], onFeedback: status => statuses.push(status) });
+  plugin(env.dir, 'example', manifest({ feedback: true }));
+  await env.manager.setEnabled(true);
+  await env.manager.approve('example');
+  assert.match(env.asked.at(-1).detail, /피드백/);
+  assert.equal(env.manager.snapshot().plugins[0].feedback, true);
+  const { child } = env.hosts.at(-1);
+  child.emit('message', { type: 'ready' });
+  assert.equal((await env.manager.submitFeedback({ meta: {}, images: [] })).error.code, 'FEEDBACK_UNAVAILABLE');
+  child.emit('message', { type: 'feedback', available: false, reason: '로그인하지 않았습니다' });
+  child.emit('message', { type: 'feedback', available: true, account: 'tester‮' });
+  assert.deepEqual(statuses.at(-1), { ok: true, account: 'tester', plugin: 'example' });
+  assert.ok(statuses.some(status => status.reason === '로그인하지 않았습니다'));
+
+  const submitted = env.manager.submitFeedback({ meta: { title: 't' }, images: [{ path: '/x/img-1.png', mime: 'image/png' }] });
+  const request = child.sent.find(message => message.type === 'feedback/submit');
+  assert.deepEqual(request.images, [{ path: '/x/img-1.png', mime: 'image/png' }]);
+  child.emit('message', { type: 'feedback/result', id: request.id, ok: true, issueUrl: 'https://github.com/o/r/issues/3', issueNumber: 3 });
+  assert.deepEqual(await submitted, { ok: true, issueUrl: 'https://github.com/o/r/issues/3', issueNumber: 3 });
+  // An odd URL is dropped; a host that dies answers what was in flight.
+  const second = env.manager.submitFeedback({ meta: {}, images: [] });
+  const request2 = child.sent.filter(message => message.type === 'feedback/submit').at(-1);
+  child.emit('message', { type: 'feedback/result', id: request2.id, ok: true, issueUrl: 'javascript:alert(1)' });
+  assert.deepEqual(await second, { ok: true });
+  const third = env.manager.submitFeedback({ meta: {}, images: [] });
+  child.exit(1);
+  assert.equal((await third).error.code, 'PLUGIN_STOPPED');
+  assert.equal(statuses.at(-1).ok, false);
+});
+
+test('a plugin that did not declare feedback is never asked and never counted', async t => {
+  const statuses = [];
+  const env = setup(t, { answers: [0, 0], onFeedback: status => statuses.push(status) });
+  plugin(env.dir, 'example', manifest());
+  await env.manager.setEnabled(true);
+  await env.manager.approve('example');
+  const { child } = env.hosts.at(-1);
+  child.emit('message', { type: 'ready' });
+  child.emit('message', { type: 'feedback', available: true });
+  assert.equal(env.manager.feedbackStatus().ok, false);
+  assert.equal((await env.manager.submitFeedback({ meta: {}, images: [] })).ok, false);
+  assert.ok(!child.sent.some(message => message.type === 'feedback/submit'));
 });

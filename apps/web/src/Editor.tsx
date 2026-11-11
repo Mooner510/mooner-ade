@@ -33,6 +33,8 @@ export type Settings = {
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean;
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
+  // Feedback inbox: feedbackAgentTool lets chat agents put drafts in it; feedbackAiContext adds screen layout and recent errors to an AI draft request.
+  feedbackAgentTool: boolean; feedbackAiContext: boolean;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -90,7 +92,8 @@ export const defaultSettings: Settings = {
   chatSendKey: 'enter', chatToolsOpen: false, chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'default', chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false,
-  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
+  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
+  feedbackAgentTool: true, feedbackAiContext: true
 };
 export const monoFont = "'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
