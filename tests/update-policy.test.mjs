@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { IDLE_POLLS, UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, waitUntilIdle, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
+import { UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
   assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
@@ -12,39 +12,6 @@ test('a version the user turned down is remembered until the app restarts', () =
   declined.add('0.2.9');
   assert.equal(declined.has('0.2.9'), true);
   assert.equal(declined.has('0.3.0'), false, 'a newer release is asked about again');
-});
-
-// Answers are consumed in order; the sleep resolves at once so no real time passes.
-const run = async (answers, options = {}) => {
-  const asked = [], controller = options.controller ?? new AbortController();
-  const result = await waitUntilIdle({
-    signal: controller.signal, sleep: async () => {}, ...options,
-    poll: async () => { asked.push(1); const next = answers.shift(); if (options.onPoll) options.onPoll(asked.length, controller); return { busy: next ?? false, reasons: [] }; }
-  });
-  return { result, polls: asked.length };
-};
-
-test('waiting ends only after several idle answers in a row', async () => {
-  assert.deepEqual(await run([false, false, false, false]), { result: 'idle', polls: IDLE_POLLS });
-  // A busy answer in between starts the count over: the work resumed (or never really stopped).
-  assert.deepEqual(await run([false, false, true, false, false, false, false]), { result: 'idle', polls: 7 });
-  assert.deepEqual(await run([true, true, true, false, false, false, false]), { result: 'idle', polls: 7 });
-});
-
-test('waiting can be cancelled or forced from outside, and never ends on its own while busy', async () => {
-  const cancelled = new AbortController(), forced = new AbortController();
-  assert.deepEqual(await run(Array(1000).fill(true), { controller: cancelled, onPoll: (count, controller) => { if (count === 5) controller.abort('cancelled'); } }), { result: 'cancelled', polls: 5 });
-  assert.deepEqual(await run(Array(1000).fill(true), { controller: forced, onPoll: (count, controller) => { if (count === 3) controller.abort('force'); } }), { result: 'force', polls: 3 });
-  const early = new AbortController(); early.abort('cancelled');
-  assert.deepEqual(await run([], { controller: early }), { result: 'cancelled', polls: 0 });
-  // Hundreds of busy answers (hours at 15 s) still do not end the wait. The sleep yields to the event loop, as a real timer does.
-  let finished = false, polls = 0;
-  const never = new AbortController();
-  const waiting = waitUntilIdle({ poll: async () => ({ busy: ++polls > 0, reasons: [] }), signal: never.signal, sleep: () => new Promise(resolve => setImmediate(resolve)) }).then(result => { finished = true; return result; });
-  while (polls < 300) await new Promise(resolve => setImmediate(resolve));
-  assert.equal(finished, false);
-  never.abort('cancelled');
-  assert.equal(await waiting, 'cancelled');
 });
 
 test('a report that cannot be understood counts as busy', () => {
@@ -87,7 +54,7 @@ test('only old update scratch folders are swept', () => {
   assert.deepEqual(staleUpdateDirs(entries, now), ['mooner-update-abc', '.MoonerADE-update-xyz']);
 });
 
-test('with terminals kept through the restart, only what does not survive holds the update back', () => {
+test('with terminals kept through the restart, only what does not survive counts as busy', () => {
   const turn = { project: 'a', terminal: 'b', kind: 'turn', agent: 'claude', keeps: true }, plugin = { project: '', terminal: 'p', kind: 'plugin' };
   assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn] }), { busy: false, reasons: [], kept: [turn], keepsTerminals: true });
   assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn, plugin] }), { busy: true, reasons: [plugin], kept: [turn], keepsTerminals: true });

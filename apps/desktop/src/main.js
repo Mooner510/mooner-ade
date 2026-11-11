@@ -8,7 +8,7 @@ import { helloPtyHost, ptyHostControl } from '../../local-server/src/pty-client.
 import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
 import { setupPlugins } from './plugins.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
-import { checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
+import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name.
 app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
@@ -307,7 +307,7 @@ function serverBusy() {
 const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
 const readBeta = () => { try { return JSON.parse(fs.readFileSync(channelFile, 'utf8')).beta === true; } catch { return false; } };
 const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, beta: readBeta(), getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
-ipcMain.handle('ade:app-info', () => ({ version: appVersion }));
+ipcMain.handle('ade:app-info', () => ({ version: appVersion, dev }));
 ipcMain.handle('ade:get-beta-updates', () => readBeta());
 ipcMain.handle('ade:set-beta-updates', (_event, beta) => { fs.writeFileSync(channelFile, JSON.stringify({ beta: beta === true })); return readBeta(); });
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
@@ -359,7 +359,7 @@ if (!app.requestSingleInstanceLock()) {
     void steps.reduce((chain, step) => chain.then(step).catch(error => console.warn(error.message)), Promise.resolve()).finally(() => app.quit());
   };
   // Terminals survive a quit in the pty-host; a chat turn is a child of the server and ends with it, so quitting in the middle of one asks first.
-  // An update restart already asked (and waits for chat turns to finish), so it skips this. A server that does not answer is not a reason to hold the quit.
+  // An immediate update restart already set keepTerminalsOnQuit, so it skips this. A server that does not answer is not a reason to hold the quit.
   async function confirmQuit() {
     if (keepTerminalsOnQuit) return true;
     const report = await serverBusy().catch(() => null), turns = report?.reasons.filter(reason => reason.kind === 'turn' && !reason.keeps && reason.agent) ?? [];
@@ -373,6 +373,12 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (asking) return;
     asking = true;
-    void confirmQuit().catch(() => true).then(go => { asking = false; if (go) quitNow(); });
+    void confirmQuit().catch(() => true).then(async go => {
+      asking = false;
+      if (!go) return;
+      try { if (await applyStagedUpdate()) keepTerminalsOnQuit = true; }
+      catch (error) { dialog.showErrorBox('업데이트', `설치를 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`); return; }
+      quitNow();
+    });
   });
 }
