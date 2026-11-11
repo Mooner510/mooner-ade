@@ -25,7 +25,7 @@ import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
 import { mcpServers, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
-import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, probeModels, probeAgentModels, readModelCatalog } from './chat.js';
+import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
@@ -37,15 +37,17 @@ const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
 // ADE_DEV=1 serves the web UI through an in-process Vite dev server (same origin, so cookie auth keeps working) instead of web/dist.
 const devWeb = process.env.ADE_DEV === '1', devTokenEnv = process.env.ADE_DEV_TOKEN ?? ''; // read here: both are removed from the environment below
-const vite = devWeb ? await (async () => {
+let vite = null;
+// HMR rides on the HTTP server so a leftover dev server from a crashed app cannot block the next run on a fixed port.
+async function startVite(httpServer) {
+  if (!devWeb) return;
   const webDir = path.resolve(import.meta.dirname, '../../web');
   const { createServer } = await import(pathToFileURL(createRequire(path.join(webDir, 'package.json')).resolve('vite')).href);
   // A crashing MSYS tool (Git Bash) drops a locked <tool>.exe.stackdump into its working directory; watching it fails with EBUSY.
-  const server = await createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 }, watch: { ignored: ['**/*.stackdump'] } } });
+  vite = await createServer({ root: webDir, appType: 'spa', server: { middlewareMode: true, hmr: { server: httpServer }, watch: { ignored: ['**/*.stackdump'] } } });
   // Vite leaves its file watcher's 'error' event unhandled, so one unwatchable file would take down the whole server.
-  server.watcher.on('error', error => console.warn(`Vite 파일 감시 오류 (${error.code || 'WATCH_FAILED'}): ${error.path || error.message}`));
-  return server;
-})() : null;
+  vite.watcher.on('error', error => console.warn(`Vite 파일 감시 오류 (${error.code || 'WATCH_FAILED'}): ${error.path || error.message}`));
+}
 // pnpm can install node-pty's prebuilt spawn-helper without the executable bit, which makes every spawn fail (posix_spawnp).
 if (process.platform !== 'win32') {
   try {
@@ -313,6 +315,21 @@ function configurePlugins(config) {
 }
 const agentModelProbes = new Map();
 let modelsProbe = null; // { at, root, promise } for chat/models; the default model can come from a project's own settings, so it is per project folder
+const commandsProbes = new Map(); // cwd + config -> { at, promise }
+// The only helper CLI start there is (see probeInit): its init event holds the folder's slash commands and the model it resolved, so the command menu and
+// the default model share one answer per folder and hour. Never rejects; a failed answer (null) is dropped so the next call asks again.
+const initProbes = new Map(); // cwd + config -> { at, promise }
+function claudeInit(cwd, env, refresh = false) {
+  const configDir = (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR ?? '', key = JSON.stringify([cwd, configDir]);
+  let cached = initProbes.get(key);
+  if (!cached || refresh || Date.now() - cached.at > 3_600_000) {
+    cached = { at: Date.now(), promise: probeInit({ env, cwd }) };
+    initProbes.set(key, cached);
+    void cached.promise.then(init => { if (!init && initProbes.get(key) === cached) initProbes.delete(key); });
+    if (initProbes.size > 32) initProbes.delete(initProbes.keys().next().value);
+  }
+  return cached.promise;
+}
 function pluginEnv() {
   if (!pluginTerminal.plugins.length) return {};
   const env = {}, dirs = pluginTerminal.plugins.flatMap(plugin => plugin.path);
@@ -719,6 +736,12 @@ async function route(action, input, project) {
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
+    case 'chat/retry': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.retry();
+      return {};
+    }
     case 'chat/send': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
@@ -760,7 +783,7 @@ async function route(action, input, project) {
       if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true }); }
       return {};
     }
-    // Concrete model behind each alias (see probeModels). Cached for an hour; one probe at a time.
+    // Concrete model behind each alias (see resolveModels). Cached for an hour.
     case 'chat/models': {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
@@ -778,11 +801,13 @@ async function route(action, input, project) {
         return result;
       }
       if (!modelsProbe || modelsProbe.root !== workspace.root || input.refresh === true || Date.now() - modelsProbe.at > 3_600_000) {
-        const entry = { at: Date.now(), root: workspace.root, promise: probeModels({ env: pluginEnv, cwd: workspace.root }).catch(() => ({})) };
+        const entry = { at: Date.now(), root: workspace.root, promise: resolveModels({ env: pluginEnv, cwd: workspace.root, init: () => claudeInit(workspace.root, pluginEnv, input.refresh === true) }).catch(() => ({})) };
         modelsProbe = entry;
         entry.promise.then(models => { if (!Object.keys(models).length && modelsProbe === entry) modelsProbe = null; }); // a failed probe is retried next time
       }
-      return { models: await modelsProbe.promise, catalog: await readModelCatalog() };
+      const [models, catalog] = await Promise.all([modelsProbe.promise, readModelCatalog()]);
+      const chat = project.chats.get(input.id); if (chat?.agent === 'claude') chat.loadCatalog(catalog, models['']);
+      return { models, catalog };
     }
     // Just the CLI's own model list (see readModelCatalog); cheap, so the "more models" window reads it fresh each time it opens.
     case 'chat/model-catalog': {
@@ -798,7 +823,24 @@ async function route(action, input, project) {
       await seedTerminalSession(project.directory, id, sessionId, agent);
       return { agent, restoreId: id, cwd: chat.cwd, ...(configDir && { configDir }) };
     }
-    case 'chat/commands': if (input.agent === 'codex') return [{ name: 'compact', description: '대화 컨텍스트를 압축합니다' }]; if (input.agent === 'cursor') return []; return listCommands(input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root, os.homedir());
+    case 'chat/commands': {
+      const agent = input.agent ?? 'claude';
+      if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+      const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+      const configDir = typeof input.configDir === 'string' && path.isAbsolute(input.configDir) ? input.configDir : '';
+      const env = { ...pluginEnv(), ...(configDir ? { [agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: configDir } : {}) };
+      const extraNames = Array.isArray(input.names) ? input.names.filter(name => typeof name === 'string') : [];
+      // Names come from a running chat's own init event; without them the shared init answer (claudeInit) stands in until a chat has started.
+      const key = JSON.stringify([agent, cwd, configDir, extraNames]);
+      let cached = commandsProbes.get(key);
+      if (!cached || input.refresh === true || Date.now() - cached.at > 600_000) {
+        cached = { at: Date.now(), promise: (async () => listCommands(cwd, os.homedir(), { env, names: extraNames.length || agent !== 'claude' ? extraNames : (await claudeInit(cwd, env, input.refresh === true))?.slashCommands, agent, probe: false }))() };
+        commandsProbes.set(key, cached);
+        cached.promise.catch(() => { if (commandsProbes.get(key) === cached) commandsProbes.delete(key); });
+        if (commandsProbes.size > 32) commandsProbes.delete(commandsProbes.keys().next().value);
+      }
+      return cached.promise;
+    }
     case 'terminal/follow-up': {
       const prompt = text(input.prompt, '후속 입력', 16000), requestId = text(input.requestId, '요청 ID', 100);
       if (!prompt.trim() || /[\x00-\x08\x0b-\x1f\x7f]/.test(prompt) || !Number.isSafeInteger(input.sequence)) throw fault('INVALID_INPUT', '후속 입력을 확인하세요.');
@@ -838,7 +880,7 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
-  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; img-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     if (closing) throw fault('SHUTTING_DOWN', '서버가 종료 중입니다.', 503);
     if (!trusted(request, false)) throw fault('UNTRUSTED_HOST', '잘못된 Host입니다.', 403);
@@ -1154,6 +1196,8 @@ async function busyReport() {
   const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
   // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
   const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
+  // A chat turn is a child of this server, so any restart (update or dev reload) ends it; an idle chat resumes from its session id and costs nothing.
+  for (const project of projects.values()) for (const [id, chat] of project.chats) if (['working', 'attention'].includes(chat.state().status)) reasons.push({ project: path.basename(project.root), terminal: id.slice(0, 6), kind: 'turn', agent: chat.agent });
   // Terminals in the pty-host keep running through an app restart; the updater then only waits for what does not.
   const keepsTerminals = Boolean(ptyHost && !ptyHostLost);
   const kept = [];
@@ -1183,6 +1227,7 @@ async function busyReport() {
   }
   return report();
 }
+await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);

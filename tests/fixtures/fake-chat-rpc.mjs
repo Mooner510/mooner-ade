@@ -1,5 +1,7 @@
 import readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const cursor = process.argv.includes('cursor'), send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const reply = (id, result) => send({ id, result });
@@ -56,6 +58,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (text === 'hold') return;
     if (cursor && text === 'empty') { reply(promptId, { stopReason: 'end_turn' }); return; }
     if (text === 'crash') { process.exit(2); return; }
+    if (text === 'retry-once') {
+      const flag = path.join(process.cwd(), '.ade-retry-once');
+      if (!fs.existsSync(flag)) { fs.writeFileSync(flag, '1'); process.exit(2); }
+      finish();
+      return;
+    }
     if (text === 'approval' || text === 'question') {
       requestId = `approval-${count}`;
       if (text === 'question') send({ id: requestId, method: cursor ? 'cursor/ask_question' : 'item/tool/requestUserInput', params: { threadId: sessionId, questions: cursor ? [{ id: 'q1', prompt: '선택', options: [{ id: 'a', label: 'A' }] }] : [{ id: 'q1', question: '선택', options: [{ label: 'A' }] }] } });

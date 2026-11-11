@@ -5,7 +5,7 @@ export function chatCapabilities(agent) {
   const cursor = agent === 'cursor';
   return { images: true, steer: !cursor, cancelSteer: agent === 'claude', branch: !cursor, rewind: !cursor, worktree: true, addDirs: !cursor,
     terminal: true, terminalToChat: agent === 'claude', cost: agent === 'claude', tokens: !cursor, context: agent === 'claude',
-    permissionModes: cursor ? ['default', 'plan', 'ask'] : ['default', 'acceptEdits', 'plan', 'bypassPermissions'],
+    permissionModes: cursor ? ['default', 'plan', 'ask'] : ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
     efforts: agent === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : [], catalog: [], configOptions: [],
     limitations: { branch: 'Cursor ACP는 과거 지점 분기를 제공하지 않습니다.', rewind: 'Cursor ACP는 과거 지점 복원을 제공하지 않습니다.',
       steer: 'Cursor ACP는 실행 중 추가 지시를 제공하지 않습니다. 응답 후 순서대로 전송합니다.', cancelSteer: 'CLI가 받은 지시는 개별 취소할 수 없습니다.',
@@ -33,7 +33,7 @@ export const codexPermissions = (mode, cwd, addDirs = []) => ({
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
 export function createChatProtocol(agent, { write, emit, fail }) {
-  let nextId = 0, sessionId, turnId, startedAt = 0, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false;
+  let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false;
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
@@ -82,7 +82,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     const extra = completed && item.type === 'agentMessage' ? { uuid: item.id, turnId: atTurn } : {};
     if (item.type === 'agentMessage' || item.type === 'plan') message(item.id, [{ type: 'text', text: item.text ?? '' }], extra);
     else if (item.type === 'reasoning') message(item.id, [{ type: 'thinking', text: [...(item.summary ?? []), ...(item.content ?? [])].join('\n') }]);
-    else if (item.type === 'contextCompaction') { if (completed && compacting) { compacting = false; result(); } }
+    else if (item.type === 'contextCompaction') { if (completed) { emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: null, postTokens: null }); if (compacting) { compacting = false; result(); } } }
     else if (item.type !== 'userMessage') {
       const name = item.type === 'commandExecution' ? 'Bash' : item.type === 'fileChange' ? 'Patch' : item.tool ?? item.type;
       const input = item.type === 'commandExecution' ? { command: item.command, cwd: item.cwd } : item.type === 'fileChange' ? { changes: item.changes }
@@ -100,7 +100,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       else if (method === 'item/agentMessage/delta' || method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta' || method === 'item/plan/delta') {
         const key = params.itemId, phase = method.includes('reasoning') ? 'thinking' : 'text';
         if (!chunks.has(key)) { chunks.set(key, chunks.size); emit({ kind: 'delta', phase: 'start', messageId: key }); }
-        emit({ kind: 'delta', phase, index: chunks.get(key), text: params.delta ?? '' });
+        emit({ kind: 'delta', phase, index: chunks.get(key), messageId: key, text: params.delta ?? '' });
       } else if (method === 'thread/tokenUsage/updated') {
         const value = params.tokenUsage;
         emit({ kind: 'usage', tokens: usage(value.total), contextTokens: value.last.totalTokens, contextWindow: value.modelContextWindow });
@@ -112,17 +112,31 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     if (method !== 'session/update' || params.sessionId !== sessionId) return;
     const update = params.update ?? {}, type = update.sessionUpdate;
     if (type === 'agent_message_chunk' || type === 'agent_thought_chunk') {
-      const phase = type === 'agent_thought_chunk' ? 'thinking' : 'text', key = `${turnId}-${phase}`;
+      const phase = type === 'agent_thought_chunk' ? 'thinking' : 'text', messageId = `${turnId}-${phase}`;
       const text = update.content?.text ?? '';
-      const old = chunks.get(key) ?? ''; chunks.set(key, old + text);
-      emit({ kind: 'delta', phase, index: phase === 'thinking' ? 0 : 1, text });
+      const old = chunks.get(messageId) ?? ''; chunks.set(messageId, old + text);
+      emit({ kind: 'delta', phase, index: phase === 'thinking' ? 0 : 1, messageId, text });
     } else if (type === 'tool_call' || type === 'tool_call_update') {
+      // Text said before this tool stays its own message, so it is not glued onto the final answer.
+      const spokenId = `${turnId}-text`, spoken = chunks.get(spokenId);
+      if (typeof spoken === 'string' && spoken.trim()) {
+        message(`${spokenId}:${textSerial++}`, [{ type: 'text', text: spoken }]);
+        chunks.set(spokenId, '');
+        emit({ kind: 'delta', phase: 'reset', messageId: spokenId });
+      }
       const old = chunks.get(update.toolCallId) ?? {}, item = { ...old, ...update }; chunks.set(update.toolCallId, item);
       const name = item.kind === 'execute' ? 'Bash' : item.kind === 'edit' ? 'Patch' : item.title ?? item.kind ?? 'Tool';
       message(update.toolCallId, [{ type: 'tool_use', id: update.toolCallId, name, input: { ...(item.rawInput ?? {}), description: item.title, content: item.content, locations: item.locations } }]);
       if (item.status === 'completed' || item.status === 'failed') emit({ kind: 'tool_result', toolUseId: update.toolCallId, isError: item.status === 'failed',
         content: (item.content ?? []).map(part => part.type === 'content' ? part.content?.text ?? `[${part.content?.type}]` : part.type === 'diff' ? `${part.path}\n${part.newText}` : JSON.stringify(part)).join('\n') });
-    } else if (type === 'available_commands_update') emit({ kind: 'session', sessionId, slashCommands: (update.availableCommands ?? []).map(item => item.name) });
+    } else if (type === 'available_commands_update') {
+      const commands = (update.availableCommands ?? []).flatMap(item => {
+        if (!item || typeof item.name !== 'string') return [];
+        const hint = typeof item.input?.hint === 'string' ? item.input.hint : '';
+        return [{ name: item.name, description: typeof item.description === 'string' ? item.description : '', ...(hint ? { hint } : {}) }];
+      });
+      emit({ kind: 'session', sessionId, slashCommands: commands.map(item => item.name), commands });
+    }
     else if (type === 'config_option_update') cursorInfo({ configOptions: update.configOptions });
     else if (type === 'current_model_update') emit({ kind: 'session', sessionId, model: update.currentModelId });
     else if (type === 'current_mode_update') emit({ kind: 'settings', permissionMode: update.currentModeId === 'agent' ? 'default' : update.currentModeId });
@@ -166,18 +180,20 @@ export function createChatProtocol(agent, { write, emit, fail }) {
           efforts: (item.supportedReasoningEfforts ?? []).map(e => e.reasoningEffort), images: !item.inputModalities || item.inputModalities.includes('image') }));
         const selected = capabilities.catalog.find(item => item.id === meta.model) ?? capabilities.catalog.find(item => item.id === models.data?.find(m => m.isDefault)?.model);
         capabilities.efforts = selected?.efforts ?? []; capabilities.images = selected?.images !== false;
+        if (config.effort && capabilities.efforts.length && !capabilities.efforts.includes(config.effort)) { config.effort = undefined; emit({ kind: 'settings', effort: null }); }
         publishCapabilities();
         if (meta.discoverOnly) { emit({ kind: 'session', model: selected?.id }); return; }
         const availableSkills = await request('skills/list', { cwds: [cwd], forceReload: false }).catch(() => ({ data: [] }));
         for (const group of availableSkills.data ?? []) for (const skill of group.skills ?? []) if (skill.enabled !== false) skills.set(skill.name, skill);
         const permissions = codexPermissions(meta.permissionMode, cwd, meta.addDirs);
         const params = { cwd, model: meta.model ?? null, approvalPolicy: permissions.approvalPolicy, sandbox: meta.permissionMode === 'plan' ? 'read-only' : meta.permissionMode === 'bypassPermissions' ? 'danger-full-access' : 'workspace-write',
-          config: { ...(meta.effort && { model_reasoning_effort: meta.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs],
+          config: { ...(config.effort && { model_reasoning_effort: config.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs],
             ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args }])) } };
         const response = await request(meta.resumeAt ? 'thread/fork' : meta.sessionId ? 'thread/resume' : 'thread/start', {
           ...params, ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
         sessionId = response.thread.id;
-        emit({ kind: 'session', sessionId, model: response.model ?? meta.model, slashCommands: ['compact', ...skills.keys()] });
+        const commands = [{ name: 'compact', description: '대화 컨텍스트를 압축합니다', hint: '[지침]' }, ...[...skills.values()].flatMap(skill => typeof skill?.name === 'string' ? [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description : '' }] : [])];
+        emit({ kind: 'session', sessionId, model: response.model ?? meta.model, slashCommands: commands.map(item => item.name), commands });
       } else {
         const init = await request('initialize', { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.1' } });
         capabilities.images = init.agentCapabilities?.promptCapabilities?.image === true;
@@ -193,7 +209,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
           const option = capabilities.configOptions.find(item => item.id === configId);
           if (option?.options.some(item => item.value === value)) await this.configure({ configOption: { configId, value } });
         }
-        if (meta.effort && capabilities.effortConfigId) await this.configure({ configOption: { configId: capabilities.effortConfigId, value: meta.effort } });
+        const effortOption = cursorEffortOption(capabilities.configOptions);
+        if (meta.effort && effortOption?.options.some(item => item.value === meta.effort)) await this.configure({ configOption: { configId: effortOption.id, value: meta.effort } });
         emit({ kind: 'session', sessionId }); publishCapabilities();
       }
     },
@@ -224,7 +241,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         else { startedAt = Date.now(); const response = await request('turn/start', { threadId: sessionId, input, ...codexPermissions(config.permissionMode, config.cwd, config.addDirs), ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }) }); turnId = response.turn.id; }
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
-        startedAt = Date.now(); turnId = `cursor-${startedAt}`; chunks.clear(); emit({ kind: 'delta', phase: 'start' });
+        startedAt = Date.now(); turnId = `cursor-${startedAt}`; textSerial = 0; chunks.clear(); emit({ kind: 'delta', phase: 'start' });
         void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(response => {
           if (disposed) return;
           for (const phase of ['thinking', 'text']) { const content = chunks.get(`${turnId}-${phase}`); if (typeof content === 'string' && content) message(`${turnId}-${phase}`, [{ type: phase, text: content }]); }
