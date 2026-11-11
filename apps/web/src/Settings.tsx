@@ -400,9 +400,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Dropdown label="메시지 전송 키" value={settings.chatSendKey} options={[{ value: 'enter', label: 'Enter' }, { value: 'mod-enter', label: 'Cmd/Ctrl+Enter' }]} onChange={value => set('chatSendKey', value as Settings['chatSendKey'])} /></Row>
           <Row title="입력창 최대 높이" hint="긴 글을 쓸 때 입력창이 늘어나는 한계입니다. (120–600px)">{number('chatComposerMax', 120, 600, 10)}</Row>
           <h4 className="setting-group">새 채팅 기본값</h4>
-          <p className="setting-note">새로 만드는 Claude Code 채팅에만 적용됩니다. 이미 있는 채팅과 Codex·Cursor 채팅은 그대로이고, 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
+          <p className="setting-note">새로 만드는 채팅에 적용됩니다. 그 에이전트가 지원하는 권한 모드와 Effort만 반영되고, 이미 있는 채팅은 그대로입니다. 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
           <Row title="권한 모드" hint="모든 권한 건너뛰기(bypassPermissions)는 위험해서 기본값으로 고를 수 없습니다. 채팅마다 직접 고르세요.">
-            <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
+            <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }, { value: 'auto', label: '자동' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
           <Row title="Effort" hint="자동은 에이전트의 기본값을 따릅니다. 높을수록 오래 생각하고 비용이 늘어납니다.">
             <Dropdown label="새 채팅 Effort" value={settings.chatDefaultEffort} options={[{ value: 'auto', label: '자동' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'xhigh', label: 'xhigh' }, { value: 'max', label: 'max' }]} onChange={value => set('chatDefaultEffort', value as Settings['chatDefaultEffort'])} /></Row>
           <h4 className="setting-group">대화 표시</h4>

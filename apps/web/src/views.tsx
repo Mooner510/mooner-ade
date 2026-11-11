@@ -37,6 +37,7 @@ export function Dropdown({ value, options, onChange, label, className = '', plac
     menu.style.maxHeight = '';
     const below = innerHeight - anchor.bottom - gap - margin, above = anchor.top - gap - margin;
     const up = menu.offsetHeight > below && above > below;
+    menu.dataset.placement = up ? 'above' : 'below';
     menu.style.maxHeight = `${Math.min(340, up ? above : below)}px`;
     menu.style.top = up ? `${anchor.top - gap - menu.offsetHeight}px` : `${anchor.bottom + gap}px`;
     const overflow = menu.getBoundingClientRect().right - (innerWidth - margin);
