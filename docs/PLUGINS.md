@@ -1,7 +1,20 @@
 # 플러그인
 
-MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을 넣어 더하는 방법입니다. MoonerADE 자체에는 플러그인이
-들어 있지 않습니다.
+MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을 넣어 더하는 방법입니다. 설치하는 플러그인은 기본으로 꺼져 있고
+하나씩 승인해야 합니다. MoonerADE에는 [내장 플러그인](#내장-플러그인)이 몇 개 함께 들어 있습니다.
+
+## 내장 플러그인
+
+앱에 함께 들어 있는 플러그인(`apps/desktop/builtin-plugins/<id>/`)입니다. 같은 플러그인 API로 만들어졌고 설정 → 플러그인에 **내장**
+표시로 나옵니다. 설치한 플러그인과 다른 점은 이렇습니다.
+
+- **승인이 없습니다.** 앱의 일부이므로 승인 확인 창도, 파일 해시 고정도 없습니다. 위의 **플러그인 사용** 스위치와도 상관없이 실행됩니다.
+- **각자 켜고 끕니다.** 기본은 켜짐입니다. 상세 화면의 **사용** 스위치로 끄면 플러그인 프로세스를 멈추고 에이전트에 주던 도구도 거둡니다.
+  확인 창은 없습니다(끄는 것은 더하는 것이 아니고, 켜는 것도 앱에 들어 있는 기능일 뿐입니다). 선택은 `plugins.bin`에 봉인됩니다.
+- **id는 내장 플러그인이 먼저 갖습니다.** 플러그인 폴더에 같은 id의 플러그인을 넣거나 같은 id의 zip을 설치할 수 없습니다.
+- 에이전트 도구를 **확인 없이 실행**하도록 요청할 수 있습니다(`terminal` 메시지의 `autoApprove`). 설치한 플러그인이 보내면 무시됩니다.
+
+지금 들어 있는 것: **에이전트 버스**(`agent-bus`) — 채팅의 Claude·Codex·Cursor 에이전트가 서로 메시지를 주고받습니다. [AGENT_BUS.md](AGENT_BUS.md) 참고.
 
 ## 쓰는 법
 
@@ -16,8 +29,25 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
    - 플러그인 폴더에 넣은 zip은 설치한 뒤 지워집니다. **취소**하면 zip은 그대로 두고, 앱을 다시 켤 때까지 다시 묻지 않습니다.
 3. zip 안에는 맨 위에 `plugin.json`이 있거나, 폴더 하나가 있고 그 안에 `plugin.json`이 있어야 합니다.
 
-압축을 푼 플러그인 폴더(안에 `plugin.json`이 있는 폴더)를 직접 넣어도 됩니다. 이때는 플러그인 카드의
+압축을 푼 플러그인 폴더(안에 `plugin.json`이 있는 폴더)를 직접 넣어도 됩니다. 이때는 목록에서 플러그인을 열고
 **승인하고 실행**을 누릅니다(플러그인 사용이 꺼져 있으면 **켜고 승인**으로 함께 켭니다).
+
+### 설정 화면
+
+설정 → 플러그인은 설치된 플러그인 목록입니다. 한 줄에 이름, 상태, 제공하는 것(명령, MCP 도구 수, 작업공간)이 나오고,
+누르면 그 플러그인의 상세 화면이 열립니다(왼쪽 위 **← 플러그인**으로 돌아갑니다).
+
+- **제공하는 기능**: 터미널 명령(`terminal.bin` 폴더의 실행 파일 이름), 플러그인이 넣는 환경 변수 이름(값은 보이지 않음),
+  에이전트 도구(MCP), 작업공간 권한.
+- **에이전트 도구 (MCP)**: 플러그인이 MCP 서버를 주기 시작하면 MoonerADE가 그 서버를 에이전트와 같은 방식으로 한 번 실행해
+  `tools/list`로 도구 목록(이름, 설명, 인자, 읽기 전용/변경 작업 표시)을 받아 보여 줍니다. 서버 전체와 도구 하나하나를
+  끄고 켤 수 있습니다. 바꾼 설정은 새로 시작하는 에이전트부터 적용됩니다.
+  - 서버를 끄면 터미널과 채팅의 에이전트에 그 서버를 주지 않습니다.
+  - 도구를 끄면 Claude Code에는 `--settings`의 `permissions.deny`(`mcp__<서버>__<도구>`)로, Codex에는
+    `mcp_servers.<서버>.disabled_tools`로 전합니다. Cursor(ACP)는 도구 하나만 뺄 수 없어, 끈 도구가 있는 서버는 주지 않습니다.
+  - 이 선택은 `plugins.bin`에 함께 봉인되고, 플러그인을 다시 승인하거나 업데이트해도 남습니다.
+- **설정**: 플러그인이 보내는 `view`(상태, 정보, 입력칸, 버튼).
+- **정보**: id, 버전, 폴더, SHA-256. **사용 중지**는 맨 아래에 있습니다.
 
 ## 보안 모델
 
@@ -56,7 +86,7 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   "description": "…",
   "main": "host.js",
   "terminal": { "bin": "bin", "envPrefix": "EXAMPLE_" },
-  "mcp": { "name": "example_tools", "script": "bin/example.js", "args": ["mcp"] },
+  "mcp": { "name": "example_tools", "script": "bin/example.js", "args": ["mcp"], "chatOnly": false },
   "workspace": true
 }
 ```
@@ -66,6 +96,8 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
 - `name`과 `description`은 승인 확인 창에 그대로 나오므로 제어 문자와 글자 방향을 바꾸는 문자를 쓸 수 없습니다.
   `name`에 있으면 받지 않고, `description`에서는 지웁니다(줄바꿈은 두 줄까지 남깁니다).
 - `terminal`, `mcp`, `workspace`는 선택입니다.
+- `mcp.chatOnly: true`는 MCP 서버를 **채팅의 에이전트에게만** 주고 터미널에는 주지 않는다는 뜻입니다. 이 서버는 자기가 섬기는 채팅을
+  환경 변수 `ADE_CHAT_ID`, `ADE_PROJECT_ID`, `ADE_CHAT_AGENT`(claude, codex, cursor)로 받습니다. 이 변수는 채팅에서만 생깁니다.
 - `workspace: true`는 플러그인이 이 PC의 프로젝트와 터미널을 열고 조작할 수 있는 권한입니다. 승인 확인 창에 표시됩니다.
   선언하지 않은 플러그인의 `workspace` 메시지는 무시됩니다.
 
@@ -89,12 +121,12 @@ MoonerADE → 플러그인
 | 메시지 | 뜻 |
 |---|---|
 | `{type:'ready'}` | 준비 끝. 이때부터 터미널 추가가 적용됩니다 |
-| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{label,value,mono,copy}], fields:[{key,label,value,placeholder,hint}], actions:[{id,label,primary}], qr:{label,value}}`. `qr`의 `value`(1000자 이하)는 MoonerADE가 QR 코드로 그립니다 |
+| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{label,value,mono,copy}], fields:[{key,label,type,value,placeholder,hint,options}], actions:[{id,label,primary}], qr:{label,value}}`. `qr`의 `value`(1000자 이하)는 MoonerADE가 QR 코드로 그립니다. `type`은 `text`(기본), `select`(`options:[{value,label}]` 필요), `switch`, `number`이고 값은 늘 문자열입니다(스위치는 `'true'`/`'false'`). 입력칸은 24개까지입니다 |
 | `{type:'notify', title, body}` | OS 알림. 제목은 `플러그인: <이름>`이고, `title`(100자)과 `body`(300자)가 본문입니다. 플러그인마다 1분에 10개까지 보여 주고 나머지는 버립니다. 누르면 설정 → 플러그인이 열립니다 |
 | `{type:'badge', badge}` / `{type:'badge', badge:null}` | 상태바 표시 `{text, tone}`(24자, 한 줄) / 지움. 실행 중인 동안 항상 보이고(숨길 수 없음), 누르면 설정 → 플러그인이 열립니다. 플러그인이 멈추면 사라집니다 |
 | `{type:'storage', value}` | 봉인해 저장할 값(JSON 64 KiB 이하). 다음 `init`의 `storage`로 돌아옵니다 |
 | `{type:'confirm', id, message, detail, confirmLabel}` | 네이티브 확인 창 |
-| `{type:'terminal', env, mcpArgs}` / `{type:'terminal', enabled:false}` | 새 터미널에 더할 환경 변수와 MCP 인자 / 더하지 않음 |
+| `{type:'terminal', env, mcpArgs, autoApprove}` / `{type:'terminal', enabled:false}` | 새 터미널에 더할 환경 변수와 MCP 인자 / 더하지 않음. `autoApprove`는 내장 플러그인만 쓸 수 있습니다 |
 | `{type:'action-result', id, ok, message?, error?}` | `action`에 대한 답 |
 | `{type:'log', level, message}` | MoonerADE 로그에 남깁니다 |
 | `{type:'workspace', ...}` | 작업공간 세션 요청(아래 [작업공간](#작업공간-workspace)) |

@@ -6,11 +6,13 @@ import { BrowserWindow, dialog, ipcMain, Notification, safeStorage, shell } from
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createPluginManager, createPluginStore } from './plugin-core.js';
+import { createPluginManager, createPluginStore, probeMcpTools } from './plugin-core.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
 export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted }) {
+  // The plugins that ship with the app (apps/desktop/builtin-plugins): no approval, only their own on/off.
+  const builtinDir = process.env.ADE_BUILTIN_PLUGINS_DIR || path.join(import.meta.dirname, '..', 'builtin-plugins');
   const dir = process.env.ADE_PLUGINS_DIR || path.join(userData, 'plugins'), stagingRoot = path.join(userData, 'plugin-staging');
   fs.mkdirSync(dir, { recursive: true });
   // Left over from an install the app did not finish.
@@ -61,20 +63,26 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     return child;
   }
 
+  // The plugin's MCP server is listed with what an agent in an ADE terminal would run it with: the terminal's Node and the
+  // plugin's terminal variables on top of the user's environment.
+  const probeMcp = ({ command, args, cwd, env }) => probeMcpTools({ command, args, cwd, env: { ...hostEnv(), ...env, ADE_PLUGIN_NODE: terminalNode }, clientVersion: version });
   const manager = createPluginManager({
-    dir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
-    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify
+    dir, builtinDir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
+    onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify, probeMcp
   });
 
   const installPickedZip = file => manager.installZip(String(file), { picked: true });
   const handlers = {
     state: () => ({ ...manager.snapshot(), error }),
     setEnabled: value => manager.setEnabled(value === true),
+    setBuiltin: (id, on) => manager.setBuiltin(String(id), on === true),
     rescan: () => manager.rescan(),
     approve: folder => manager.approve(String(folder)),
     revoke: (id, options) => manager.revoke(String(id), { forget: options?.forget === true }),
     restart: id => manager.restart(String(id)),
     action: (id, action, values) => manager.action(String(id), String(action), values),
+    setMcp: (id, change) => manager.setMcp(String(id), { ...(typeof change?.tool === 'string' && { tool: change.tool }), enabled: change?.enabled === true }),
+    refreshTools: id => manager.refreshTools(String(id)),
     openFolder: async () => { const failure = await shell.openPath(dir); if (failure) throw new Error(failure); return manager.snapshot(); },
     installZip: installPickedZip,
     pickZip: async () => {

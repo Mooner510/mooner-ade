@@ -4,7 +4,7 @@
 // Each approved plugin runs as its own Node process and talks to the main process over IPC only.
 // A plugin .zip is installed only after one native dialog that shows what approving it shows (installZip).
 // Kept free of Electron so it can be tested: `crypto` is safeStorage or a stand-in, `spawnHost`, `ask` and `extractZip` are injected.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -15,6 +15,8 @@ const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 const FIELD_KEY = /^[a-z][a-zA-Z0-9_]{0,31}$/;
 const ACTION_ID = /^[a-z][a-z0-9-]{0,31}$/;
+// An MCP tool name as the agents see it (Claude: mcp__<server>__<tool>, Codex: disabled_tools). Also safe inside TOML literal strings.
+export const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 // A prefix may not reach into what the app, Node or the agents read themselves, nor into variables that run code or move
 // trust in every shell and tool started there (shell startup, proxies, TLS trust, language runtimes).
 const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROPIC|GIT_|SSH_|PATH|HOME|USER|SHELL|TERM|LD_|DYLD_|BASH_|PROMPT_|HTTP_|HTTPS_|ALL_|FTP_|SSL_|CURL_|REQUESTS_|JAVA_|JDK_|DOTNET_|COR_|CORECLR_|PYTHON|PIP_|SUDO_|XDG_|OTEL_|MCP_|DISABLE_|MAX_|API_)/;
@@ -66,6 +68,11 @@ export function validManifest(value) {
     const args = mcp.args ?? [];
     if (!Array.isArray(args) || args.length > 8 || !args.every(arg => str(arg, 200) && !arg.includes("'"))) throw fail('mcp.args가 올바르지 않습니다.');
     manifest.mcp = { name: mcp.name, script: relative(mcp.script, 'mcp.script'), args: [...args] };
+    // Only for chats (never terminals), and told which chat it serves. A plugin that talks between chats needs this.
+    if (mcp.chatOnly !== undefined) {
+      if (typeof mcp.chatOnly !== 'boolean') throw fail('mcp.chatOnly가 올바르지 않습니다.');
+      if (mcp.chatOnly) manifest.mcp.chatOnly = true;
+    }
   }
   if (value.workspace !== undefined) {
     if (typeof value.workspace !== 'boolean') throw fail('workspace 항목이 올바르지 않습니다.');
@@ -116,12 +123,14 @@ export function checkPluginFiles(folder, manifest) {
 
 // Every folder directly in `dir` that has a plugin.json. A folder that fails is listed with its error instead of dropped,
 // so the settings page can say why. A second folder with an id already taken is refused.
-export function scanPlugins(dir) {
+// `builtin` marks the plugins that ship inside the app (their folder key is `builtin:<name>`); `seen` carries ids already taken,
+// so a plugin in the user's folder can never shadow a built-in one.
+export function scanPlugins(dir, { builtin = false, seen = new Set() } = {}) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  const seen = new Set(), list = [];
+  const list = [];
   for (const entry of entries.filter(item => item.isDirectory()).sort((a, b) => a.name < b.name ? -1 : 1)) {
-    const folder = path.join(dir, entry.name), item = { folder: entry.name, dir: folder, manifest: null, hash: null, error: null };
+    const folder = path.join(dir, entry.name), item = { folder: builtin ? `builtin:${entry.name}` : entry.name, dir: folder, manifest: null, hash: null, error: null, ...(builtin && { builtin: true }) };
     if (!fs.lstatSync(path.join(folder, 'plugin.json'), { throwIfNoEntry: false })) continue;
     try {
       item.manifest = readManifest(folder);
@@ -129,10 +138,27 @@ export function scanPlugins(dir) {
       seen.add(item.manifest.id);
       checkPluginFiles(folder, item.manifest);
       item.hash = treeHash(folder);
+      item.commands = binCommands(folder, item.manifest);
     } catch (error) { item.error = error.message; }
     list.push(item);
   }
   return list;
+}
+
+// The commands a plugin's terminal.bin folder puts on PATH, by name: `x`, `x.cmd` and `x.ps1` are one command. Script files
+// (.js and the like) are what those launchers run, not commands of their own. Shown on the settings page only.
+const LAUNCHER = /^[^.]+(\.(cmd|bat|ps1|exe|com|sh))?$/i;
+export function binCommands(folder, manifest) {
+  if (!manifest.terminal?.bin) return [];
+  let entries;
+  try { entries = fs.readdirSync(path.join(folder, ...manifest.terminal.bin.split('/')), { withFileTypes: true }); } catch { return []; }
+  const names = new Set();
+  for (const entry of entries) {
+    if (!entry.isFile() || !LAUNCHER.test(entry.name)) continue;
+    const name = plainText(entry.name.replace(/\.[^.]+$/, '')).slice(0, 60);
+    if (name) names.add(name);
+  }
+  return [...names].sort().slice(0, 20);
 }
 
 // ---- plugin zips ----------------------------------------------------------------------------------------------------
@@ -200,7 +226,9 @@ export function grantsFor(manifest) {
 const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}\n${place}\nSHA-256: ${hash}`;
 
 // ---- sealed settings ------------------------------------------------------------------------------------------------
-export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {} });
+// `mcp[id]` is what the user turned off of a plugin's MCP server: all of it (`off`) or single tools (`disabled`).
+// `builtin[id]` is the on/off choice for a plugin that ships with the app (on until the user turns it off).
+export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {} });
 export function validPluginState(value) {
   const state = emptyPluginState();
   if (!value || typeof value !== 'object' || value.version !== 1) return state;
@@ -209,6 +237,13 @@ export function validPluginState(value) {
     if (ID.test(id) && entry && /^[a-f0-9]{64}$/.test(entry.hash) && str(entry.folder, 200) && Number.isFinite(entry.approvedAt)) state.approved[id] = { hash: entry.hash, folder: entry.folder, version: String(entry.version ?? '').slice(0, 32), approvedAt: entry.approvedAt };
   }
   for (const [id, data] of Object.entries(value.data ?? {})) if (ID.test(id) && typeof data === 'string' && data.length <= MAX_STORAGE) state.data[id] = data;
+  for (const [id, entry] of Object.entries(value.builtin && typeof value.builtin === 'object' && !Array.isArray(value.builtin) ? value.builtin : {})) if (ID.test(id) && entry && typeof entry.enabled === 'boolean') state.builtin[id] = { enabled: entry.enabled };
+  const mcp = value.mcp && typeof value.mcp === 'object' && !Array.isArray(value.mcp) ? value.mcp : {};
+  for (const [id, entry] of Object.entries(mcp)) {
+    if (!ID.test(id) || !entry || typeof entry !== 'object') continue;
+    const disabled = [...new Set(Array.isArray(entry.disabled) ? entry.disabled.filter(name => typeof name === 'string' && TOOL_NAME.test(name)) : [])].slice(0, 200);
+    if (entry.off === true || disabled.length) state.mcp[id] = { off: entry.off === true, disabled };
+  }
   return state;
 }
 // Sealed with safeStorage: without working encryption nothing is stored and plugins stay off.
@@ -241,6 +276,7 @@ export function createPluginStore({ file, crypto }) {
 
 // ---- what a plugin may show and add ------------------------------------------------------------------------------
 const TONES = ['ok', 'warn', 'error', 'info'];
+const FIELD_TYPES = ['text', 'select', 'switch', 'number'];
 // The settings page draws this as plain text; nothing a plugin sends becomes markup.
 export function validView(view) {
   if (!view || typeof view !== 'object') return null;
@@ -248,8 +284,13 @@ export function validView(view) {
   const list = (value, max) => Array.isArray(value) ? value.slice(0, max) : [];
   return {
     status: view.status && TONES.includes(view.status.tone) ? { tone: view.status.tone, text: text(view.status.text, 300) } : null,
-    info: list(view.info, 20).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true })),
-    fields: list(view.fields, 10).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => ({ key: item.key, label: item.label, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300) })),
+    info: list(view.info, 30).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true })),
+    // `type` is how the page draws the input: text (default), select (needs `options`), switch ('true' / 'false') or number. The value stays a string.
+    fields: list(view.fields, 24).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => {
+      const type = FIELD_TYPES.includes(item.type) ? item.type : 'text';
+      const options = type === 'select' ? list(item.options, 12).filter(option => option && str(option.value, 60) && str(option.label, 60)).map(option => ({ value: option.value, label: option.label })) : [];
+      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(options.length && type === 'select' && { options }) };
+    }),
     actions: list(view.actions, 8).filter(item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40)).map(item => ({ id: item.id, label: item.label, primary: item.primary === true })),
     // Only the text to encode; the settings page draws the code itself.
     qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null
@@ -262,7 +303,8 @@ export function validBadge(badge) {
   return text ? { text, tone: badge.tone } : null;
 }
 // Terminal additions are limited to what the manifest declared: its own env prefix, its own bin folder, its own MCP script.
-export function pluginTerminal(manifest, dir, report, nodeBinary) {
+// `builtin` plugins (shipped with the app, so trusted like the app) may also ask for their MCP tools to run without a permission prompt.
+export function pluginTerminal(manifest, dir, report, nodeBinary, { builtin = false } = {}) {
   const env = {};
   if (manifest.terminal?.envPrefix && report?.env && typeof report.env === 'object') {
     for (const [name, value] of Object.entries(report.env).slice(0, 32)) if (ENV_NAME.test(name) && name.startsWith(manifest.terminal.envPrefix) && typeof value === 'string' && value.length <= 4096 && !value.includes('\0')) env[name] = value;
@@ -271,24 +313,106 @@ export function pluginTerminal(manifest, dir, report, nodeBinary) {
   return {
     id: manifest.id, env,
     path: manifest.terminal?.bin ? [path.join(dir, ...manifest.terminal.bin.split('/'))] : [],
-    mcp: manifest.mcp ? { name: manifest.mcp.name, command: nodeBinary, args: [path.join(dir, ...manifest.mcp.script.split('/')), ...manifest.mcp.args, ...extra] } : null
+    mcp: manifest.mcp ? { name: manifest.mcp.name, command: nodeBinary, args: [path.join(dir, ...manifest.mcp.script.split('/')), ...manifest.mcp.args, ...extra],
+      ...(manifest.mcp.chatOnly && { chatOnly: true }), ...(builtin && report?.autoApprove === true && { autoApprove: true }) } : null
   };
+}
+
+// What an MCP server's tools/list said, as the settings page shows it: plain text, limited in size.
+export function validTools(tools) {
+  const seen = new Set(), list = [];
+  const text = (value, max) => typeof value === 'string' ? plainText(value).slice(0, max) : '';
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!tool || typeof tool !== 'object' || !TOOL_NAME.test(tool.name ?? '') || seen.has(tool.name)) continue;
+    seen.add(tool.name);
+    const annotations = tool.annotations && typeof tool.annotations === 'object' ? tool.annotations : {};
+    const schema = tool.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : {};
+    const properties = schema.properties && typeof schema.properties === 'object' ? Object.keys(schema.properties) : [];
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    list.push({
+      name: tool.name, title: text(tool.title ?? annotations.title, 80), description: text(tool.description, 1000),
+      readOnly: annotations.readOnlyHint === true, destructive: annotations.readOnlyHint !== true && annotations.destructiveHint === true,
+      params: properties.filter(name => /^[\w.-]{1,64}$/.test(name)).slice(0, 20).map(name => ({ name, required: required.includes(name) }))
+    });
+    if (list.length >= 200) break;
+  }
+  return list;
+}
+// Asks a plugin's MCP server (stdio, one JSON-RPC message per line) which tools it has, the way an agent would, then ends it.
+export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs = 15_000, spawnProcess = spawn, clientVersion = '0.0.0' }) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try { child = spawnProcess(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); }
+    catch (error) { reject(fail(`MCP 서버를 시작하지 못했습니다: ${error.message}`, 'MCP_PROBE')); return; }
+    let buffer = '', done = false;
+    const tools = [];
+    const finish = (error, value) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      // A server that answered gets to end on its own when its input closes; one that failed is ended now.
+      try { child.stdin.end(); } catch {}
+      const kill = () => { if (child.exitCode === null && child.signalCode == null) child.kill(); };
+      if (error) kill(); else setTimeout(kill, 1000).unref?.();
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => finish(fail('MCP 서버가 응답하지 않습니다.', 'MCP_TIMEOUT')), timeoutMs);
+    const send = message => { try { child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`); } catch {} };
+    const rpcError = error => fail(`MCP 서버가 오류로 답했습니다: ${String(error?.message ?? '').slice(0, 200)}`, 'MCP_PROBE');
+    child.on('error', error => finish(fail(`MCP 서버를 시작하지 못했습니다: ${error.message}`, 'MCP_PROBE')));
+    child.on('exit', code => finish(fail(`MCP 서버가 도구 목록을 주기 전에 종료되었습니다 (exit ${code}).`, 'MCP_PROBE')));
+    child.stdin.on('error', () => {});
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      buffer += chunk;
+      if (buffer.length > 4 * 1024 * 1024) return finish(fail('MCP 서버의 응답이 너무 큽니다.', 'MCP_PROBE'));
+      let end;
+      while (!done && (end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end).trim();
+        buffer = buffer.slice(end + 1);
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+        if (!message || typeof message !== 'object') continue;
+        // A request from the server (roots/list, sampling, ...): this client offers none of them.
+        if (typeof message.method === 'string') { if (message.id !== undefined && message.id !== null) send({ id: message.id, error: { code: -32601, message: 'Method not found' } }); continue; }
+        if (message.id === 1) {
+          if (message.error) return finish(rpcError(message.error));
+          send({ method: 'notifications/initialized' });
+          send({ id: 2, method: 'tools/list', params: {} });
+        } else if (Number.isInteger(message.id) && message.id >= 2) {
+          if (message.error) return finish(rpcError(message.error));
+          if (Array.isArray(message.result?.tools)) tools.push(...message.result.tools);
+          const cursor = message.result?.nextCursor;
+          if (typeof cursor === 'string' && cursor && message.id < 10 && tools.length < 200) send({ id: message.id + 1, method: 'tools/list', params: { cursor } });
+          else finish(null, tools);
+        }
+      }
+    });
+    send({ id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mooner-ade', version: clientVersion } } });
+  });
 }
 
 // ---- the manager --------------------------------------------------------------------------------------------------
 // spawnHost({ id, dir, main }) returns a ChildProcess-like object (send, kill, connected, on('message'|'exit')).
 // ask({ title, message, detail, buttons, defaultId, cancelId }) resolves the chosen button index.
+// builtinDir holds the plugins that ship with the app: they need no approval and no "plugins on" switch, only their own on/off (setBuiltin).
 // toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
-export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, log = console }) {
+// probeMcp({ command, args, cwd, env }) resolves the raw tools/list of a plugin's MCP server (default: probeMcpTools).
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
+  // id -> what its MCP server said it has: { key, status: 'loading'|'ok'|'error', list, error, at }. Kept while the plugin is
+  // stopped, so its tools can still be looked at and turned off.
+  const tools = new Map();
+  const mcpPrefs = id => store.state.mcp?.[id] ?? { off: false, disabled: [] };
 
   const approvedFor = item => item.manifest && store.state.approved[item.manifest.id];
-  const eligible = item => !item.error && store.state.enabled && approvedFor(item)?.hash === item.hash && approvedFor(item)?.folder === item.folder;
+  const builtinOn = item => store.state.builtin?.[item.manifest?.id]?.enabled !== false;
+  const eligible = item => !item.error && (item.builtin ? builtinOn(item) : store.state.enabled && approvedFor(item)?.hash === item.hash && approvedFor(item)?.folder === item.folder);
   function stateOf(item) {
     if (item.error) return 'invalid';
+    if (item.builtin) return builtinOn(item) ? hosts.get(item.manifest.id)?.status ?? 'stopped' : 'off';
     const approval = approvedFor(item);
     if (!approval) return 'new';
     if (approval.hash !== item.hash || approval.folder !== item.folder) return 'changed';
@@ -302,16 +426,57 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
         const host = item.manifest && hosts.get(item.manifest.id);
         return {
           folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
+          builtin: item.builtin === true, ...(item.builtin && { builtinEnabled: builtinOn(item) }),
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
-          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null,
-          badge: host?.status === 'running' ? host.badge : null
+          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null,
+          badge: host?.status === 'running' ? host.badge : null,
+          // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
+          commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
+          env: host?.status === 'running' && host.terminal ? Object.keys(host.terminal.env) : [],
+          tools: item.manifest?.mcp ? toolsView(item.manifest.id, host) : null
         };
       })
     };
   }
+  function toolsView(id, host) {
+    const prefs = mcpPrefs(id), found = tools.get(id);
+    return {
+      enabled: !prefs.off,
+      // The plugin hands its server to new terminals and chats now (one that is not set up yet may hold it back).
+      offered: host?.status === 'running' && Boolean(host.terminal?.mcp),
+      status: found?.status ?? 'idle', error: found?.error ?? null, checkedAt: found?.at ?? null,
+      list: found?.list ? found.list.map(tool => ({ ...tool, enabled: !prefs.disabled.includes(tool.name) })) : null,
+      disabled: [...prefs.disabled]
+    };
+  }
   const changed = () => onChange(snapshot());
+  // What the user turned off stays out: a server turned off is not given at all, single tools are named for the agents to leave out.
+  function withPrefs(terminal) {
+    if (!terminal.mcp) return terminal;
+    const prefs = mcpPrefs(terminal.id);
+    if (prefs.off) return { ...terminal, mcp: null };
+    return prefs.disabled.length ? { ...terminal, mcp: { ...terminal.mcp, disabledTools: [...prefs.disabled] } } : terminal;
+  }
   function emitTerminal() {
-    onTerminal({ node: terminalNode, plugins: [...hosts.values()].filter(host => host.status === 'running' && host.terminal).map(host => host.terminal) });
+    onTerminal({ node: terminalNode, plugins: [...hosts.values()].filter(host => host.status === 'running' && host.terminal).map(host => withPrefs(host.terminal)) });
+  }
+  // Runs the plugin's MCP server once, as the agents would get it, to list its tools. Again only when what would run changes.
+  function discoverTools(host, force = false) {
+    const mcp = host.terminal?.mcp;
+    if (!mcp) return;
+    const key = JSON.stringify([host.item.hash, mcp.command, mcp.args]), before = tools.get(host.id);
+    if (before?.key === key && (!force || before.status === 'loading')) return;
+    const run = { key, status: 'loading', list: before?.list ?? null, error: null, at: before?.at ?? null };
+    tools.set(host.id, run);
+    Promise.resolve().then(() => probeMcp({ command: mcp.command, args: [...mcp.args], cwd: host.item.dir, env: { ...host.terminal.env } })).then(raw => {
+      if (tools.get(host.id) !== run) return;
+      Object.assign(run, { status: 'ok', list: validTools(raw), error: null, at: Date.now() });
+      changed();
+    }, error => {
+      if (tools.get(host.id) !== run) return;
+      Object.assign(run, { status: 'error', error: String(error?.message ?? error).slice(0, 300) });
+      changed();
+    });
   }
 
   // ---- hosts ------------------------------------------------------------------------------------------------------
@@ -404,7 +569,12 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
         break;
       }
       // `enabled: false` withdraws the additions (e.g. a plugin that is not set up yet).
-      case 'terminal': host.terminal = message.enabled === false ? null : pluginTerminal(manifest, host.item.dir, message, terminalNode); if (host.status === 'running') emitTerminal(); break;
+      case 'terminal':
+        host.terminal = message.enabled === false ? null : pluginTerminal(manifest, host.item.dir, message, terminalNode, { builtin: host.item.builtin === true });
+        if (host.status === 'running') emitTerminal();
+        discoverTools(host);
+        changed();
+        break;
       case 'action-result': {
         const pending = host.pending.get(message.id);
         if (!pending) break;
@@ -467,7 +637,9 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
     changed();
   }
   function rescan() {
-    list = scanPlugins(dir);
+    // Built-in ones first: their ids are taken, so a plugin of the same id in the user's folder shows up as a duplicate.
+    const seen = new Set();
+    list = [...(builtinDir ? scanPlugins(builtinDir, { builtin: true, seen }) : []), ...scanPlugins(dir, { seen })];
     reconcile();
     return snapshot();
   }
@@ -499,6 +671,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
     rescan();
     const item = list.find(entry => entry.folder === folder);
     if (!item) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
+    if (item.builtin) throw fail('내장 플러그인은 승인하지 않아도 됩니다.', 'PLUGIN_INVALID');
     if (item.error) throw fail(item.error);
     const { manifest } = item;
     const answer = await ask({
@@ -516,11 +689,46 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
   // Keeps the plugin's saved data (its keys and settings) unless `forget` is set.
   function revoke(id, { forget = false } = {}) {
     store.update(state => {
-      const approved = { ...state.approved }, data = { ...state.data };
-      delete approved[id]; if (forget) delete data[id];
-      return { ...state, approved, data };
+      const approved = { ...state.approved }, data = { ...state.data }, mcp = { ...state.mcp };
+      delete approved[id]; if (forget) { delete data[id]; delete mcp[id]; }
+      return { ...state, approved, data, mcp };
     });
     reconcile();
+    return snapshot();
+  }
+  // Turns a plugin's whole MCP server (no `tool`) or one of its tools on or off for agents started from now on. Turning off
+  // needs no dialog, and turning back on gives no more than the plugin's approval already did.
+  function setMcp(id, { tool, enabled } = {}) {
+    const item = list.find(entry => entry.manifest?.id === id);
+    if (!item?.manifest?.mcp) throw fail('MCP 도구를 주는 플러그인이 아닙니다.', 'NOT_FOUND');
+    if (tool !== undefined && !TOOL_NAME.test(String(tool))) throw fail('잘못된 도구 이름입니다.');
+    const on = enabled === true;
+    store.update(state => {
+      const current = state.mcp?.[id] ?? { off: false, disabled: [] };
+      const next = tool === undefined ? { ...current, off: !on }
+        : { ...current, disabled: on ? current.disabled.filter(name => name !== tool) : [...new Set([...current.disabled, String(tool)])] };
+      const mcp = { ...state.mcp };
+      if (next.off || next.disabled.length) mcp[id] = next; else delete mcp[id];
+      return { ...state, mcp };
+    });
+    emitTerminal();
+    changed();
+    return snapshot();
+  }
+  // Turns a plugin that ships with the app on or off. No dialog: it is part of the app, and turning it off only removes things.
+  function setBuiltin(id, on) {
+    const item = list.find(entry => entry.builtin && entry.manifest?.id === id);
+    if (!item) throw fail('내장 플러그인이 아닙니다.', 'NOT_FOUND');
+    store.update(state => ({ ...state, builtin: { ...state.builtin, [id]: { enabled: on === true } } }));
+    reconcile();
+    return snapshot();
+  }
+  // Lists a running plugin's tools again (e.g. after the plugin was set up or its server changed what it offers).
+  function refreshTools(id) {
+    const host = hosts.get(id);
+    if (!host || host.status !== 'running') throw fail('플러그인이 실행 중일 때 도구 목록을 불러올 수 있습니다.', 'PLUGIN_STOPPED');
+    if (!host.terminal?.mcp) throw fail('플러그인이 아직 에이전트 도구를 주고 있지 않습니다. 플러그인 설정을 먼저 마치세요.', 'MCP_NOT_OFFERED');
+    discoverTools(host, true);
     return snapshot();
   }
   async function action(id, actionId, values) {
@@ -528,7 +736,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
     if (!host || host.status !== 'running' || !host.child?.connected) throw fail('플러그인이 실행 중이 아닙니다.', 'PLUGIN_STOPPED');
     if (!ACTION_ID.test(String(actionId))) throw fail('잘못된 작업입니다.');
     const clean = {};
-    if (values && typeof values === 'object') for (const [key, value] of Object.entries(values).slice(0, 10)) if (FIELD_KEY.test(key) && typeof value === 'string') clean[key] = value.slice(0, 4096);
+    if (values && typeof values === 'object') for (const [key, value] of Object.entries(values).slice(0, 24)) if (FIELD_KEY.test(key) && typeof value === 'string') clean[key] = value.slice(0, 4096);
     const requestId = randomUUID();
     const message = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { host.pending.delete(requestId); reject(fail('플러그인이 응답하지 않습니다.', 'PLUGIN_TIMEOUT')); }, ACTION_TIMEOUT_MS);
@@ -592,6 +800,7 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
       checkPluginFiles(root, manifest);
       const hash = treeHash(root), wasOn = store.state.enabled;
       rescan();
+      if (list.some(entry => entry.builtin && entry.manifest?.id === manifest.id)) throw fail(`이 id(${manifest.id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
       const { current } = replaced(manifest.id);
       const answer = await ask({
         type: 'warning', title: current ? '플러그인 업데이트' : '플러그인 설치',
@@ -628,5 +837,5 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
 
   function close() { closing = true; for (const host of [...hosts.values()]) stop(host); }
 
-  return { snapshot, rescan, restart, setEnabled, approve, revoke, action, installZip, droppedZips, close, emitTerminal, fromServer, serverReset };
+  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset };
 }
