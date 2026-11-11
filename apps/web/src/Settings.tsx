@@ -267,10 +267,11 @@ const lookNames: Record<string, string> = {
   theme: '색 테마', accent: '강조 색', dim: '비활성 pane', zoom: '화면 배율', sidebar: '사이드바 접기', sidebarWidth: '사이드바 너비',
   termSize: '글꼴 크기', termFont: '글꼴', termWeight: '글꼴 굵기', termCursor: '커서 모양', termBlink: '커서 깜빡임',
   termName: '글꼴 이름', termLine: '줄 높이', termSpace: '글자 간격', termContrast: '최소 대비', termBold: '굵은 글자',
-  chatSize: '채팅 글꼴', chatWidth: '대화 너비', chatComposer: '입력창 높이', chatTools: '도구 호출', chatThink: '생각 과정', chatStream: '부드러운 스트리밍',
+  chatSize: '채팅 글꼴', chatWidth: '대화 너비', chatComposer: '입력창 높이', chatTools: '도구 호출', chatToolMode: '도구 호출 표시', chatThink: '생각 과정', chatStream: '부드러운 스트리밍',
   diffSize: 'diff 글꼴 크기', diffFont: 'diff 글꼴', diffName: 'diff 글꼴 이름', diffWrap: '자동 줄바꿈', diffLayout: 'diff 표시', diffFold: '구간 접기', diffContext: '주변 줄', diffWidth: '패널 너비',
   usage: '사용량 색', clock12: '12시간제', clockSec: '초 표시'
 };
+const TOOL_PREVIEW = ['Read src/app.ts', 'Grep PORT', 'Edit src/server.ts', 'Bash npm test'];
 function LookPreview({ id, settings }: { id: string; settings: Settings }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -306,6 +307,9 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
     {family === 'chat' && <div className="look-chat" style={{ fontSize: settings.chatFontSize, width: ({ narrow: '78%', default: '88%', wide: '96%', full: '100%' } as const)[settings.chatWidth] }}>
       {settings.chatThinkingOpen !== 'never' && <p className="look-think">{settings.chatThinkingOpen === 'live' ? '생각 중…' : '포트를 상수에서 찾았습니다.'}</p>}
       <p className={settings.chatSmoothStream ? 'look-stream' : ''}>알겠어, 환경 변수로 바꿀게.</p>
+      {id === 'chatToolMode' && <div className="look-tools">{settings.chatToolDisplay === 'summary'
+        ? <div className="look-bundle"><div className="look-bundle-head"><i />도구 4개 · 실행 중</div><div className="look-bundle-rows">{TOOL_PREVIEW.map(row => <div key={row}>{row}</div>)}</div></div>
+        : TOOL_PREVIEW.map(row => <div key={row} className="look-tool">{row}</div>)}</div>}
       <div className={`look-tool${settings.chatToolsOpen ? ' open' : ''}`}><b>Edit</b> src/server.ts{settings.chatToolsOpen && <small>PORT = process.env.PORT</small>}</div>
       <div className="look-compose" style={{ maxHeight: Math.round(settings.chatComposerMax / 4) }}>긴 글을 쓰면 이 높이에서 멈춥니다.</div>
     </div>}
@@ -383,7 +387,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     </>}
     {tab === 'claude' && <>
       <h4 className="setting-group">프롬프트 캐시·입력</h4>
-      <Row title="프롬프트 캐시 타이머" hint="터미널 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
+      <Row title="프롬프트 캐시 타이머" hint="터미널·채팅 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
       {settings.cacheTimer && <Row title="식기 전 경고 시점" hint="남은 시간이 이 비율 이하이면 노란색(곧 식음)으로 바뀝니다. (5–50%)">{number('cacheWarn', 5, 50)}</Row>}
       <Row title="캐시 만료 시 전송 경고" hint="캐시가 식었거나 곧 식을 때 메시지를 보내려 하면 먼저 확인을 받고, 허락하지 않으면 보내지 않습니다. 후속 대기열의 자동 전송에도 적용됩니다. 캐시 타이머 표시와는 별개입니다.">{toggle('cacheSendWarn')}</Row>
       {settings.cacheSendWarn && <Row title="경고 기준 남은 시간(분)" hint="1시간 캐시에서 남은 시간이 이 값 이하이면 경고합니다. (1–60분) 5분 캐시는 이미 식었을 때만 경고합니다.">{number('cacheSendWarnMinutes', 1, 60)}</Row>}
@@ -446,6 +450,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               <Dropdown label="대화 너비" value={settings.chatWidth} options={[{ value: 'narrow', label: '좁게' }, { value: 'default', label: '기본' }, { value: 'wide', label: '넓게' }, { value: 'full', label: '가득' }]} onChange={value => set('chatWidth', value as Settings['chatWidth'])} /></Row>
             <Row title="생각 과정 표시" hint="‘응답 중에만’은 생각이 스트리밍되는 동안만 펼치고 끝나면 접습니다." preview="chatThink">
               <Dropdown label="생각 과정 표시" value={settings.chatThinkingOpen} options={[{ value: 'live', label: '응답 중에만 펼침' }, { value: 'always', label: '항상 펼침' }, { value: 'never', label: '항상 접음' }]} onChange={value => set('chatThinkingOpen', value as Settings['chatThinkingOpen'])} /></Row>
+            <Row title="도구 호출 표시" hint="요약은 도구를 3개 이상 연달아 부르면 낮은 상자 하나에 묶어 스크롤로 보여 줍니다. 상세는 도구마다 한 줄씩 나열합니다." preview="chatToolMode">
+              <Dropdown label="도구 호출 표시" value={settings.chatToolDisplay} options={[{ value: 'summary', label: '요약 (묶어서 스크롤)' }, { value: 'detail', label: '상세 (하나씩 나열)' }]} onChange={value => set('chatToolDisplay', value as Settings['chatToolDisplay'])} /></Row>
             <Advanced>
               <Row title="입력창 최대 높이" hint="긴 글을 쓸 때 입력창이 늘어나는 한계입니다. (120–600px)" preview="chatComposer">{number('chatComposerMax', 120, 600, 10)}</Row>
               <Row title="도구 호출 펼쳐 보기" hint="Bash·Edit 같은 도구 카드를 처음부터 펼쳐 둡니다. 끄면 눌러서 엽니다." preview="chatTools">{toggle('chatToolsOpen')}</Row>
@@ -556,9 +562,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Group title="새 채팅 기본값">
             <p className="setting-note">새로 만드는 채팅에 적용됩니다. 그 에이전트가 지원하는 권한 모드와 Effort만 반영되고, 이미 있는 채팅은 그대로입니다. 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
             <Row title="권한 모드" hint="모든 권한 건너뛰기(bypassPermissions)는 위험해서 기본값으로 고를 수 없습니다. 채팅마다 직접 고르세요.">
-              <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }, { value: 'auto', label: '자동' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
+              <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'cli', label: 'CLI 설정 따름' }, { value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }, { value: 'auto', label: '자동' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
             <Row title="Effort" hint="자동은 에이전트의 기본값을 따릅니다. 높을수록 오래 생각하고 비용이 늘어납니다.">
-              <Dropdown label="새 채팅 Effort" value={settings.chatDefaultEffort} options={[{ value: 'auto', label: '자동' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'xhigh', label: 'xhigh' }, { value: 'max', label: 'max' }]} onChange={value => set('chatDefaultEffort', value as Settings['chatDefaultEffort'])} /></Row>
+              <Dropdown label="새 채팅 Effort" value={settings.chatDefaultEffort} options={[{ value: 'auto', label: 'CLI 설정 따름' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'xhigh', label: 'xhigh' }, { value: 'max', label: 'max' }]} onChange={value => set('chatDefaultEffort', value as Settings['chatDefaultEffort'])} /></Row>
           </Group>
           <Group title="대화">
             <p className="setting-note">글꼴, 너비, 입력창 높이, 도구·생각 표시, 부드러운 스트리밍은 외관에서 바꿉니다.</p>

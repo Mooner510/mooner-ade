@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
+import { spawnAgent } from './agent-spawn.js';
 import { fault } from './files.js';
 
 export const isCursorSummarizeCommand = text => /^\/(compact|compress|summarize)(?:\s|$)/.test(String(text ?? '').trim());
 
-export function runCursorSummarize({ executable, executableArgs = [], sessionId, cwd, env = {}, spawnProcess = spawn, timeoutMs = 600_000 }) {
+export function runCursorSummarize({ executable, executableArgs = [], sessionId, cwd, env = {}, spawnProcess = spawnAgent, timeoutMs = 600_000 }) {
   if (!sessionId) throw fault('CHAT_UNSUPPORTED', '세션이 없어 컨텍스트를 압축할 수 없습니다.', 409);
   return new Promise((resolve, reject) => {
     const args = [...executableArgs, '--resume', sessionId, '--print', '-p', '/summarize', '--output-format', 'text'];

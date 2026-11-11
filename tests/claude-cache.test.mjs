@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readClaudeCache } from '../apps/local-server/src/claude-cache.js';
+import { readClaudeCache, readSessionCache } from '../apps/local-server/src/claude-cache.js';
 
 const session = '5450d9b4-ef97-4365-80a9-40e9e92cc1a0', cwd = '/Users/me/my_project';
 const request = (id, timestamp) => JSON.stringify({ type: 'api-request', id, timestamp });
@@ -76,5 +76,18 @@ test('a compaction boundary marks the cache as compacted until the next main-thr
   assert.equal((await readClaudeCache(config, 42, compacted)).value.compacted, undefined, 'the next request starts a fresh cache');
   await fs.appendFile(file, `${boundary('manual', '2026-11-06T11:20:00.000Z')}\n`);
   assert.equal((await readClaudeCache(config, 42, await readClaudeCache(config, 42))).value.compacted.trigger, 'manual');
+  await fs.rm(config, { recursive: true, force: true });
+});
+
+test('a chat reads its cache clock by session id (no sessions/<pid>.json), and never promises an idle compaction', async () => {
+  const config = await fs.mkdtemp(path.join(os.tmpdir(), 'ade-cache-'));
+  const dir = path.join(config, 'projects', '-Users-me-my-project');
+  await fs.mkdir(dir, { recursive: true });
+  // A 1h cache over a long conversation would get a compactAt from a terminal's Claude Code; a chat's child is stopped when idle, so it must not.
+  await fs.writeFile(path.join(dir, `${session}.jsonl`), `${request('r1', '2026-11-06T10:00:00.000Z')}\n${reply({ requestRef: 'r1', promptCacheRequested: '1h' }, { cache_read_input_tokens: 300000 })}\n`);
+  const reading = await readSessionCache(config, { sessionId: session, cwd }, null, { idle: false });
+  assert.equal(reading.value.ttl, 3600);
+  assert.equal(reading.value.compactAt, undefined);
+  assert.equal(await readSessionCache(config, { sessionId: '../x', cwd }), null);
   await fs.rm(config, { recursive: true, force: true });
 });
