@@ -2,14 +2,20 @@
 // No DOM or React here, so tests/feedback-model.test.mjs can bundle and run it in node.
 
 export type FeedbackSource = 'human' | 'ai' | 'agent';
-export type FeedbackStatus = 'draft' | 'review' | 'drafting' | 'submitting' | 'submitted' | 'failed';
+export type FeedbackStatus = 'draft' | 'review' | 'drafting' | 'queued' | 'submitting' | 'submitted' | 'failed';
 export interface FeedbackImage { name: string; w: number; h: number; annotated: boolean }
 export interface Feedback {
   id: string; title: string; body: string; source: FeedbackSource; status: FeedbackStatus;
   reviewed: boolean; images: FeedbackImage[]; createdAt: number; updatedAt: number;
-  issueUrl?: string; issueNumber?: number; error?: string;
+  issueUrl?: string; issueNumber?: number;
+  // While queued, `error` is the last refused attempt's message; after `failed`, why it ended.
+  error?: string;
+  // Server-side send queue: when it was queued, when it may be tried next (ms epoch), how many tries so far, and how it went out.
+  queuedAt?: number; nextAttemptAt?: number; attempts?: number; via?: 'account' | 'anonymous';
 }
-export interface FeedbackAvailability { ok: boolean; account?: string; reason?: string }
+// mode: 'account' = sent with the signed-in remote-access login; 'anonymous' = no login, at most one per 5 minutes from this install.
+export interface FeedbackAvailability { ok: boolean; mode?: 'account' | 'anonymous'; account?: string; reason?: string }
+export interface FeedbackQueue { size: number; nextAt?: number }
 
 export const MAX_IMAGES = 10;
 export const MAX_TITLE = 120;
@@ -17,11 +23,11 @@ export const MAX_BODY_BYTES = 65536;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 export const statusLabels: Record<FeedbackStatus, string> = {
-  draft: '작성 중', review: '검토 필요', drafting: 'AI 작성 중', submitting: '제출 중', submitted: '제출됨', failed: '제출 실패'
+  draft: '작성 중', review: '검토 필요', drafting: 'AI 작성 중', queued: '전송 대기', submitting: '전송 중', submitted: '제출됨', failed: '제출 실패'
 };
 export const sourceLabels: Record<FeedbackSource, string> = { human: '직접 작성', ai: 'AI 초안', agent: '에이전트 초안' };
 
-// Title, body and images can only change in these states (the server refuses edits while drafting/submitting and after submit).
+// Title, body and images can only change in these states (the server refuses edits while drafting, queued, submitting and after submit).
 export const isEditable = (item: Pick<Feedback, 'status'>) => item.status === 'draft' || item.status === 'review' || item.status === 'failed';
 // An AI or agent draft that no human has opened yet.
 export const needsReview = (item: Pick<Feedback, 'source' | 'reviewed'>) => item.source !== 'human' && !item.reviewed;
@@ -33,7 +39,8 @@ const utf8Length = (text: string) => new TextEncoder().encode(text).length;
 export function canSubmit(item: Pick<Feedback, 'title' | 'body' | 'source' | 'status' | 'reviewed' | 'images'>, available: FeedbackAvailability | null | undefined): { ok: boolean; reason: string } {
   const no = (reason: string) => ({ ok: false, reason });
   if (item.status === 'drafting') return no('AI가 초안을 작성하는 중입니다.');
-  if (item.status === 'submitting') return no('제출하는 중입니다.');
+  if (item.status === 'queued') return no('이미 전송 대기 중입니다.');
+  if (item.status === 'submitting') return no('전송하는 중입니다.');
   if (item.status === 'submitted') return no('이미 제출한 피드백입니다.');
   if (!isEditable(item)) return no('지금은 제출할 수 없습니다.');
   if (needsReview(item)) return no('AI가 쓴 초안은 먼저 열어서 검토해야 합니다.');
@@ -44,6 +51,24 @@ export function canSubmit(item: Pick<Feedback, 'title' | 'body' | 'source' | 'st
   if (item.images.length > MAX_IMAGES) return no(`이미지는 ${MAX_IMAGES}장까지 보낼 수 있습니다.`);
   if (!available?.ok) return no(available?.reason || '지금은 피드백을 보낼 수 없습니다.');
   return { ok: true, reason: '' };
+}
+
+// When a queued item should go out, as Korean text. The head of the queue waits for whichever is later: its own retry time or the
+// queue's next slot (which already includes the anonymous 5-minute spacing).
+export function queueEta(item: Pick<Feedback, 'status' | 'nextAttemptAt'>, queue: FeedbackQueue | null | undefined, now: number): string {
+  if (item.status === 'submitting') return '전송 중';
+  const at = Math.max(item.nextAttemptAt ?? 0, queue?.nextAt ?? 0), wait = at - now;
+  if (wait < 45_000) return '곧 전송';
+  const minutes = Math.round(wait / 60_000);
+  if (minutes < 60) return `약 ${minutes}분 뒤 전송`;
+  const hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return `약 ${hours}시간${rest ? ` ${rest}분` : ''} 뒤 전송`;
+}
+// How a submission will be sent, for the confirm dialog and the settings row.
+export function submitModeText(available: FeedbackAvailability | null | undefined): string {
+  if (!available?.ok) return available?.reason || '지금은 피드백을 보낼 수 없습니다.';
+  if (available.mode === 'anonymous') return '익명 제출 (이 기기에서 5분에 1건씩 자동 전송)';
+  return available.account ? `${available.account} 계정으로 제출` : '계정으로 제출';
 }
 
 // ---- capture geometry ----

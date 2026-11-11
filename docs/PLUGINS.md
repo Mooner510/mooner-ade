@@ -175,7 +175,7 @@ MoonerADE → 플러그인
 | 메시지 | 뜻 |
 |---|---|
 | `{type:'feedback', available, account?, reason?}` | 지금 제출할 수 있는지. `ready` 뒤에 한 번, 바뀔 때마다 보내세요. `account`(100자)는 피드백 창고에 보이는 계정 이름, `reason`(200자)은 제출할 수 없을 때 보여 줄 한 문장입니다 |
-| `{type:'feedback/result', id, ok, issueUrl?, issueNumber?, error?}` | `feedback/submit`에 대한 답. `issueUrl`은 `https://github.com/<owner>/<repo>/issues/<n>` 모양만 받습니다. `error`는 `{code, message}`이고 `message`가 사용자에게 보입니다 |
+| `{type:'feedback/result', id, ok, issueUrl?, issueNumber?, error?}` | `feedback/submit`에 대한 답. `issueUrl`은 `https://github.com/<owner>/<repo>/issues/<n>` 모양만 받습니다. `error`는 `{code, message, retryAfter?}`이고 `message`가 사용자에게 보입니다. `retryAfter`(초)가 있으면 그만큼 기다렸다 다시 보냅니다 |
 
 MoonerADE → 플러그인
 
@@ -183,7 +183,7 @@ MoonerADE → 플러그인
 |---|---|
 | `{type:'feedback/submit', id, meta, images}` | `meta`: `{clientKey, title, body, source:'human'\|'ai'\|'agent', appVersion, platform}`. `images`: `[{path, mime}]`(PNG/JPEG 10장 이하, 순서대로, MoonerADE 데이터 폴더 안의 절대 경로). `id`는 정수 |
 
-- 실행 중이고 `available: true`인 플러그인 하나에만 보냅니다. 120초 안에 답이 없으면 실패로 봅니다.
+- 실행 중이고 `available: true`인 플러그인 하나에만 보냅니다. 120초 안에 답이 없으면 실패로 보고, MoonerADE의 전송 큐가 나중에 같은 `clientKey`로 다시 보냅니다. 제출할 수 있는 플러그인이 없으면 MoonerADE가 Hub에 익명으로 보냅니다.
 - `clientKey`는 피드백마다 고정입니다. 같은 피드백을 다시 제출하면 같은 `clientKey`가 오므로, 받는 쪽은 이것으로 중복을 막으세요.
 - 플러그인이 멈추거나 종료되면 진행 중인 제출은 실패로 끝나고, 제출할 수 없는 상태가 됩니다.
 

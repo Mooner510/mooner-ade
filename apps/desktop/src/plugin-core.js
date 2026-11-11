@@ -471,7 +471,8 @@ export function createPluginManager({ dir, dataRoot, stagingRoot = path.join(dat
         const issueUrl = typeof message.issueUrl === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(message.issueUrl) ? message.issueUrl : undefined;
         answer(message.ok === true
           ? { ok: true, ...(issueUrl && { issueUrl }), ...(Number.isSafeInteger(message.issueNumber) && { issueNumber: message.issueNumber }) }
-          : { ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'PLUGIN_FEEDBACK', message: plainText(String(message.error?.message ?? '피드백을 보내지 못했습니다.')).slice(0, 500) || '피드백을 보내지 못했습니다.' } });
+          : { ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'PLUGIN_FEEDBACK', message: plainText(String(message.error?.message ?? '피드백을 보내지 못했습니다.')).slice(0, 500) || '피드백을 보내지 못했습니다.',
+            ...(Number.isInteger(message.error?.retryAfter) && message.error.retryAfter > 0 && { retryAfter: Math.min(message.error.retryAfter, 86_400) }) } });
         break;
       }
       case 'log': log[message.level === 'error' ? 'error' : message.level === 'warn' ? 'warn' : 'log'](`[plugin ${host.id}] ${String(message.message ?? '').slice(0, 2000)}`); break;

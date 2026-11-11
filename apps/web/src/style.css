@@ -1741,3 +1741,11 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .feedback-annotate-stage canvas { max-width: 100%; max-height: calc(100vh - 190px); cursor: crosshair; touch-action: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); }
 .feedback-annotate-actions { padding: 10px 12px; border-top: 1px solid var(--border); }
 .feedback-annotate-actions .hint { padding: 0; font-size: 12px; }
+/* feedback send queue */
+.feedback-status.status-queued { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.feedback-queue-chip { flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; white-space: nowrap; color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
+.feedback-eta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.feedback-note.queued { color: var(--fg); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.feedback-note.queued > .icon { color: var(--warn); }
+.feedback-note .feedback-last-error { flex-basis: 100%; color: var(--muted); overflow-wrap: anywhere; }
+@container (max-width: 380px) { .feedback-queue-chip { display: none; } }

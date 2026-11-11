@@ -37,12 +37,15 @@ test('canSubmit: title, body, images, review, status and availability', async t 
   assert.match(canSubmit(item({ source: 'agent', reviewed: false, status: 'review' }), ok).reason, /검토/);
   assert.equal(canSubmit(item({ source: 'agent', reviewed: true, status: 'review' }), ok).ok, true);
   assert.equal(canSubmit(item({ status: 'failed' }), ok).ok, true);
-  for (const status of ['drafting', 'submitting', 'submitted']) assert.equal(canSubmit(item({ status }), ok).ok, false, status);
+  assert.equal(canSubmit(item(), { ok: true, mode: 'anonymous' }).ok, true);
+  for (const status of ['drafting', 'queued', 'submitting', 'submitted']) assert.equal(canSubmit(item({ status }), ok).ok, false, status);
   assert.deepEqual(canSubmit(item(), { ok: false, reason: '원격 접속에 로그인하지 않았습니다' }), { ok: false, reason: '원격 접속에 로그인하지 않았습니다' });
   assert.equal(canSubmit(item(), { ok: false }).ok, false);
   assert.equal(canSubmit(item(), null).ok, false);
   assert.ok(needsReview({ source: 'ai', reviewed: false }) && !needsReview({ source: 'human', reviewed: false }));
-  assert.ok(isEditable({ status: 'review' }) && !isEditable({ status: 'submitted' }));
+  assert.ok(isEditable({ status: 'review' }) && !isEditable({ status: 'submitted' }) && !isEditable({ status: 'queued' }));
+  assert.equal(statusLabels.queued, '전송 대기');
+  assert.equal(statusLabels.submitting, '전송 중');
   assert.equal(pendingReviewCount([item({ status: 'review', reviewed: false }), item({ status: 'review', reviewed: true }), item({ status: 'draft', reviewed: false })]), 1);
   assert.equal(statusLabels.submitted, '제출됨');
 });
@@ -82,4 +85,20 @@ test('annotation geometry and base64', async t => {
   assert.equal(base64Bytes(bytesToBase64(new Uint8Array(4))), 4);
   assert.equal(aiContext({}), '');
   assert.match(aiContext({ appVersion: '0.5.2', project: 'ade', panes: ['탭1[채팅]'], errors: ['boom\nline'] }), /앱 버전: 0\.5\.2[\s\S]*현재 프로젝트: ade[\s\S]*- boom line/);
+});
+
+test('queue eta and submit mode text', async t => {
+  const { queueEta, submitModeText } = await load(t);
+  const now = 1_000_000_000_000, queued = patch => ({ status: 'queued', ...patch });
+  assert.equal(queueEta(queued({}), { size: 1 }, now), '곧 전송');
+  assert.equal(queueEta(queued({ nextAttemptAt: now - 5000 }), { size: 1, nextAt: now + 30_000 }, now), '곧 전송');
+  assert.equal(queueEta(queued({ nextAttemptAt: now + 60_000 }), { size: 1, nextAt: now + 180_000 }, now), '약 3분 뒤 전송');
+  assert.equal(queueEta(queued({ nextAttemptAt: now + 600_000 }), { size: 2, nextAt: now + 60_000 }, now), '약 10분 뒤 전송');
+  assert.equal(queueEta(queued({ nextAttemptAt: now + 90 * 60_000 }), null, now), '약 1시간 30분 뒤 전송');
+  assert.equal(queueEta(queued({ nextAttemptAt: now + 120 * 60_000 }), undefined, now), '약 2시간 뒤 전송');
+  assert.equal(queueEta({ status: 'submitting' }, { size: 1, nextAt: now + 600_000 }, now), '전송 중');
+  assert.equal(submitModeText({ ok: true, mode: 'account', account: 'mooner' }), 'mooner 계정으로 제출');
+  assert.match(submitModeText({ ok: true, mode: 'anonymous' }), /^익명 제출/);
+  assert.equal(submitModeText({ ok: false, reason: '익명 제출이 꺼져 있습니다' }), '익명 제출이 꺼져 있습니다');
+  assert.equal(submitModeText(null), '지금은 피드백을 보낼 수 없습니다.');
 });

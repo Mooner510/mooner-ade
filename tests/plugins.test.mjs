@@ -402,6 +402,11 @@ test('feedback is an explicit permission; only a declaring, signed-in plugin sub
   const request2 = child.sent.filter(message => message.type === 'feedback/submit').at(-1);
   child.emit('message', { type: 'feedback/result', id: request2.id, ok: true, issueUrl: 'javascript:alert(1)' });
   assert.deepEqual(await second, { ok: true });
+  // A rate limit keeps its wait (capped) for the queue.
+  const limited = env.manager.submitFeedback({ meta: {}, images: [] });
+  const request3 = child.sent.filter(message => message.type === 'feedback/submit').at(-1);
+  child.emit('message', { type: 'feedback/result', id: request3.id, ok: false, error: { code: 'rate_limited', message: 'wait', retryAfter: 999999 } });
+  assert.deepEqual(await limited, { ok: false, error: { code: 'rate_limited', message: 'wait', retryAfter: 86_400 } });
   const third = env.manager.submitFeedback({ meta: {}, images: [] });
   child.exit(1);
   assert.equal((await third).error.code, 'PLUGIN_STOPPED');

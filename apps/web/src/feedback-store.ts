@@ -1,13 +1,13 @@
 import { useSyncExternalStore } from 'react';
 import { api } from './api';
-import { isEditable, type Feedback, type FeedbackAvailability } from './feedback-model';
+import { isEditable, type Feedback, type FeedbackAvailability, type FeedbackQueue } from './feedback-model';
 
 // The feedback inbox is global (not per project), so every open workspace shares this one store: the list, which item is open,
 // and a pending screen capture. It loads on first use and again whenever the server pushes {type:'feedback/changed'}.
 export type CaptureMode = 'element' | 'window' | 'range';
-export type FeedbackState = { items: Feedback[]; available: FeedbackAvailability | null; loaded: boolean; error: string; currentId: string; capture: CaptureMode | null };
+export type FeedbackState = { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; loaded: boolean; error: string; currentId: string; capture: CaptureMode | null };
 
-let state: FeedbackState = { items: [], available: null, loaded: false, error: '', currentId: '', capture: null };
+let state: FeedbackState = { items: [], available: null, queue: { size: 0 }, loaded: false, error: '', currentId: '', capture: null };
 const listeners = new Set<() => void>();
 let started = false, timer = 0, loading: Promise<void> | null = null, again = false;
 
@@ -16,8 +16,8 @@ export const feedbackState = () => state;
 
 async function load() {
   try {
-    const result = await api<{ items: Feedback[]; available: FeedbackAvailability }>('feedback/list');
-    set({ items: result.items, available: result.available, loaded: true, error: '' });
+    const result = await api<{ items: Feedback[]; available: FeedbackAvailability; queue?: FeedbackQueue }>('feedback/list');
+    set({ items: result.items, available: result.available, queue: result.queue ?? { size: 0 }, loaded: true, error: '' });
   } catch (cause) { set({ loaded: true, error: cause instanceof Error ? cause.message : String(cause) }); }
 }
 // Every workspace receives the push, so calls within a short window share one request.
@@ -52,6 +52,19 @@ export const createFeedback = async () => { const item = await feedbackCall('fee
 export async function ensureDraft() {
   const current = state.items.find(item => item.id === state.currentId);
   return current && isEditable(current) ? current : createFeedback();
+}
+
+// Re-renders every 30 s while something is queued, so "약 n분 뒤 전송" counts down.
+let clockTimer = 0;
+const clockListeners = new Set<() => void>();
+function subscribeClock(listener: () => void) {
+  clockListeners.add(listener);
+  if (!clockTimer) clockTimer = window.setInterval(() => clockListeners.forEach(fn => fn()), 30_000);
+  return () => { clockListeners.delete(listener); if (!clockListeners.size) { clearInterval(clockTimer); clockTimer = 0; } };
+}
+const noClock = () => () => {};
+export function useQueueClock(on: boolean) {
+  return useSyncExternalStore(on ? subscribeClock : noClock, () => on ? Math.floor(Date.now() / 30_000) * 30_000 : 0) || Date.now();
 }
 
 export const requestCapture = (mode: CaptureMode) => set({ capture: mode });
