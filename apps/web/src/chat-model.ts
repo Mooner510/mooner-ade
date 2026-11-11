@@ -11,12 +11,15 @@ export type ChatState = {
   status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sandbox?: string | null; network?: boolean; runEverything?: boolean; configuring?: boolean; restartPending?: boolean; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
   contextTokens: number; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
   segmentTitles?: ChatSegmentTitles; chatTitle?: string;
+  // Claude: the prompt cache clock read from the session's transcript (same shape as the terminal's ClaudeCache); null before the first reply.
+  cache?: { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } } | null;
 };
 // `key` keeps a block's React identity from its first streamed character to the stored message (so nothing remounts or replays its entrance);
 // `partial` marks a block that is still streaming. `slot` is a streamed tool's content-block index, `partialJson` its input so far.
 type BlockBase = { key?: string; partial?: boolean };
 export type Block = BlockBase & ({ type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
-export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: { id: string; prompt: string; secret?: boolean; allowMultiple?: boolean; options?: { id: string; label: string; description?: string }[] }[] };
+export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[] };
+export type ChatQuestion = { id: string; prompt: string; header?: string; secret?: boolean; allowMultiple?: boolean; allowOther?: boolean; options?: { id: string; label: string; description?: string }[] };
 // `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
 type ItemBase = { key: string; fresh?: boolean };
 /** The part of a system line that names what changed (a model, an Effort, a permission mode) and the colour it is drawn in elsewhere in the UI. */
@@ -25,7 +28,7 @@ export type Tone = { value: string; color: string; icon?: string; bars?: number 
 export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -37,7 +40,7 @@ export type ChatView = {
   items: Item[]; results: Record<string, { content: string; isError: boolean }>;
   // Streamed output grows inside `items` (the assistant item of its message id), so the stored message lands on the same item.
   // `live`: message ids streaming in this turn and whether they belong to a subagent; `liveId` takes deltas that name no message.
-  live: Record<string, { sub: boolean }>; liveId: string | null;
+  live: Record<string, { sub: boolean; parent?: string }>; liveId: string | null;
   thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
 export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null, autoCompact: null,
@@ -68,6 +71,52 @@ const MAX_ITEMS = 2000, MAX_TOOL_JSON = 8192;
 export function lastIndexWhere<T>(list: readonly T[], test: (value: T) => boolean) { for (let at = list.length - 1; at >= 0; at--) if (test(list[at])) return at; return -1; }
 const blockText = (block: Block) => block.type === 'text' || block.type === 'thinking' ? block.text.trim() : '';
 export const isPartial = (item: Item) => item.kind === 'assistant' && item.blocks.some(block => block.partial);
+
+// ---- "process" and "result" inside one turn ----
+// A turn can run: tools and short remarks, a result with a question, more tools, the final answer. Only the tool/thinking stretches fold under a "과정"
+// header; every result stays plain text where it was said. A text is a result (not a remark) when it is the turn's closing text, long, structured
+// (heading, table, code, list), spans paragraphs, or asks something.
+const STRUCTURED = /^\s*(?:#{1,6}\s|\|.*\||```|(?:[-*]|\d+\.)\s.+\n\s*(?:[-*]|\d+\.)\s)/m;
+export const isResultText = (text: string) => { const value = text.trim(); return value.length > 240 || (value.length > 120 && /\n\s*\n/.test(value)) || STRUCTURED.test(value) || /[?？]$/.test(value); };
+export type ProcessGroup = { start: number; end: number; steps: number; tools: number; answered: boolean }; // blocks [start, end) of the turn; `answered`: a result follows
+// `blocks` are the turn's visible blocks in order. `plain[i]` is true for the ones drawn as plain text; each group is one unbroken stretch of the rest.
+export function processGroups(blocks: { block: Block; sub: boolean }[]): { plain: boolean[]; groups: ProcessGroup[] } {
+  let cut = blocks.length;
+  while (cut > 0 && blocks[cut - 1].block.type === 'text' && !blocks[cut - 1].sub) cut -= 1; // the closing text
+  const isStep = (entry: { block: Block; sub: boolean }) => entry.block.type !== 'text' || entry.sub; // a sub-agent's text is process by nature
+  const plain = blocks.map((entry, at) => at >= cut || (entry.block.type === 'text' && !entry.sub && isResultText(entry.block.text)));
+  const groups: ProcessGroup[] = [];
+  for (let at = 0; at < blocks.length;) {
+    if (plain[at]) { at += 1; continue; }
+    let end = at; while (end < blocks.length && !plain[end]) end += 1;
+    const steps = blocks.slice(at, end).filter(isStep);
+    // Remarks with no tool or thought among them are just text: nothing to fold.
+    if (!steps.length) for (let i = at; i < end; i++) plain[i] = true;
+    else groups.push({ start: at, end, steps: steps.length, tools: steps.filter(entry => entry.block.type === 'tool_use').length, answered: end < blocks.length });
+    at = end;
+  }
+  return { plain, groups };
+}
+// "Summary" tool display: a run of consecutive tools (thoughts in between belong to it; any text ends it) inside one process group is shown as a single
+// bundle once it holds at least `min` tools. Returns blocks [start, end) of the same flat list `processGroups` took.
+export type ToolRun = { start: number; end: number; tools: number };
+export function toolRuns(blocks: { block: Block; sub: boolean }[], groups: ProcessGroup[], min = 3): ToolRun[] {
+  const runs: ToolRun[] = [];
+  for (const group of groups) {
+    for (let at = group.start; at < group.end;) {
+      if (blocks[at].block.type === 'text') { at += 1; continue; }
+      let end = at, tools = 0;
+      while (end < group.end && blocks[end].block.type !== 'text') { if (blocks[end].block.type === 'tool_use') tools += 1; end += 1; }
+      // A run that starts or ends on a thought keeps only the tools' span, so a bundle never opens or closes with a lone "생각" row.
+      let from = at, to = end;
+      while (from < to && blocks[from].block.type !== 'tool_use') from += 1;
+      while (to > from && blocks[to - 1].block.type !== 'tool_use') to -= 1;
+      if (tools >= min) runs.push({ start: from, end: to, tools });
+      at = end;
+    }
+  }
+  return runs;
+}
 const settle = (block: Block): Block => {
   if (!block.partial) return block;
   const { partial: _partial, ...rest } = block as Block & { partialJson?: string };
@@ -205,10 +254,10 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (at < 0) {
         // After /compact the CLI re-sends earlier synthetic messages (what /context or /mcp printed) under a fresh id but the same uuid: a repeat, not a new reply.
         if (typeof event.uuid === 'string' && view.items.some(item => item.kind === 'assistant' && item.uuid === event.uuid)) return view;
-        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), fresh });
+        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), ...parentOf(event), fresh });
       }
       const prev = view.items[at] as AssistantItem, items = [...view.items];
-      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), blocks: absorb(prev.blocks, incoming) };
+      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), blocks: absorb(prev.blocks, incoming) };
       return { ...view, items };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
@@ -221,14 +270,14 @@ export function reduce(view: ChatView, event: any): ChatView {
     case 'delta': {
       if (event.phase === 'start') {
         const messageId = String(event.messageId ?? `live-${view.items.length}`), sub = Boolean(event.parentToolUseId);
-        return { ...view, live: { ...view.live, [messageId]: { sub } }, liveId: messageId, thinkingTokens: sub ? view.thinkingTokens : 0 };
+        return { ...view, live: { ...view.live, [messageId]: { sub, ...parentOf(event) } }, liveId: messageId, thinkingTokens: sub ? view.thinkingTokens : 0 };
       }
       if (event.phase === 'thinkingTokens') return { ...view, thinkingTokens: Number(event.tokens) || 0 };
       if (event.phase === 'compacting') return { ...view, compacting: event.active === true };
       if (!['text', 'thinking', 'tool', 'toolInput'].includes(event.phase)) return view;
       const messageId = String(event.messageId ?? view.liveId ?? 'live-0'), at = findAssistant(view.items, messageId);
       const base: AssistantItem = at >= 0 ? view.items[at] as AssistantItem
-        : { kind: 'assistant', key: `m:${messageId}`, id: messageId, blocks: [], sub: view.live[messageId]?.sub ?? Boolean(event.parentToolUseId), fresh };
+        : { kind: 'assistant', key: `m:${messageId}`, id: messageId, blocks: [], sub: view.live[messageId]?.sub ?? Boolean(event.parentToolUseId), ...(view.live[messageId]?.parent ? { parent: view.live[messageId].parent } : parentOf(event)), fresh };
       const blocks = applyDelta(base.blocks, event);
       if (blocks === base.blocks) return view;
       const item = { ...base, blocks };
@@ -289,7 +338,8 @@ export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 
   const max = contextWindow(state.model, state.contextWindow, state.capabilities?.catalog);
   const compact = state.autoCompact && state.autoCompact.window > 0 && state.autoCompact.window < max ? state.autoCompact : null;
   const basis = compact?.window ?? max;
-  return { percent: Math.min(100, Math.round(state.contextTokens * 100 / basis)), used: state.contextTokens, basis, max, autoCompact: Boolean(compact), autoEstimated: Boolean(compact?.auto) };
+  // Not capped: a gauge stuck at 100% hid that the context had already outgrown the window.
+  return { percent: Math.round(state.contextTokens * 100 / basis), used: state.contextTokens, basis, max, autoCompact: Boolean(compact), autoEstimated: Boolean(compact?.auto) };
 };
 export const contextPercent = (state: Parameters<typeof contextGauge>[0]) => contextGauge(state).percent;
 // Each model family has its own color (CSS variables --model-*, defined per theme in style.css); unknown models stay uncolored.
@@ -454,7 +504,7 @@ export function compact(value: number): string {
 }
 export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
-  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
+  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문 전용' };
 // Resolved on the chat pane via agent-scoped `--mode-*` vars in style.css (Claude Code theme.ts, Codex TUI, Cursor CLI).
@@ -503,6 +553,15 @@ export function withSettingChange(items: Item[], change: SettingsChange, key: st
   return result;
 }
 
+// Which Agent tool call a subagent's message belongs to (its tool_use id), so parallel subagents stay apart.
+const parentOf = (event: any): { parent?: string } => typeof event.parentToolUseId === 'string' && event.parentToolUseId ? { parent: event.parentToolUseId } : {};
+
+// A session's cost: under $0.1 five decimals (small turns still show), from $0.1 two.
+export const dollars = (value: number) => value < 0.1 ? value.toFixed(5) : value.toFixed(2);
+
+// One name for what a tool is called in the UI (internal ones read as what they do).
+export const toolLabel = (name: string) => name === 'SubagentHandback' ? '보고' : name;
+
 // A one-line summary of a tool call for its collapsed card.
 export function toolSummary(name: string, input: any): string {
   const text = (value: unknown) => typeof value === 'string' ? value : '';
@@ -514,10 +573,30 @@ export function toolSummary(name: string, input: any): string {
     case 'WebFetch': return line(text(input?.url));
     case 'WebSearch': return line(text(input?.query));
     case 'Task': case 'Agent': return line(text(input?.description) || text(input?.prompt));
+    case 'AskUserQuestion': { const asked = Array.isArray(input?.questions) ? input.questions : []; return line(text(asked[0]?.question)) + (asked.length > 1 ? ` 외 ${asked.length - 1}개` : ''); }
+    case 'ExitPlanMode': return line((text(input?.plan).split(/\r?\n/).filter(row => row.trim()).find(row => !/^\s*#/.test(row)) ?? text(input?.plan).split(/\r?\n/).filter(row => row.trim())[0] ?? '').replace(/^[\s#>*-]+/, ''));
+    case 'SubagentHandback': return line(text(input?.message));
     case 'TodoWrite': return `${Array.isArray(input?.todos) ? input.todos.length : 0}개 항목`;
     default: return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || JSON.stringify(input ?? {}));
   }
 }
+
+// ---- answering a question (Claude's AskUserQuestion, Codex's requestUserInput, Cursor's ask_question) ----
+// A person's picks for one question: the options chosen, and their own wording ("직접 입력"; null = not used, '' = chosen but still empty).
+export type QuestionPick = { options: string[]; other: string | null };
+export const emptyPick = (question: ChatQuestion): QuestionPick => ({ options: [], other: question.options?.length ? null : '' }); // a question with no options is only a text box
+export function pickOption(question: ChatQuestion, pick: QuestionPick, id: string): QuestionPick {
+  if (!question.allowMultiple) return { options: [id], other: null };
+  return { ...pick, options: pick.options.includes(id) ? pick.options.filter(item => item !== id) : [...pick.options, id] };
+}
+export function pickOther(question: ChatQuestion, pick: QuestionPick, other: string | null): QuestionPick {
+  return question.allowMultiple || !question.options?.length ? { ...pick, other } : { options: other === null ? pick.options : [], other };
+}
+// The answers the server takes: per question id, the chosen option ids followed by the typed text.
+export function questionAnswers(questions: ChatQuestion[], picks: Record<string, QuestionPick>): Record<string, string[]> {
+  return Object.fromEntries(questions.map(question => { const pick = picks[question.id] ?? emptyPick(question), typed = pick.other?.trim(); return [question.id, [...pick.options, ...(typed ? [typed] : [])]]; }));
+}
+export const questionsAnswered = (questions: ChatQuestion[], answers: Record<string, string[]>) => questions.length > 0 && questions.every(question => (answers[question.id]?.length ?? 0) > 0);
 
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [

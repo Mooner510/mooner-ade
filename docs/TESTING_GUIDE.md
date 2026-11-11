@@ -403,3 +403,25 @@ CHROME_PATH=/path/to/chrome pnpm e2e
 4. 같은 대화를 모달에서 다시 열면 목록에 한 번만 나오고(중복 없음) 새 탭이 아니라 기존 채팅이 열린다.
 5. 터미널에서 `claude --resume`으로 그 대화를 열어 둔 채 모달을 보면 `터미널에서 실행 중` 배지가 붙고 선택되지 않는다.
 6. 검색창에 제목 일부를 넣으면 목록이 걸러지고, Esc로 닫힌다.
+
+## 에이전트 버스 (내장 플러그인)
+
+설명과 설정은 [AGENT_BUS.md](AGENT_BUS.md). 자동 검증: `node --test tests/agent-bus.test.mjs tests/agent-bus-host.test.mjs tests/plugins.test.mjs`와 `pnpm typecheck`.
+규칙(범위, 전송·연쇄·길이 한도, 대기열 합치기·만료), MCP 서버 프로토콜, 내장 플러그인 켜기·끄기·봉인, 채팅 전용 MCP 서버의 터미널 제외와 `ADE_CHAT_*` 주입,
+Codex·Cursor 프로토콜의 env와 자동 허용, 호스트 프로세스(루프백·토큰·재시작 시 같은 포트·워크스페이스 세션 재연결)를 가짜 서버로 확인합니다.
+
+실제 CLI 확인(2026-11-12, claude 2.1.322, Windows): 실제 `claude -p`가 `--mcp-config`로 받은 `agent_bus`의 `list_peers`와 `send_message`를 호출했고, 채팅 id(`ADE_CHAT_ID`)가
+보낸 쪽으로 정확히 찍혀 서버의 `chat/send`까지 도달했습니다(`permissions.allow`로 권한 확인 없음). Codex는 이 PC의 로그인이 만료되어(refresh token revoked) 확인하지 못했고,
+Cursor는 `cursor-agent`가 없어 확인하지 못했습니다.
+
+화면에서 직접 확인할 것:
+
+| 확인 | 기대 |
+|---|---|
+| 설정 → 플러그인 | 에이전트 버스가 **내장**으로 보이고 "플러그인 사용"이 꺼져 있어도 실행 중 |
+| 상세 → 사용 스위치 끄기 | 상태가 꺼짐, 설정 칸이 사라짐. 켜면 되돌아옴. 앱을 다시 켜도 유지 |
+| 같은 프로젝트에 Claude·Codex·Cursor 채팅 세 개, Claude에게 "Codex 채팅에 ○○라고 전해" | Codex 채팅에 "다른 에이전트의 메시지" 카드가 뜨고 Codex가 새 턴을 시작 |
+| Codex가 응답 중일 때 보내기 | 턴에 끼워 들어감(스티어). Cursor가 응답 중이면 끝난 뒤 전달 |
+| 서로 답장을 계속 시키기 | 연쇄 한도(기본 4)에서 멈추고 에이전트가 사용자에게 알림 |
+| 설정에서 Cursor 참여 끄기 | `list_peers`에 Cursor가 나오지 않음 |
+| Cursor가 `send_message`를 허용 요청 없이 실행하는지 | 요청이 뜨면 AGENT_BUS.md의 한계 항목대로 **항상 허용** |

@@ -1,6 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine } from '../apps/local-server/src/chat-claude.js';
+import { ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine } from '../apps/local-server/src/chat-claude.js';
+
+const askInput = { questions: [
+  { question: 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.', header: '웹 서비스', multiSelect: true, options: [{ label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { label: 'DONGPO', description: '' }] },
+  { question: '언어는요?', header: '언어', multiSelect: false, options: [{ label: 'TS' }, { label: 'Go' }] },
+] };
+const askRequest = { type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: askInput } };
+
+test('AskUserQuestion becomes questions with headers, descriptions, multi-select and a free-text row', () => {
+  const [event] = normalizeClaude(askRequest);
+  assert.equal(event.kind, 'approval');
+  assert.equal(event.tool, 'AskUserQuestion');
+  assert.deepEqual(event.input, askInput); // the original input stays: it is what the answer is returned inside
+  assert.deepEqual(event.questions.map(q => [q.id, q.header, q.allowMultiple, q.allowOther]), [['q0', '웹 서비스', true, true], ['q1', '언어', false, true]]);
+  assert.deepEqual(event.questions[0].options, [{ id: 'Project Manager', label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { id: 'DONGPO', label: 'DONGPO' }]);
+  assert.equal(claudeQuestions({ questions: [{ question: '', options: [] }] }), null);
+  assert.equal(normalizeClaude({ ...askRequest, request: { ...askRequest.request, tool_name: 'Bash', input: { command: 'ls' } } })[0].questions, undefined);
+});
+
+test('a Claude answer goes back inside the tool input keyed by the question text; skipping says so instead of a bare refusal', () => {
+  const { questions } = normalizeClaude(askRequest)[0];
+  const input = askUserInput(askInput, questions, { q0: ['Project Manager', 'DONGPO'], q1: ['직접 쓴 답'] });
+  assert.deepEqual(input.answers, { 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.': 'Project Manager, DONGPO', '언어는요?': '직접 쓴 답' });
+  assert.deepEqual(input.questions, askInput.questions);
+  const line = JSON.parse(approvalLine('r1', { allow: true, input }));
+  assert.equal(line.response.response.behavior, 'allow');
+  assert.equal(line.response.response.updatedInput.answers['언어는요?'], '직접 쓴 답');
+  assert.match(ASK_SKIPPED, /chose not to answer/);
+});
 
 test('argv always asks for host-side permission prompts and resumes by session id', () => {
   const args = buildClaudeArgs({ sessionId: 'abc', model: 'sonnet', permissionMode: 'plan' });
@@ -8,6 +36,7 @@ test('argv always asks for host-side permission prompts and resumes by session i
   assert.ok(args.join(' ').includes('--resume abc') && args.join(' ').includes('--model sonnet') && args.join(' ').includes('--permission-mode plan'));
   assert.ok(buildClaudeArgs({ permissionMode: 'default' }).join(' ').includes('--permission-mode manual'));
   assert.ok(buildClaudeArgs({ permissionMode: 'auto' }).join(' ').includes('--permission-mode auto'));
+  assert.ok(!buildClaudeArgs({}).includes('--permission-mode'), 'no explicit choice: the CLI follows its own settings');
   assert.ok(buildClaudeArgs({}).join(' ').includes('--allow-dangerously-skip-permissions'));
   assert.equal(cliPermissionMode('default'), 'manual');
   assert.equal(cliPermissionMode('bypassPermissions'), 'bypassPermissions');

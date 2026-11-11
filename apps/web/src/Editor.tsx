@@ -27,9 +27,9 @@ export type Settings = {
   onboarded: boolean;
   // Chat tab status line (Claude Code's own statusLine, drawn by ADE): which items, their order and side, and a separator.
   chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
-  // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('auto' effort = the CLI's own default).
-  chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
-  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'default' | 'acceptEdits' | 'plan' | 'auto'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
+  chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatToolDisplay: 'summary' | 'detail'; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
+  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean;
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
@@ -49,7 +49,7 @@ export function statusLayout(settings: Pick<Settings, 'statusLeft' | 'statusRigh
   return { left, right };
 }
 // The chat tab's status line only has items that read the conversation; branch, usage, clock etc. stay in the bottom status bar so nothing shows twice.
-const chatDefaultLeft = ['status', 'tokens', 'turns'], chatDefaultRight = ['cost', 'duration', 'session', 'model', 'mode', 'context']; // model, mode and context are also controls in the composer's footer
+const chatDefaultLeft = ['status', 'tokens', 'turns'], chatDefaultRight = ['cost', 'share', 'duration', 'session', 'model', 'mode', 'context']; // model, mode and context are also controls in the composer's footer
 export const chatStatusItemIds = [...chatDefaultLeft, ...chatDefaultRight];
 export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'chatStatusRight'>) {
   const known = new Set(chatStatusItemIds), seen = new Set<string>();
@@ -72,6 +72,11 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
     && known(saved.chatStatusLeft) === JSON.stringify(['status', 'model', 'mode', 'context']) && known(saved.chatStatusRight) === JSON.stringify(['tokens', 'cost', 'turns', 'duration', 'session'])) {
     next.chatStatusItems = defaultSettings.chatStatusItems; next.chatStatusLeft = defaultSettings.chatStatusLeft; next.chatStatusRight = defaultSettings.chatStatusRight;
   }
+  // 'share' (usage contribution) arrived next to the cost: an untouched default layout gets it; a layout saved since then keeps the user's choice.
+  else if (saved.chatStatusItems && !saved.chatStatusLeft?.includes('share') && !saved.chatStatusRight?.includes('share') && known(saved.chatStatusItems) === JSON.stringify(['tokens', 'cost'])) {
+    next.chatStatusItems = [...saved.chatStatusItems, 'share'];
+    if (saved.chatStatusRight?.includes('cost')) next.chatStatusRight = saved.chatStatusRight.flatMap(item => item === 'cost' ? ['cost', 'share'] : [item]);
+  }
   return next;
 }
 // xterm's own default, so an empty-looking field means "unchanged".
@@ -86,9 +91,9 @@ export const defaultSettings: Settings = {
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
   diffLayout: 'auto', diffIgnoreWhitespace: false, diffFoldUnchanged: true, diffContextLines: 3,
   clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false,
-  chatStatusItems: ['tokens', 'cost'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
-  chatSendKey: 'enter', chatToolsOpen: false, chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
-  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'default', chatDefaultEffort: 'auto',
+  chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
+  chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
+  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'cli', chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
 };

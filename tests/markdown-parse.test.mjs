@@ -35,3 +35,10 @@ test('double underscores only make bold at a word edge, so identifiers stay plai
   assert.deepEqual(spans('__bold__ at the start, (__bold__) in parentheses'), ['__bold__', '__bold__']);
   assert.deepEqual(spans('_it_ and **strong** and `code`'), ['_it_', '**strong**', '`code`']);
 });
+
+test('ordered list items keep the number they were written with', () => {
+  const nums = text => parse(text).filter(node => node.t === 'list').flatMap(list => list.items.map(item => item.num));
+  assert.deepEqual(nums('5. 내용\n내용이 있음\n\n6. 내용이 있음\n내용'), [5, 6]);
+  assert.deepEqual(nums('3. a\n4. b\n\n본문\n\n6. c\n7. d\n\n본문\n\n9. e\n11. f'), [3, 4, 6, 7, 9, 11]);
+  assert.deepEqual(nums('- a\n- b'), [undefined, undefined]);
+});

@@ -40,7 +40,10 @@ function renderNode(node: Node, key: string) {
     case 'code': return <CodeBlock key={key} code={node.code} lang={node.lang} />;
     case 'quote': return <blockquote key={key}>{lines(node.text)}</blockquote>;
     case 'hr': return <hr key={key} />;
-    case 'list': { const Tag = node.ordered ? 'ol' : 'ul'; return <Tag key={key}>{node.items.map((item, i) => <li key={i} className={item.depth ? 'nested' : ''}>{inline(item.text)}</li>)}</Tag>; }
+    case 'list': {
+      const Tag = node.ordered ? 'ol' : 'ul';
+      return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={node.ordered ? item.num : undefined} className={item.depth ? 'nested' : ''}>{inline(item.text)}</li>)}</Tag>;
+    }
     case 'table': return <div className="md-table" key={key}><table><thead><tr>{node.head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
       <tbody>{node.rows.map((row, r) => <tr key={r}>{node.head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table></div>;
     default: return <p key={key}>{lines(node.text)}</p>;

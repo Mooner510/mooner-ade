@@ -1,7 +1,7 @@
 // The pure half of the chat's Markdown: text -> block nodes, plus the cuts the streaming renderer makes. No React, so tests load it directly.
 export type Node =
   | { t: 'p'; text: string } | { t: 'h'; level: number; text: string } | { t: 'code'; lang: string; code: string } | { t: 'quote'; text: string } | { t: 'hr' }
-  | { t: 'list'; ordered: boolean; items: { text: string; depth: number }[] } | { t: 'table'; head: string[]; rows: string[][] };
+  | { t: 'list'; ordered: boolean; items: { text: string; depth: number; num?: number }[] } | { t: 'table'; head: string[]; rows: string[][] };
 const cells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
 
 export function parse(source: string): Node[] {
@@ -32,10 +32,12 @@ export function parse(source: string): Node[] {
     }
     const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (item) {
-      flush(); const ordered = /\d/.test(item[2]), items = [{ text: item[3], depth: Math.min(1, Math.floor(item[1].length / 2)) }];
+      // Each item keeps the number it was written with ("5.", "11."): a list cut by a paragraph would restart at 1, and a gap ("9." "11.") would be renumbered.
+      const make = (m: RegExpExecArray) => ({ text: m[3], depth: Math.min(1, Math.floor(m[1].length / 2)), num: /\d/.test(m[2]) ? Number.parseInt(m[2], 10) : undefined });
+      flush(); const ordered = /\d/.test(item[2]), items = [make(item)];
       while (i + 1 < lines.length) {
         const next = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i + 1]);
-        if (next) { items.push({ text: next[3], depth: Math.min(1, Math.floor(next[1].length / 2)) }); i++; }
+        if (next) { items.push(make(next)); i++; }
         else if (/^\s{2,}\S/.test(lines[i + 1]) && lines[i + 1].trim()) { items[items.length - 1].text += ` ${lines[++i].trim()}`; }
         else break;
       }
