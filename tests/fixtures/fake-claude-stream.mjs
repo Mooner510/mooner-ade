@@ -10,5 +10,6 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (message.type !== 'user') return;
   send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } });
+  send({ type: 'ai-title', aiTitle: 'AI가 붙인 제목' });
   send({ type: 'result', is_error: false, result: 'ok', session_id: 'fake-session', total_cost_usd: 0.01, duration_ms: 5, num_turns: 1 });
 });

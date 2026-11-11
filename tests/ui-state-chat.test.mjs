@@ -18,10 +18,10 @@ test('chat status settings accept a well-formed layout and reject a bad one', ()
 
 test('chat, zoom and bell settings accept valid values and reject the rest', () => {
   const good = { chatSendKey: 'mod-enter', chatToolsOpen: true, chatThinkingOpen: 'always', chatAutoScroll: false, chatSmoothStream: false, chatFontSize: 15, chatWidth: 'wide', chatComposerMax: 400,
-    chatDefaultPermission: 'plan', chatDefaultEffort: 'high', uiZoom: 110, diffFont: 'Fira Code', sidebarCompact: true, terminalBell: 'visual', diffComputeMs: 5000, confirmCloseChat: false, confirmCloseProject: false };
+    chatDefaultPermission: 'plan', chatDefaultEffort: 'high', chatModelPins: { cursor: ['gpt-5.4-sol'] }, uiZoom: 110, diffFont: 'Fira Code', sidebarCompact: true, terminalBell: 'visual', diffComputeMs: 5000, confirmCloseChat: false, confirmCloseProject: false };
   assert.deepEqual(validateAppState(app(good)).settings, good);
   for (const bad of [{ chatSendKey: 'space' }, { chatThinkingOpen: 'yes' }, { chatWidth: 'huge' }, { chatDefaultPermission: 'bypassPermissions' }, { chatDefaultEffort: 'ultra' }, { terminalBell: 'loud' },
     { chatFontSize: 10 }, { chatFontSize: 21 }, { chatComposerMax: 119 }, { chatComposerMax: 601 }, { uiZoom: 79 }, { uiZoom: 151 }, { uiZoom: 100.5 }, { diffComputeMs: 999 }, { diffComputeMs: 20001 },
-    { diffFont: 3 }, { diffFont: 'x'.repeat(201) }, { chatToolsOpen: 'yes' }, { sidebarCompact: 1 }, { confirmCloseChat: 'no' }])
+    { diffFont: 3 }, { diffFont: 'x'.repeat(201) }, { chatToolsOpen: 'yes' }, { sidebarCompact: 1 }, { confirmCloseChat: 'no' }, { chatModelPins: { bad: [] } }, { chatModelPins: { cursor: ['x'.repeat(129)] } }])
     assert.throws(() => validateAppState(app(bad)), { code: 'INVALID_INPUT' }, JSON.stringify(bad));
 });

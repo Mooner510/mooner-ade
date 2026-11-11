@@ -115,6 +115,43 @@ test('Codex permission modes keep approval and sandbox restrictions separate', (
   assert.deepEqual(codexPermissions('acceptEdits', '/repo', ['/extra']).sandboxPolicy.writableRoots, ['/repo', '/extra']);
   assert.equal(codexPermissions('bypassPermissions', '/repo').sandboxPolicy.type, 'dangerFullAccess');
 });
+test('Codex auto uses the auto_review reviewer, and the sandbox is its own choice (plan stays read-only)', () => {
+  assert.equal(codexPermissions('auto', '/repo').approvalsReviewer, 'auto_review');
+  for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions']) assert.equal(codexPermissions(mode, '/repo').approvalsReviewer, 'user');
+  assert.equal(codexPermissions('default', '/repo', [], 'read-only').sandboxPolicy.type, 'readOnly');
+  assert.equal(codexPermissions('bypassPermissions', '/repo', [], 'workspace-write').sandboxPolicy.type, 'workspaceWrite', 'an explicit sandbox beats the mode default');
+  assert.equal(codexPermissions('default', '/repo', [], 'danger-full-access').sandboxPolicy.type, 'dangerFullAccess');
+  assert.equal(codexPermissions('plan', '/repo', [], 'danger-full-access').sandboxPolicy.type, 'readOnly');
+  assert.equal(codexPermissions('acceptEdits', '/repo', [], null, true).sandboxPolicy.networkAccess, true);
+  assert.equal(codexPermissions('acceptEdits', '/repo').sandboxPolicy.networkAccess, false);
+  assert.deepEqual(chatCapabilities('codex').sandboxes, ['read-only', 'workspace-write', 'danger-full-access']);
+  assert.deepEqual(chatCapabilities('claude').sandboxes, []);
+});
+test('Codex: switching to Bypass accepts the requests already waiting and the ones that follow, but never answers a question', async () => {
+  const events = [], sent = [];
+  let protocol;
+  const answers = { initialize: {}, 'model/list': { data: [] }, 'skills/list': { data: [] }, 'thread/start': { thread: { id: 't1' }, model: 'm' } };
+  const write = async line => { const message = JSON.parse(line); sent.push(message); if (message.method in answers) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] })); };
+  protocol = createChatProtocol('codex', { write, emit: event => events.push(event) });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [] }, '/repo');
+  const command = { id: 'c1', method: 'item/commandExecution/requestApproval', params: { threadId: 't1', itemId: 'i1', command: 'ls' } };
+  protocol.handle(command);
+  protocol.handle({ id: 'q1', method: 'item/tool/requestUserInput', params: { threadId: 't1', questions: [{ id: 'a', question: 'which?' }] } });
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 2, 'asked while the mode is default');
+  await protocol.setPermissions({ permissionMode: 'bypassPermissions' });
+  assert.deepEqual(sent.filter(message => message.id === 'c1').map(message => message.result), [{ decision: 'accept' }]);
+  assert.ok(events.some(event => event.phase === 'cancel' && event.requestId === 'c1'), 'the waiting card is withdrawn');
+  assert.ok(!sent.some(message => message.id === 'q1'), 'the question still waits for the user');
+  protocol.handle({ id: 'c2', method: 'item/fileChange/requestApproval', params: { threadId: 't1', itemId: 'i2' } });
+  protocol.handle({ id: 'p1', method: 'item/permissions/requestApproval', params: { threadId: 't1', permissions: { network: { enabled: true } } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent.find(message => message.id === 'c2').result, { decision: 'accept' });
+  assert.deepEqual(sent.find(message => message.id === 'p1').result, { permissions: { network: { enabled: true } }, scope: 'turn' });
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 2, 'later requests never show a card');
+  await protocol.setPermissions({ permissionMode: 'default' });
+  protocol.handle({ id: 'c3', method: 'item/commandExecution/requestApproval', params: { threadId: 't1', itemId: 'i3', command: 'rm' } });
+  assert.ok(!sent.some(message => message.id === 'c3'), 'back to asking once Bypass is off');
+});
 
 test('RPC requests time out and pending requests reject on disconnection', async () => {
   const protocol = createChatProtocol('codex', { write: async () => {}, emit() {} });
@@ -216,7 +253,10 @@ test('Cursor advertised options apply without a turn, persist, restore and refre
   await restored.send('restored'); await until(() => restored.state().status === 'idle');
   for (const [id, value] of [['fast', 'true'], ['context', '1m'], ['effort', 'max'], ['thinking', 'false'], ['max_mode', 'true'], ['future_option', 'b']]) assert.equal(restored.state().capabilities.configOptions.find(option => option.id === id).currentValue, value);
   await restored.send('hold');
-  await assert.rejects(restored.set({ configOption: { configId: 'fast', value: 'false' } }), /응답이 끝난 뒤/);
+  // Settings are applied through the ACP session even while a turn runs.
+  await restored.set({ configOption: { configId: 'fast', value: 'false' } });
+  assert.equal(restored.state().status, 'working');
+  assert.equal(restored.state().capabilities.configOptions.find(option => option.id === 'fast').currentValue, 'false');
   await restored.interrupt(); await until(() => restored.state().status === 'idle');
   const sessionId = restored.state().sessionId;
   await restored.set({ model: 'composer-test' });
@@ -234,6 +274,44 @@ test('Cursor advertises agent/plan/ask and switches between them', async t => {
   session.loadCatalog(info.catalog, info.models[''], info.configOptions);
   assert.deepEqual(session.state().capabilities.permissionModes, ['default', 'plan', 'ask']);
   for (const permissionMode of ['plan', 'ask', 'default']) { await session.set({ permissionMode }); assert.equal(session.state().permissionMode, permissionMode); }
+});
+
+test('Cursor Run Everything applies at once (permission requests are accepted by the app); Sandbox is a launch flag applied by a restart', async t => {
+  const ctx = await setup(t, 'cursor'), session = ctx.session, replies = () => ctx.events.filter(e => e.kind === 'message').flatMap(e => e.blocks.map(b => b.text));
+  const turn = async text => { await session.send(text); await until(() => session.state().status === 'idle'); return replies().at(-1); };
+  assert.equal(session.state().capabilities.runEverything, true);
+  assert.deepEqual(session.state().capabilities.sandboxes, ['enabled', 'disabled']);
+  assert.equal(await turn('one'), '안녕');
+  await session.set({ runEverything: true });
+  assert.equal(session.state().runEverything, true);
+  assert.equal(await turn('two'), '안녕', 'no --force: the app answers the requests');
+  await session.send('approval'); await until(() => session.state().status === 'idle');
+  assert.equal(session.state().pending, 0, 'the permission request was accepted without asking');
+  await session.set({ runEverything: false });
+  await session.send('approval'); await until(() => session.state().status === 'attention');
+  assert.equal(session.state().pending, 1, 'turned off again: asks');
+  await session.set({ runEverything: true });
+  await until(() => session.state().pending === 0, 'a request already waiting is accepted when it is switched on');
+  await until(() => session.state().status === 'idle');
+  await session.set({ sandbox: 'disabled' });
+  assert.equal(session.state().sandbox, 'disabled');
+  assert.equal(await turn('three'), '안녕 [sandbox:disabled]');
+  await session.set({ runEverything: false, sandbox: null });
+  assert.equal(await turn('four'), '안녕', 'the flag is gone again');
+  const meta = JSON.parse(await readFile(path.join(ctx.directory, 'chat/chat/meta.json')));
+  assert.ok(!meta.runEverything); assert.equal(meta.sandbox ?? null, null);
+  await assert.rejects(session.set({ sandbox: 'read-only' }), /지원하지 않는 샌드박스/);
+  await assert.rejects(session.set({ runEverything: 'yes' }), /Run Everything/);
+  // Sandbox changed mid-turn: stored now, the process is replaced after the turn.
+  await session.send('hold'); await session.set({ sandbox: 'enabled' });
+  assert.equal(session.state().restartPending, true);
+  await session.interrupt(); await until(() => session.state().status === 'idle');
+  assert.ok(!session.state().restartPending);
+});
+
+test('Run Everything is Cursor-only', async t => {
+  const ctx = await setup(t, 'codex');
+  await assert.rejects(ctx.session.set({ runEverything: true }), /Cursor에서만/);
 });
 
 test('new chat defaults apply only to modes and efforts the agent supports', async t => {
@@ -256,6 +334,15 @@ test('new chat defaults apply only to modes and efforts the agent supports', asy
   await codex.close();
   await skipped.close();
   await cursor.close();
+});
+
+test('Cursor exposes context capability, window from config, and usage_update after a turn', async t => {
+  const ctx = await setup(t, 'cursor'), session = ctx.session;
+  assert.equal(session.state().capabilities.context, true);
+  await session.send('hello');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.state().contextTokens, 14_000);
+  assert.equal(session.state().contextWindow, 300_000);
 });
 
 test('listCommands reads argument-hint from project slash commands', async t => {
@@ -296,4 +383,57 @@ test('Claude /compact leaves a compact event and the context gauge drops to the 
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === true));
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === false));
   assert.ok(!events.some(event => event.kind === 'divider'), 'compacting keeps the history; only /clear starts over');
+  assert.deepEqual(events.filter(event => event.kind === 'command_output').map(event => event.text), ['Compacted'], "the CLI's own output is shown once");
 });
+
+async function controlSession(t) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-control-'));
+  const events = [], session = await openChatSession({ directory, id: 'control', cwd: directory, executable: process.execPath,
+    executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  return { session, events };
+}
+
+test('an interrupted Claude turn stays open until its own result, so that result cannot end the next turn', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('slow');
+  await session.interrupt();
+  assert.equal(session.state().status, 'working', 'the interrupt answer alone does not close the turn');
+  await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'interrupted');
+  await session.send('hello');
+  await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'success');
+});
+
+test('an approval left open when the child dies is withdrawn on the screen, and an answered request is not retried', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('hello');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.state().recoverable, false, 'a request with a successful result is answered');
+  await assert.rejects(session.retry(), /다시 시도할 메시지가 없습니다/);
+  await session.send('approve');
+  await until(() => session.state().status === 'attention');
+  await until(() => events.some(event => event.kind === 'approval' && event.phase === 'cancel' && event.requestId === 'req-1'));
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.state().pending, 0);
+  assert.equal(session.state().recoverable, true, 'the crashed request can be sent again');
+});
+
+test('Cursor: text before a tool keeps the id it streamed with, later text gets a new one, and repeated tool updates are stored only when they change', () => {
+  const events = [], protocol = createChatProtocol('cursor', { write: async () => {}, emit: event => events.push(event) });
+  const update = value => protocol.handle({ jsonrpc: '2.0', method: 'session/update', params: { update: value } });
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Looking' } });
+  update({ sessionUpdate: 'tool_call', toolCallId: 'c1', kind: 'execute', title: 'ls', rawInput: { command: 'ls' }, status: 'pending' });
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'in_progress' });
+  assert.equal(events.filter(event => event.kind === 'message' && event.id === 'c1').length, 1, 'a status-only update stores nothing');
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'a.txt' } }] });
+  update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed' });
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done' } });
+  const textIds = [...new Set(events.filter(event => event.kind === 'delta' && event.phase === 'text').map(event => event.messageId))];
+  assert.equal(textIds.length, 2);
+  assert.deepEqual(events.find(event => event.kind === 'message' && event.id === textIds[0]).blocks, [{ type: 'text', text: 'Looking' }], 'stored under its streaming id');
+  assert.ok(!events.some(event => event.kind === 'delta' && event.phase === 'reset'));
+  assert.equal(events.filter(event => event.kind === 'tool_result').length, 1);
+});
+

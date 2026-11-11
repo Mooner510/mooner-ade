@@ -105,4 +105,6 @@ argument-hint: [path]
   assert.equal(ship?.description, 'Ship the branch');
   assert.equal(ship?.hint, '[args]');
   assert.equal(cursor.some(item => item.name === 'review-agent'), false);
+  assert.equal(cursor.find(item => item.name === 'summarize')?.description, 'Cursor CLI로 대화 컨텍스트를 압축합니다');
+  assert.equal(cursor.find(item => item.name === 'compact')?.description, '/summarize와 같습니다');
 });
