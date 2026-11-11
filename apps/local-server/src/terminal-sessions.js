@@ -61,14 +61,26 @@ export async function seedTerminalSession(directory, id, sessionId, agent = 'cla
 
 // MCP servers approved plugins give the agents started in ADE terminals (docs/PLUGINS.md). Set by the main process only.
 let agentMcpServers = [];
-const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
+const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/, TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 export const mcpServers = () => agentMcpServers;
+// A `chatOnly` server (the built-in agent bus) is not given to terminals: it needs to know which chat it serves.
+const terminalMcpServers = () => agentMcpServers.filter(server => !server.chatOnly);
+// What a chat gets: every server, and a chatOnly one also learns its chat from ADE_CHAT_* variables (they exist nowhere else).
+export const chatMcpServers = (context = {}) => agentMcpServers.map(server => server.chatOnly
+  ? { ...server, env: { ADE_CHAT_ID: String(context.chatId ?? ''), ADE_PROJECT_ID: String(context.projectId ?? ''), ADE_CHAT_AGENT: String(context.agent ?? '') } } : server);
+// Servers whose tools may run without a permission prompt. Only built-in plugins can ask for it (see pluginTerminal).
+export const autoApprovedMcpServers = () => agentMcpServers.filter(server => server.autoApprove).map(server => server.name);
+// `disabledTools` are the server's tools the user turned off in the plugin settings: Claude gets them as deny rules, Codex as disabled_tools.
 export function setAgentMcpServers(servers) {
   agentMcpServers = (Array.isArray(servers) ? servers : []).filter(server => MCP_NAME.test(server?.name ?? '') && typeof server.command === 'string' && Array.isArray(server.args)
     // Codex gets these as TOML literal strings, which cannot hold a quote; such a server is left out of both agents.
     && [server.command, ...server.args].every(value => typeof value === 'string' && !value.includes("'") && !/[\0\r\n]/.test(value)))
-    .map(server => ({ name: server.name, command: server.command, args: [...server.args] }));
+    .map(server => ({ name: server.name, command: server.command, args: [...server.args],
+      disabledTools: Array.isArray(server.disabledTools) ? server.disabledTools.filter(name => typeof name === 'string' && TOOL_NAME.test(name)) : [],
+      ...(server.chatOnly === true && { chatOnly: true }), ...(server.autoApprove === true && { autoApprove: true }) }));
 }
+// Claude Code permission rules that keep the turned-off plugin tools away from the model.
+export const deniedMcpTools = (servers = agentMcpServers) => servers.flatMap(server => (server.disabledTools ?? []).map(tool => `mcp__${server.name}__${tool}`));
 // TOML literal strings ('...') so no shell, including Windows PowerShell 5.1, has to pass a double quote through.
 const toml = value => `'${value.replaceAll('\\', '/')}'`;
 
@@ -87,22 +99,24 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   if (shellTracksSessions) return command;
   if (agent === 'codex') {
     // shortcut: Codex's root session-start log is version-dependent; unknown IDs open the picker.
-    const mcp = agentMcpServers.flatMap(server => [
+    const mcp = terminalMcpServers().flatMap(server => [
       '-c', quote(`mcp_servers.${server.name}.command=${toml(server.command)}`),
-      '-c', quote(`mcp_servers.${server.name}.args=[${server.args.map(toml).join(',')}]`)
+      '-c', quote(`mcp_servers.${server.name}.args=[${server.args.map(toml).join(',')}]`),
+      ...(server.disabledTools.length ? ['-c', quote(`mcp_servers.${server.name}.disabled_tools=[${server.disabledTools.map(toml).join(',')}]`)] : [])
     ]);
     return [command, '--no-daemon', '-c', quote(`log_dir=${root}`), ...mcp].join(' ');
   }
   // Claude runs command hooks through a shell, including Git Bash on Windows.
   const hook = [process.execPath, import.meta.filename, path.join(root, 'session.json')]
     .map(value => quote(value.replaceAll('\\', '/'), false)).join(' ');
-  const settings = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] } });
+  const denied = deniedMcpTools();
+  const settings = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] }, ...(denied.length && { permissions: { deny: denied } }) });
   const settingsFile = path.join(root, 'claude-settings.json');
   await fs.writeFile(settingsFile, settings, { mode: 0o600 });
-  if (!agentMcpServers.length) return `${command} --settings ${quote(settingsFile)}`;
+  if (!terminalMcpServers().length) return `${command} --settings ${quote(settingsFile)}`;
   // --mcp-config adds to the user's own MCP servers.
   const mcpFile = path.join(root, 'claude-mcp.json');
-  const servers = Object.fromEntries(agentMcpServers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args }]));
+  const servers = Object.fromEntries(terminalMcpServers().map(server => [server.name, { type: 'stdio', command: server.command, args: server.args }]));
   await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
   return `${command} --settings ${quote(settingsFile)} --mcp-config ${quote(mcpFile)}`;
 }
