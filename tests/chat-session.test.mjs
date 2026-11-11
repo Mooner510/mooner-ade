@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { execFile } from 'node:child_process';
-import { agentExitBenign, openChatSession, seedChat, probeAgentModels } from '../apps/local-server/src/chat.js';
+import { execFile, spawn } from 'node:child_process';
+import { agentExitBenign, chatFolder, openChatSession, seedChat, probeAgentModels } from '../apps/local-server/src/chat.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
 
@@ -195,6 +195,34 @@ test('Claude streaming usage updates live tokens once and commits on result', as
   assert.ok(committedOutputs.includes(35));
 });
 
+test('Claude: the session cost keeps adding up when a setting change replaces the child (its total_cost_usd starts over)', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-cost-'));
+  const session = await openChatSession({ directory, id: 'cost', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))] });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  await session.send('one');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.state().costUsd, 0.03);
+  await session.set({ effort: 'low' }); // a startup flag: the child is replaced
+  await session.send('two');
+  await until(() => session.state().turns === 2 && session.state().status === 'idle');
+  assert.ok(Math.abs(session.state().costUsd - 0.06) < 1e-9, String(session.state().costUsd));
+});
+
+test('Claude: the auto Compact window the gauge shows is handed to the CLI; a window the user set is left to the CLI', async t => {
+  for (const [settings, expected] of [[{}, '350000'], [{ autoCompactWindow: 300000 }, undefined], [{ autoCompactEnabled: false }, undefined]]) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-window-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'window');
+    await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify(settings));
+    await writeFile(path.join(folder, 'meta.json'), JSON.stringify({ configDir, model: 'claude-sonnet-5-5[1m]' }));
+    const windows = [];
+    const session = await openChatSession({ directory, id: 'window', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
+      env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '', DISABLE_AUTO_COMPACT: '' }, spawnProcess: (command, args, options) => { windows.push(options.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW); return spawn(command, args, options); } });
+    t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+    await session.send('hello'); await until(() => session.state().status === 'idle');
+    assert.equal(windows[0] || undefined, expected, JSON.stringify(settings));
+  }
+});
+
 test('legacy Claude chats still resume, and clear stays cleared after reopening', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-claude-'));
   const options = { directory, id: 'legacy', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))] };
@@ -213,6 +241,53 @@ test('Claude model catalog refresh keeps Effort choices', async t => {
   assert.deepEqual(session.state().capabilities.efforts, chatCapabilities('claude').efforts);
   session.loadCatalog([{ id: 'claude-sonnet-4-5', name: 'Sonnet 4.5', family: 'sonnet', window: 200_000, main: true }], 'claude-sonnet-4-5');
   assert.deepEqual(session.state().capabilities.efforts, chatCapabilities('claude').efforts);
+});
+
+test('Claude: sub-agent output after a turn result keeps the chat working until the hand-back turn ends', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-bg-'));
+  const statuses = [], events = [];
+  const session = await openChatSession({ directory, id: 'bg', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
+    onEvent: event => events.push(event), onState: state => { if (statuses.at(-1) !== state.status) statuses.push(state.status); } });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('background');
+  await until(() => events.filter(event => event.kind === 'result').length === 1);
+  // The first result has landed, yet the sub-agent is still producing output: the chat must not read as idle.
+  await until(() => events.some(event => event.kind === 'message' && event.id === 'sub1'));
+  assert.equal(session.state().status, 'working');
+  await until(() => events.filter(event => event.kind === 'result').length === 2);
+  await until(() => session.state().status === 'idle');
+  assert.ok(statuses.includes('working'));
+});
+
+test('Claude: a question is answered through the tool input; skipping it is not the generic refusal', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-ask-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'ask', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const said = () => events.filter(event => event.kind === 'message').map(event => event.blocks.map(block => block.text ?? '').join('')).join('|');
+  await session.send('ask'); await until(() => session.state().status === 'attention');
+  const approval = session.replay().approvals[0];
+  assert.equal(approval.questions.length, 1);
+  await assert.rejects(session.approve(approval.requestId, { allow: true, answers: {} }), /질문/);
+  await session.approve(approval.requestId, { allow: true, answers: { q0: ['직접 쓴 답'] } }); // free text is allowed (the question has an Other row)
+  await until(() => session.state().status === 'idle');
+  assert.match(said(), /answers=\{"고르세요":"직접 쓴 답"\}/);
+  await session.send('ask'); await until(() => session.state().status === 'attention');
+  await session.approve(session.replay().approvals[0].requestId, { allow: false }); await until(() => session.state().status === 'idle');
+  assert.match(said(), /chose not to answer/);
+});
+
+test('Claude: a silent reopened turn falls back to idle, and the next output reopens it', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-quiet-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'quiet', cwd: directory, quietMs: 60, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('background');
+  await until(() => events.some(event => event.kind === 'message' && event.id === 'sub1'));
+  assert.equal(session.state().status, 'working');
+  await until(() => session.state().status === 'idle'); // no output for quietMs (the next sub-agent event is 150 ms away)
+  await until(() => events.filter(event => event.kind === 'result').length === 2);
+  await until(() => session.state().status === 'idle');
 });
 
 test('worktree cwd survives restart and is retained when the chat is forgotten', async t => {

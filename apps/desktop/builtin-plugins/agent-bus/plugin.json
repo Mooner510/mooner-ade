@@ -1,0 +1,10 @@
+{
+  "id": "agent-bus",
+  "name": "에이전트 버스",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "채팅 탭의 Claude, Codex, Cursor 에이전트가 서로 메시지를 주고받으며 협업하게 합니다. 에이전트가 MCP 도구(agent_bus)로 다른 채팅을 찾고 메시지를 보내면, 받는 채팅에 사용자 승인 없이 바로 전달됩니다.",
+  "main": "host.mjs",
+  "mcp": { "name": "agent_bus", "script": "mcp.mjs", "args": ["--stdio"], "chatOnly": true },
+  "workspace": true
+}

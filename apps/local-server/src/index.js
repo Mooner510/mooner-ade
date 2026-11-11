@@ -23,8 +23,9 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { mcpServers, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
+import { readSessionStats, sessionFiles } from './chat-stats.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { claudeBusy } from './claude-busy.js';
@@ -309,7 +310,7 @@ let pluginTerminal = { node: null, plugins: [] };
 function configurePlugins(config) {
   const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string');
   const plugins = Array.isArray(config?.plugins) ? config.plugins.filter(plugin => plugin && typeof plugin.id === 'string' && plugin.env && typeof plugin.env === 'object' && strings(plugin.path) && Object.values(plugin.env).every(value => typeof value === 'string')
-    && (plugin.mcp === null || (typeof plugin.mcp?.name === 'string' && typeof plugin.mcp.command === 'string' && strings(plugin.mcp.args)))) : [];
+    && (plugin.mcp === null || (typeof plugin.mcp?.name === 'string' && typeof plugin.mcp.command === 'string' && strings(plugin.mcp.args) && (plugin.mcp.disabledTools === undefined || strings(plugin.mcp.disabledTools))))) : [];
   pluginTerminal = { node: typeof config?.node === 'string' ? config.node : null, plugins };
   setAgentMcpServers(plugins.map(plugin => plugin.mcp).filter(Boolean));
 }
@@ -489,13 +490,19 @@ function trimRecent(list) {
   let unpinned = 0;
   return list.filter(item => item.pinned || ++unpinned <= 30);
 }
-// The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript.
-async function chatLaunchFiles(root) {
-  const servers = mcpServers();
+// The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript, and
+// the plugin tools the user turned off as deny rules in a --settings file.
+// A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
+async function chatLaunchFiles(root, context) {
+  const servers = chatMcpServers(context);
   if (!servers.length) return {};
   const mcpFile = path.join(root, 'claude-mcp.json');
-  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args }])) }), { mode: 0o600 });
-  return { mcpFile };
+  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
+  const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
+  if (!denied.length && !allowed.length) return { mcpFile };
+  const settingsFile = path.join(root, 'claude-settings.json');
+  await fs.writeFile(settingsFile, JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }), { mode: 0o600 });
+  return { mcpFile, settingsFile };
 }
 // Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
@@ -536,6 +543,14 @@ async function terminalToChat(project, id, newId, workspace) {
 const cliConfigDirs = async project => [(await accounts('claude', project).catch(() => null))?.dir || defaultClaudeDir(), defaultClaudeDir()];
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
+  // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
+  if (action === 'chat/peers') {
+    const scope = input.scope === 'all' ? [...projects.values()] : project ? [project] : [];
+    return scope.flatMap(item => [...item.chats.entries()].map(([id, chat]) => {
+      const state = chat.state();
+      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, title: state.chatTitle || '', status: state.status, cwd: chat.cwd };
+    }));
+  }
   if (action === 'recent/remove') {
     const root = text(input.root, '프로젝트 경로');
     return registryWrite(async () => {
@@ -724,7 +739,7 @@ async function route(action, input, project) {
         try {
           const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-          chat = await openChatSession({ directory: project.directory, id, cwd, agent: input.agent === undefined ? 'claude' : input.agent, env: pluginEnv,
+          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent: input.agent === undefined ? 'claude' : input.agent, env: pluginEnv,
             onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
             prepare: chatLaunchFiles, recover: () => checkAgents(), defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
           project.chats.set(id, chat);
@@ -735,6 +750,18 @@ async function route(action, input, project) {
     });
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
+    // Session statistics (Claude only): read from the transcript the CLI keeps, nothing is sent anywhere.
+    case 'chat/stats': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      const ref = chat.sessionRef();
+      if (ref.agent !== 'claude') throw fault('CHAT_UNSUPPORTED', '세션 통계는 Claude 채팅에서만 볼 수 있습니다.', 409);
+      if (!ref.sessionId) throw fault('NOT_FOUND', '아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.', 404);
+      const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
+      const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
+      if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      return { sessionId: ref.sessionId, ...await readSessionStats(files) };
+    }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/retry': {
