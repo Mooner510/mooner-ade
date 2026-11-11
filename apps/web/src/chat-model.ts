@@ -3,80 +3,268 @@
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheCreate: number };
 export type ModelConfigOption = { id: string; name: string; description?: string; category?: string; type: 'select'; currentValue: string; options: { value: string; name: string; description?: string }[] };
-export type ChatCapabilities = { configOptions?: ModelConfigOption[]; images: boolean; steer: boolean; cancelSteer: boolean; branch: boolean; rewind: boolean; worktree: boolean; addDirs: boolean; terminal: boolean; terminalToChat: boolean; cost: boolean; tokens: boolean; context: boolean; permissionModes: string[]; efforts: string[]; catalog: CatalogModel[]; limitations: Record<string, string> };
+export type ChatCapabilities = { configOptions?: ModelConfigOption[]; images: boolean; steer: boolean; cancelSteer: boolean; branch: boolean; rewind: boolean; worktree: boolean; addDirs: boolean; terminal: boolean; terminalToChat: boolean; cost: boolean; tokens: boolean; context: boolean; permissionModes: string[]; sandboxes?: string[]; runEverything?: boolean; efforts: string[]; catalog: CatalogModel[]; limitations: Record<string, string> };
+export type AutoCompact = { window: number; maxWindow: number; auto: boolean; source?: string };
+export type ChatSegmentTitles = { custom?: string; ai?: string; agent?: string };
 export type ChatState = {
   agent?: 'claude' | 'codex' | 'cursor'; capabilities?: ChatCapabilities;
-  status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
-  contextTokens: number; contextWindow: number | null; tokens: Tokens; slashCommands: string[]; tools: string[]; pending: number; error: string | null; startedAt: number;
+  status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sandbox?: string | null; network?: boolean; runEverything?: boolean; configuring?: boolean; restartPending?: boolean; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
+  contextTokens: number; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
+  segmentTitles?: ChatSegmentTitles; chatTitle?: string;
 };
-export type Block = { type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any } | { type: 'other'; original: string };
+// `key` keeps a block's React identity from its first streamed character to the stored message (so nothing remounts or replays its entrance);
+// `partial` marks a block that is still streaming. `slot` is a streamed tool's content-block index, `partialJson` its input so far.
+type BlockBase = { key?: string; partial?: boolean };
+export type Block = BlockBase & ({ type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
 export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: { id: string; prompt: string; secret?: boolean; allowMultiple?: boolean; options?: { id: string; label: string; description?: string }[] }[] };
-export type Item =
-  | { kind: 'user'; key: string; text: string; images: number }
-  | { kind: 'assistant'; key: string; id: string; uuid?: string; blocks: Block[]; sub: boolean }
-  | { kind: 'divider'; key: string }
-  | { kind: 'error'; key: string; message: string }
-  | { kind: 'note'; key: string; text: string }; // client-only (/cost, /help): never stored
+// `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
+type ItemBase = { key: string; fresh?: boolean };
+/** The part of a system line that names what changed (a model, an Effort, a permission mode) and the colour it is drawn in elsewhere in the UI. */
+export type Tone = { value: string; color: string; icon?: string; bars?: number };
+/** What the user switched with /model, /effort and /permissions since the last thing said in the thread. */
+export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone };
+export type Item = ItemBase & (
+  | { kind: 'user'; text: string; images: number }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean }
+  | { kind: 'divider' }
+  | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
+  | { kind: 'error'; message: string; recoverable?: boolean }
+  | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
+  | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
+  | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
 export type ChatView = {
-  items: Item[]; results: Record<string, { content: string; isError: boolean }>; stream: Record<number, Block> | null; thinkingTokens: number; steers: { uuid: string; text: string; images: number }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
+  items: Item[]; results: Record<string, { content: string; isError: boolean }>;
+  // Streamed output grows inside `items` (the assistant item of its message id), so the stored message lands on the same item.
+  // `live`: message ids streaming in this turn and whether they belong to a subagent; `liveId` takes deltas that name no message.
+  live: Record<string, { sub: boolean }>; liveId: string | null;
+  thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
-export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null,
-  tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, slashCommands: [], tools: [], pending: 0, error: null, startedAt: Date.now() });
-export const emptyView = (): ChatView => ({ items: [], results: {}, stream: null, thinkingTokens: 0, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
+export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null, autoCompact: null,
+  tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, slashCommands: [], tools: [], pending: 0, error: null, startedAt: Date.now(), segmentTitles: {}, chatTitle: '' });
+const PASTE = /<\/?.?pasted_content(?:\s[^>]*)?>/gi;
+export const cleanChatTitle = (text: string) => text.replace(PASTE, ' ').replace(/\s+/g, ' ').trim();
+const titleUsersFromItems = (items: Item[]) => {
+  const since = lastIndexWhere(items, item => item.kind === 'divider');
+  return items.slice(since + 1).filter((item): item is Extract<Item, { kind: 'user' }> => item.kind === 'user').map(item => ({ kind: 'user' as const, text: item.text }));
+};
+export const resolveChatTitle = (titles: ChatSegmentTitles = {}, users: { kind: 'user'; text: string }[] = []): string => {
+  for (const source of ['custom', 'ai', 'agent'] as const) {
+    const value = cleanChatTitle(titles[source] ?? '');
+    if (value) return value.slice(0, 80);
+  }
+  for (const event of users) {
+    const text = cleanChatTitle(event.text);
+    if (text && !isChatSlashCommand(text)) return text.slice(0, 80);
+  }
+  const first = users.map(event => cleanChatTitle(event.text)).find(Boolean);
+  return first ? first.slice(0, 80) : '';
+};
+const refreshViewTitle = (view: ChatView, segmentTitles: ChatSegmentTitles) => ({ ...view, state: { ...view.state, segmentTitles, chatTitle: resolveChatTitle(segmentTitles, titleUsersFromItems(view.items)) } });
+export const emptyView = (): ChatView => ({ items: [], results: {}, live: {}, liveId: null, thinkingTokens: 0, compacting: false, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
 
-const MAX_ITEMS = 2000;
+const MAX_ITEMS = 2000, MAX_TOOL_JSON = 8192;
+// Array#findLastIndex without the ES2023 lib.
+export function lastIndexWhere<T>(list: readonly T[], test: (value: T) => boolean) { for (let at = list.length - 1; at >= 0; at--) if (test(list[at])) return at; return -1; }
+const blockText = (block: Block) => block.type === 'text' || block.type === 'thinking' ? block.text.trim() : '';
+export const isPartial = (item: Item) => item.kind === 'assistant' && item.blocks.some(block => block.partial);
+const settle = (block: Block): Block => {
+  if (!block.partial) return block;
+  const { partial: _partial, ...rest } = block as Block & { partialJson?: string };
+  if ('partialJson' in rest) delete (rest as { partialJson?: string }).partialJson;
+  return rest as Block;
+};
+// A turn ended (or the conversation moved on): nothing is streaming any more.
+const settleItems = (items: Item[]) => {
+  let out = items;
+  for (let at = items.length - 1; at >= 0; at--) {
+    const item = items[at];
+    if (item.kind !== 'assistant' || !item.blocks.some(block => block.partial)) continue;
+    if (out === items) out = [...items];
+    out[at] = { ...item, blocks: item.blocks.map(settle) };
+  }
+  return out;
+};
+const findAssistant = (items: Item[], id: string) => { for (let at = items.length - 1; at >= 0; at--) { const item = items[at]; if (item.kind === 'assistant' && item.id === id) return at; } return -1; };
+const append = (view: ChatView, item: Item): ChatView => ({ ...view, items: [...view.items, item].slice(-MAX_ITEMS) });
+
+// What a tool's input says so far, while its JSON is still arriving (`input_json_delta`): the whole object once it parses, else the string fields the card summary uses.
+const PARTIAL_KEYS = /"(command|description|file_path|notebook_path|pattern|url|query|path|prompt|subagent_type)"\s*:\s*"((?:[^"\\]|\\.)*)/g;
+export function partialToolInput(json: string): Record<string, any> {
+  try { const value = JSON.parse(json); if (value && typeof value === 'object' && !Array.isArray(value)) return value; } catch { /* still arriving */ }
+  const out: Record<string, string> = {};
+  for (const match of json.matchAll(PARTIAL_KEYS)) {
+    if (match[1] in out) continue;
+    const raw = match[2].replace(/\\(u[0-9a-fA-F]{0,3})?$/, '');
+    try { out[match[1]] = JSON.parse(`"${raw}"`); } catch { out[match[1]] = raw; }
+  }
+  return out;
+}
+
+// One live delta into the blocks of its message. Blocks are found by key, so a delta never lands on another block's text.
+function applyDelta(blocks: Block[], event: any): Block[] {
+  const index = Number(event.index) || 0;
+  if (event.phase === 'text' || event.phase === 'thinking') {
+    const type: 'text' | 'thinking' = event.phase, key = `d${index}:${type}`, chunk = String(event.text ?? '');
+    if (!chunk) return blocks;
+    const at = blocks.findIndex(block => block.key === key);
+    if (at < 0) return [...blocks, { type, text: chunk, key, partial: true }];
+    const prev = blocks[at] as Extract<Block, { type: 'text' | 'thinking' }>, next = [...blocks];
+    next[at] = { ...prev, text: prev.text + chunk, partial: true };
+    return next;
+  }
+  if (event.phase === 'tool') {
+    const id = String(event.id ?? ''), input = event.input && typeof event.input === 'object' ? event.input : undefined;
+    const at = blocks.findIndex(block => block.type === 'tool_use' && block.id === id);
+    if (at >= 0) { if (!input) return blocks; const next = [...blocks]; next[at] = { ...(blocks[at] as Extract<Block, { type: 'tool_use' }>), input }; return next; }
+    return [...blocks, { type: 'tool_use', id, name: String(event.name ?? ''), input: input ?? {}, slot: index, key: `t:${id}`, partial: true }];
+  }
+  if (event.phase === 'toolInput') {
+    const at = lastIndexWhere(blocks, block => block.type === 'tool_use' && Boolean(block.partial) && block.slot === index);
+    if (at < 0) return blocks;
+    const prev = blocks[at] as Extract<Block, { type: 'tool_use' }>;
+    if ((prev.partialJson?.length ?? 0) >= MAX_TOOL_JSON) return blocks;
+    const partialJson = ((prev.partialJson ?? '') + String(event.text ?? '')).slice(0, MAX_TOOL_JSON), next = [...blocks];
+    next[at] = { ...prev, partialJson, input: partialToolInput(partialJson) };
+    return next;
+  }
+  return blocks;
+}
+
+// A stored message into the blocks already there. Claude sends one event per content block under one message id, and the streamed block it
+// completes is replaced in place (same key). A later block never erases the text said before it.
+function absorb(existing: Block[], incoming: Block[]): Block[] {
+  const blocks = [...existing];
+  for (const raw of incoming) {
+    if (!raw || typeof raw !== 'object') continue;
+    const { key: _key, partial: _partial, ...block } = raw as Block;
+    if (block.type === 'tool_use') {
+      const at = blocks.findIndex(item => item.type === 'tool_use' && item.id === block.id);
+      if (at >= 0) blocks[at] = { ...block, key: blocks[at].key ?? `t:${block.id}` }; else blocks.push({ ...block, key: `t:${block.id}` });
+      continue;
+    }
+    if (block.type !== 'text' && block.type !== 'thinking') { blocks.push({ ...block, key: `b${blocks.length}` } as Block); continue; }
+    const next = blockText(block as Block), streamed = blocks.findIndex(item => item.type === block.type && item.partial);
+    if (streamed >= 0) {
+      const prev = blockText(blocks[streamed]);
+      if (!next) { blocks[streamed] = settle(blocks[streamed]); continue; }
+      // Stored thinking is the whole of that message's thinking (Codex joins its parts differently than they streamed): it always replaces.
+      if (block.type === 'thinking' || !prev || next.startsWith(prev) || prev.startsWith(next)) { blocks[streamed] = { ...block, key: blocks[streamed].key } as Block; continue; }
+      blocks[streamed] = settle(blocks[streamed]); // a different text: the streamed one stays and the stored one follows it
+    }
+    const last = blocks.at(-1);
+    if (last?.type === block.type && !last.partial) {
+      const previous = blockText(last);
+      if (!next || !previous || next.startsWith(previous) || previous.startsWith(next)) { if (next) blocks[blocks.length - 1] = { ...block, key: last.key } as Block; continue; }
+    }
+    if (!next || blocks.some(item => item.type === block.type && blockText(item) === next)) continue;
+    blocks.push({ ...block, key: `b${blocks.length}` } as Block);
+  }
+  return blocks;
+}
+
+// Commands whose answer is a report to read, so it is shown as a chat message instead of a one-line system note or a monospaced card.
+export const CHAT_FORMAT = new Set(['cost', 'context', 'status', 'usage']);
+// The name of the slash command the current turn started with ('' when it did not start with one).
+function lastSlashName(view: ChatView): string {
+  for (let at = view.items.length - 1; at >= 0; at--) {
+    const item = view.items[at];
+    if (item.kind === 'user') return parseChatSlashCommand(item.text)?.name ?? '';
+    if (item.kind === 'divider') return '';
+  }
+  return '';
+}
+
+// A finished turn that showed nothing (a slash command answered only in `result`, or not at all) still gets a line under its command.
+function commandFallback(view: ChatView, event: any, key: string): ChatView {
+  let user = -1;
+  for (let at = view.items.length - 1; at >= 0; at--) { const kind = view.items[at].kind; if (kind === 'user') { user = at; break; } if (kind === 'divider') return view; }
+  if (user < 0 || view.items.slice(user + 1).some(item => item.kind === 'assistant' || item.kind === 'command' || item.kind === 'info' || item.kind === 'compact' || item.kind === 'error')) return view;
+  const text = typeof event.text === 'string' ? event.text.trim() : '', lead = view.items[user] as Extract<Item, { kind: 'user' }>;
+  if (text) return append(view, CHAT_FORMAT.has(parseChatSlashCommand(lead.text)?.name ?? '') ? { kind: 'info', key, text, fresh: view.ready } : { kind: 'command', key, text, isError: false, fresh: view.ready });
+  return isChatSlashCommand(lead.text) ? append(view, { kind: 'command', key, text: '', isError: false, fresh: view.ready }) : view;
+}
+
 // Applies one server event. Stored events carry `seq` (a replayed or doubly delivered one is ignored); `delta` events are live-only.
 export function reduce(view: ChatView, event: any): ChatView {
   if (!event || typeof event !== 'object') return view;
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
-  const key = `e${event.seq ?? Math.random()}`;
-  const push = (item: Item): ChatView => ({ ...view, items: [...view.items, item].slice(-MAX_ITEMS) });
+  const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return push({ kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0 });
+    case 'user': return refreshViewTitle(append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, fresh }), view.state.segmentTitles ?? {});
+    case 'title': {
+      const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
+      const text = cleanChatTitle(String(event.text ?? ''));
+      if (!text) return view;
+      const segmentTitles = { ...view.state.segmentTitles, [source]: text };
+      return refreshViewTitle(view, segmentTitles);
+    }
     case 'message': {
-      const item: Item = { kind: 'assistant', key, id: String(event.id ?? key), ...(typeof event.uuid === 'string' && { uuid: event.uuid }), blocks: Array.isArray(event.blocks) ? event.blocks : [], sub: Boolean(event.parentToolUseId) };
-      // The complete message replaces what was streamed of it.
-      const at = view.items.findIndex(existing => existing.kind === 'assistant' && existing.id === item.id);
-      if (at >= 0) { const items = [...view.items]; items[at] = { ...item, key: items[at].key }; return { ...view, items, stream: null }; }
-      return { ...push(item), stream: null };
+      const messageId = String(event.id ?? key), incoming: Block[] = Array.isArray(event.blocks) ? event.blocks : [];
+      const uuid = typeof event.uuid === 'string' ? { uuid: event.uuid } : {}, at = findAssistant(view.items, messageId);
+      if (at < 0) {
+        // After /compact the CLI re-sends earlier synthetic messages (what /context or /mcp printed) under a fresh id but the same uuid: a repeat, not a new reply.
+        if (typeof event.uuid === 'string' && view.items.some(item => item.kind === 'assistant' && item.uuid === event.uuid)) return view;
+        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), fresh });
+      }
+      const prev = view.items[at] as AssistantItem, items = [...view.items];
+      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), blocks: absorb(prev.blocks, incoming) };
+      return { ...view, items };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
+    case 'command_output': {
+      const text = String(event.text ?? ''), isError = event.isError === true;
+      // The CLI confirms a model switch itself; the line ADE writes (with the model's colour) already says so.
+      if (!isError && /^Set model to /.test(text)) return view;
+      return !isError && text.trim() && CHAT_FORMAT.has(lastSlashName(view)) ? append(view, { kind: 'info', key, text, fresh }) : append(view, { kind: 'command', key, text, isError, fresh });
+    }
     case 'delta': {
-      if (event.phase === 'start') return { ...view, stream: {}, thinkingTokens: 0 };
+      if (event.phase === 'start') {
+        const messageId = String(event.messageId ?? `live-${view.items.length}`), sub = Boolean(event.parentToolUseId);
+        return { ...view, live: { ...view.live, [messageId]: { sub } }, liveId: messageId, thinkingTokens: sub ? view.thinkingTokens : 0 };
+      }
       if (event.phase === 'thinkingTokens') return { ...view, thinkingTokens: Number(event.tokens) || 0 };
-      const stream = { ...(view.stream ?? {}) }, index = Number(event.index) || 0, current = stream[index];
-      if (event.phase === 'text') stream[index] = { type: 'text', text: (current?.type === 'text' ? current.text : '') + (event.text ?? '') };
-      else if (event.phase === 'thinking') stream[index] = { type: 'thinking', text: (current?.type === 'thinking' ? current.text : '') + (event.text ?? '') };
-      else if (event.phase === 'tool') stream[index] = { type: 'tool_use', id: String(event.id ?? ''), name: String(event.name ?? ''), input: {} };
-      else return view;
-      return { ...view, stream };
+      if (event.phase === 'compacting') return { ...view, compacting: event.active === true };
+      if (!['text', 'thinking', 'tool', 'toolInput'].includes(event.phase)) return view;
+      const messageId = String(event.messageId ?? view.liveId ?? 'live-0'), at = findAssistant(view.items, messageId);
+      const base: AssistantItem = at >= 0 ? view.items[at] as AssistantItem
+        : { kind: 'assistant', key: `m:${messageId}`, id: messageId, blocks: [], sub: view.live[messageId]?.sub ?? Boolean(event.parentToolUseId), fresh };
+      const blocks = applyDelta(base.blocks, event);
+      if (blocks === base.blocks) return view;
+      const item = { ...base, blocks };
+      if (at < 0) return { ...append(view, item), liveId: messageId };
+      const items = [...view.items]; items[at] = item;
+      return { ...view, items, liveId: messageId };
     }
     case 'approval': {
       if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [] }] };
       return { ...view, approvals: view.approvals.filter(item => item.requestId !== event.requestId) };
     }
     case 'result': {
+      let results = view.results;
       if (event.status === 'interrupted' || event.status === 'failed') {
-        const results = { ...view.results };
-        for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) results[block.id] = { content: event.status === 'interrupted' ? '응답을 중단했습니다.' : '응답에 실패했습니다.', isError: true };
-        view = { ...view, results };
+        const text = event.status === 'interrupted' ? '응답을 중단했습니다.' : '응답에 실패했습니다.';
+        for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results) results = { ...results }; results[block.id] = { content: text, isError: true }; }
       }
-      if (event.status === 'interrupted') return { ...push({ kind: 'note', key, text: '응답을 중단했습니다.' }), stream: null, approvals: [] };
-      return event.status === 'failed' ? { ...push({ kind: 'error', key, message: event.text || '응답에 실패했습니다.' }), stream: null, approvals: [] } : { ...view, stream: null };
+      view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null };
+      if (event.status === 'interrupted') return { ...append(view, { kind: 'note', key, text: '응답을 중단했습니다.', fresh }), approvals: [] };
+      if (event.status === 'failed') return append(view, { kind: 'error', key, message: event.text || '응답에 실패했습니다.', fresh });
+      return commandFallback(view, event, key);
     }
-    case 'error': return push({ kind: 'error', key, message: String(event.message ?? '오류') });
-    case 'divider': return { ...push({ kind: 'divider', key }), stream: null, approvals: [], steers: [], thinkingTokens: 0 };
+    case 'error': return { ...append(view, { kind: 'error', key, message: String(event.message ?? '오류'), recoverable: event.recoverable === true, fresh }), state: { ...view.state, error: String(event.message ?? '오류'), recoverable: event.recoverable === true || view.state.recoverable } };
+    case 'compact': return { ...append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh }), compacting: false };
+    case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
     case 'steer': {
       const rest = view.steers.filter(item => item.uuid !== event.uuid);
       if (event.phase === 'queued') return { ...view, steers: [...rest, { uuid: String(event.uuid), text: String(event.text ?? ''), images: Number(event.images) || 0 }] };
-      if (event.phase === 'applied') return { ...push({ kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0 }), steers: rest };
+      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, fresh }), steers: rest };
       return { ...view, steers: rest };
     }
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).
     case 'rewind': {
       const at = view.items.findIndex(item => item.kind === 'assistant' && item.uuid === event.uuid);
-      return at < 0 ? view : { ...view, items: [...view.items.slice(0, at + 1), { kind: 'note', key, text: '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.' }], stream: null, approvals: [], thinkingTokens: 0 };
+      return at < 0 ? view : { ...view, items: [...settleItems(view.items.slice(0, at + 1)), { kind: 'note', key, text: '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.', fresh }], live: {}, liveId: null, approvals: [], thinkingTokens: 0 };
     }
     default: return view;
   }
@@ -90,10 +278,20 @@ export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatS
     approvals: (replay.approvals ?? []).map(item => ({ requestId: item.requestId, tool: item.tool, input: item.input, toolUseId: item.toolUseId, questions: item.questions, suggestions: item.suggestions ?? [] })) };
 }
 
+
 // ---- numbers shown in the status line ----
-// The CLI reports the real window in each result's modelUsage; before the first answer (or when absent) 1M only if the model id asks for it, else 200k.
-export const contextWindow = (model: string | null, reported?: number | null) => reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : 200_000);
-export const contextPercent = (state: Pick<ChatState, 'contextTokens' | 'model'> & { contextWindow?: number | null }) => Math.min(100, Math.round(state.contextTokens * 100 / contextWindow(state.model, state.contextWindow)));
+// The CLI reports the real window on each result's modelUsage. Until that arrives, the model catalog's max input
+// tokens is the window (Sonnet 5.5 is 1M with no [1m] suffix). A [1m] id is 1M when the catalog has no row; anything else is 200k.
+export const contextWindow = (model: string | null, reported?: number | null, catalog?: { id: string; window?: number }[]) =>
+  reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : catalog?.find(item => item.id === model)?.window) || 200_000;
+export type ContextGauge = { percent: number; used: number; basis: number; max: number; autoCompact: boolean; autoEstimated: boolean };
+export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 'autoCompact'> & { contextWindow?: number | null; capabilities?: { catalog?: { id: string; window?: number }[] } }): ContextGauge => {
+  const max = contextWindow(state.model, state.contextWindow, state.capabilities?.catalog);
+  const compact = state.autoCompact && state.autoCompact.window > 0 && state.autoCompact.window < max ? state.autoCompact : null;
+  const basis = compact?.window ?? max;
+  return { percent: Math.min(100, Math.round(state.contextTokens * 100 / basis)), used: state.contextTokens, basis, max, autoCompact: Boolean(compact), autoEstimated: Boolean(compact?.auto) };
+};
+export const contextPercent = (state: Parameters<typeof contextGauge>[0]) => contextGauge(state).percent;
 // Each model family has its own color (CSS variables --model-*, defined per theme in style.css); unknown models stay uncolored.
 export const modelFamilies = ['fable', 'opus', 'sonnet', 'haiku', 'astra', 'sol', 'terra', 'luna'];
 export const modelColor = (model: string | null | undefined) => {
@@ -158,16 +356,48 @@ const ALIASES = ['opus', 'sonnet', 'haiku'], FAMILY_ORDER = ['fable', 'opus', 's
 export const modelVersion = (name: string) => (/(\d+(?:\.\d+)*)/.exec(name)?.[1] ?? '0').split('.').map(Number);
 const compareVersion = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const diff = (b[i] ?? 0) - (a[i] ?? 0); if (diff) return diff; } return 0; };
 const familyRank = (family: string) => { const at = FAMILY_ORDER.indexOf(family); return at < 0 ? FAMILY_ORDER.length : at; };
-// One row per model, plus a "(1M)" row right behind Opus and Sonnet models that can take a 1M window (so Opus sits with Opus). Fable always comes
+const versionAtLeast = (version: number[], min: number[]) => compareVersion(min, version) >= 0;
+const versionBelow = (version: number[], max: number[]) => compareVersion(version, max) > 0;
+// Opus 4.6 / Sonnet 4.x (before 5) still need `--model …[1m]` for 1M; newer lines default to 1M (Fable 5+, Opus 4.7+, Sonnet 5+, Haiku 5.5). Older families do not support 1M.
+export function needsExplicit1mRow(family: string, version: number[]): boolean {
+  if (family === 'opus') return versionAtLeast(version, [4, 6]) && versionBelow(version, [4, 7]);
+  if (family === 'sonnet') return versionAtLeast(version, [4, 6]) && versionBelow(version, [5, 0]);
+  return false;
+}
+// One row per model, plus a "(1M)" row right behind Opus/Sonnet only when `[1m]` is still required (so Opus sits with Opus). Fable always comes
 // first; the rest are newest version first (5.5 before 5.4), then the family, then the plain row before its 1M row. A row's value is what `--model` gets: the alias when it points at this
 // very model (so the choice keeps following "latest"), else the full id.
 export function modelRows(catalog: CatalogModel[], aliases: Record<string, string>): ModelRow[] {
   const rows = catalog.flatMap(model => {
     const alias = ALIASES.find(name => aliases[name] === model.id), value = alias ?? model.id, label = modelDisplayName(model.name);
-    const base: ModelRow = { value, label, family: model.family, id: model.id, oneM: false, main: model.main, version: modelVersion(model.name) };
-    return model.window >= 1_000_000 && (model.family === 'opus' || model.family === 'sonnet') ? [base, { ...base, value: `${value}[1m]`, label: `${label} (1M)`, oneM: true }] : [base];
+    const version = modelVersion(model.name);
+    const base: ModelRow = { value, label, family: model.family, id: model.id, oneM: false, main: model.main, version };
+    return needsExplicit1mRow(model.family, version) ? [base, { ...base, value: `${value}[1m]`, label: `${label} (1M)`, oneM: true }] : [base];
   });
   return rows.sort((a, b) => Number(b.family === 'fable') - Number(a.family === 'fable') || compareVersion(a.version, b.version) || familyRank(a.family) - familyRank(b.family) || a.family.localeCompare(b.family) || Number(a.oneM) - Number(b.oneM));
+}
+const rowNewestFirst = (a: ModelRow, b: ModelRow) => compareVersion(a.version, b.version) || familyRank(a.family) - familyRank(b.family) || Number(a.oneM) - Number(b.oneM) || a.label.localeCompare(b.label);
+const codexFamily = (row: ModelRow) => /(?:^|[^a-z])(astra|sol|terra|luna)(?![a-z])/i.exec(`${row.id} ${row.label}`)?.[1].toLowerCase() ?? 'other';
+const pickTopPerGroup = (rows: ModelRow[], group: (row: ModelRow) => string, keepAll?: (row: ModelRow) => boolean) => {
+  const fixed: ModelRow[] = [], groups = new Map<string, ModelRow[]>();
+  for (const row of rows) {
+    if (keepAll?.(row)) { fixed.push(row); continue; }
+    const key = group(row); groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...fixed, ...[...groups.values()].map(group => group.sort(rowNewestFirst)[0])];
+};
+// Quick menu: Claude keeps CLI `main` rows; Codex one top model per family; Cursor one top per third-party provider plus every Cursor provider model.
+export function modelQuickDefaults(rows: ModelRow[], agent: 'claude' | 'codex' | 'cursor'): ModelRow[] {
+  if (agent === 'claude') return rows.filter(row => row.main);
+  if (agent === 'codex') return pickTopPerGroup(rows, codexFamily);
+  return pickTopPerGroup(rows, row => modelProvider(row.id)?.id ?? 'other', row => modelProvider(row.id)?.id === 'cursor');
+}
+export function modelQuickRows(rows: ModelRow[], agent: 'claude' | 'codex' | 'cursor', pins: string[] = []): ModelRow[] {
+  const byValue = new Map(rows.map(row => [row.value, row])), defaults = modelQuickDefaults(rows, agent), seen = new Set<string>();
+  const push = (list: ModelRow[]) => list.filter(row => { if (seen.has(row.value)) return false; seen.add(row.value); return true; });
+  const order = new Map(rows.map((row, index) => [row.value, index]));
+  return push([...defaults, ...pins.map(value => byValue.get(value)).filter((row): row is ModelRow => Boolean(row))])
+    .sort((a, b) => (order.get(a.value) ?? 0) - (order.get(b.value) ?? 0));
 }
 // The concrete id the CLI reports, shown as the alias row that resolves to it (rows of models without an alias keep their id).
 export function modelValue(model: string | null, aliases: Record<string, string>): string {
@@ -185,6 +415,10 @@ export const isCursorEffort = (option: { id: string }) => /^(effort|reasoning|re
 export const isCursorMax = (option: { id: string }) => /^max([_-]?mode)?$/i.test(option.id);
 export const isCursorSwitch = (option: { id: string; options: { value: string }[] }) => !isCursorEffort(option) && !isCursorMax(option) && option.options.length === 2 && option.options.every(item => item.value === 'true' || item.value === 'false');
 const contextRank = (value: string) => { const match = /^(\d+(?:\.\d+)?)([km])$/i.exec(value.trim()); return match ? Number(match[1]) * (match[2].toLowerCase() === 'm' ? 1_000_000 : 1_000) : 0; };
+export const parseContextSetting = (value: string | null | undefined) => contextRank((value ?? '').trim());
+// Claude reports from the first turn; Codex/Cursor only after usage_update or a known window from config.
+export const contextReported = (state: Pick<ChatState, 'agent' | 'contextTokens' | 'contextWindow'>) =>
+  state.agent === 'claude' || state.contextTokens > 0 || (state.contextWindow ?? 0) > 0;
 // The largest advertised context window is what MAX selects. ACP has no separate max-mode flag (cursor-agent 2026.11).
 export function contextEnds(option: { options: { value: string }[] }) {
   const ranked = option.options.map(item => ({ value: item.value, rank: contextRank(item.value) })).filter(item => item.rank > 0).sort((a, b) => a.rank - b.rank);
@@ -195,10 +429,10 @@ export const maxOnValue = (option: { options: { value: string }[] }) => option.o
 export const maxOffValue = (option: { options: { value: string }[] }) => option.options.find(item => item.value !== maxOnValue(option))?.value ?? option.options[0]?.value ?? '';
 export const maxSelected = (option: { currentValue: string; options: { value: string }[] }) => option.currentValue === maxOnValue(option);
 // Effort level -> color + glyph, cool and calm at the bottom, hot at the top. The two highest levels get rising particles (EffortSparks in ChatPane.tsx).
-export const effortStyle: Record<string, { color: string; icon: string }> = {
-  none: { color: '#8b93a0', icon: 'remove' }, minimal: { color: '#7fb8a4', icon: 'signal_cellular_alt_1_bar' },
-  low: { color: '#5ec9a0', icon: 'signal_cellular_alt_1_bar' }, medium: { color: '#6fa8f0', icon: 'signal_cellular_alt_2_bar' },
-  high: { color: '#b58cf0', icon: 'signal_cellular_alt' }, xhigh: { color: '#f0a04b', icon: 'bolt' },
+export const effortStyle: Record<string, { color: string; icon?: string; bars?: number }> = {
+  none: { color: '#8b93a0', icon: 'remove' }, minimal: { color: '#7fb8a4', bars: 1 },
+  low: { color: '#5ec9a0', bars: 1 }, medium: { color: '#6fa8f0', bars: 2 },
+  high: { color: '#b58cf0', bars: 4 }, xhigh: { color: '#f0a04b', icon: 'bolt' },
   max: { color: '#f2566e', icon: 'local_fire_department' }, ultra: { color: '#f2566e', icon: 'local_fire_department' }
 };
 export const effortLabels: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', minimal: '최소', none: '없음', ultra: '최상' };
@@ -222,11 +456,52 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
-export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', bypassPermissions: '모두 허용', ask: '질문 전용' };
+export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문 전용' };
+// Resolved on the chat pane via agent-scoped `--mode-*` vars in style.css (Claude Code theme.ts, Codex TUI, Cursor CLI).
+export const permissionModeColor = (mode: string) => `var(--mode-${mode}, var(--muted))`;
 export const statusLabelsKo: Record<ChatState['status'], string> = { idle: '대기 중', working: '응답 중', attention: '승인 대기', closed: '종료' };
 
 // "{model} · {ctx}" style templates; unknown tokens stay as typed so a typo is visible.
 export const fillFormat = (format: string, values: Record<string, string>) => format.replace(/\{(\w+)\}/g, (whole, name) => name in values ? values[name] : whole);
+
+// The particle "-(으)로" for a word: 로 after a vowel or ㄹ, 으로 after any other final consonant. Digits are read aloud ("5" is 오); for anything else (Latin
+// letters, symbols) the pronunciation is unknown, so the neutral "(으)로" is returned.
+export function ro(word: string): string {
+  const last = word.trim().slice(-1), code = last.charCodeAt(0);
+  if (code >= 0xAC00 && code <= 0xD7A3) { const final = (code - 0xAC00) % 28; return final === 0 || final === 8 ? '로' : '으로'; }
+  if (/[0-9]/.test(last)) return '036'.includes(last) ? '으로' : '로';
+  return '(으)로';
+}
+
+// The line that says what was switched. Model and Effort share one kind of line ("이제부터 Sonnet 5.5, 높음으로 작업합니다."), a permission mode has its own
+// ("계획 모드로 변경했습니다."). The particle after an Effort follows its last sound.
+export function settingsLine(change: SettingsChange): { text: string; tones: Tone[] } {
+  const { model, effort, mode } = change;
+  if (mode) return { text: `${mode.value}로 변경했습니다.`, tones: [mode] };
+  if (model && effort) return { text: `이제부터 ${model.value}, ${effort.value}${ro(effort.value)} 작업합니다.`, tones: [model, effort] };
+  if (model) return { text: `이제부터 ${model.value} 모델로 작업합니다.`, tones: [model] };
+  if (effort) return { text: `이제부터 ${effort.value} 추론 강도로 작업합니다.`, tones: [effort] };
+  return { text: '', tones: [] };
+}
+
+// Switching again right after a switch edits that line instead of adding another one, as long as the line just above is the same kind (a model/Effort line for a
+// model or Effort, a mode line for a mode). A model and an Effort switched back to back share one line, and a setting that was changed once stays on its line even
+// when it is switched back to what it was. Anything in between (a message, an answer, the other kind of line) means the next switch gets a line of its own.
+export function withSettingChange(items: Item[], change: SettingsChange, key: string): Item[] {
+  const { mode, ...rest } = change;
+  const upsert = (list: Item[], next: SettingsChange, id: string): Item[] => {
+    const last = list.at(-1);
+    if (last?.kind === 'note' && last.local && last.change && Boolean(last.change.mode) === Boolean(next.mode)) {
+      const merged = { ...last.change, ...next };
+      return [...list.slice(0, -1), { ...last, change: merged, ...settingsLine(merged), rev: (last.rev ?? 0) + 1, fresh: false }];
+    }
+    return [...list, { kind: 'note', key: id, local: true, change: next, ...settingsLine(next), fresh: true }];
+  };
+  let result = items;
+  if (rest.model || rest.effort) result = upsert(result, rest, key);
+  if (mode) result = upsert(result, { mode }, `${key}m`);
+  return result;
+}
 
 // A one-line summary of a tool call for its collapsed card.
 export function toolSummary(name: string, input: any): string {
@@ -272,6 +547,34 @@ const greetings = {
   evening: ['오늘 마무리하기 전에 할 일이 더 있나요?', '저녁이네요. 남은 작업을 같이 볼까요?', '오늘 작업은 어디까지 진행됐나요?', '하루 끝이 보이네요. 마지막으로 무엇을 할까요?'],
   night: ['늦은 시간이네요. 무엇을 도와드릴까요?', '늦었는데 급한 작업이 있나요?', '오늘은 하나만 끝내 볼까요? 무엇부터 할까요?', '밤늦게까지 고생이 많네요. 무엇을 할까요?'],
 };
+
+const SLASH_COMMAND = /^\/[^\s/]*(?:\s|$)/;
+const SLASH_PARTS = /^\/([\w:-]*)(?:\s+([\s\S]*))?$/;
+
+/** Slash-command user input in chat (not a Unix path like `/usr/bin/env`). */
+export function isChatSlashCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return Boolean(trimmed) && SLASH_COMMAND.test(trimmed);
+}
+
+export function parseChatSlashCommand(text: string): { name: string; args: string } | null {
+  const trimmed = text.trim();
+  if (!isChatSlashCommand(trimmed)) return null;
+  const match = SLASH_PARTS.exec(trimmed);
+  if (!match) return null;
+  return { name: match[1], args: (match[2] ?? '').trim() };
+}
+
+const inferenceBlock = (block: Block) => block.type === 'tool_use' || (block.type === 'thinking' && Boolean(block.text.trim()));
+
+/** Copy / branch / rewind apply to real agent turns; local slash output is usually text-only (no tools, no thinking). */
+export function turnAllowsMessageActions(turn: Item[]): boolean {
+  const user = turn.find(item => item.kind === 'user');
+  if (!user || !isChatSlashCommand(user.text)) return true;
+  const assistants = turn.filter((item): item is Extract<Item, { kind: 'assistant' }> => item.kind === 'assistant' && !item.sub);
+  if (!assistants.length) return true;
+  return assistants.some(item => item.blocks.some(inferenceBlock));
+}
 
 /** 시간대별 문구와 공통 문구를 섞어 무작위로 하나 고른다. */
 export function pickGreeting(user = '', now = new Date(), random = Math.random): string {

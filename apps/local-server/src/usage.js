@@ -3,12 +3,13 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { cursorRefreshClientID, cursorSessionCookie, cursorUserId, parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, readCursorLogin } from './cursor-usage.js';
 import { fault } from './files.js';
 
 // Plan limits move slowly and both endpoints are rate limited, so a reading is reused for a few minutes.
 export const TTL = 3 * 60_000;
 const FORCE_GAP = 30_000, BACKOFF = 10 * 60_000;
-export const providers = ['claude', 'codex'];
+export const providers = ['claude', 'codex', 'cursor'];
 
 // Claude Code keeps its OAuth login in the macOS keychain; a custom CLAUDE_CONFIG_DIR gets its own entry suffixed with a hash of that path.
 export function claudeKeychainServices(env = process.env) {
@@ -112,15 +113,18 @@ export async function readCodexLog({ env = process.env, home = os.homedir() } = 
 }
 
 class UsageError extends Error { constructor(message, status) { super(message); this.status = status; } }
-async function getJson(fetchImpl, url, headers) {
-  const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(15_000) });
+async function getJson(fetchImpl, url, headers, init = {}) {
+  const response = await fetchImpl(url, { ...init, headers, signal: AbortSignal.timeout(15_000) });
   if (response.status === 401 || response.status === 403) throw new UsageError('로그인이 만료되었습니다. CLI를 한 번 실행해 다시 로그인하세요.', response.status);
   if (response.status === 429) throw new UsageError('사용량 조회 한도에 걸렸습니다. 잠시 뒤 다시 확인합니다.', 429);
   if (!response.ok) throw new UsageError(`사용량 조회 실패 (HTTP ${response.status})`, response.status);
   return response.json();
 }
 
-export const accountVariable = { claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME' };
+const connectHeaders = token => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' });
+const connectPost = (fetchImpl, url, token, userAgent) => getJson(fetchImpl, url, { ...connectHeaders(token), 'User-Agent': userAgent }, { method: 'POST', body: '{}' });
+
+export const accountVariable = { claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME', cursor: 'CURSOR_APP_SUPPORT' };
 
 // macOS `ps -E` appends the environment to the arguments, space-joined, so a value runs until the next NAME= token.
 export function envFromPs(output, name) {
@@ -235,7 +239,21 @@ export function createAccountResolver({ env = process.env, platform = process.pl
   });
 }
 
-export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.fetch, claudeLogin = readClaudeLogin, codexLogin = readCodexLogin, codexLog = readCodexLog, account = async () => ({ dir: '', from: 'server' }), now = Date.now } = {}) {
+async function refreshCursorToken(fetchImpl, refreshToken, userAgent) {
+  const response = await fetchImpl('https://api2.cursor.sh/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': userAgent },
+    body: JSON.stringify({ grant_type: 'refresh_token', client_id: cursorRefreshClientID, refresh_token: refreshToken }),
+    signal: AbortSignal.timeout(15_000)
+  });
+  if (!response.ok) throw new UsageError('Cursor 로그인이 만료되었습니다. cursor-agent login을 다시 실행하세요.', response.status);
+  const body = await response.json();
+  if (body?.shouldLogout) throw new UsageError('Cursor 로그인이 만료되었습니다. cursor-agent login을 다시 실행하세요.', 401);
+  if (!body?.access_token) throw new UsageError('Cursor 토큰 갱신 응답이 올바르지 않습니다.', response.status);
+  return body.access_token;
+}
+
+export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.fetch, claudeLogin = readClaudeLogin, codexLogin = readCodexLogin, codexLog = readCodexLog, cursorLogin = readCursorLogin, account = async () => ({ dir: '', from: 'server' }), now = Date.now } = {}) {
   const userAgent = `MoonerADE/${version}`;
   const sources = {
     async claude(env) {
@@ -259,6 +277,45 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
         if (!log) throw error;
         return { windows: log.windows, plan: '', source: 'log', at: log.at, note: error.message };
       }
+    },
+    async cursor(env) {
+      const login = await cursorLogin({ env: env?.CURSOR_APP_SUPPORT ? { CURSOR_APP_SUPPORT: env.CURSOR_APP_SUPPORT } : {} });
+      if (!login) throw new UsageError('Cursor 로그인 정보를 찾지 못했습니다. 터미널에서 cursor-agent login을 실행하세요. Cursor 앱만 로그인한 경우 CURSOR_IDE_AUTH=1이면 앱 토큰을 쓰지만 Keychain 확인 창이 뜰 수 있습니다.');
+      if (login.expiresAt && login.expiresAt < now()) throw new UsageError('Cursor 로그인 토큰이 만료되었습니다. cursor-agent login을 다시 실행하세요.');
+      const urls = {
+        usage: 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage',
+        plan: 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo',
+        grok: 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus',
+        summary: 'https://cursor.com/api/usage-summary',
+        requests: 'https://cursor.com/api/usage'
+      };
+      const fetchCursor = async token => {
+        const usageBody = await connectPost(fetchImpl, urls.usage, token, userAgent).catch(async error => {
+          if (error.status !== 401 && error.status !== 403) throw error;
+          const renewed = await refreshCursorToken(fetchImpl, login.refreshToken || token, userAgent);
+          return connectPost(fetchImpl, urls.usage, renewed, userAgent);
+        });
+        const [planBody, grokBody] = await Promise.all([
+          connectPost(fetchImpl, urls.plan, token, userAgent).catch(() => null),
+          connectPost(fetchImpl, urls.grok, token, userAgent).catch(() => null)
+        ]);
+        let plan = planBody?.planInfo?.planName || '';
+        let { windows, needsFallback } = parseCursorUsage(usageBody, { planName: plan });
+        if (needsFallback) {
+          const session = cursorSessionCookie(token);
+          const summary = session ? await getJson(fetchImpl, urls.summary, { Cookie: session, 'User-Agent': userAgent }).catch(() => null) : null;
+          const userId = cursorUserId(token);
+          const requestUrl = userId ? `${urls.requests}?user=${encodeURIComponent(userId)}` : null;
+          const requestUsage = session && requestUrl ? await getJson(fetchImpl, requestUrl, { Cookie: session, 'User-Agent': userAgent }).catch(() => null) : null;
+          const fallback = parseCursorUsageFallback({ summary, requestUsage, planName: plan });
+          if (fallback.windows.length) { windows = fallback.windows; plan ||= fallback.plan; }
+        }
+        const pools = usageBody?.planUsage ?? {};
+        const grok = grokBody ? parseCursorGrokUsage(grokBody, { autoPercent: pools.autoPercentUsed, totalPercent: pools.totalPercentUsed }) : null;
+        if (grok) windows.push(grok);
+        return { windows, plan, source: 'api', at: now() };
+      };
+      return fetchCursor(login.token);
     }
   };
   const cache = new Map();

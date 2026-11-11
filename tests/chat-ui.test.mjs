@@ -37,12 +37,12 @@ test('Cursor model modal renders party tabs, provider groups and readable names'
   await build({ stdin: { contents: `import { useState, useEffect, useMemo, useId, useRef } from 'react';
     import { Icon } from './Icon';
     import { Modal, ModelLabel } from './views';
-    import { modelRows, modelValue, modelAppearance, modelProvider, cursorModelGroups } from './chat-model';
+    import { modelRows, modelValue, modelAppearance, modelProvider, cursorModelGroups, modelQuickDefaults, modelQuickRows } from './chat-model';
   ` + source.slice(source.indexOf('function ModelsModal('), source.indexOf('// Handled here')) + `
     import { renderToStaticMarkup } from 'react-dom/server';
     const ids = ['composer-2.5', 'grok-4.7', 'claude-sonnet-4', 'claude-opus-5-5', 'glm-5p3', 'muse-wonder-1.0'];
     const fallback = ids.map(id => ({id, name:id, family:'', window:0, main:true}));
-    const render = current => renderToStaticMarkup(<ModelsModal current={current} agent="cursor" fallback={fallback} aliases={{}} call={async () => ({})} onPick={() => {}} onClose={() => {}} />);
+    const render = current => renderToStaticMarkup(<ModelsModal current={current} agent="cursor" fallback={fallback} aliases={{}} settings={{chatModelPins: {}}} onSettingsChange={() => {}} call={async () => ({})} onPick={() => {}} onClose={() => {}} />);
     export const thirdParty = render('glm-5p3');
     export const firstParty = render('grok-4.7');
   `, loader: 'tsx', resolveDir: fileURLToPath(new URL('../apps/web/src', import.meta.url)) }, bundle: true, external: ['monaco-editor'], platform: 'node', format: 'cjs', jsx: 'automatic', outfile });
@@ -55,4 +55,33 @@ test('Cursor model modal renders party tabs, provider groups and readable names'
   assert.doesNotMatch(thirdParty, />Grok 4.7<|>Composer 2.5</);
   assert.match(firstParty, /role="tab" aria-selected="true"[^>]*>First Party/);
   for (const name of ['Grok 4.7', 'Composer 2.5']) assert.ok(firstParty.includes(`color:var(--provider-cursor)">${name}</span>`));
+});
+
+test('chat dev draft storage is compiled out when import.meta.env.DEV is false', async t => {
+  const require = createRequire(import.meta.url);
+  const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
+  const directory = await mkdtemp(join(tmpdir(), 'ade-chat-draft-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const bundle = async (dev) => {
+    const outfile = join(directory, dev ? 'dev.cjs' : 'prod.cjs');
+    await build({
+      stdin: {
+        contents: `
+          globalThis.localStorage = { store: new Map(), getItem(k) { return this.store.get(k) ?? null; }, setItem(k, v) { this.store.set(k, v); }, removeItem(k) { this.store.delete(k); } };
+          import { loadChatDevDraft, saveChatDevDraft, clearChatDevDraft } from './chat-dev-draft';
+          saveChatDevDraft('p', 'c', 'hello');
+          export const loaded = loadChatDevDraft('p', 'c');
+          clearChatDevDraft('p', 'c');
+          export const cleared = loadChatDevDraft('p', 'c');
+        `,
+        resolveDir: fileURLToPath(new URL('../apps/web/src', import.meta.url))
+      },
+      bundle: true, platform: 'node', format: 'cjs', outfile,
+      define: { 'import.meta.env.DEV': dev ? 'true' : 'false' }
+    });
+    return require(outfile);
+  };
+  assert.deepEqual(await bundle(true), { loaded: 'hello', cleared: null });
+  assert.deepEqual(await bundle(false), { loaded: null, cleared: null });
+  assert.equal(globalThis.localStorage?.store?.size ?? 0, 0);
 });

@@ -12,6 +12,8 @@ import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
+import { errorText, pushError } from './errors';
+import { ErrorCorner } from './error-ui';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/noto-sans-kr/wght.css';
@@ -81,7 +83,7 @@ function useHub(enabled: boolean) {
   return { hub, connection };
 }
 
-type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; error: string; onOpen(path: string): Promise<void>; onCreate(name: string, parent: string, git: boolean): Promise<void>; onClone(url: string, parent: string, name: string): Promise<void>; onPin(root: string, pinned: boolean): void; onRemove(root: string): Promise<void>; onDismissError(): void; onClose?(): void };
+type PickerProps = { ready: boolean; recent: Recent[]; open: Set<string>; errorScope: string; onOpen(path: string): Promise<void>; onCreate(name: string, parent: string, git: boolean): Promise<void>; onClone(url: string, parent: string, name: string): Promise<void>; onPin(root: string, pinned: boolean): void; onRemove(root: string): Promise<void>; onClose?(): void };
 type PickerTab = 'open' | 'create' | 'clone';
 const pickerTabs: { id: PickerTab; label: string; icon: IconName }[] = [
   { id: 'open', label: '기존 프로젝트 추가', icon: 'folder' },
@@ -106,15 +108,16 @@ function FolderField({ label, ariaLabel, title, value, placeholder, disabled, on
     <button type="button" className={value ? '' : 'primary'} disabled={disabled || picking} onClick={pick}><Icon name="folder" size={15} />{picking ? '선택 중…' : value ? '변경…' : '폴더 선택…'}</button>
   </div></div>;
 }
-function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onPin, onRemove, onDismissError, onClose }: PickerProps) {
+function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone, onPin, onRemove, onClose }: PickerProps) {
   const [tab, setTab] = useState<PickerTab>(() => { try { const saved = localStorage.getItem('ade-picker-tab'); return pickerTabs.some(item => item.id === saved) ? saved as PickerTab : 'open'; } catch { return 'open'; } });
   const [path, setPath] = useState(''), [url, setUrl] = useState(''), [parent, setParent] = useState(''), [name, setName] = useState(''), [folder, setFolder] = useState(''), [git, setGit] = useState(true), [busy, setBusy] = useState(false);
-  const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false), [removeError, setRemoveError] = useState(''), [pickError, setPickError] = useState('');
+  const [removing, setRemoving] = useState(''), [deleting, setDeleting] = useState(false);
+  const fail = (message: string) => pushError(errorScope, message);
   const tabRefs = useRef<Partial<Record<PickerTab, HTMLButtonElement | null>>>({});
   useEffect(() => { try { localStorage.setItem('ade-picker-tab', tab); } catch {} }, [tab]);
   useEffect(() => { if (tab !== 'open' && !parent) void api<{ path: string }>('picker/parent').then(home => setParent(previous => previous || home.path)).catch(() => {}); }, [tab, parent]);
   const run = (work: () => Promise<void>) => { setBusy(true); void work().finally(() => setBusy(false)); };
-  const fieldState = { disabled: !ready || busy, onError: setPickError };
+  const fieldState = { disabled: !ready || busy, onError: fail };
   const onTabKey = (event: React.KeyboardEvent) => {
     const index = pickerTabs.findIndex(item => item.id === tab);
     const next = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? pickerTabs.length - 1 : null;
@@ -129,11 +132,10 @@ function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onP
     <button type="button" className="recent-open" title={isOpen ? `${item.root}
 열려 있음 · 누르면 이 프로젝트로 이동` : item.root} onClick={() => void onOpen(item.root)}><strong><span className="recent-name">{shortName(item.root)}</span>{isOpen && <span className="open-badge">열림</span>}</strong><small>{item.root}</small></button>
     <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} title={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
-    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => { setRemoveError(''); setRemoving(item.root); }}><Icon name="x" size={14} /></button></div>; };
+    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => setRemoving(item.root)}><Icon name="x" size={14} /></button></div>; };
   const submitLabel = tab === 'open' ? (busy ? '여는 중…' : '열기') : tab === 'create' ? (busy ? '만드는 중…' : '만들고 열기') : (busy ? '클론 중…' : '클론하고 열기');
   const createTarget = joinPath(parent.trim(), name.trim()), cloneTarget = joinPath(parent.trim(), folder.trim() || repoName(url));
   return <><div className="welcome-card picker"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
-    {error && <div role="alert" className="error">{error}<button onClick={onDismissError}>닫기</button></div>}
     <div className="picker-split">
       <aside className="picker-side" aria-label="즐겨찾기와 최근 프로젝트">
         <h2>즐겨찾기</h2>
@@ -146,7 +148,6 @@ function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onP
           {pickerTabs.map(item => <button key={item.id} ref={element => { tabRefs.current[item.id] = element; }} type="button" role="tab" id={`picker-tab-${item.id}`} aria-controls="picker-panel" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><Icon name={item.icon} size={15} />{item.label}</button>)}
         </div>
         <div role="tabpanel" id="picker-panel" aria-labelledby={`picker-tab-${tab}`} className="picker-panel">
-          {pickError && <div role="alert" className="error">{pickError}<button type="button" onClick={() => setPickError('')}>닫기</button></div>}
           {tab === 'open' && <form id="picker-form" className="picker-form" onSubmit={event => { event.preventDefault(); if (path) run(() => onOpen(path)); }}>
             <p className="hint">이미 있는 폴더를 프로젝트로 엽니다.</p>
             <FolderField label="프로젝트 폴더" ariaLabel="프로젝트 절대 경로" title="프로젝트 폴더 선택" value={path} placeholder="열 프로젝트 폴더를 선택하세요" onChange={setPath} {...fieldState} /></form>}
@@ -177,11 +178,10 @@ function PickerCard({ ready, recent, open, error, onOpen, onCreate, onClone, onP
       <h2 id="recent-remove-title">최근 프로젝트에서 삭제할까요?</h2>
       <p><strong>{shortName(removing)}</strong></p><p className="hint">{removing}</p>
       <p>목록에서만 제거하며 실제 폴더와 파일, 열려 있는 프로젝트는 유지됩니다.</p>
-      {removeError && <p role="alert" className="error">{removeError}</p>}
       <div className="actions"><button autoFocus disabled={deleting} onClick={() => setRemoving('')}>취소</button>
         <button disabled={deleting} onClick={() => {
-          setDeleting(true); setRemoveError('');
-          void onRemove(removing).then(() => setRemoving('')).catch(cause => setRemoveError(cause instanceof Error ? cause.message : String(cause))).finally(() => setDeleting(false));
+          setDeleting(true);
+          void onRemove(removing).then(() => setRemoving('')).catch(cause => fail(errorText(cause))).finally(() => setDeleting(false));
         }}>{deleting ? '삭제 중…' : '삭제'}</button></div>
     </Modal>}</>;
 }
@@ -224,7 +224,7 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
 }
 
 function Shell() {
-  const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [error, setError] = useState('');
+  const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [bootError, setBootError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
   const [status, setStatus] = useState<Record<string, WorkspaceStatus>>({});
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
@@ -252,7 +252,9 @@ function Shell() {
     next.splice(index + (after ? 1 : 0), 0, entry);
     commit(next);
   };
-  const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
+  const scopeRef = useRef('shell');
+  scopeRef.current = current || 'shell';
+  const report = useCallback((cause: unknown) => pushError(scopeRef.current, errorText(cause)), []);
 
   // ---- boot: sign in, then reopen the projects that were open last time ----
   useEffect(() => {
@@ -270,8 +272,8 @@ function Shell() {
       setSplash(Boolean(loaded?.onboarded));
       const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
-    }).catch(report);
-  }, [report]);
+    }).catch(cause => setBootError(errorText(cause)));
+  }, []);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
   useEffect(() => { (window as unknown as { adeDesktop?: { setZoom?(percent: number): void } }).adeDesktop?.setZoom?.(settings.uiZoom); }, [settings.uiZoom]);
@@ -333,7 +335,6 @@ function Shell() {
   const cloneProject = useCallback((url: string, parent: string, name: string) => openEntry('project/clone', name ? { url, parent, name } : { url, parent }), []);
   const createProject = useCallback((name: string, parent: string, git: boolean) => openEntry('project/create', { name, parent, git }), []);
   async function openEntry(action: string, input: object) {
-    setError('');
     try {
       const opened = await api<{ id: string; root: string }>(action, input);
       // The same project can be reached through different paths (worktrees, symlinks); the id decides.
@@ -392,7 +393,7 @@ function Shell() {
   };
 
   const open = new Set(entries.map(entry => entry.root));
-  const picking: PickerProps = { ready, recent, open, error, onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })), onDismissError: () => setError('') };
+  const picking: PickerProps = { ready, recent, open, errorScope: current || 'shell', onOpen: addProject, onCreate: createProject, onClone: cloneProject, onPin: (root, pinned) => void api<Recent[]>('recent/pin', { root, pinned }).then(setRecent).catch(report), onRemove: async root => setRecent(await api<Recent[]>('recent/remove', { root })) };
   // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
@@ -401,7 +402,7 @@ function Shell() {
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main>{tutorial}</> : <div className="shell">{error && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{error}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭">
@@ -555,7 +556,6 @@ function Shell() {
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
-    {error && !picker && <div role="alert" className="error shell-error">{error}<button onClick={() => setError('')}>닫기</button></div>}
     {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</>;

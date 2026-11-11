@@ -19,6 +19,7 @@ const glyphs = {
   bot: 'smart_toy',
   sparkles: 'auto_awesome',
   settings: 'settings',
+  tune: 'tune',
   splitH: 'vertical_split',
   splitV: 'horizontal_split',
   maximize: 'fullscreen',
@@ -68,8 +69,35 @@ const brands = {
   cursor: <g transform="translate(2.4 2.4) scale(.8)"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" /></g>
 } satisfies Record<string, ReactNode>;
 
-export type IconName = keyof typeof glyphs | keyof typeof brands;
+// A beacon drawn in the same stroke as the other icons. The font's siren glyph is too busy at header size.
+const strokes = {
+  siren: <>
+    <path d="M12 2.4v1.6M4.7 5.5l1.3 1.1M19.3 5.5l-1.3 1.1" />
+    <path className="siren-glass" d="M8.3 13.2a3.7 3.7 0 0 1 7.4 0z" />
+    <path d="M6.5 13.2h11v3.4c0 .7-.6 1.3-1.3 1.3H7.8c-.7 0-1.3-.6-1.3-1.3z" />
+    <path d="M5 20.4h14" />
+  </>
+} satisfies Record<string, ReactNode>;
+
+const effortBars = [{ x: 2.5, h: 6 }, { x: 7.5, h: 9.5 }, { x: 12.5, h: 13 }, { x: 17.5, h: 16.5 }] as const;
+const effortBarBottom = 21;
+
+export function EffortSignalIcon({ bars, size = 15 }: { bars: number; size?: number }) {
+  const active = Math.max(0, Math.min(4, bars));
+  return <svg className="icon effort-signal" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    {effortBars.map((bar, index) => <rect key={index} x={bar.x} y={effortBarBottom - bar.h} width={3.5} height={bar.h} rx={1} fill={index < active ? 'currentColor' : 'var(--faint)'} />)}
+  </svg>;
+}
+
+export function SettingGlyph({ icon, bars, size = 15 }: { icon?: string; bars?: number; size?: number }) {
+  if (bars != null) return <EffortSignalIcon bars={bars} size={size} />;
+  if (!icon) return null;
+  return <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{icon}</span>;
+}
+
+export type IconName = keyof typeof glyphs | keyof typeof brands | keyof typeof strokes;
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+  if (name in strokes) return <svg className="icon" width={size + 2} height={size + 2} viewBox="0 0 24 24" aria-hidden="true">{strokes[name as keyof typeof strokes]}</svg>;
   if (name in brands) return <svg className={`icon brand-${name}`} width={size + 2} height={size + 2} viewBox="0 0 24 24" aria-hidden="true">{brands[name as keyof typeof brands]}</svg>;
   return <span className="icon material-symbols-outlined" style={{ fontSize: size + 2 }} aria-hidden="true">{glyphs[name as keyof typeof glyphs]}</span>;
 }

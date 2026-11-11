@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, waitUntilIdle } from './update-policy.js';
+import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 
@@ -19,9 +19,8 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // macOS: the zip holds MoonerADE.app (made with ditto so the framework symlinks and signature survive); after the app
 // exits, a shell helper swaps the new bundle in for the old one and opens it. User data lives in ~/Library.
 // Terminals live in the pty-host, outside the app (apps/local-server/src/pty-host.js): just before the restart the app asks it to keep
-// them, and the restarted app takes them over, so agents and commands running in them simply go on. What a restart would still cut off
-// (a plugin at work, or every terminal when the host could not start) holds it back: if something like that runs, the user chooses
-// between waiting for it to finish and "later"; either way the new version is not downloaded until the restart is safe.
+// them, and the restarted app takes them over, so agents and commands running in them simply go on. Restored sessions make the app
+// look busy almost all the time, so an accepted update is downloaded immediately and installed on the next quit. There is no idle wait.
 // The previous version is not kept (the new files are mirrored over it), and the scratch folder is removed after the helper has run.
 
 // Only a packaged copy (exe + resources/app, or MoonerADE.app/Contents/Resources/app) updates itself;
@@ -101,21 +100,21 @@ function progressWindow(parent) {
 // One check or update at a time: the periodic timer, the startup check and the settings button may overlap.
 // `applying` stays set once the helper has been started, so no check or prompt can come in during the few seconds the app takes to quit.
 let running = false, applying = false;
-// Set while an accepted update waits for the running work to finish (it can be hours): { version, controller, report }.
-let pending = null;
+// An accepted update already on disk, installed the next time the app quits: { version, launch, discard }.
+let stagedUpdate = null;
 // Versions the user answered "later" to; background checks leave them alone until the app is restarted.
 const declined = createDeclined();
 
-// Resolves to 'unsupported' | 'latest' | 'declined' | 'waiting' | 'updating' | 'error'. `manual` (the settings button) also answers
-// "up to date" and failures in a dialog, asks again about a version turned down earlier, and manages an update that is waiting for
-// work to finish; background checks stay silent unless a new version is there. `getBusy()` asks the server what a restart would cut off.
+// Resolves to 'unsupported' | 'latest' | 'declined' | 'staged' | 'updating' | 'error'. `manual` (the settings button) also answers
+// "up to date" and failures in a dialog, asks again about a version turned down earlier, and can install or drop an update already
+// downloaded; background checks stay silent unless a new version is there. `getBusy()` asks the server what a restart would cut off.
 export async function checkForUpdate({ repo, asset, window, manual = false, beta = false, getBusy, beforeRestart }) {
   if (!portable()) {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치된 앱(Windows 포터블, macOS .app)에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
     return 'unsupported';
   }
   if (applying) return 'updating';
-  if (pending) return manual ? manageWaiting(window) : 'waiting';
+  if (stagedUpdate) return manual ? manageStaged(window) : 'staged';
   if (running) return 'updating';
   running = true;
   try { return await check({ repo, asset, window, manual, beta, getBusy, beforeRestart }); }
@@ -126,6 +125,16 @@ export async function checkForUpdate({ repo, asset, window, manual = false, beta
   } finally { running = false; }
 }
 
+// Called from the app's quit path. Starts the helper that swaps the files in once this process exits. False when nothing is staged.
+export async function applyStagedUpdate() {
+  const current = stagedUpdate;
+  if (!current) return false;
+  stagedUpdate = null;
+  applying = true;
+  try { await current.launch(); return true; }
+  catch (error) { applying = false; stagedUpdate = current; throw error; }
+}
+
 // An answer that cannot be read counts as busy: the app is not restarted on a guess.
 async function readBusy(getBusy) {
   if (!getBusy) return unknownReport('작업 상태를 확인할 수 없습니다');
@@ -133,32 +142,35 @@ async function readBusy(getBusy) {
   catch (error) { return unknownReport(error instanceof Error ? error.message : String(error)); }
 }
 
-// The settings button while an update waits: keep waiting, stop waiting (and leave this version alone), or restart now.
-async function manageWaiting(window) {
-  const current = pending;
+// The settings button after an update has been downloaded: install on the next quit, install now, or drop it.
+async function manageStaged(window) {
+  const current = stagedUpdate;
   if (!current) return 'updating';
   const options = {
-    type: 'info', buttons: ['계속 대기', '대기 취소', '지금 업데이트 (세션 종료)'], defaultId: 0, cancelId: 0, title: '업데이트',
-    message: `새 버전 ${current.version}은 작업이 모두 끝난 뒤 자동으로 설치됩니다.`,
-    detail: `지금 진행 중인 작업:\n${describeReasons(current.report.reasons) || '• 확인 중'}`,
+    type: 'info', buttons: ['지금 재시작', '받지 않기', '종료할 때까지 대기'], defaultId: 2, cancelId: 2, title: '업데이트',
+    message: `v${current.version}을 받아 두었습니다.`,
+    detail: '앱을 종료하면 이 버전을 설치하고 다시 실행합니다. 그 전까지 작업은 계속하면 됩니다.',
   };
   const { response } = await (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
-  if (response === 1) { declined.add(current.version); current.controller.abort('cancelled'); return 'declined'; }
-  if (response !== 2) return 'waiting';
-  const confirmOptions = {
-    type: 'warning', buttons: ['지금 업데이트', '취소'], defaultId: 1, cancelId: 1, title: '업데이트',
-    message: '실행 중인 작업을 끝내지 않고 지금 업데이트할까요?',
-    detail: current.report.keepsTerminals
-      ? `터미널과 그 안의 작업은 계속 실행됩니다. 아래 작업만 끊깁니다.\n\n${describeReasons(current.report.reasons)}`
-      : `모든 터미널과 에이전트가 종료됩니다. 진행 중인 작업, 승인 대기, 백그라운드 작업은 이어지지 않고, Claude 대화는 다시 열 때 resume으로 이어집니다.\n\n${describeReasons(current.report.reasons)}`,
-  };
-  const confirmed = await (window ? dialog.showMessageBox(window, confirmOptions) : dialog.showMessageBox(confirmOptions));
-  if (confirmed.response !== 0 || pending !== current) return 'waiting';
-  current.controller.abort('force');
+  if (response === 1) { declined.add(current.version); current.discard(); if (stagedUpdate === current) stagedUpdate = null; return 'declined'; }
+  if (response !== 0) return 'staged';
+  app.quit();
   return 'updating';
 }
 
-const say = (window, options) => Promise.resolve(window ? dialog.showMessageBox(window, { buttons: ['확인'], ...options }) : dialog.showMessageBox({ buttons: ['확인'], ...options }));
+const ask = (window, options) => window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+const say = (window, options) => ask(window, { buttons: ['확인'], ...options });
+
+// Shown only for "지금 업데이트" when a restart would cut something off. Cancel leaves this version to be asked about again.
+async function confirmInterrupt(window, report) {
+  const listed = describeReasons(report.reasons);
+  const { response } = await ask(window, {
+    type: 'warning', buttons: ['중단하고 업데이트', '취소'], defaultId: 1, cancelId: 1, title: '업데이트',
+    message: '아래 작업이 진행 중입니다. 중단해도 괜찮습니까?',
+    detail: [listed || '진행 중인 작업을 확인하지 못했습니다. 업데이트하면 끊길 수 있습니다.', report.keepsTerminals ? '터미널과 그 안의 작업은 중단되지 않습니다.' : ''].filter(Boolean).join('\n\n'),
+  });
+  return response === 0;
+}
 
 // A request that never answers would hold the one-check-at-a-time lock (and every later check) until undici gives up after minutes.
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -223,43 +235,28 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   // The timer does not ask again about a version the user answered "later" to (and so does not even fetch its manifest).
   if (!manual && declined.has(version)) return 'declined';
   const { file, kind } = await pickPackage(release, asset, version);
-  const report = await readBusy(getBusy), size = `다운로드 크기는 ${mb(file.size || 0)} MB입니다.`;
-  // "Later" is the default button in both prompts: the prompt can appear while typing, and a stray Enter must not end every session.
-  const prompt = report.busy
-    ? {
-      type: 'warning', buttons: ['모두 중단되면 업데이트', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
-      message: `새 ${label} ${version}을 사용할 수 있습니다.`,
-      detail: `현재 버전은 ${app.getVersion()}입니다. 지금은 아래 작업이 진행 중이라 바로 재시작하면 끊깁니다.\n\n${describeReasons(report.reasons)}\n\n"모두 중단되면 업데이트"를 고르면 위 작업이 모두 끝나고 1분쯤 지난 뒤 받아서 설치하고 재시작합니다.${report.keepsTerminals ? ' 터미널은 기다리지 않고 업데이트 중에도 계속 실행됩니다.' : ''} ${size}`,
-    }
-    : {
-      type: 'info', buttons: ['업데이트 후 재시작', '나중에'], defaultId: 1, cancelId: 1, title: '업데이트',
-      message: `새 ${label} ${version}을 사용할 수 있습니다.`,
-      detail: report.keepsTerminals
-        ? `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널과 그 안에서 실행 중인 작업은 끊기지 않고 계속되며, 다시 실행된 앱에 그대로 이어집니다.${report.kept.length ? `\n\n계속 실행되는 작업:\n${describeReasons(report.kept)}` : ''}`
-        : `현재 버전은 ${app.getVersion()}입니다. ${size} 업데이트를 받은 뒤 앱이 잠시 종료되었다가 다시 실행됩니다. 열려 있는 터미널은 종료되고, Claude 대화는 다시 열 때 이어집니다.`,
-    };
-  const { response: choice } = await (window ? dialog.showMessageBox(window, prompt) : dialog.showMessageBox(prompt));
-  if (choice !== 0) { declined.add(version); return 'declined'; }
-  return install({ version, file, kind, window, getBusy, beforeRestart, mustWait: report.busy });
+  const report = await readBusy(getBusy), size = `다운로드 크기는 ${mb(file.size || 0)} MB입니다.`, listed = report.busy ? describeReasons(report.reasons) : '';
+  // "나중에" is the default: the prompt can appear while typing, and a stray Enter must not end every session.
+  const prompt = {
+    type: report.busy ? 'warning' : 'info', buttons: ['종료할 때 업데이트', '지금 업데이트', '나중에'], defaultId: 2, cancelId: 2, title: '업데이트',
+    message: `새 ${label} ${version}을 사용할 수 있습니다.`,
+    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
+  };
+  const { response: choice } = await ask(window, prompt);
+  if (choice === 2) { declined.add(version); return 'declined'; }
+  const now = choice === 1;
+  if (now && report.busy && !(await confirmInterrupt(window, report))) return 'declined';
+  return install({ version, file, kind, window, getBusy, beforeRestart, onQuit: !now, force: now && report.busy });
 }
 
-// Waits (without a time limit) until the server has reported idle several times in a row. 'idle' | 'force' | 'cancelled'.
-async function settle(version, getBusy) {
-  const controller = new AbortController(), state = { version, controller, report: { busy: true, reasons: [] } };
-  pending = state;
-  try { return await waitUntilIdle({ poll: async () => (state.report = await readBusy(getBusy)), signal: controller.signal }); }
-  finally { if (pending === state) pending = null; }
+function holdForQuit({ version, work, staged }) {
+  stagedUpdate?.discard();
+  stagedUpdate = { version, discard() { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); }, launch: () => staged.launch({ work }) };
 }
 
-async function install({ version, file, kind, window, getBusy, beforeRestart, mustWait }) {
-  let forced = false;
-  if (mustWait) {
-    const outcome = await settle(version, getBusy);
-    if (outcome === 'cancelled') { declined.add(version); return 'declined'; }
-    forced = outcome === 'force';
-  }
+async function install({ version, file, kind, window, getBusy, beforeRestart, onQuit, force }) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
-  let progress = progressWindow(window), staged = null;
+  let progress = progressWindow(window), staged = null, held = false;
   try {
     const zip = path.join(work, file.name);
     progress.set(`v${version} 다운로드 준비 중…`);
@@ -269,12 +266,21 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, mu
     });
     progress.set('압축 푸는 중…');
     staged = process.platform === 'darwin' ? await stageMac({ zip, progress, kind }) : await stageWindows({ zip, work, kind });
-    // Work may have started while this downloaded; the restart is decided on the answer from this moment, not from the prompt's.
-    if (!forced && (await readBusy(getBusy)).busy) {
+    if (onQuit) {
       progress.close();
-      const outcome = await settle(version, getBusy);
-      if (outcome === 'cancelled') { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); declined.add(version); return 'declined'; }
-      progress = progressWindow(window);
+      holdForQuit({ version, work, staged });
+      held = true;
+      await say(window, { type: 'info', title: '업데이트', message: `v${version}을 받아 두었습니다.`, detail: '앱을 종료하면 설치되고 다시 실행됩니다. 그 전까지 작업은 계속하면 됩니다.' });
+      return 'staged';
+    }
+    // "지금 업데이트" while idle: work may have started during the download, so ask once before cutting it off.
+    if (!force) {
+      const again = await readBusy(getBusy);
+      if (again.busy) {
+        progress.close();
+        if (!(await confirmInterrupt(window, again))) { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); return 'declined'; }
+        progress = progressWindow(window);
+      }
     }
     progress.set('설치를 위해 앱을 다시 시작합니다…');
     await staged.launch({ work, progress });
@@ -286,6 +292,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, mu
     return 'updating';
   } catch (error) {
     progress.close();
+    if (held && stagedUpdate?.version === version) stagedUpdate = null;
     staged?.discard();
     fs.rmSync(work, { recursive: true, force: true });
     dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);

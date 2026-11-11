@@ -66,6 +66,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     onChange: publish, onTerminal: config => { terminal = config; push(); }, toServer, notify
   });
 
+  const installPickedZip = file => manager.installZip(String(file), { picked: true });
   const handlers = {
     state: () => ({ ...manager.snapshot(), error }),
     setEnabled: value => manager.setEnabled(value === true),
@@ -75,11 +76,12 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     restart: id => manager.restart(String(id)),
     action: (id, action, values) => manager.action(String(id), String(action), values),
     openFolder: async () => { const failure = await shell.openPath(dir); if (failure) throw new Error(failure); return manager.snapshot(); },
+    installZip: installPickedZip,
     pickZip: async () => {
       const window = getWindow(), options = { title: '플러그인 zip 선택', properties: ['openFile'], filters: [{ name: '플러그인 zip', extensions: ['zip'] }] };
       const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
       if (result.canceled || !result.filePaths[0]) return manager.snapshot();
-      return manager.installZip(result.filePaths[0], { picked: true });
+      return installPickedZip(result.filePaths[0]);
     }
   };
   // Zips found in the plugin folder go through the same dialog, one after another. A failure is shown once and not retried
