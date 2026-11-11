@@ -1,6 +1,6 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, contextGauge, contextPercent, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
 export type ChatStatusContext = { state: ChatState };
@@ -39,23 +39,22 @@ export const chatStatusLabels: Record<string, string> = Object.fromEntries(Objec
 export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string } | null => {
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
-  const { state } = context; if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false || id === 'context' && state.capabilities?.context === false) return null;
+  const { state } = context;
+  if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
+  if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   return { text: fillFormat(def.format, values), icon: def.icon, color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };
 };
 
-function ChatItem({ id, context }: { id: string; context: ChatStatusContext }) {
-  const view = chatItemView(id, context); if (!view) return null;
+function ChatItem({ id, view }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>> }) {
   return <span className={`stat chat-stat chat-stat-${id}`} title={chatStatusLabels[id]} style={view.color ? { color: view.color } as CSSProperties : undefined}>
     <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{view.icon}</span>{view.text}</span>;
 }
 
 export function ChatStatusLine({ settings, context }: { settings: Settings; context: ChatStatusContext }) {
   const layout = chatStatusLayout(settings), shown = new Set(settings.chatStatusItems), separator = settings.chatStatusSeparator;
-  const nodes = (ids: string[]) => ids.filter(id => shown.has(id)).flatMap(id => {
-    const node = chatItemView(id, context) ? <ChatItem id={id} context={context} /> : null;
-    return node ? [{ id, node }] : [];
-  });
+  // Each item's view is computed once (it was computed again inside the item).
+  const nodes = (ids: string[]) => ids.filter(id => shown.has(id)).flatMap(id => { const view = chatItemView(id, context); return view ? [{ id, node: <ChatItem id={id} view={view} /> }] : []; });
   const render = (list: { id: string; node: ReactNode }[]) => list.map((item, index) => <Fragment key={item.id}>{index > 0 && separator && <span className="chat-sep" aria-hidden="true">{separator}</span>}{item.node}</Fragment>);
   return <footer className="statusbar chat-statusbar" aria-label="채팅 상태 표시줄">
     <div className="status-left">{render(nodes(layout.left))}</div>
