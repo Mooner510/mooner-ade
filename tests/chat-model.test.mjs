@@ -1,6 +1,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
+
+const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
+const flow = (...entries) => entries.map(entry => typeof entry === 'string' ? { block: say(entry), sub: false } : entry);
+const T = id => ({ block: tool(id), sub: false }), SUB = block => ({ block, sub: true });
+const shapeOf = flow => { const { plain, groups } = processGroups(flow); return flow.map((_, at) => { const group = groups.find(item => at >= item.start && at < item.end); return group ? (at === group.start ? 'P' : 'p') : plain[at] ? 'R' : '?'; }).join(''); };
+
+test('process groups: each tool stretch folds, every result stays plain in between', () => {
+  const question = ['## 사전 조사 결과', '', '| 프로젝트 | 커밋 |', '|---|---|', '| A | 87 |', '', '어느 페이지를 구현할까요?'].join('\n');
+  // tools + short remark, [result and question], tools + short remark, [result]
+  const turn = flow(T('t1'), '먼저 저장소를 살펴볼게요.', T('t2'), question, T('t3'), '다음은 확인합니다.', T('t4'), '구현했습니다.');
+  assert.equal(shapeOf(turn), 'PppRPppR');
+  const { groups } = processGroups(turn);
+  assert.deepEqual(groups.map(group => [group.tools, group.answered]), [[2, true], [2, true]]);
+});
+
+test('process groups: a closing text is the result even when short; a turn that ends on tools stays unanswered', () => {
+  assert.equal(shapeOf(flow(T('t1'), '끝.')), 'PR');
+  const open = processGroups(flow(T('t1'), '설명입니다.', T('t2')));
+  assert.equal(open.groups.length, 1);
+  assert.equal(open.groups[0].answered, false);
+});
+
+test('process groups: remarks with no tool or thought stay plain, and sub-agent text is process', () => {
+  assert.equal(shapeOf(flow('짧은 말.', '## 결과\n\n본문')), 'RR');
+  assert.equal(shapeOf(flow(T('t1'), SUB(say('서브 에이전트의 긴 결과 '.repeat(30))), SUB(tool('t2')), '완료')), 'PppR');
+  assert.equal(shapeOf(flow(SUB(say('서브 텍스트뿐')), '완료')), 'PR');
+});
+
+test('a text is a result when long, structured, multi-paragraph or a question', () => {
+  assert.equal(isResultText('좋아요, 다음은 확인합니다.'), false);
+  assert.equal(isResultText('어느 쪽으로 할까요?'), true);
+  assert.equal(isResultText('- 하나\n- 둘'), true);
+  assert.equal(isResultText('가'.repeat(241)), true);
+  assert.equal(isResultText(['가'.repeat(70), '나'.repeat(70)].join('\n\n')), true);
+});
+
+test('answering questions: single select replaces, multi select toggles, typed text counts, a text-only question needs text', () => {
+  const single = { id: 'a', prompt: '하나', options: [{ id: 'x', label: 'x' }, { id: 'y', label: 'y' }], allowOther: true }, multi = { ...single, id: 'b', allowMultiple: true }, text = { id: 'c', prompt: '이름' };
+  let one = pickOption(single, emptyPick(single), 'x'); one = pickOption(single, one, 'y');
+  assert.deepEqual(one.options, ['y']);
+  one = pickOther(single, one, '내 답'); // typing one's own answer replaces the option in a single-select
+  assert.deepEqual(one, { options: [], other: '내 답' });
+  assert.deepEqual(pickOption(single, one, 'x'), { options: ['x'], other: null });
+  let many = pickOption(multi, emptyPick(multi), 'x'); many = pickOption(multi, many, 'y'); many = pickOption(multi, many, 'x');
+  assert.deepEqual(many.options, ['y']);
+  many = pickOther(multi, many, '추가'); // in a multi-select it adds to the options
+  assert.deepEqual(questionAnswers([multi], { b: many }), { b: ['y', '추가'] });
+  assert.deepEqual(emptyPick(text), { options: [], other: '' });
+  assert.equal(questionsAnswered([single, text], questionAnswers([single, text], { a: one })), false);
+  assert.equal(questionsAnswered([single, text], questionAnswers([single, text], { a: one, c: pickOther(text, emptyPick(text), '  민지 ') })), true);
+  assert.deepEqual(questionAnswers([text], { c: { options: [], other: '  민지 ' } }), { c: ['민지'] });
+  assert.equal(questionsAnswered([], {}), false);
+  assert.equal(toolSummary('AskUserQuestion', { questions: [{ question: '무엇을 할까요?' }, { question: '둘째' }] }), '무엇을 할까요? 외 1개');
+});
 
 test('interrupted tools stay interrupted when a later turn starts', () => {
   let view = reduce(emptyView(), { kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'tool', name: 'Bash', input: {} }] });
@@ -179,7 +234,7 @@ test('contextReported waits for usage on Cursor and Codex', () => {
 test('status numbers and templates', () => {
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x' }), 50);
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x[1m]' }), 10);
-  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 100);
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 132, 'past the window the percent keeps counting instead of sticking at 100');
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 1_000_000 }] } }), 26);
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 200_000 }] } }), 26);
   const withAuto = { contextTokens: 175_000, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, autoCompact: { window: 350_000, maxWindow: 1_000_000, auto: false, source: 'modelSettings' } };
@@ -440,4 +495,17 @@ test('switching settings edits the line above when it is the same kind, otherwis
   assert.equal(go(effort('높음')).length, 6, 'after another message a new line starts');
   assert.equal(settingsLine({}).text, '');
   assert.equal(settingsLine({ model: { value: 'M', color: 'x' }, effort: { value: '최대', color: 'x' } }).text, '이제부터 M, 최대로 작업합니다.', 'the particle follows the Effort');
+});
+
+test('tool runs: 3+ consecutive tools bundle, thoughts between tools stay inside, any text ends the run', () => {
+  const think = { block: { type: 'thinking', text: 'hm' }, sub: false };
+  const runsOf = turn => { const { groups } = processGroups(turn); return toolRuns(turn, groups).map(run => [run.start, run.end, run.tools]); };
+  assert.deepEqual(runsOf(flow(T('a'), T('b'), '다음으로 볼게요.', '끝.')), [], 'two tools are not worth a bundle');
+  assert.deepEqual(runsOf(flow(T('a'), T('b'), T('c'), '끝.')), [[0, 3, 3]]);
+  // a thought between tools belongs to the run; one at either edge does not
+  assert.deepEqual(runsOf(flow(think, T('a'), think, T('b'), T('c'), think, '끝.')), [[1, 5, 3]]);
+  // a remark splits the tools: 2 + 2 is two small stretches, 3 + 1 is one bundle
+  assert.deepEqual(runsOf(flow(T('a'), T('b'), '잠깐 확인.', T('c'), T('d'), '끝.')), []);
+  assert.deepEqual(runsOf(flow(T('a'), T('b'), T('c'), '잠깐 확인.', T('d'), '끝.')), [[0, 3, 3]]);
+  assert.deepEqual(toolRuns(flow(T('a'), T('b'), '끝.'), processGroups(flow(T('a'), T('b'), '끝.')).groups, 2).map(run => run.tools), [2], 'the threshold is a parameter');
 });

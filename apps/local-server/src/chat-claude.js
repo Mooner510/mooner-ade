@@ -64,8 +64,9 @@ export function buildClaudeArgs({
   // A new session can start in its own git worktree; a resumed one re-enters the worktree it was created in.
   if (worktree && !sessionId) args.push("--worktree");
   if (addDirs?.length) args.push("--add-dir", ...addDirs);
-  // The CLI's own name for "ask me" is `manual` (its init event reports it as `default`); leaving the flag out would follow the user's own setting, e.g. `auto`.
-  args.push("--permission-mode", cliPermissionMode(permissionMode));
+  // Only a mode the user picked in this chat is passed. Left out, the CLI follows its own settings (defaultMode), like a plain `claude`.
+  // The CLI's own name for "ask me" is `manual` (its init event reports it as `default`).
+  if (permissionMode) args.push("--permission-mode", cliPermissionMode(permissionMode));
   if (settingsFile) args.push("--settings", settingsFile);
   if (mcpFile) args.push("--mcp-config", mcpFile);
   return args;
@@ -91,6 +92,27 @@ export function userLine(text, images = [], uuid) {
 export const controlLine = (requestId, request) =>
   JSON.stringify({ type: "control_request", request_id: requestId, request }) +
   "\n";
+// AskUserQuestion: the CLI asks its host to put 1-4 questions to the user (each with a header, 2-4 options with descriptions, optionally multi-select).
+// They become the same `questions` every agent's question uses. The user may always type an answer of their own ("Other" in the CLI).
+export function claudeQuestions(input) {
+  if (!Array.isArray(input?.questions)) return null;
+  const questions = input.questions.slice(0, 8).flatMap((item, index) => {
+    if (!item || typeof item.question !== "string" || !item.question.trim()) return [];
+    const options = (Array.isArray(item.options) ? item.options : []).slice(0, 16).flatMap((option) =>
+      typeof option?.label === "string" && option.label
+        ? [{ id: option.label, label: option.label, ...(typeof option.description === "string" && option.description && { description: option.description }) }]
+        : [],
+    );
+    return [{ id: `q${index}`, prompt: item.question, ...(typeof item.header === "string" && item.header && { header: item.header }), allowMultiple: item.multiSelect === true, allowOther: true, options }];
+  });
+  return questions.length ? questions : null;
+}
+// The answer goes back inside the tool input: { answers: { "<question text>": "<label, or labels joined with ', ', or the user's own text>" } }.
+export const askUserInput = (input, questions, answers) => ({
+  ...input,
+  answers: Object.fromEntries(questions.map((question) => [question.prompt, (answers[question.id] ?? []).join(", ")])),
+});
+export const ASK_SKIPPED = "The user chose not to answer these questions. Do not ask them again right away: continue with your best judgment, or ask in plain text if you cannot proceed without an answer.";
 export function approvalLine(
   requestId,
   { allow, input, message, suggestions },
@@ -341,6 +363,7 @@ export function normalizeClaude(raw) {
     raw.request?.subtype === "can_use_tool"
   ) {
     const request = raw.request;
+    const questions = request.tool_name === "AskUserQuestion" ? claudeQuestions(request.input) : null;
     return [
       {
         kind: "approval",
@@ -348,6 +371,7 @@ export function normalizeClaude(raw) {
         requestId: raw.request_id,
         tool: request.tool_name,
         input: request.input ?? {},
+        ...(questions && { questions }),
         toolUseId: request.tool_use_id,
         suggestions: Array.isArray(request.permission_suggestions)
           ? request.permission_suggestions
