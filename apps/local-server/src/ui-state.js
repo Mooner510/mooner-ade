@@ -39,6 +39,14 @@ function validateSettings(settings, invalid) {
   for (const [name, min, max] of [['chatFontSize', 11, 20], ['chatComposerMax', 120, 600], ['uiZoom', 80, 150], ['diffComputeMs', 1000, 20000]])
     if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= min && settings[name] <= max)) invalid();
   if (settings.diffFont !== undefined && !(typeof settings.diffFont === 'string' && settings.diffFont.length <= 200)) invalid();
+  if (settings.chatModelPins !== undefined) {
+    if (!settings.chatModelPins || typeof settings.chatModelPins !== 'object' || Array.isArray(settings.chatModelPins)) invalid();
+    if (Object.keys(settings.chatModelPins).length > 3) invalid();
+    for (const [agent, list] of Object.entries(settings.chatModelPins)) {
+      if (!['claude', 'codex', 'cursor'].includes(agent)) invalid();
+      if (!Array.isArray(list) || list.length > 32 || list.some(item => typeof item !== 'string' || item.length > 128)) invalid();
+    }
+  }
 }
 
 // App-wide state: which projects are open, which one is active, and settings shared by every project.

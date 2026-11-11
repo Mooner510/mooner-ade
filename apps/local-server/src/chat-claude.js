@@ -3,6 +3,13 @@
 // Control-request shapes follow the Agent SDK's stdio protocol; tests/fixtures/claude-stream.jsonl (scripts/record-claude-stream.mjs)
 // is the real capture they should be checked against. Anything not recognised passes through as `raw`.
 
+import { cleanChatTitle } from "./chat-title.js";
+
+const titleEvent = (source, text) => {
+  const cleaned = cleanChatTitle(text);
+  return cleaned ? [{ kind: "title", source, text: cleaned }] : [];
+};
+
 export const PERMISSION_MODES = [
   "default",
   "acceptEdits",
@@ -127,9 +134,27 @@ const compactEvent = (meta, at) => ({
   ...(at && { at }),
 });
 
+// What a local slash command printed (/compact, /context, /cost, /mcp, ...): the CLI echoes it as a user message wrapped in these tags.
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
+const LOCAL_OUTPUT = /<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/g;
+export function localCommandOutput(text) {
+  if (typeof text !== "string" || !text.includes("<local-command-")) return [];
+  return [...text.matchAll(LOCAL_OUTPUT)].flatMap((match) => {
+    const output = match[2].replace(ANSI, "").replace(/\r\n?/g, "\n").trim().slice(0, 64_000);
+    return output || match[1] === "stdout" ? [{ kind: "command_output", text: output, isError: match[1] === "stderr" }] : [];
+  });
+}
+const textOf = (content) =>
+  blocks(content)
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n");
+
 // raw JSON object from stdout -> list of events. `delta` events are live-only; the rest are stored in the transcript.
 export function normalizeClaude(raw) {
   if (!raw || typeof raw !== "object") return [];
+  if (raw.type === "custom-title" && raw.customTitle) return titleEvent("custom", raw.customTitle);
+  if (raw.type === "ai-title" && raw.aiTitle) return titleEvent("ai", raw.aiTitle);
   if (raw.type === "system" && raw.subtype === "init") {
     return [
       {
@@ -162,14 +187,16 @@ export function normalizeClaude(raw) {
   if (raw.type === "system" && raw.subtype === "compact_boundary")
     return [compactEvent(raw.compact_metadata)];
   if (raw.type === "stream_event") {
-    const event = raw.event ?? {};
+    // Every live event names its subagent (null for the main thread), so the server can keep parallel streams apart.
+    const event = raw.event ?? {},
+      parentToolUseId = raw.parent_tool_use_id ?? null;
     if (event.type === "message_start") {
       const started = [
         {
           kind: "delta",
           phase: "start",
           messageId: event.message?.id,
-          parentToolUseId: raw.parent_tool_use_id ?? null,
+          parentToolUseId,
         },
       ];
       const usage = usageOf(event.message?.usage);
@@ -177,7 +204,7 @@ export function normalizeClaude(raw) {
         usage &&
         (usage.input || usage.output || usage.cacheRead || usage.cacheCreate)
       )
-        started.push({ kind: "delta", phase: "usage", usage });
+        started.push({ kind: "delta", phase: "usage", usage, parentToolUseId });
       return started;
     }
     if (event.type === "message_delta") {
@@ -186,7 +213,7 @@ export function normalizeClaude(raw) {
         usage &&
         (usage.input || usage.output || usage.cacheRead || usage.cacheCreate)
       )
-        return [{ kind: "delta", phase: "usage", usage }];
+        return [{ kind: "delta", phase: "usage", usage, parentToolUseId }];
       return [];
     }
     if (event.type === "content_block_delta") {
@@ -197,6 +224,7 @@ export function normalizeClaude(raw) {
             phase: "text",
             index: event.index,
             text: event.delta.text,
+            parentToolUseId,
           },
         ];
       if (event.delta?.type === "thinking_delta")
@@ -206,6 +234,18 @@ export function normalizeClaude(raw) {
             phase: "thinking",
             index: event.index,
             text: event.delta.thinking,
+            parentToolUseId,
+          },
+        ];
+      // A tool's input arrives as JSON pieces; the card shows the command or path from them before the call is complete.
+      if (event.delta?.type === "input_json_delta" && typeof event.delta.partial_json === "string" && event.delta.partial_json)
+        return [
+          {
+            kind: "delta",
+            phase: "toolInput",
+            index: event.index,
+            text: event.delta.partial_json,
+            parentToolUseId,
           },
         ];
     }
@@ -220,6 +260,7 @@ export function normalizeClaude(raw) {
           index: event.index,
           id: event.content_block.id,
           name: event.content_block.name,
+          parentToolUseId,
         },
       ];
     }
@@ -254,8 +295,9 @@ export function normalizeClaude(raw) {
     ];
   }
   if (raw.type === "user") {
-    // Tool results come back as user messages; plain user text is already recorded by the server when it is sent.
-    return blocks(raw.message?.content)
+    // Tool results come back as user messages; plain user text is already recorded by the server when it is sent. A local command's output is kept.
+    const content = raw.message?.content;
+    return blocks(content)
       .filter((block) => block.type === "tool_result")
       .map((block) => ({
         kind: "tool_result",
@@ -269,7 +311,8 @@ export function normalizeClaude(raw) {
                   part.type === "text" ? part.text : `[${part.type}]`,
                 )
                 .join("\n"),
-      }));
+      }))
+      .concat(localCommandOutput(textOf(content)));
   }
   if (raw.type === "result") {
     return [
@@ -335,6 +378,14 @@ export function transcriptEvents(text) {
     } // torn first line of a tail, or a line being written
     if (!raw || raw.isSidechain) continue;
     const at = Date.parse(raw.timestamp) || undefined;
+    if (raw.type === "custom-title" && raw.customTitle) {
+      events.push(...titleEvent("custom", raw.customTitle).map(event => ({ ...event, at })));
+      continue;
+    }
+    if (raw.type === "ai-title" && raw.aiTitle) {
+      events.push(...titleEvent("ai", raw.aiTitle).map(event => ({ ...event, at })));
+      continue;
+    }
     if (raw.type === "system" && raw.subtype === "compact_boundary")
       events.push(compactEvent(raw.compactMetadata, at));
     else if (raw.type === "assistant")
@@ -346,11 +397,7 @@ export function transcriptEvents(text) {
         for (const event of results) events.push({ ...event, at });
         continue;
       }
-      const command = parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.text ?? "")
-        .join("\n")
-        .trim();
+      const command = textOf(raw.message?.content).trim();
       const name = /<command-name>\s*([^<]+?)\s*<\/command-name>/.exec(
           command,
         )?.[1],
