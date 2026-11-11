@@ -1,14 +1,10 @@
 // Decisions of the auto-updater that do not need Electron, kept apart so they can be tested: how often to look, which
-// versions the user already turned down, what counts as "everything stopped", and how a busy report is worded.
+// versions the user already turned down, and how a busy report is worded. A downloaded update installs on the next quit;
+// nothing here waits for the app to look idle.
 
 // Background checks: shortly after start and then every 10 minutes. A check without a new release is one small API call
 // (about 7 KB, unauthenticated: 6 of the 60 requests an IP gets per hour) and writes nothing to disk.
 export const UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
-
-// While waiting for work to finish the server is asked every 15 s, and only 4 idle answers in a row (about a minute) count:
-// a Claude between two tool calls or a build between two steps can look idle for a moment.
-export const IDLE_POLL_MS = 15_000;
-export const IDLE_POLLS = 4;
 
 // Versions are 1.2.3 (stable) or 1.2.3-beta1 (a prerelease, offered only to users who turned beta updates on).
 export const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$/;
@@ -57,30 +53,9 @@ export function createDeclined() {
   return { has: version => versions.has(version), add: version => { versions.add(version); }, clear: () => versions.clear() };
 }
 
-const sleepFor = (ms, signal) => new Promise(resolve => {
-  const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
-  const timer = setTimeout(done, ms);
-  signal.addEventListener('abort', done, { once: true });
-});
-
-// Polls until `required` answers in a row say nothing is busy, then resolves 'idle'. Resolves with the abort reason
-// ('cancelled' or 'force') when `signal` is aborted first. There is deliberately no timeout: a Claude waiting on a long
-// monitor is not something to guess about, and the user can always cancel or force the update.
-export async function waitUntilIdle({ poll, signal, intervalMs = IDLE_POLL_MS, required = IDLE_POLLS, sleep = sleepFor }) {
-  let idle = 0;
-  while (!signal.aborted) {
-    const report = await poll();
-    if (signal.aborted) break;
-    idle = report.busy ? 0 : idle + 1;
-    if (idle >= required) return 'idle';
-    await sleep(intervalMs, signal);
-  }
-  return typeof signal.reason === 'string' ? signal.reason : 'cancelled';
-}
-
 // The server's report is trusted only in shape: anything unreadable counts as busy, never as idle.
 // `keepsTerminals`: the server's terminals live in the pty-host and keep running through the restart; each reason they cause is
-// marked `keeps`. Only the other reasons (a plugin at work, an answer that could not be read) hold the restart back.
+// marked `keeps`. Only the other reasons (a plugin at work, an answer that could not be read) are work a quit would cut off.
 export function normalizeReport(value) {
   if (!value || typeof value !== 'object' || typeof value.busy !== 'boolean') return unknownReport('작업 상태 응답을 이해하지 못했습니다');
   const all = Array.isArray(value.reasons) ? value.reasons.filter(item => item && typeof item === 'object') : [];
