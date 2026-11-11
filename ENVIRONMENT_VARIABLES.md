@@ -16,3 +16,9 @@
 | `ADE_PTY_LINGER_MS` / `ADE_PTY_FIRST_OWNER_MS` | `120000` / `60000` | PTY 호스트가 서버 없이 터미널을 유지하는 시간, 첫 연결을 기다리는 시간. 테스트용 |
 
 macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, Windows는 `%LOCALAPPDATA%/mooner-ade`(변수 미설정 시 사용자 홈 아래)입니다. 실제 프로젝트 파일과 CLI 자체 인증 설정은 별도로 관리됩니다.
+
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `CURSOR_APP_SUPPORT` | OS별 Cursor 앱 데이터 경로 | IDE 로그인 DB(`state.vscdb`) 위치 |
+| `CURSOR_ACCESS_TOKEN` / `CURSOR_REFRESH_TOKEN` | 없음 | Cursor 사용량 API용 JWT. 설정 시 Keychain 읽기 생략 |
+| `CURSOR_IDE_AUTH` | 꺼짐 | `1`이면 macOS에서 Cursor **앱** 로그인(`state.vscdb` + Safe Storage)을 쓴다. Keychain 확인 창이 뜰 수 있음. 기본은 `cursor-agent login`의 CLI Keychain만 사용 |
