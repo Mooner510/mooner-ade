@@ -3,7 +3,11 @@ import readline from 'node:readline';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 send({ type: 'system', subtype: 'init', session_id: 'fake-session', model: 'fake-model', permissionMode: 'default', slash_commands: ['compact'], tools: ['Bash'] });
 readline.createInterface({ input: process.stdin }).on('line', line => {
-  const message = JSON.parse(line);
+  let message; try { message = JSON.parse(line); } catch { return; }
+  if (message.type === 'control_request' && message.request?.subtype === 'set_permission_mode') {
+    send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { permissionMode: message.request.mode } } });
+    return;
+  }
   if (message.type !== 'user') return;
   send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } });
   send({ type: 'result', is_error: false, result: 'ok', session_id: 'fake-session', total_cost_usd: 0.01, duration_ms: 5, num_turns: 1 });
