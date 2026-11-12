@@ -13,7 +13,7 @@
   - 2026-11-12 검증에서 찾아 고친 결함(아래 3절): `chat-model.ts`, `main.tsx`, `Workspace.tsx`, `feedback-store.ts`, `FeedbackCapture.tsx`, `errors.ts`, `ChatPane.tsx`, `QuickInput.tsx`, `style.css`, `tests/errors.test.mjs`, 루트 `a.txt` 삭제.
   - 새 파일: `docs/AI_AGENT_TEST_CHECKLIST.md`, 이 문서, `scripts/verify/`(검증 하네스).
 - 1차 Full E2E(2026-11-12)에서 아래 3절 수정을 실행으로 확인했고, 새로 찾은 결함 2건(후속 큐 이미지 썸네일 `ChatPane.tsx`·`style.css`, `ade-ui` 스크롤바 `UiFrame.tsx`)을 고쳤습니다. 타입 검사 통과. 가짜 `claude`에는 `adeui` 응답이 추가됐습니다(`scripts/verify/bin/claude`). 커밋은 아직 없습니다.
-- **웹 번들:** 서버는 `apps/web/dist`를 서빙하므로 웹 소스를 고친 뒤에는 `pnpm --filter @mooner/ade-web build` 후 `Page.reload(ignoreCache)` 해야 합니다(안 하면 수정 전 화면을 봅니다).
+- **웹 번들 없음:** 검증 세션(`start-ui.mjs`)과 `pnpm e2e`의 서버는 `ADE_DEV=1`로 떠서 `apps/web/src`를 Vite 개발 서버로 직접 서빙합니다. 빌드도, `apps/web/dist`도 필요 없습니다. 웹 소스를 고치면 열린 페이지에 HMR로 약 0.1초 안에 반영되므로 새로고침도 필요 없습니다(서버 코드 `apps/local-server`를 고쳤을 때만 세션을 다시 띄웁니다). `pnpm --filter @mooner/ade-web build`는 패키징·`pnpm start`용 프로덕션 번들일 뿐 검증에는 쓰지 않습니다. 개발 서버의 HMR 소켓(`/?token=…`, 프로토콜 `vite-hmr`)은 서버의 `upgrade` 핸들러가 같은 출처·로그인 확인 뒤 Vite에 넘깁니다.
 
 ## 2. 이미 확인한 것 (격리 환경, 실제 AI 없음)
 
@@ -44,18 +44,37 @@
 
 사용자의 설치 앱(`/Applications/MoonerADE.app`)과 다른 세션의 서버·Chrome을 건드리지 않도록 **전부 격리**합니다. 실제 모델 호출, 실제 Hub 전송, Electron 실행은 없습니다.
 
-### 4.1 서버 + 가짜 Hub + 보이는 Chrome
+### 4.1 테스트 세션 (서버 + 가짜 Hub + 보이는 Chrome)
 
 ```
 VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/start-ui.mjs      # 계속 실행되는 프로세스. 다른 터미널에서 이어서 작업
 ```
 
-- 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`의 서버, 가짜 Hub(`ADE_HUB_URL`), 별도 프로필의 보이는 Chrome(`--remote-debugging-port=0`)을 띄우고 `VERIFY_OUT/env.json`에 `origin`·`token`·`cookie`·`projectId`·`repo`·`data`·`temp`·`hub`·`cdp`·`pid`·`chromePid`를 적습니다.
+- 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`의 서버, 가짜 Hub(`ADE_HUB_URL`), 별도 프로필의 보이는 Chrome(`--remote-debugging-port=0`)을 띄우고 `VERIFY_OUT/env.json`에 `origin`·`token`·`cookie`·`projectId`·`repo`·`data`·`temp`·`hub`·`cdp`·`pid`·`serverPids`(두 서버의 PID)·`chromePid`를 적습니다.
 - Chrome 경로는 macOS 기본값이며 `CHROME=<경로>`로 바꿉니다. 검증은 Chrome 157로 했습니다.
 - Chrome은 **이 탭만 공유**하도록(`--auto-accept-this-tab-capture`) 뜹니다. `--auto-select-desktop-capture-source=Entire screen`을 붙이면 캡쳐가 화면 크기로 나와 결과가 어긋나 보이니 쓰지 마세요.
 - 첫 화면은 프로젝트 선택 화면입니다(최근 프로젝트에 `repo`). `repo`를 눌러 워크스페이스를 엽니다. 온보딩이 뜨면 "다음: 기능 둘러보기" → "건너뛰기".
 - 두 번째 서버(`origin2`)는 저장소 파일 없이 하나 더 뜨지만 이번 검증에서는 쓰지 않았습니다.
-- 종료: `kill <env.json의 pid>`(SIGTERM). 서버를 먼저 죽인 뒤에는 종료 처리가 끝나지 않아 두 번째 서버·Chrome이 남을 수 있으니 `ps -eo pid,command | grep ade-verify`로 확인하고 **내 것(`ade-verify-*`)만** 정리합니다.
+- Chrome은 `start-ui`와 **분리**(`detached`)되어 뜹니다. Windows에서는 자식 프로세스가 부모와 같은 Job에 묶여 부모가 끝나면 같이 죽기 때문에, 분리하지 않으면 서버를 재시작할 때 Chrome도 닫힙니다.
+
+#### 테스트 세션 운영 규칙
+
+| 상황 | 하는 일 | 하지 않는 일 |
+| --- | --- | --- |
+| 웹 소스(`apps/web/src`)를 고침 | 아무것도 안 합니다. 열린 페이지에 HMR로 약 0.1초 만에 반영됩니다. 안 바뀌면 그 탭만 새로고침(F5, CDP `Page.reload`) | 웹 빌드, 서버 재시작, Chrome 재시작 |
+| 서버 코드(`apps/local-server`)를 고침 | `VERIFY_OUT=<경로> node scripts/verify/restart-ui.mjs` — 서버와 가짜 Hub만 다시 뜨고, **같은 Chrome의 첫 탭이 새 주소(포트·토큰이 바뀜)로 이동**합니다. 저장된 데이터(채팅·키·저장소)는 그대로입니다 | Chrome을 끄고 다시 켜기 |
+| 서버만 다시 띄우고 싶음(수동) | `VERIFY_OUT=<경로> VERIFY_TEMP=<env.json의 temp> VERIFY_CHROME=<env.json의 cdp> node scripts/verify/start-ui.mjs`. 이 프로세스를 끌 때 Chrome은 남습니다 | |
+| 실제 CLI(API 키)로 확인 | `REAL_AGENTS=1`을 붙여 `start-ui.mjs`/`restart-ui.mjs`를 실행하면 가짜 `claude` 대신 PATH의 실제 CLI를 씁니다. HOME이 임시라 설정 › AI 툴 › 채팅 인증에 저장한 API 키로만 로그인됩니다 | 내 로그인으로 실제 모델 호출 |
+| 사용자가 Chrome을 직접 닫았거나 `cdp`가 응답하지 않음 | 그때만 `start-ui.mjs`를 `VERIFY_CHROME` 없이 새로 띄웁니다(`VERIFY_TEMP`를 주면 데이터는 유지) | |
+| 이미 떠 있는 세션이 있음(내 것이든 다른 세션 것이든) | 그걸 재활용합니다. 확인은 `node.exe` 명령줄의 `verify/start-ui.mjs`와, 서버 포트의 소유 프로세스에서 부모를 따라가는 것으로 합니다 | 확인 없이 새로 띄우기 |
+| 병렬로 따로 검증해야 함 | `VERIFY_OUT`을 달리해 각자 `start-ui.mjs`를 띄웁니다 | 같은 `VERIFY_OUT` 공유·덮어쓰기 |
+| 세션 종료 | **내가 띄운 `start-ui`의 PID(`env.json`의 `pid`) 하나만** 끕니다. 서버·가짜 Hub는 같이 내려가고 Chrome은 `chromePid`를 따로 닫습니다 | 이름(`node`, `chrome`)으로 일괄 종료 — 다른 에이전트의 세션까지 꺼집니다 |
+
+- 서버를 재시작한다는 이유로 Chrome을 끌 필요는 없습니다. 주소가 바뀌었을 뿐이므로 주소만 다시 입력하면 되고, `restart-ui.mjs`가 그 일을 CDP `Page.navigate`로 대신합니다.
+- `restart-ui.mjs`는 그 `VERIFY_OUT`의 `env.json`에 적힌 PID만 `SIGKILL`로 끕니다(종료 핸들러가 Chrome을 같이 닫지 않도록). Chrome이 이미 없으면 새 세션을 띄우라는 오류로 멈춥니다.
+- `VERIFY_OUT`(`env.json`·`shots`)은 지우거나 덮어쓰지 않습니다. 새 세션이 같은 경로를 덮으면 기존 세션을 가리키던 `env.json`이 사라집니다.
+- Windows에서 `detached`로 띄운 프로세스 아래서 콘솔 앱(서버 `node`)을 띄우면 서버마다 새 콘솔 창이 뜹니다. 그래서 `start-ui`의 Chrome, `restart-ui`가 띄우는 `start-ui`, `boot()`의 서버는 모두 `windowsHide: true`로 띄웁니다. 새로 spawn을 추가할 때도 같게 합니다.
+- Windows에서 `node -e` 문자열 안의 `/tmp`는 `C:\tmp`로 풀립니다. 스크립트에서는 절대 경로나 `VERIFY_OUT` 환경변수를 씁니다.
 
 ### 4.2 서버 수준 스위트 (UI 없음)
 
@@ -121,7 +140,7 @@ console.log(await c.ev(`return document.body.innerText`));
 - **busy 중 `/x`+Tab:** 후속 큐로 가는 동작이 커밋 메시지("Tab 포커스 이동 방지")와 맞는지 판단.
 - **Provider 전환:** Codex·Cursor 채팅이 열린 뒤의 화면(가짜가 없어 오류 상태가 정상인지).
 - **대화상자:** "그래도 보내기"·브랜치 전환·명령 팔레트(CLI 모드 터미널 에이전트·실제 터미널 필요).
-- **서버 재시작 후 이미지 썸네일 유지:** 1차는 `chat/close`+새로고침으로 대신 확인. 서버가 `start-ui`의 자식이라 재시작하려면 Chrome이 다시 떠서, 서버만 따로 띄워 같은 `ADE_DATA_DIR`로 재시작해야 함.
+- **서버 재시작 후 이미지 썸네일 유지:** 1차는 `chat/close`+새로고침으로 대신 확인. 이제 `scripts/verify/restart-ui.mjs`로 Chrome을 그대로 두고 서버만 재시작할 수 있으니(4.1절) 같은 `ADE_DATA_DIR`로 다시 확인하면 됩니다.
 
 ### 5.2 수정 후 남은 확인
 - 브라우저 캡쳐: 창이 **가려졌을 때**의 "화면 공유를 시작하지 못했습니다…" 안내, "공유 중지" 시 공유 종료(창을 가려야 하므로 사용자 창 배치를 건드리지 않는 방법이 필요).
@@ -150,7 +169,7 @@ console.log(await c.ev(`return document.body.innerText`));
 
 - **격리:** 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`, 가짜 Hub. 설치된 MoonerADE 앱, 다른 세션이 띄운 서버·Chrome(예: `ade-test.*`)은 건드리지 않습니다. 프로세스를 끄기 전 `ps`로 이름·인자를 확인합니다.
 - **보이는 Chrome**으로 진행합니다. 헤드리스로 바꾸면 사용자가 볼 수 없습니다. **사용자가 배치한 창의 위치·크기를 바꾸지 않습니다**(`Browser.setWindowBounds` 금지). `Page.bringToFront`도 캡쳐처럼 꼭 필요할 때만 씁니다.
-- **병렬 진행:** 영역별로 `VERIFY_OUT`을 따로 주고 `start-ui.mjs`를 각각 띄우면 서버·Chrome·가짜 Hub가 서로 독립입니다(1차는 3개). 소스 수정은 한 곳에서만 합니다.
+- **병렬 진행:** 영역별로 `VERIFY_OUT`을 따로 주고 `start-ui.mjs`를 각각 띄우면 서버·Chrome·가짜 Hub가 서로 독립입니다(1차는 3개). 소스 수정은 한 곳에서만 합니다. 이미 떠 있는 세션이 있으면 병렬 검증이 아닌 한 새로 띄우지 않고 재활용합니다(4.1절 운영 규칙).
 - **5179 등 다른 세션이 띄운 서버**는 PATH의 `claude`가 실제일 수 있으니(`ps eww`로 확인) 채팅·AI 정리는 격리 서버에서만 합니다.
 - **실제 모델이 필요한 테스트**(체크리스트)는 `claude-haiku-5-5`·Effort low를 명시하고 `ps` 인자와 저장된 이벤트의 `model`로 확인합니다.
 - 고친 뒤에는 `pnpm typecheck`, 해당 문서(TESTING_GUIDE·VERIFICATION) 갱신. 커밋·푸시·머지·릴리스는 요청이 있을 때만 합니다(릴리스는 master에서만, 루트 `CLAUDE.md`).
