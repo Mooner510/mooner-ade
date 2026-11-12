@@ -25,4 +25,7 @@ test('errors stack newest first, ignore a repeat while its toast is up, and cap 
   assert.equal(errorLog(scope).items.length, 0);
   assert.equal(errorText(new Error('끊김')), '끊김');
   assert.equal(errorText(''), '알 수 없는 오류');
+  // A fetch that never reached the server is not shown as the browser's bare English text.
+  for (const text of ['Failed to fetch', 'Load failed', 'NetworkError when attempting to fetch resource.']) assert.match(errorText(new TypeError(text)), /서버에 연결할 수 없습니다/);
+  assert.equal(errorText(new Error('Failed to fetch')), 'Failed to fetch');
 });
