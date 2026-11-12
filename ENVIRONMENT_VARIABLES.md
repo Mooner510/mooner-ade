@@ -17,6 +17,8 @@
 | `ADE_PTY_LINGER_MS` / `ADE_PTY_FIRST_OWNER_MS` | `120000` / `60000` | PTY 호스트가 서버 없이 터미널을 유지하는 시간, 첫 연결을 기다리는 시간. 테스트용 |
 | `ADE_PLUGIN_NODE` | 없음 | 플러그인 MCP 서버가 쓸 Node 경로. ADE가 넘김. 직접 설정하지 않음 |
 | `ADE_CHAT_ID` / `ADE_PROJECT_ID` / `ADE_CHAT_AGENT` | 없음 | 채팅 전용 내장 플러그인([에이전트 버스](docs/AGENT_BUS.md))이 자기 채팅을 식별하도록 ADE가 넣는 값. 터미널에는 주지 않음. 직접 설정하지 않음 |
+| `ADE_HUB_URL` | `https://ade-hub.mooner510.kr` | 로그인 없이 보내는 피드백([피드백 요청](docs/ARCHITECTURE.md#피드백-요청))이 가는 MoonerADE Hub 주소. 서버가 읽습니다 |
+| `ADE_FEEDBACK_ANONYMOUS` | 켜짐 | `0`이면 로그인 없는 피드백 제출을 끕니다. 제출 가능한 플러그인 계정이 없으면 피드백 제출을 할 수 없게 됩니다 |
 
 macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, Windows는 `%LOCALAPPDATA%/mooner-ade`(변수 미설정 시 사용자 홈 아래)입니다. 실제 프로젝트 파일과 CLI 자체 인증 설정은 별도로 관리됩니다.
 
@@ -27,6 +29,7 @@ macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, 
 | `CLAUDE_CODE_EFFORT_LEVEL` | 없음 | Claude Code의 Effort. 설정 파일의 값보다 우선. 채팅을 시작하기 전 상태 줄 표시에만 쓰이고, 실제 적용은 CLI가 한다 |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 없음 | Auto Compact 창 크기. 직접 지정하면 ADE가 게이지에서 정한 auto 창 대신 이 값을 따른다 |
 | `CLAUDE_CODE_MCP_STARTUP_WAIT_MS` | `3000` (Chat만) | Claude Chat이 첫 메시지 전에 MCP 서버 연결을 기다리는 최대 시간(ms). 느리거나 응답 없는 MCP 서버(예: 외부 커넥터)가 있어도 첫 응답이 최대 30초 지연되지 않도록 ADE가 3초로 제한한다. 직접 지정하면 그 값을 따른다 |
+| `CLAUDE_CODE_ARTIFACT` | 없음 | ADE가 Claude 채팅의 Artifact 도구를 켤 때 `1`로 넣는 값입니다. 메시지에 `artifact`·`아티팩트`가 있거나 설정 "Artifact 항상 켜기"가 켜졌을 때 설정되며, 한 번 켠 채팅은 다시 시작해도 유지됩니다. 사용자가 직접 설정하는 변수가 아닙니다. [채팅 기능 정리](CHAT_MODE_FEATURES.md) §7 |
 | `DISABLE_AUTO_COMPACT` | 없음 | `1`/`true`이면 자동 압축이 꺼진 것으로 본다. 컨텍스트 게이지의 Auto Compact 창과 캐시 타이머의 "자동 compact" 예정 시각이 사라진다. 실제 동작은 CLI가 정한다 |
 | `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | `200000` (하한 `100000`) | 유휴 자동 압축이 일어나는 최소 컨텍스트 크기. 캐시 타이머가 압축 예정 시각을 계산할 때만 읽는다 |
 | `ANTHROPIC_MODEL` | 없음 | 채팅에서 모델을 고르지 않았을 때 모델 목록이 "기본 모델"로 푸는 값. `settings.json`의 `model`보다 우선 |

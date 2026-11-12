@@ -70,6 +70,10 @@ MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식
 | **자유로운 터미널 분할** | 좌우·상하 분할, 크기 조절, 최대화, 2 × 3 그리드 한 번에 만들기 |
 | **Claude Code · Codex** | 공식 CLI를 실행하고 질문·승인·완료 상태를 한눈에 확인 |
 | **다음 요청 예약** | Claude가 일하는 동안 다음 요청을 적어 두면 끝나자마자 전송 |
+| **Chat 탭** | Claude Code·Codex·Cursor Agent를 터미널 대신 채팅 화면으로 사용. 질문 카드, 계획 검토, 서브에이전트 카드, 이미지 첨부, `@` 파일 언급, 이전 대화 불러오기. 지원 범위는 CLI마다 다름 ([채팅 기능 정리](CHAT_MODE_FEATURES.md)) |
+| **인터랙티브 UI** | 채팅에서 에이전트가 답변 안에 차트·상태 카드·입력 폼과 샌드박스 미리보기를 그림 (설정 → AI 툴 → Claude Code, 기본 켜짐) |
+| **플러그인** | 승인한 플러그인으로 터미널 명령·에이전트 도구·작업공간을 더함. 앱에 든 에이전트 버스는 채팅 에이전트끼리 메시지를 주고받음 ([플러그인](docs/PLUGINS.md), [에이전트 버스](docs/AGENT_BUS.md)) |
+| **피드백 요청** | 앱 화면을 캡쳐하고 글로 정리해 개선 요청을 보냄. AI·에이전트가 쓴 초안은 사람이 열어 검토한 뒤에만 제출 |
 | **변경사항 Diff** | 바뀐 파일과 추가·삭제 줄 수, 코드 비교를 터미널 옆에서 확인 |
 | **작업 환경 유지** | 화면 배치 복원, 테마·글꼴·알림·단축키 설정 |
 | **저장소별 worktree** | 여러 저장소가 담긴 폴더에서 저장소마다 작업 경로를 나누고 fast-forward로 합치기 |
@@ -102,6 +106,8 @@ MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식
 | `mod+Shift+P` / `F1` | 명령 팔레트 (분할, 2 × 3 그리드 등) |
 | `mod+Shift+Enter` | pane 최대화 켜기/끄기 |
 | `mod+Shift+G` | 변경사항 Diff 패널 |
+| `mod+Alt+F` | 피드백 요청 패널 |
+| `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 |
 | `mod+,` | 설정 |
 
 전체 단축키와 데이터 복구 방법은 [사용 안내](docs/LOCAL_IDE.md)에 있습니다.
@@ -192,8 +198,9 @@ pnpm audit        # lockfile 의존성 보안 검사
 ## 문서
 
 - [로컬 실행·단축키·데이터 복구](docs/LOCAL_IDE.md)
-- [검증 결과와 확인 범위](docs/VERIFICATION.md) · [테스트 실행 안내](docs/TESTING_GUIDE.md)
-- [아키텍처](docs/ARCHITECTURE.md)
+- [검증 결과와 확인 범위](docs/VERIFICATION.md) · [테스트 실행 안내](docs/TESTING_GUIDE.md) · [Full E2E 인수인계](docs/E2E_HANDOFF.md) · [실제 AI 에이전트가 필요한 테스트](docs/AI_AGENT_TEST_CHECKLIST.md)
+- [아키텍처](docs/ARCHITECTURE.md) · [채팅 기능 정리](CHAT_MODE_FEATURES.md)
+- [플러그인](docs/PLUGINS.md) · [에이전트 버스](docs/AGENT_BUS.md)
 - [환경 변수](ENVIRONMENT_VARIABLES.md) · [보안 경계](docs/SECURITY_REVIEW.md)
 
 ## 라이선스
