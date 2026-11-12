@@ -84,7 +84,7 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
   </span>;
   const time = new Date(2025, 0, 1, 14, 32, 8).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: settings.clockSeconds ? '2-digit' : undefined, hour12: settings.clock12h });
   return {
-    connection: <span className="conn ok"><Icon name="wifi" size={13} /></span>,
+    connection: <span className="conn"><Icon name="wifi" size={13} />연결 끊김</span>,
     path: <span className="stat"><Icon name="folder" size={13} />~/projects/my-app</span>,
     branch: <span className="stat"><Icon name="branch" size={13} />main</span>,
     changes: <span className="stat"><Icon name="diff" size={13} />3개 파일<ins>+42</ins><del>−7</del></span>,

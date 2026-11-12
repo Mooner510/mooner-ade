@@ -77,8 +77,8 @@ export function ErrorPanel({ scope, wide, toggleWide }: { scope: string; wide: b
     <header className="panel-head">
       <Icon name="siren" /><strong>오류</strong>
       <span className="spacer" />
-      <button type="button" disabled={!items.length} onClick={() => clearErrors(scope)}>모두 지우기</button>
-      <IconButton icon={wide ? 'minimize' : 'maximize'} label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
+      {items.length > 0 && <button type="button" onClick={() => clearErrors(scope)}>모두 지우기</button>}
+      <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
     </header>
     <div className="review-list">
       {!items.length && <div className="review-empty"><Icon name="check" size={22} /><strong>오류 없음</strong><p>문제가 생기면 여기에 남습니다.</p></div>}
