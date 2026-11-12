@@ -10,7 +10,7 @@ export type Settings = {
   // AI tools: `agentsOff` hides an agent from the launchers, `agentsMuted` silences its alerts; *Args are appended to its launch command.
   agentsOff: string[]; agentsMuted: string[]; claudeArgs: string; codexArgs: string; cursorArgs: string; notifyLooking: boolean;
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
-  cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; usageRefresh: number;
+  cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; interactiveUi: boolean; usageRefresh: number;
   // Chat composer shortcut overrides (id -> combo, see chat-model chatKeyDefs); a missing id uses its default.
   chatKeys: Record<string, string>; appKeys: Record<string, string>;
   defaultMode: AgentMode; chatTipPending: boolean;
@@ -85,7 +85,7 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
@@ -97,9 +97,11 @@ export const defaultSettings: Settings = {
   uiZoom: 100, diffFont: '', sidebarCompact: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
 };
-export const monoFont = "'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
-const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => { const own = settings.diffFont.trim() || settings.terminalFont.trim(); return own ? `${own}, ${monoFont}` : monoFont; };
+// Terminal default = the OS's own monospace font (Mac: Menlo, Windows: Cascadia Mono); a chosen font goes first and falls back to it.
+const systemMono = /Mac|iPhone|iPad/.test(navigator.platform) ? "Menlo, Monaco, monospace" : /Windows/.test(navigator.userAgent) ? "'Cascadia Mono', Consolas, monospace" : "'DejaVu Sans Mono', ui-monospace, monospace";
+export const terminalFontStack = (name: string) => name.trim() ? `${name.trim()}, ${systemMono}` : systemMono;
+const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => terminalFontStack(settings.diffFont.trim() || settings.terminalFont);
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';
 
 let monacoPromise: Promise<typeof Monaco> | null = null;

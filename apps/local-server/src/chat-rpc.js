@@ -226,7 +226,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       }
     },
     dispose() { disposed = true; for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
-    async initialize(meta, cwd, servers = []) {
+    async initialize(meta, cwd, servers = [], instructions) {
       config = { ...meta, cwd };
       if (agent === 'codex') {
         await request('initialize', { clientInfo: { name: 'mooner_ade', title: 'Mooner ADE', version: '0.5.1' }, capabilities: { experimentalApi: true } });
@@ -246,7 +246,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
           config: { ...(config.effort && { model_reasoning_effort: config.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs], 'sandbox_workspace_write.network_access': meta.network === true,
             ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args, ...(s.env && { env: s.env }), ...(s.autoApprove && { default_tools_approval_mode: 'approve' }), ...(s.disabledTools?.length && { disabled_tools: s.disabledTools }) }])) } };
         const response = await request(meta.resumeAt ? 'thread/fork' : meta.sessionId ? 'thread/resume' : 'thread/start', {
-          ...params, ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
+          ...params, ...(instructions && { developerInstructions: instructions }), ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
         sessionId = response.thread.id;
         const resumed = agentTitle(response.thread?.name);
         if (resumed) emit(resumed);

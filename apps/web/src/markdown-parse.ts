@@ -1,6 +1,6 @@
 // The pure half of the chat's Markdown: text -> block nodes, plus the cuts the streaming renderer makes. No React, so tests load it directly.
 export type Node =
-  | { t: 'p'; text: string } | { t: 'h'; level: number; text: string } | { t: 'code'; lang: string; code: string } | { t: 'quote'; text: string } | { t: 'hr' }
+  | { t: 'p'; text: string } | { t: 'h'; level: number; text: string } | { t: 'code'; lang: string; code: string; open?: true } | { t: 'quote'; text: string } | { t: 'hr' }
   | { t: 'list'; ordered: boolean; items: { text: string; depth: number; num?: number }[] } | { t: 'table'; head: string[]; rows: string[][] };
 const cells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
 
@@ -14,7 +14,8 @@ export function parse(source: string): Node[] {
     if (fence) {
       flush(); const code: string[] = [];
       for (i++; i < lines.length && !lines[i].trimStart().startsWith(fence[1]); i++) code.push(lines[i]);
-      nodes.push({ t: 'code', lang: fence[2], code: code.join('\n') }); continue;
+      // `open` only when the closing fence never arrived (still streaming, or cut off): an interactive block must not run half-written code.
+      nodes.push({ t: 'code', lang: fence[2], code: code.join('\n'), ...(i >= lines.length && { open: true as const }) }); continue;
     }
     if (!line.trim()) { flush(); continue; }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);

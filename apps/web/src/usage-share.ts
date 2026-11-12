@@ -28,10 +28,10 @@ export function contribution({ before, after, costUsd, cal }: { before?: Reading
     const d = after.util - before.util;
     out.observed = d; bound = [Math.max(0, d - 1), d + 1]; // the true change lies strictly between d-1 and d+1
   }
-  if (est === null) { if (bound) { out.label = `${sign(out.observed!)}%p (±1)`; out.quality = 'delta'; } return out; }
+  if (est === null) { if (bound) { out.label = `${sign(out.observed!)}%p`; out.quality = 'delta'; } return out; }
   if (!bound) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'estimate'; return out; }
   const [lo, hi] = bound;
   if (est >= lo - 1e-9 && est <= hi + 1e-9) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'consistent'; return out; }
-  out.label = `≈${shown(Math.min(Math.max(est, lo), hi))}%p (관측 ${sign(out.observed!)}±1)`; out.quality = 'clamped';
+  out.label = `≈${shown(Math.min(Math.max(est, lo), hi))}%p`; out.quality = 'clamped';
   return out;
 }

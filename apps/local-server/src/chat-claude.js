@@ -21,6 +21,8 @@ export const cliPermissionMode = (mode) =>
   !mode || mode === "default" ? "manual" : mode;
 export const uiPermissionMode = (mode) =>
   mode === "manual" || mode === "defaultMode" ? "default" : mode;
+// A plan answered with feedback: the model reads this as the tool error, so say what to do with it.
+export const planRevision = (feedback) => `The user rejected this plan and asks for changes. Stay in plan mode, revise the plan to address the feedback, and present it again.\n\nUser feedback:\n${feedback}`;
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"]; // `claude --effort`
 
 export const validMessageUuid = (value) =>
@@ -36,6 +38,7 @@ export function buildClaudeArgs({
   permissionMode,
   settingsFile,
   mcpFile,
+  promptFile,
   resumeAt,
   fork,
 } = {}) {
@@ -69,6 +72,7 @@ export function buildClaudeArgs({
   if (permissionMode) args.push("--permission-mode", cliPermissionMode(permissionMode));
   if (settingsFile) args.push("--settings", settingsFile);
   if (mcpFile) args.push("--mcp-config", mcpFile);
+  if (promptFile) args.push("--append-system-prompt-file", promptFile);
   return args;
 }
 
@@ -115,13 +119,13 @@ export const askUserInput = (input, questions, answers) => ({
 export const ASK_SKIPPED = "The user chose not to answer these questions. Do not ask them again right away: continue with your best judgment, or ask in plain text if you cannot proceed without an answer.";
 export function approvalLine(
   requestId,
-  { allow, input, message, suggestions },
+  { allow, input, message, suggestions, mode },
 ) {
   const response = allow
     ? {
         behavior: "allow",
         updatedInput: input ?? {},
-        ...(suggestions?.length && { updatedPermissions: suggestions }),
+        ...((suggestions?.length || mode) && { updatedPermissions: [...(suggestions ?? []), ...(mode ? [{ type: "setMode", mode: cliPermissionMode(mode), destination: "session" }] : [])] }),
       }
     : { behavior: "deny", message: message || "사용자가 거부했습니다." };
   return (

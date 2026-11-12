@@ -28,6 +28,8 @@ import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessi
 import { readSessionStats, sessionFiles } from './chat-stats.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
+import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
+import { UI_PROMPT } from './chat-ui-prompt.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
@@ -495,14 +497,17 @@ function trimRecent(list) {
 // A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
 async function chatLaunchFiles(root, context) {
   const servers = chatMcpServers(context);
-  if (!servers.length) return {};
+  // The interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
+  const promptFile = context.interactiveUi ? path.join(root, 'ade-ui-prompt.md') : undefined;
+  if (promptFile) await fs.writeFile(promptFile, UI_PROMPT, { mode: 0o600 });
+  if (!servers.length) return { promptFile };
   const mcpFile = path.join(root, 'claude-mcp.json');
   await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
   const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-  if (!denied.length && !allowed.length) return { mcpFile };
+  if (!denied.length && !allowed.length) return { mcpFile, promptFile };
   const settingsFile = path.join(root, 'claude-settings.json');
   await fs.writeFile(settingsFile, JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }), { mode: 0o600 });
-  return { mcpFile, settingsFile };
+  return { mcpFile, settingsFile, promptFile };
 }
 // Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
@@ -535,7 +540,7 @@ async function terminalToChat(project, id, newId, workspace) {
   if (alive(pid)) { process.kill(pid, 'SIGKILL'); await new Promise(resolve => setTimeout(resolve, 300)); }
   if (alive(pid)) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
   if (file) await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
-  else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [], permissionMode: 'default' } });
+  else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [] } });
   terminal.native.close(); project.terminals.delete(id);
   return { cwd };
 }
@@ -776,6 +781,7 @@ async function route(action, input, project) {
       const images = Array.isArray(input.images) ? input.images : [];
       const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
       if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > 2_500_000 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
+      chat.setInteractiveUi(input.interactiveUi);
       await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true });
       return {};
     }
@@ -796,7 +802,7 @@ async function route(action, input, project) {
     case 'chat/approve': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.slice(0, 500) : undefined });
+      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.trim().slice(0, 4000) || undefined : undefined, mode: typeof input.mode === 'string' ? input.mode : undefined });
       return {};
     }
     case 'chat/set': {
@@ -909,7 +915,7 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
-  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     if (closing) throw fault('SHUTTING_DOWN', '서버가 종료 중입니다.', 503);
     if (!trusted(request, false)) throw fault('UNTRUSTED_HOST', '잘못된 Host입니다.', 403);
@@ -932,6 +938,8 @@ const server = http.createServer(async (request, response) => {
       response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value));
     } else {
       if (request.method !== 'GET') throw fault('NOT_FOUND', '경로가 없습니다.', 404);
+      // Interactive chat UIs run in an iframe on this page; it has its own, much tighter CSP and needs no session.
+      if (url.pathname === '/ade-ui-frame.html') { response.setHeader('Content-Security-Policy', UI_FRAME_CSP); response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(UI_FRAME_HTML); return; }
       if (vite) {
         await new Promise((resolve, reject) => { response.once('close', resolve); vite.middlewares(request, response, error => reject(error || fault('NOT_FOUND', '경로가 없습니다.', 404))); });
         return;

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { spawnAgent } from './agent-spawn.js';
-import { ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, transcriptEvents, uiPermissionMode, userLine, validMessageUuid } from './chat-claude.js';
+import { ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, transcriptEvents, uiPermissionMode, userLine, validMessageUuid } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
@@ -16,6 +16,7 @@ import { readSessionCache } from './claude-cache.js';
 import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
+import { UI_PROMPT } from './chat-ui-prompt.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -62,7 +63,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode ?? 'default', sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
     contextTokens: 0, contextWindow: null, autoCompact: null, tokens: zero(), slashCommands: [], commandInfo: [], tools: [], pending: 0, error: null, startedAt: Date.now(),
     segmentTitles: { custom: '', ai: '', agent: '' }, chatTitle: '' };
-  let turnUsage = null, thinkingTokens = 0;
+  // A turn is several API calls: `turnDone` holds the calls already finished, `turnUsage` the one streaming (`liveId`). result.usage is the whole turn, so it replaces both.
+  let turnUsage = null, thinkingTokens = 0, turnDone = zero(), liveId = null;
+  const resetLive = () => { turnUsage = null; thinkingTokens = 0; turnDone = zero(); liveId = null; };
+  const nextMessage = id => { if (id == null || id !== liveId) { if (turnUsage) turnDone = addTokens(turnDone, turnUsage); turnUsage = null; liveId = id ?? null; } };
   // The transcript with rewinds applied, and the last request not yet answered. Both are read on every state publish (token updates included),
   // so they are kept until the next stored event instead of being rebuilt from up to 6000 events each time. Callers must not mutate them.
   let retainedCache = null, unansweredCache;
@@ -162,7 +166,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, costBase: meta.costBase, title: state.chatTitle });
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, costBase: meta.costBase, title: state.chatTitle });
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -170,7 +174,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   };
   const tokensShown = () => {
     const live = turnUsage ?? (thinkingTokens > 0 ? { input: 0, output: thinkingTokens, cacheRead: 0, cacheCreate: 0 } : null);
-    return live ? addTokens(state.tokens, live) : { ...state.tokens };
+    const base = addTokens(state.tokens, turnDone);
+    return live ? addTokens(base, live) : base;
   };
   const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }); };
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
@@ -203,7 +208,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function fold(event, replay = false) {
     if (event.kind === 'session') {
       state.sessionId = event.sessionId ?? state.sessionId; state.model = event.model ?? state.model;
-      if (event.permissionMode !== undefined) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; if (agent !== 'claude') meta.permissionMode = mode; }
+      // Claude: a session event only reports the mode the child started with (replayed, or arriving after a later switch); a mode the user picked is in meta and wins.
+      if (event.permissionMode !== undefined && (agent !== 'claude' || meta.permissionMode === undefined)) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; if (agent !== 'claude') meta.permissionMode = mode; }
       if (event.slashCommands?.length) state.slashCommands = event.slashCommands.map(item => typeof item === 'string' ? item : item?.name).filter(name => typeof name === 'string');
       if (Array.isArray(event.commands)) state.commandInfo = event.commands.flatMap(item => {
         if (!item || typeof item.name !== 'string' || !/^[\w:.-]+$/.test(item.name)) return [];
@@ -222,13 +228,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.contextTokens = event.usage.input + event.usage.cacheRead + event.usage.cacheCreate + event.usage.output;
     } else if (event.kind === 'result') {
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
-      if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key];
+      if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
       // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
       if (!replay && event.costUsd != null) state.costUsd = meta.costBase + event.costUsd;
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
-    } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens; turnUsage = null; thinkingTokens = 0;
+    } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
-      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; turnUsage = null; thinkingTokens = 0; state.cache = null; cacheReading = null;
+      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; resetLive(); state.cache = null; cacheReading = null;
       state.segmentTitles = { custom: '', ai: '', agent: '' }; refreshChatTitle();
       if (!replay) void refreshAutoCompact();
     } else if (event.kind === 'title') {
@@ -286,7 +292,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'delta') {
         if (!protocol) {
           const stream = event.parentToolUseId ?? '';
-          if (event.phase === 'start') { if (event.messageId) streamIds.set(stream, event.messageId); if (!stream) { turnUsage = null; thinkingTokens = 0; } }
+          if (event.phase === 'start') { if (event.messageId) streamIds.set(stream, event.messageId); if (!stream) { nextMessage(event.messageId); thinkingTokens = 0; } }
           else if (event.phase === 'thinkingTokens') { thinkingTokens = Number(event.tokens) || 0; publishSoon(); }
           else if (event.phase === 'usage') {
             // A subagent's usage is not this conversation's context; the status line only follows the main thread. Usage itself is not drawn, so it is not sent.
@@ -306,7 +312,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'command_output') { const same = `${turnSeq}\0${event.isError}\0${event.text}`; if (lastCommandOutput === same) return; lastCommandOutput = same; }
       emit(event);
       noteBackgroundActivity(event);
-      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { turnUsage = { ...event.usage }; thinkingTokens = 0; publishSoon(); }
+      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage }; thinkingTokens = 0; publishSoon(); }
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
         if (agent === 'claude') void refreshAutoCompact(event.model ?? state.model);
@@ -317,7 +323,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
         clearTimeout(activityTimer); reopened = false;
-        streamIds.clear(); toolInputSize.clear(); turnUsage = null; thinkingTokens = 0; turnOpen = steers.size > 0; setStatus();
+        streamIds.clear(); toolInputSize.clear(); resetLive(); turnOpen = steers.size > 0; setStatus();
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
         if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
@@ -336,7 +342,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
 
   // total_cost_usd restarts at 0 in every process, so what a replaced child had cost is carried by costBase. The child's own close handler does not run
   // this (it sees it was already replaced), hence every place that drops the child calls it.
-  let prePlanMode = 'default';
+  let prePlanMode = meta.prePlanMode ?? 'default'; // kept in meta so a plan approved after reopening goes back to the mode before it
   const carryCost = () => { if (typeof state.costUsd === 'number') meta.costBase = state.costUsd; };
 
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
@@ -356,7 +362,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       await createLocalRuntime({ root: cwd }).git.createWorktree(target, `ade/chat-${id}`);
       meta.worktreePath = target; cwd = target; await saveMeta();
     }
-    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent }) : {};
+    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true }) : {};
     const args = [...executableArgs, ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
@@ -371,6 +377,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (agent === 'claude' && launchedWindow) launchEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(launchedWindow);
       if (agent === 'codex') { meta.configDir ??= launchEnv.CODEX_HOME || path.join(os.homedir(), '.codex'); launchEnv.CODEX_HOME = meta.configDir; }
       if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
+      // With --mcp-config (the agent bus) the CLI holds its init event until every MCP server of the user has connected, up to ~30s when one is slow or
+      // unreachable (measured with claude 2.1.322: init 1.1s without the flag, 29.7s with it). The bus connects in ~1s; a late server just joins later.
+      // ponytail: a user's own server slower than this misses the first turn's tool list; set CLAUDE_CODE_MCP_STARTUP_WAIT_MS in the environment ADE starts with to wait longer.
+      if (agent === 'claude') launchEnv.CLAUDE_CODE_MCP_STARTUP_WAIT_MS ??= '3000';
       return spawnProcess(executable, args, { cwd, env: launchEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     };
     let proc = run();
@@ -383,7 +393,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     attach(proc);
     if (protocol) {
       try {
-        await protocol.initialize(meta, cwd, chatMcpServers({ chatId: id, projectId, agent }));
+        await protocol.initialize(meta, cwd, chatMcpServers({ chatId: id, projectId, agent }), meta.interactiveUi === true ? UI_PROMPT : undefined);
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -426,7 +436,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     proc.once('close', (code, signal) => {
       if (child !== proc) return;
       const wasTurn = turnOpen;
-      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear();
+      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear(); // A turn cut off before its result still spent these tokens.
+      nextMessage(null); state.tokens = addTokens(state.tokens, turnDone); resetLive();
       const abort = !closed && !agentExitBenign(code, signal);
       const fail = (message, { store = true } = {}) => {
         state.error = message;
@@ -538,15 +549,18 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (!Array.isArray(values) || !values.length || values.length > (question.allowMultiple ? 32 : 1) || values.some(value => typeof value !== 'string' || !value.trim() || value.length > 4000 || value.includes('\0') || (question.options?.length && !question.allowOther && !question.options.some(option => option.id === value)))) throw fault('INVALID_INPUT', '질문 답변을 확인하세요.');
         }
       }
+      // Approving a Claude plan can also pick the mode to work in (auto, accept edits); anything else just returns to the mode before the plan.
+      const planMode = agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && answer.mode ? answer.mode : undefined;
+      if (planMode !== undefined && (!PERMISSION_MODES.includes(planMode) || planMode === 'plan' || planMode === 'bypassPermissions')) throw fault('INVALID_INPUT', '계획 승인 후 사용할 수 없는 권한 모드입니다.');
       if (protocol) await protocol.approve(requestId, answer);
       else {
         // A Claude question is answered inside the tool input; skipping it tells the model so, instead of the generic "rejected, STOP" refusal.
         const asking = pending.tool === 'AskUserQuestion' && pending.questions;
         await write(approvalLine(requestId, { allow: answer.allow === true, input: asking && answer.allow ? askUserInput(pending.input, pending.questions, answer.answers) : pending.input,
-          message: answer.message ?? (asking ? ASK_SKIPPED : undefined), suggestions: answer.always === true ? pending.suggestions : [] }));
+          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ?? (asking ? ASK_SKIPPED : undefined), suggestions: answer.always === true ? pending.suggestions : [], mode: planMode }));
       }
       // Approving a plan makes the CLI leave plan mode (back to what it was before); it says nothing about it, so the mode chip is moved here.
-      if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = prePlanMode; publish(); }
+      if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = planMode ?? prePlanMode; publish(); }
       approvals.delete(requestId);
       emit({ kind: 'approval', phase: 'answer', requestId, tool: pending.tool, allow: answer.allow === true });
       setStatus();
@@ -563,7 +577,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       else setTimeout(() => { if (child === proc && turnOpen && turnSeq === turn) proc.kill('SIGTERM'); }, 5000).unref();
       setStatus();
     },
-    // Starts the agent process ahead of the first setting change or message (a no-op when it is running).
+    // Whether the agent is told about UI blocks is decided once, by the setting at the chat's first message, and kept: a later change would rewrite the system prompt
+    // and make the whole conversation miss the prompt cache. Chats that already had a session (older ones) never get it. Cursor has no system-prompt channel.
+    setInteractiveUi(value) {
+      if (meta.interactiveUi === undefined && !state.sessionId && !child && typeof value === 'boolean') meta.interactiveUi = value;
+    },
     async warm() { live(); if (agent === 'cursor' && !closed && !child && !turnOpen) await start(); },
     async set({ model, effort, worktree, addDirs, permissionMode, configOption, sandbox, network, runEverything }) {
       live();
@@ -629,7 +647,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           const response = await control({ subtype: 'set_permission_mode', mode: cliPermissionMode(permissionMode) });
           if (!response || response.subtype !== 'success') throw fault('AGENT_PROTOCOL', '권한 모드를 적용하지 못했습니다. Claude Code 버전과 설정을 확인하세요.', 502);
         }
-        if (permissionMode === 'plan' && state.permissionMode !== 'plan') prePlanMode = state.permissionMode;
+        if (permissionMode === 'plan' && state.permissionMode !== 'plan') meta.prePlanMode = prePlanMode = state.permissionMode;
         meta.permissionMode = state.permissionMode = permissionMode;
       }
       if (model !== undefined) {
@@ -718,7 +736,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
-      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); state.turns = 0; state.durationMs = 0;
+      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
     async close({ forget = false } = {}) {
@@ -786,7 +804,7 @@ export async function seedFromTranscript({ directory, id, file, sessionId, confi
   try { const { size } = await handle.stat(), length = Math.min(size, 16 * 1024 * 1024), buffer = Buffer.alloc(length); await handle.read(buffer, 0, length, size - length); text = buffer.toString('utf8'); } finally { await handle.close(); }
   const events = transcriptEvents(text).map((event, index) => ({ ...event, seq: index + 1, at: event.at ?? Date.now() }));
   const last = events.findLast(event => event.kind === 'message' && /^claude-/.test(event.model ?? ''));
-  await seedChat({ directory, id, events, meta: { sessionId, configDir, model: model ?? last?.model, addDirs: [], permissionMode: 'default' } });
+  await seedChat({ directory, id, events, meta: { sessionId, configDir, model: model ?? last?.model, addDirs: [] } });
   return events.length;
 }
 

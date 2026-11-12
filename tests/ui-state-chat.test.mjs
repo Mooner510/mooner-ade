@@ -25,3 +25,8 @@ test('chat, zoom and bell settings accept valid values and reject the rest', () 
     { diffFont: 3 }, { diffFont: 'x'.repeat(201) }, { chatToolsOpen: 'yes' }, { chatToolDisplay: 'compact' }, { sidebarCompact: 1 }, { confirmCloseChat: 'no' }, { chatModelPins: { bad: [] } }, { chatModelPins: { cursor: ['x'.repeat(129)] } }])
     assert.throws(() => validateAppState(app(bad)), { code: 'INVALID_INPUT' }, JSON.stringify(bad));
 });
+
+test('the interactive UI setting must be a boolean', () => {
+  validateAppState(app({ interactiveUi: false }));
+  assert.throws(() => validateAppState(app({ interactiveUi: 'yes' })));
+});

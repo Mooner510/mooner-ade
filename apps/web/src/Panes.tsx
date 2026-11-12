@@ -8,7 +8,7 @@ import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
 import { useHiddenAgents } from './installed-agents';
 import { pickGreeting } from './chat-model';
-import { DiffView, monoFont, type Settings } from './Editor';
+import { DiffView, terminalFontStack, type Settings } from './Editor';
 import { Icon, IconButton, type IconName } from './Icon';
 import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
@@ -133,7 +133,7 @@ export const xtermOptions = (settings: Settings) => ({
   cursorBlink: settings.cursorBlink, cursorStyle: settings.cursorStyle, scrollback: settings.scrollback, scrollSensitivity: settings.scrollSensitivity,
   minimumContrastRatio: settings.minimumContrast, wordSeparator: settings.wordSeparator, drawBoldTextInBrightColors: settings.boldBright, macOptionIsMeta: settings.optionAsMeta
 });
-const fontStack = (settings: Settings) => settings.terminalFont.trim() ? `${settings.terminalFont.trim()}, ${monoFont}` : monoFont;
+const fontStack = (settings: Settings) => terminalFontStack(settings.terminalFont);
 
 function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);

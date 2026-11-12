@@ -30,7 +30,7 @@ export const chatStatusDefs: Record<string, Def> = {
   tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), total: compact(state.tokens.input + state.tokens.output) }),
     hint: '이 채팅의 누적. {input} {output} {cache}(캐시 읽기) {total}' },
   cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)' },
-  share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ share }) => share ? { share: `기여도 ${share}` } : null,
+  share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ share }) => share ? { share } : null,
     hint: '이 채팅이 플랜 한도(5h·주)에서 차지한 %p. 서버가 정수 %만 알려 주므로 비용 ÷ (1%p당 비용)으로 추정하고, 턴마다 한도 변화를 읽어 1%p당 비용을 보정합니다. 다른 사용이 겹치면 오차가 생길 수 있습니다.' },
   turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }) },
   duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }) },
