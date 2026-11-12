@@ -1,17 +1,18 @@
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { spawnAgent } from './agent-spawn.js';
-import { ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
+import { CODEX_KEY_ENV } from './agent-keys.js';
+import { ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
-import { readAutoCompact, readClaudeSettingsLayers } from './claude-auto-compact.js';
+import { readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
 import { readSessionCache } from './claude-cache.js';
 import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
@@ -38,6 +39,16 @@ const mergeTurnUsage = (current, patch) => ({
 
 // One chat tab = one transcript + (while a turn or an approval is open) one `claude -p` child. The child starts on the first
 // message and is resumed with `--resume <session id>` when it ended in between, so closing the app never loses the conversation.
+// `env` and `executableArgs` may be functions, read at every launch, so a change (an API key turned on, a plugin added) reaches the next (re)start.
+const argsOf = args => typeof args === 'function' ? args() : args;
+// On Windows the agent's Bash tool runs Git Bash as a non-login shell, which sets no locale: its tools then treat UTF-8 as raw bytes, and
+// `ls 존재하지않는폴더` reports the name as escaped bytes instead of text. With no locale variable at all, LC_CTYPE=C.UTF-8 fixes the encoding only;
+// message language (LANG, LC_MESSAGES) stays as it was, and a locale the user set is never touched.
+export function withUtf8Ctype(env, platform = process.platform) {
+  if (platform === 'win32' && !env.LC_ALL && !env.LC_CTYPE && !env.LANG) env.LC_CTYPE = 'C.UTF-8';
+  return env;
+}
+
 export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, quietMs = BACKGROUND_QUIET_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
@@ -63,6 +74,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode ?? 'default', sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
     contextTokens: 0, contextWindow: null, autoCompact: null, tokens: zero(), slashCommands: [], commandInfo: [], tools: [], pending: 0, error: null, startedAt: Date.now(),
     segmentTitles: { custom: '', ai: '', agent: '' }, chatTitle: '', liveTasks: [] }; // liveTasks: subagents (Agent call ids) running in the current child
+  // apiKey: this chat's CLI runs on an API key (Settings > AI 툴, or the user's own environment), not the CLI login. The UI then shows "API Usage"
+  // instead of a share of the plan's limits. Read from what the child is launched with, so it follows the setting from the next start on.
+  state.cwd = meta.worktreePath ?? cwd; // the folder the CLI runs in: the UI shows file paths under it as relative paths
+  const usesApiKey = launch => Boolean(agent === 'claude' ? launch.ANTHROPIC_API_KEY : agent === 'codex' ? launch[CODEX_KEY_ENV] : launch.CURSOR_API_KEY);
+  state.apiKey = usesApiKey({ ...process.env, ...(typeof env === 'function' ? env() : env) });
   // A turn is several API calls: `turnDone` holds the calls already finished, `turnUsage` the one streaming (`liveId`). result.usage is the whole turn, so it replaces both.
   let turnUsage = null, thinkingTokens = 0, turnDone = zero(), liveId = null;
   const resetLive = () => { turnUsage = null; thinkingTokens = 0; turnDone = zero(); liveId = null; };
@@ -166,7 +182,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, artifact: meta.artifact || undefined, costBase: meta.costBase, title: state.chatTitle });
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -230,7 +246,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
       // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
-      if (!replay && event.costUsd != null) state.costUsd = meta.costBase + event.costUsd;
+      if (!replay && event.costUsd != null) { state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
@@ -288,6 +304,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function handleEvent(event) {
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (event.kind === 'approval') {
+        // A Write request says whether it creates the file or replaces one, so its card can read "새 파일" or "덮어쓰기".
+        if (event.phase === 'request' && event.tool === 'Write' && typeof event.input?.file_path === 'string') event.exists = existsSync(path.resolve(cwd, event.input.file_path));
         if (event.phase === 'request') approvals.set(event.requestId, event); else approvals.delete(event.requestId);
         emit(event); setStatus(); return;
       }
@@ -365,13 +383,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       const target = path.join(directory, 'worktrees', `chat-${id}`);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await createLocalRuntime({ root: cwd }).git.createWorktree(target, `ade/chat-${id}`);
-      meta.worktreePath = target; cwd = target; await saveMeta();
+      meta.worktreePath = target; cwd = state.cwd = target; await saveMeta();
     }
     // Without a pick the CLI would follow ~/.claude/settings.json at every (re)start, so a change made in another project (or a terminal `/model`) would silently
     // switch this conversation on its next resume. The model and Effort it is running with are pinned to the chat instead.
     if (agent === 'claude') { let pinned = false; if (!meta.model && state.model) { meta.model = state.model; pinned = true; } if (meta.effort === undefined && state.effort && state.capabilities.efforts.includes(state.effort)) { meta.effort = state.effort; pinned = true; } if (pinned) await saveMeta(); }
     const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true }) : {};
-    const args = [...executableArgs, ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
+    const args = [...argsOf(executableArgs), ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
       // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the CLI starts with the window the gauge shows.
@@ -381,7 +399,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     }
     // shell:false and argv only: the message text never reaches a shell.
     const run = () => {
-      const launchEnv = { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' };
+      const launchEnv = withUtf8Ctype({ ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' });
+      state.apiKey = usesApiKey(launchEnv);
       if (agent === 'claude' && launchedWindow) launchEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(launchedWindow);
       if (agent === 'codex') { meta.configDir ??= launchEnv.CODEX_HOME || path.join(os.homedir(), '.codex'); launchEnv.CODEX_HOME = meta.configDir; }
       if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
@@ -481,6 +500,21 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   await saveMeta(); setStatus();
   return {
     id, agent, get cwd() { return cwd; },
+    // /rename: the chat's own title (wins over the AI/agent titles until /clear); stored as a custom-title event like the CLI's.
+    rename(title) {
+      const text = cleanChatTitle(title).slice(0, 60);
+      if (!text) throw fault('INVALID_INPUT', '이름을 입력하세요.');
+      emit({ kind: 'title', source: 'custom', text }); publish();
+      return { title: state.chatTitle };
+    },
+    // /autocompact: saved like the CLI's own command, so it works while a turn runs; a running child that was handed another window is replaced after the turn.
+    async setAutoCompact(value) {
+      if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', 'Auto Compact 창은 Claude 채팅에서만 바꿀 수 있습니다.', 409);
+      const model = meta.model ?? state.model;
+      try { await writeAutoCompact(configDirOf(), model, value, maxContextForModel(model)); } catch (cause) { throw fault('INVALID_INPUT', cause.message); }
+      await refreshAutoCompact(model);
+      return { autoCompact: state.autoCompact };
+    },
     loadCatalog(catalog, defaultModel, configOptions = []) {
       if (agent === 'cursor' && child) return;
       state.capabilities.catalog = catalog;
@@ -498,6 +532,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     retry: () => resendLastUser(),
     state: () => ({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }),
+    // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
+    // right away when idle, or once the running turn ends. The next message starts a child with the new key.
+    relaunch() { if (child) { if (turnOpen || approvals.size) { restartAfterTurn = true; state.restartPending = true; } else restart(); } },
     replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: { ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() },
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
@@ -528,7 +565,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           emit({ kind: 'delta', phase: 'compacting', active: true });
           restart();
           try {
-            const output = await runCursorSummarize({ executable, executableArgs, sessionId, cwd, env, spawnProcess });
+            const output = await runCursorSummarize({ executable, executableArgs: argsOf(executableArgs), sessionId, cwd, env, spawnProcess });
             const after = await readCursorStoreUsage(sessionId).catch(() => null);
             emit({ kind: 'delta', phase: 'compacting', active: false });
             emit({ kind: 'compact', trigger: 'manual', preTokens: preTokens || null, postTokens: after?.contextTokens ?? null });
@@ -574,10 +611,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         // A Claude question is answered inside the tool input; skipping it tells the model so, instead of the generic "rejected, STOP" refusal.
         const asking = pending.tool === 'AskUserQuestion' && pending.questions;
         await write(approvalLine(requestId, { allow: answer.allow === true, input: asking && answer.allow ? askUserInput(pending.input, pending.questions, answer.answers) : pending.input,
-          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ?? (asking ? ASK_SKIPPED : undefined), suggestions: answer.always === true ? pending.suggestions : [], mode: planMode }));
+          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ? (asking ? answer.message : refusalWith(answer.message)) : asking ? ASK_SKIPPED : undefined, suggestions: answer.always === true ? pending.suggestions : [], mode: planMode }));
       }
       // Approving a plan makes the CLI leave plan mode (back to what it was before); it says nothing about it, so the mode chip is moved here.
-      if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = planMode ?? prePlanMode; publish(); }
+      if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = planMode ?? prePlanMode; void saveMeta().catch(() => {}); publish(); }
       approvals.delete(requestId);
       emit({ kind: 'approval', phase: 'answer', requestId, tool: pending.tool, allow: answer.allow === true });
       setStatus();
@@ -796,7 +833,7 @@ export async function seedChat({ directory, id, events, meta }) {
 // Cursor publishes its catalog on a new ACP session; this empty session makes no model call.
 export async function probeAgentModels({ agent, cwd, env = {}, spawnProcess = spawnAgent, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], timeoutMs = 30_000 }) {
   if (!['codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
-  const proc = spawnProcess(executable, [...executableArgs, agent === 'codex' ? 'app-server' : 'acp'], { cwd, env: { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawnProcess(executable, [...argsOf(executableArgs), agent === 'codex' ? 'app-server' : 'acp'], { cwd, env: { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let buffer = '', catalog = [], configOptions = [], model = null;
   const decoder = new StringDecoder('utf8');
   const protocol = createChatProtocol(agent, { write: line => new Promise((resolve, reject) => proc.stdin.write(line, error => error ? reject(error) : resolve())),
@@ -862,6 +899,33 @@ export async function resolveModels({ env = {}, cwd = os.tmpdir(), home = os.hom
   const model = known ?? (await init?.())?.model;
   if (model) models[''] = model;
   return models;
+}
+
+// Every model an Anthropic API key can use, from the Models API. With an API key the CLI never writes its catalog (below), so without this the
+// picker only had the opus/sonnet/haiku aliases. Same shape as readModelCatalog; `main` marks the newest model of each family (the quick menu).
+// [] when the request fails (bad key, offline), so the caller falls back to the CLI catalog.
+const API_FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'];
+export async function fetchApiModelCatalog({ apiKey, baseURL, timeoutMs = 10_000, Client } = {}) {
+  if (!apiKey) return [];
+  try {
+    Client ??= (await import('@anthropic-ai/sdk')).default;
+    const client = new Client({ apiKey, ...(baseURL && { baseURL }), timeout: timeoutMs, maxRetries: 1 });
+    const models = [];
+    for await (const item of client.models.list({ limit: 100 })) { models.push(item); if (models.length >= 64) break; }
+    const rows = models.flatMap(item => {
+      const id = item?.id, raw = typeof item?.display_name === 'string' ? item.display_name.trim() : '';
+      if (typeof id !== 'string' || !/^[\w.-]{1,100}$/.test(id)) return [];
+      // "Claude Opus 5.5" -> "Opus 5.5"; the old "Claude 3.5 Haiku" order -> "Haiku 3.5".
+      let name = (raw || id).replace(/^Claude\s+/i, '');
+      const old = /^(\d[\d.]*)\s+([A-Za-z]+)$/.exec(name); if (old) name = `${old[2]} ${old[1]}`;
+      if (name.length > 40) return [];
+      const words = name.toLowerCase().split(/\s+/), family = (words.find(word => API_FAMILIES.includes(word)) ?? words[0]).replace(/[^a-z0-9]/g, '').slice(0, 20);
+      return [{ id, name, family, window: Number(item.max_input_tokens) || 0, main: false, created: Date.parse(item.created_at) || 0 }];
+    });
+    const newest = new Map();
+    for (const row of rows) if (API_FAMILIES.includes(row.family) && (!newest.has(row.family) || row.created > newest.get(row.family).created)) newest.set(row.family, row);
+    return rows.map(({ created, ...row }) => ({ ...row, main: newest.get(row.family)?.id === row.id }));
+  } catch { return []; }
 }
 
 // Every model the CLI offers right now. The CLI keeps its own catalog (fetched with the user's login, refreshed about hourly while it runs) in

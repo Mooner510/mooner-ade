@@ -8,7 +8,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFeedbackStore, imageInfo, MAX_IMAGES } from '../apps/local-server/src/feedback-store.js';
-import { feedbackPrompt, parseFeedbackDraft, runFeedbackDraft } from '../apps/local-server/src/feedback-agent.js';
+import { feedbackPrompt, LOGIN_HINT, parseFeedbackDraft, runFeedbackDraft } from '../apps/local-server/src/feedback-agent.js';
 import { createFeedbackMcp, writeDraft } from '../apps/local-server/src/feedback-mcp.js';
 import { backoffMs, createFeedbackQueue, nextStep, surelyNotCreated } from '../apps/local-server/src/feedback-queue.js';
 import { ANONYMOUS_INTERVAL_MS, anonymousDeviceId, postAnonymousFeedback } from '../apps/local-server/src/feedback-hub.js';
@@ -389,4 +389,18 @@ test('runFeedbackDraft passes --model and --effort only for known values', async
   assert.deepEqual((await run('claude-haiku-5-5', 'medium')).slice(0, 4), ['--model', 'claude-haiku-5-5', '--effort', 'medium']);
   const unknown = await run('gpt-4', 'turbo');
   assert.ok(!unknown.includes('--model') && !unknown.includes('--effort'));
+});
+
+test('a Claude Code login failure in the AI draft is explained, and says that submitting needs no login', async () => {
+  const fake = text => () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter(); proc.stderr = new EventEmitter(); proc.stdin = { on() {}, end() { queueMicrotask(() => { proc.stdout.emit('data', JSON.stringify({ is_error: true, result: text })); }); } }; proc.kill = () => {};
+    return proc;
+  };
+  const failure = await runFeedbackDraft({ cwd: process.cwd(), images: [], spawnProcess: fake('Not logged in · Please run /login') }).catch(error => error);
+  assert.equal(failure.code, 'AGENT_LOGIN');
+  assert.equal(failure.message, LOGIN_HINT);
+  assert.match(failure.message, /로그인 없이/);
+  const other = await runFeedbackDraft({ cwd: process.cwd(), images: [], spawnProcess: fake('rate limited') }).catch(error => error);
+  assert.equal(other.code, 'AGENT_PROTOCOL');
 });
