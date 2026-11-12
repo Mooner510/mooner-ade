@@ -803,7 +803,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   async function setChat(input: any, confirmed = false) {
     if (!confirmed && input.model && input.model !== resolvedModelValue && input.model !== selectedModel && shown.length > 0) {
       const canCompact = available.some(item => item.name === 'compact');
-      const choice = await ctx.pick('대화 중에 모델을 바꾸면 프롬프트 캐시가 모두 만료됩니다.\n다음 메시지에서 지금까지의 컨텍스트 전체를 캐시 없이 다시 읽어 사용량이 늘 수 있습니다. (/clear 직후에는 해당 없음)'
+      const choice = await ctx.pick('대화 중에 모델을 바꾸면 프롬프트 캐시가 모두 만료됩니다. 다음 메시지에서 지금까지의 컨텍스트 전체를 캐시 없이 다시 읽어 사용량이 늘 수 있습니다. (/clear 직후에는 해당 없음)'
         + (canCompact ? '\n먼저 압축하면 요약된 짧은 컨텍스트만 새 모델로 다시 읽습니다.' : ''),
         [{ id: 'yes', label: '모델 변경' }, ...(canCompact ? [{ id: 'compact', label: '압축(/compact)하고 전환' }] : []), { id: 'no', label: '취소' }]);
       if (choice === 'compact') {
