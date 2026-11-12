@@ -34,9 +34,12 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
   useEffect(() => setIndex(0), [value]);
   const finish = (result: string | null) => { onClose(); request.resolve(result); };
   const title = request.title;
+  // A choice whose title is a sentence (a warning, a question) is shown as wrapped text; as the input's placeholder it was cut off at one line.
+  const message = request.kind !== 'input' && (title.length > 40 || title.includes('\n'));
   return <div className="quick-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) finish(null); }}>
     <div className="quick" role="dialog" aria-label={title}>
-      <input ref={input} value={value} aria-label={title} placeholder={title} onChange={event => setValue(event.target.value)}
+      {message && <p className="quick-message">{title}</p>}
+      <input ref={input} value={value} aria-label={title} placeholder={message ? '' : title} onChange={event => setValue(event.target.value)}
         onKeyDown={event => {
           if (event.key === 'Escape') { event.preventDefault(); finish(null); }
           else if (event.key === 'ArrowDown') { event.preventDefault(); setIndex(current => Math.min(items.length - 1, current + 1)); }

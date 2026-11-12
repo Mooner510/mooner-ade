@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+// Verification fake of `claude`. No network, no model. Logs every start to $FAKE_LOG; behaviour switches via $FAKE_CTL (json) and trigger words.
+import fs from 'node:fs'; import readline from 'node:readline';
+const argv = process.argv.slice(2), log = o => { try { fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ t: Date.now(), ...o }) + '\n'); } catch {} };
+const ctl = () => { try { return JSON.parse(fs.readFileSync(process.env.FAKE_CTL, 'utf8')); } catch { return {}; } };
+const send = m => process.stdout.write(JSON.stringify(m) + '\n');
+const envLog = { CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT, CLAUDE_CODE_MCP_STARTUP_WAIT_MS: process.env.CLAUDE_CODE_MCP_STARTUP_WAIT_MS };
+if (argv[0] === '--version') { console.log('2.1.322 (fake)'); process.exit(0); }
+if (argv[0] === 'auth') { console.log(JSON.stringify({ loggedIn: true, authMethod: 'fake' })); process.exit(0); }
+const stream = argv.includes('--input-format') && argv.includes('stream-json');
+if (!stream) {
+  // `claude -p --output-format json`: the feedback AI draft (prompt on stdin).
+  let input = ''; process.stdin.on('data', c => input += c);
+  process.stdin.on('end', async () => {
+    const mode = ctl().fb ?? 'ok'; log({ kind: 'oneshot', argv, cwd: process.cwd(), env: envLog, stdin: input.slice(0, 4000), mode });
+    if (mode === 'fail') { console.error('boom'); process.exit(1); }
+    if (mode === 'badjson') { console.log('this is not json'); process.exit(0); }
+    if (mode === 'empty') { console.log(JSON.stringify({ type: 'result', is_error: false, result: '' })); process.exit(0); }
+    if (mode === 'iserror') { console.log(JSON.stringify({ type: 'result', is_error: true, result: 'quota' })); process.exit(0); }
+    if (mode === 'slow') await new Promise(r => setTimeout(r, 4000));
+    console.log(JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ title: '가짜 제목', body: '## 문제\n가짜 본문 ' + 'x'.repeat(40) + '\n\n## 기대 동작\n되어야 함\n\n## 개선 제안\n고쳐 주세요' }) }));
+    process.exit(0);
+  });
+} else {
+  log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog });
+  const sid = 'fake-session-' + process.pid;
+  const init = { type: 'system', subtype: 'init', session_id: sid, model: argv[argv.indexOf('--model') + 1] ?? 'fake-model', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
+  send(init);
+  const result = (text = 'ok', extra = {}) => send({ type: 'result', is_error: false, result: text, session_id: sid, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5 }, ...extra });
+  const say = (text, id = 'm' + Date.now() + Math.random()) => send({ type: 'assistant', message: { id, content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 5 } } });
+  const asst = (content, parent) => send({ type: 'assistant', ...(parent && { parent_tool_use_id: parent }), message: { id: 'm' + Date.now() + Math.random(), content, usage: { input_tokens: 10, output_tokens: 5 } } });
+  const toolResult = (id, content, is_error = false) => send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(is_error && { is_error: true }) }] } });
+  const task = (subtype, id, more = {}) => send({ type: 'system', subtype, session_id: sid, tool_use_id: id, ...more });
+  readline.createInterface({ input: process.stdin }).on('line', async line => {
+    let m; try { m = JSON.parse(line); } catch { return; }
+    if (m.type === 'control_request') {
+      const sub = m.request?.subtype; log({ kind: 'control', sub, request: m.request });
+      if (sub === 'set_permission_mode') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { permissionMode: m.request.mode } } });
+      else if (sub === 'apply_flag_settings') send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } });
+      else send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+      return;
+    }
+    if (m.type === 'control_response') {
+      const reply = m.response?.response ?? {}; log({ kind: 'approval-reply', reply });
+      say('reply=' + JSON.stringify(reply)); result('replied'); return;
+    }
+    if (m.type !== 'user') return;
+    const parts = m.message?.content ?? [], text = parts.find?.(p => p.type === 'text')?.text ?? '';
+    log({ kind: 'user', text, images: parts.filter?.(p => p.type === 'image').length ?? 0, uuid: m.uuid });
+    if (m.uuid) send({ type: 'user', uuid: m.uuid, isReplay: true, message: { role: 'user', content: parts } });
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    if (text === '/compact') {
+      send({ type: 'system', subtype: 'status', status: 'compacting', session_id: sid }); send({ type: 'system', subtype: 'status', status: null, compact_result: 'success', session_id: sid }); send(init);
+      send({ type: 'system', subtype: 'compact_boundary', session_id: sid, compact_metadata: { trigger: 'manual', pre_tokens: 231097, post_tokens: 14613 } });
+      send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
+      result('', { local_command: 'compact', num_turns: 0 }); return;
+    }
+    if (text.includes('slow')) { await wait(4000); say('slow done'); result('slow done'); return; }
+    if (/\bask\b/.test(text)) { send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
+    if (text.includes('plan')) { say('계획을 세웠습니다.'); send({ type: 'control_request', request_id: 'plan-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', tool_use_id: 'toolu_plan', input: { plan: '# 계획\n\n요약 한 줄\n\n## 1단계 준비\n- a\n- b\n\n## 2단계 구현\n- c\n\n## 3단계 검증\n- d' } } }); return; }
+    if (text.includes('tasks')) {
+      asst([{ type: 'tool_use', id: 'toolu_a1', name: 'Agent', input: { description: '조사 A', prompt: 'A를 조사' } }, { type: 'tool_use', id: 'toolu_a2', name: 'Agent', input: { description: '조사 B', prompt: 'B를 조사' } }]);
+      task('task_started', 'toolu_a1', { description: '조사 A', subagent_type: 'general-purpose', is_backgrounded: false });
+      task('task_started', 'toolu_a2', { description: '조사 B', subagent_type: 'Explore', is_backgrounded: true });
+      await wait(300); task('task_progress', 'toolu_a1', { description: 'Running grep', last_tool_name: 'Grep', usage: { total_tokens: 1200, tool_uses: 2, duration_ms: 800 } });
+      await wait(300); task('task_notification', 'toolu_a1', { status: 'completed', handback_report: { text: 'A 결과 보고' }, usage: { total_tokens: 2400, tool_uses: 4, duration_ms: 1500 } });
+      toolResult('toolu_a1', 'A 결과 보고'); say('A는 끝났고 B는 백그라운드입니다.'); result('waiting');
+      await wait(3500); task('task_notification', 'toolu_a2', { status: 'completed', handback_report: { text: 'B 결과 보고' } });
+      return;
+    }
+    if (text.includes('adeui')) { say('UI입니다.\n\n```ade-ui\n' + "<div><h3>테스트 UI</h3><button id=\"b-send\" class=\"primary\" onclick=\"ade.send('UI에서 보낸 메시지')\">보내기</button> <button id=\"b-pre\" onclick=\"ade.prefill('UI가 채운 문장')\">입력창에 채우기</button> <button id=\"b-net\" onclick=\"fetch('https://example.com/x').then(()=>r.textContent='NET OK').catch(e=>r.textContent='NET BLOCKED')\">외부 요청</button> <button id=\"b-grow\" onclick=\"more.style.height='200px'\">키우기</button><p id=\"r\">대기</p><div id=\"more\"></div></div>" + '\n```\n'); result(); return; }
+    if (text.includes('uiblock')) { say('결과입니다.\n\n```ui\n["stats",["가동률","99%","ok","30일"],["지연","24ms"]]\n```\n\n```ui\n["form","계획","보내기",["slider","seats","좌석",2,1],["radio","c","결제","월","년"]]\n```\n\n```ui\n{깨진 json\n```\n'); result(); return; }
+    if (text.includes('tools')) {
+      asst([{ type: 'tool_use', id: 'toolu_m1', name: 'mcp__claude_ai_Claude_Docs__update', input: { title: '문서 제목', container: { kind: 'doc' } } }]);
+      toolResult('toolu_m1', '{"ok":true,"url":"https://claude.ai/artifact/abc123-def"}');
+      asst([{ type: 'tool_use', id: 'toolu_b1', name: 'Bash', input: { command: 'rm -rf x' } }]);
+      toolResult('toolu_b1', 'Permission denied: denied by the Claude Code auto mode classifier. Reason: [destructive command]', true);
+      asst([{ type: 'tool_use', id: 'toolu_r1', name: 'Read', input: { file_path: 'a.txt' } }]); toolResult('toolu_r1', 'hello');
+      say('도구를 썼습니다.'); result(); return;
+    }
+    say('ok'); send({ type: 'ai-title', aiTitle: 'AI가 붙인 제목' }); result();
+  });
+}

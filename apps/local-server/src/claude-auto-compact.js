@@ -64,3 +64,23 @@ export async function readAutoCompact(configDir, cwd, model, maxWindow) {
   const { settings, env } = await readClaudeSettingsLayers(configDir, cwd);
   return resolveAutoCompact({ settings, env, model, maxWindow });
 }
+
+// What the CLI's own /autocompact saves: modelSettings[<canonical model>].autoCompactWindow in the user settings file ("auto" or 100k–1M tokens).
+// With no model known yet the top-level autoCompactWindow is used. Returns the value written.
+export async function writeAutoCompact(configDir, model, value, maxWindow = 1_000_000) {
+  const parsed = parseTokenAmount(value);
+  if (parsed === null) throw new Error('auto 또는 토큰 수(예: 350k, 500000)를 입력하세요.');
+  if (parsed !== 'auto' && (parsed < 100_000 || parsed > Math.max(maxWindow, 100_000))) throw new Error(`창 크기는 100k ~ ${Math.round(Math.max(maxWindow, 100_000) / 1000)}k 토큰 사이여야 합니다.`);
+  const file = path.join(configDir, 'settings.json');
+  let settings = {};
+  try { settings = JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw new Error('settings.json을 읽지 못해 바꾸지 않았습니다. 파일이 올바른 JSON인지 확인하세요.'); }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json 형식이 올바르지 않아 바꾸지 않았습니다.');
+  const key = typeof model === 'string' ? model.replace(/\[[^\]]*\]$/, '') : '';
+  if (key) settings.modelSettings = { ...settings.modelSettings, [key]: { ...settings.modelSettings?.[key], autoCompactWindow: parsed } };
+  else settings.autoCompactWindow = parsed;
+  await fs.mkdir(configDir, { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`);
+  await fs.rename(temp, file);
+  return parsed;
+}

@@ -51,7 +51,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   else if (raw.method === 'authenticate' || raw.method.startsWith('session/set_')) reply(raw.id, {});
   else if (raw.method === 'model/list') reply(raw.id, { data: [{ model: 'codex-test', displayName: 'Codex test', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
+  else if (raw.method === 'config/read') reply(raw.id, { config: { model_provider: process.env.FAKE_PROVIDER ?? null } });
   else if (raw.method === 'thread/start' || raw.method === 'thread/resume' || raw.method === 'thread/fork') {
+    if (process.env.EXPECT_PROVIDER !== undefined && raw.method !== 'thread/start' && p.modelProvider !== process.env.EXPECT_PROVIDER) throw new Error(`resume must use provider ${process.env.EXPECT_PROVIDER}, got ${p.modelProvider}`);
     if (raw.method === 'thread/fork' && !p.lastTurnId) throw new Error('fork must include the exact turn');
     sessionId = raw.method === 'thread/resume' ? p.threadId : randomUUID(); reply(raw.id, { thread: { id: sessionId }, model: p.model ?? 'codex-test' });
   } else if (raw.method === 'session/new' || raw.method === 'session/load') { sessionId = p.sessionId ?? sessionId; reply(raw.id, cursorInfo()); }

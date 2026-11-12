@@ -28,6 +28,9 @@ const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
 const NOTIFY_PER_MINUTE = 10;
 // Workspace relay: what a host may ask for, and how much output may wait for a host that stops reading before its session is closed.
 const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
+// Feedback submission (plugins that declared `feedback`): how long an upload may take before MoonerADE gives up on the answer.
+export const FEEDBACK_TIMEOUT_MS = 120_000;
+const NO_FEEDBACK_PLUGIN = '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.';
 
 const fail = (message, code = 'PLUGIN_INVALID') => Object.assign(new Error(message), { code });
 // The name and description appear in MoonerADE's own approval dialog: no control or bidirectional formatting characters
@@ -77,6 +80,10 @@ export function validManifest(value) {
   if (value.workspace !== undefined) {
     if (typeof value.workspace !== 'boolean') throw fail('workspace 항목이 올바르지 않습니다.');
     if (value.workspace) manifest.workspace = true;
+  }
+  if (value.feedback !== undefined) {
+    if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
+    if (value.feedback) manifest.feedback = true;
   }
   return manifest;
 }
@@ -219,7 +226,8 @@ export function grantsFor(manifest) {
     '별도 프로세스로 실행되며 이 컴퓨터에서 MoonerADE와 같은 권한을 갖습니다.',
     manifest.terminal && `새로 여는 MoonerADE 터미널에 명령${manifest.terminal.bin ? `(${manifest.terminal.bin} 폴더)` : ''}과 환경 변수${manifest.terminal.envPrefix ? `(${manifest.terminal.envPrefix}*)` : ''}를 추가합니다.`,
     manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
-    manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.'
+    manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.',
+    manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.'
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
@@ -398,7 +406,7 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
 // probeMcp({ command, args, cwd, env }) resolves the raw tools/list of a plugin's MCP server (default: probeMcpTools).
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), log = console }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -428,7 +436,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
           builtin: item.builtin === true, ...(item.builtin && { builtinEnabled: builtinOn(item) }),
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
-          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), view: host?.status === 'running' ? host.view : null,
+          terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
           // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
           commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
@@ -449,7 +457,34 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       disabled: [...prefs.disabled]
     };
   }
-  const changed = () => onChange(snapshot());
+  const changed = () => { onChange(snapshot()); emitFeedback(); };
+  // Whether feedback can be submitted now, and through which plugin's account. Pushed to the server only when it changes.
+  let lastFeedback = '', feedbackSequence = 0;
+  function feedbackStatus() {
+    const declared = [...hosts.values()].filter(host => host.item.manifest.feedback && host.status === 'running');
+    const ready = declared.find(host => host.feedback?.available);
+    if (ready) return { ok: true, ...(ready.feedback.account && { account: ready.feedback.account }), plugin: ready.id };
+    const reason = declared.find(host => host.feedback?.reason)?.feedback.reason;
+    return { ok: false, reason: reason || NO_FEEDBACK_PLUGIN };
+  }
+  function emitFeedback() {
+    const status = feedbackStatus(), text = JSON.stringify(status);
+    if (text === lastFeedback) return;
+    lastFeedback = text;
+    onFeedback(status);
+  }
+  // Hands one submission to the plugin that can send it now and resolves its answer. Never rejects and never leaves a request hanging.
+  function submitFeedback({ meta, images }) {
+    const status = feedbackStatus(), host = status.ok ? hosts.get(status.plugin) : null;
+    if (!host?.child?.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: status.reason || NO_FEEDBACK_PLUGIN } });
+    const id = ++feedbackSequence;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { host.feedbackPending.delete(id); resolve({ ok: false, error: { code: 'PLUGIN_TIMEOUT', message: '플러그인이 제때 응답하지 않았습니다. 잠시 뒤 다시 제출하세요.' } }); }, FEEDBACK_TIMEOUT_MS);
+      timer.unref?.();
+      host.feedbackPending.set(id, value => { clearTimeout(timer); resolve(value); });
+      host.child.send({ type: 'feedback/submit', id, meta, images });
+    });
+  }
   // What the user turned off stays out: a server turned off is not given at all, single tools are named for the agents to leave out.
   function withPrefs(terminal) {
     if (!terminal.mcp) return terminal;
@@ -488,7 +523,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (hash !== item.hash) { item.hash = hash; return; }
     const dataDir = path.join(dataRoot, manifest.id);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
+    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), feedback: null, feedbackPending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
     hosts.set(manifest.id, host);
     let child;
     try { child = spawnHost({ id: manifest.id, dir: item.dir, main: path.join(item.dir, ...manifest.main.split('/')) }); }
@@ -505,6 +540,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     host.stopping = true;
     for (const { reject } of host.pending.values()) reject(fail('플러그인이 멈췄습니다.', 'PLUGIN_STOPPED'));
     host.pending.clear();
+    endFeedback(host, '플러그인이 멈췄습니다.');
     closeWorkspace(host);
     const child = host.child;
     if (child && child.exitCode === null) {
@@ -513,9 +549,15 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     }
     if (hosts.get(host.id) === host) hosts.delete(host.id);
   }
+  function endFeedback(host, message) {
+    for (const answer of host.feedbackPending.values()) answer({ ok: false, error: { code: 'PLUGIN_STOPPED', message } });
+    host.feedbackPending.clear();
+    host.feedback = null;
+  }
   function onHostExit(host, code) {
     for (const { reject } of host.pending.values()) reject(fail('플러그인이 종료되었습니다.', 'PLUGIN_STOPPED'));
     host.pending.clear();
+    endFeedback(host, '플러그인이 종료되었습니다.');
     // A host replaced by a newer one for the same plugin already closed its sessions when it was stopped; the newer one's stay.
     if (!hosts.has(host.id) || hosts.get(host.id) === host) closeWorkspace(host);
     const wasRunning = host.terminal !== null;
@@ -583,6 +625,26 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         break;
       }
       case 'workspace': relayWorkspace(host, message); break;
+      // Only for a plugin whose approved manifest declared `feedback` (docs/PLUGINS.md).
+      case 'feedback': {
+        if (!manifest.feedback) break;
+        const account = typeof message.account === 'string' ? plainText(message.account).slice(0, 100) : '';
+        const reason = typeof message.reason === 'string' ? plainText(message.reason).slice(0, 200) : '';
+        host.feedback = { available: message.available === true, ...(account && { account }), ...(reason && { reason }) };
+        emitFeedback();
+        break;
+      }
+      case 'feedback/result': {
+        const answer = host.feedbackPending.get(message.id);
+        if (!answer) break;
+        host.feedbackPending.delete(message.id);
+        const issueUrl = typeof message.issueUrl === 'string' && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(message.issueUrl) ? message.issueUrl : undefined;
+        answer(message.ok === true
+          ? { ok: true, ...(issueUrl && { issueUrl }), ...(Number.isSafeInteger(message.issueNumber) && { issueNumber: message.issueNumber }) }
+          : { ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'PLUGIN_FEEDBACK', message: plainText(String(message.error?.message ?? '피드백을 보내지 못했습니다.')).slice(0, 500) || '피드백을 보내지 못했습니다.',
+            ...(Number.isInteger(message.error?.retryAfter) && message.error.retryAfter > 0 && { retryAfter: Math.min(message.error.retryAfter, 86_400) }) } });
+        break;
+      }
       case 'log': log[message.level === 'error' ? 'error' : message.level === 'warn' ? 'warn' : 'log'](`[plugin ${host.id}] ${String(message.message ?? '').slice(0, 2000)}`); break;
     }
   }
@@ -837,5 +899,5 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
 
   function close() { closing = true; for (const host of [...hosts.values()]) stop(host); }
 
-  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset };
+  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback };
 }

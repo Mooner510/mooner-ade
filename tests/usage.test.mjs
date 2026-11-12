@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, envrcVariable, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
+import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -83,15 +83,9 @@ test('ps -E output yields the last value of a variable, spaces included', () => 
   assert.equal(envFromPs('claude HOME=/x', 'CLAUDE_CONFIG_DIR'), null);
 });
 
-test('a blocked .envrc still names the account through its literal export, without running anything', async () => {
-  const files = { '/h/p/.envrc': 'export DISABLE_TELEMETRY=1\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-work" # work login\n', '/q/.envrc': 'export CLAUDE_CONFIG_DIR="$PWD/.acc"', '/r/.envrc': 'export CLAUDE_CONFIG_DIR=$(whoami)' };
-  const readFile = async file => files[file] ?? Promise.reject(new Error('ENOENT'));
-  assert.equal(await envrcVariable('/h/p/src', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), '/h/.claude-work');
-  assert.equal(await envrcVariable('/q', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), '/q/.acc');
-  assert.equal(await envrcVariable('/r', 'CLAUDE_CONFIG_DIR', { home: '/h', readFile }), null);
-  assert.equal(await envrcVariable('/none', 'CODEX_HOME', { home: '/h', readFile }), null);
-  const resolve = createAccountResolver({ env: {}, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => '', exists: async () => false, readFile });
-  assert.deepEqual(await resolve('claude', { root: '/h/p', terminals: new Map() }), { dir: '/h/.claude-work', from: 'direnv' });
+test('a blocked or denied .envrc is not active: direnv fails, so the project falls back to the server environment', async () => {
+  const resolve = createAccountResolver({ env: { CLAUDE_CONFIG_DIR: '/acc-a' }, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => null, exists: async () => false });
+  assert.deepEqual(await resolve('claude', { root: '/h/p', terminals: new Map() }), { dir: '/acc-a', from: 'server' });
 });
 
 test('a project resolves to its .envrc account, then its running agent, then the server environment', async () => {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary } from '../apps/web/src/chat-model.ts';
+import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
@@ -154,7 +154,7 @@ test('slash command feedback: printed output, result text, or a done line', () =
   assert.deepEqual(view.items.at(-1), { kind: 'command', key: 'e5', text: 'v2.1: notes', isError: false, fresh: false });
   view = reduce(view, { seq: 6, kind: 'user', text: '/mcp' });
   view = reduce(view, { seq: 7, kind: 'result', status: 'success', text: '' });
-  assert.equal(view.items.at(-1).kind, 'command'); assert.equal(view.items.at(-1).text, '');
+  assert.equal(view.items.at(-1).kind, 'command'); assert.equal(view.items.at(-1).text, '/mcp 명령을 실행했습니다.', 'no output: only a line saying it ran');
   view = reduce(view, { seq: 8, kind: 'user', text: 'plain question' });
   view = reduce(view, { seq: 9, kind: 'result', status: 'success', text: '' });
   assert.equal(view.items.at(-1).kind, 'user', 'an ordinary empty turn gets no command line');
@@ -507,5 +507,136 @@ test('tool runs: 3+ consecutive tools bundle, thoughts between tools stay inside
   // a remark splits the tools: 2 + 2 is two small stretches, 3 + 1 is one bundle
   assert.deepEqual(runsOf(flow(T('a'), T('b'), '잠깐 확인.', T('c'), T('d'), '끝.')), []);
   assert.deepEqual(runsOf(flow(T('a'), T('b'), T('c'), '잠깐 확인.', T('d'), '끝.')), [[0, 3, 3]]);
+  // a thought shown as plain text has content: it splits the tools like a remark (3 + 1 bundles, 2 + 2 does not)
+  const plainRuns = turn => toolRuns(turn, processGroups(turn).groups, 3, true).map(run => [run.start, run.end, run.tools]);
+  assert.deepEqual(plainRuns(flow(T('a'), T('b'), T('c'), think, T('d'), '끝.')), [[0, 3, 3]]);
+  assert.deepEqual(plainRuns(flow(T('a'), T('b'), think, T('c'), T('d'), '끝.')), []);
   assert.deepEqual(toolRuns(flow(T('a'), T('b'), '끝.'), processGroups(flow(T('a'), T('b'), '끝.')).groups, 2).map(run => run.tools), [2], 'the threshold is a parameter');
+});
+
+test('autoDenial: only the auto-mode classifier refusal is a denial, and it carries the reason', () => {
+  const text = 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Create Unsafe Agents]. If you have other tasks...';
+  assert.deepEqual(autoDenial(text), { reason: 'Create Unsafe Agents' });
+  assert.deepEqual(autoDenial('Permission for this action was denied by the Claude Code auto mode classifier.'), { reason: '' });
+  assert.equal(autoDenial('Error: ENOENT'), null);
+});
+
+test('an Agent call stays a visible card: it splits the process around it instead of folding into it', () => {
+  const agent = { block: { type: 'tool_use', id: 'A', name: 'Agent', input: {} }, sub: false };
+  assert.equal(shapeOf([T('1'), T('2'), agent, T('3'), ...flow('끝')]), 'PpRPR');
+});
+
+test('subagents: the end report wins; a background one runs while its child lives; a foreground one ends with its result', () => {
+  const call = (id, input) => ({ type: 'tool_use', id, name: 'Agent', input });
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [call('bg', { description: 'scan', subagent_type: 'Explore', run_in_background: true }), call('fg', { description: 'read', prompt: 'go' })] });
+  view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'bg', description: 'scan', agentType: 'Explore', background: true, at: 1000 });
+  view = reduce(view, { seq: 3, kind: 'tool_result', toolUseId: 'bg', content: 'Async agent launched', isError: false });
+  view = reduce(view, { seq: 4, kind: 'message', id: 's1', parentToolUseId: 'bg', blocks: [{ type: 'tool_use', id: 'g', name: 'Grep', input: { pattern: 'x' } }] });
+  view = reduce(view, { kind: 'task', phase: 'progress', toolUseId: 'bg', activity: 'Running grep', toolUses: 1 });
+  let [bg, fg] = agentsOf(view.items, view.results, view.tasks, false, ['bg']);
+  assert.equal(bg.status, 'running'); assert.equal(bg.now, 'Running grep'); assert.equal(bg.toolCount, 1); assert.equal(bg.items.length, 1); assert.equal(bg.startedAt, 1000);
+  assert.equal(fg.status, 'stopped', 'idle chat, no result: it never finished');
+  assert.equal(agentsOf(view.items, view.results, view.tasks, true, ['bg'])[1].status, 'running');
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'stopped', 'its child is gone');
+  view = reduce(view, { seq: 5, kind: 'tool_result', toolUseId: 'fg', content: 'found it', isError: false });
+  view = reduce(view, { seq: 6, kind: 'task', phase: 'end', toolUseId: 'bg', status: 'completed', report: 'Count: 28', durationMs: 14803, at: 16000 });
+  [bg, fg] = agentsOf(view.items, view.results, view.tasks, false, []);
+  assert.equal(bg.status, 'done'); assert.equal(bg.report, 'Count: 28'); assert.equal(bg.now, ''); assert.equal(bg.durationMs, 14803);
+  assert.equal(fg.status, 'done'); assert.equal(fg.report, 'found it'); assert.equal(fg.prompt, 'go');
+  view = reduce(view, { seq: 7, kind: 'task', phase: 'end', toolUseId: 'bg', status: 'failed' });
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false)[0].status, 'error');
+});
+
+test('a plan splits into its ## sections; the # line is its title and fenced code is never cut', () => {
+  const plan = ['# 계획', '', '머리말', '', '## Context', '- a', '- b', '', '## 코드', '```md', '## not a section', '```', '1. step'].join('\n');
+  const { title, sections } = planSections(plan);
+  assert.equal(title, '계획');
+  assert.deepEqual(sections.map(section => [section.title, section.items]), [['', 0], ['Context', 2], ['코드', 1]]);
+  assert.match(sections[2].body, /## not a section/);
+  assert.deepEqual(planSections('just text').sections, [{ title: '', body: 'just text', items: 0 }]);
+});
+
+test('MCP tools: readable label and summary instead of raw JSON', () => {
+  assert.equal(toolLabel('mcp__claude_ai_Claude_Docs__update'), 'Claude Docs · update');
+  assert.equal(toolLabel('Bash'), 'Bash');
+  assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__guide', { items: ['topic.index', 'topic.editing'] }), 'topic.index, topic.editing');
+  assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__batch', { container: { kind: 'project', create: { name: '작업 내용' } } }), '작업 내용');
+  assert.equal(toolSummary('mcp__x__update', { ref: { id: 'a' }, payload: { ops: [{ with: { from: { content: '## 개요\n본문' } } }] } }), '개요 본문');
+  assert.equal(toolSummary('mcp__x__ping', { flag: true, n: 2 }), 'flag: true · n: 2');
+});
+
+test('artifacts: a created doc is found by the claude.ai link in its result', () => {
+  const url = 'https://claude.ai/artifact/1wrqK8ndBdUqv356KQ2syF';
+  const blocks = [
+    { type: 'tool_use', id: 'g', name: 'mcp__claude_ai_Claude_Docs__guide', input: {} },
+    { type: 'tool_use', id: 'b', name: 'mcp__claude_ai_Claude_Docs__batch', input: { container: { create: { name: '작업 내용' } } } },
+    { type: 'tool_use', id: 'u', name: 'mcp__claude_ai_Claude_Docs__update', input: {} }
+  ];
+  const results = { g: { content: `see ${url}`, isError: false }, b: { content: `{"frame":{"url":"${url}"}}`, isError: false }, u: { content: `{"url":"${url}"}`, isError: false } };
+  assert.deepEqual(artifactsOf(blocks, results), [{ url, title: '작업 내용', toolUseId: 'b' }]);
+  assert.deepEqual(artifactsOf(blocks, { b: { content: url, isError: true } }), []);
+});
+
+test('repeating /autocompact or /rename edits the line above instead of adding another', () => {
+  let items = [];
+  const go = change => { items = withSettingChange(items, change, `k${items.length}`); return items.filter(item => item.kind === 'note').map(item => item.text); };
+  assert.deepEqual(go({ compact: { value: '350k 토큰', color: 'x' } }), ['Auto Compact 창을 350k 토큰으로 설정했습니다.']);
+  assert.deepEqual(go({ compact: { value: 'auto', color: 'x' } }).length, 1);
+  assert.equal(go({ title: { value: '작업', color: 'x' } }).length, 2);
+  assert.equal(go({ title: { value: '작업2', color: 'x' } }).length, 2);
+  assert.equal(go({ mode: { value: '계획 모드', color: 'x' } }).length, 3);
+  assert.equal(go({ compact: { value: '400k 토큰', color: 'x' } }).length, 4);
+});
+
+test('a tool held at an approval prompt is awaiting, by its id or (without one) as the newest unanswered call of that tool', () => {
+  const items = [{ kind: 'assistant', key: 'a', blocks: [
+    { type: 'tool_use', id: 't1', name: 'Bash', input: {} }, { type: 'tool_use', id: 't2', name: 'Bash', input: {} }, { type: 'tool_use', id: 't3', name: 'Edit', input: {} }] }];
+  const results = { t1: { content: 'ok', isError: false } };
+  assert.deepEqual([...awaitingTools(items, [], results)], []);
+  assert.deepEqual([...awaitingTools(items, [{ requestId: 'r', tool: 'Edit', input: {}, toolUseId: 't3', suggestions: [] }], results)], ['t3']);
+  assert.deepEqual([...awaitingTools(items, [{ requestId: 'r', tool: 'Bash', input: {}, suggestions: [] }], results)], ['t2']);
+});
+
+test('an approval asked inside a subagent is traced back to that subagent', () => {
+  const items = [
+    { kind: 'assistant', key: 'a', id: 'a', sub: false, blocks: [{ type: 'tool_use', id: 'agent1', name: 'Agent', input: {} }] },
+    { kind: 'assistant', key: 'b', id: 'b', sub: true, parent: 'agent1', blocks: [{ type: 'tool_use', id: 'bash1', name: 'Bash', input: {} }] },
+    { kind: 'assistant', key: 'c', id: 'c', sub: false, blocks: [{ type: 'tool_use', id: 'bash2', name: 'Bash', input: {} }] },
+  ];
+  const approvals = [{ requestId: 'r1', tool: 'Bash', input: {}, toolUseId: 'bash1', suggestions: [] }, { requestId: 'r2', tool: 'Bash', input: {}, toolUseId: 'bash2', suggestions: [] }];
+  assert.deepEqual([...approvalAgents(items, approvals)], [['r1', 'agent1']], 'the main conversation\'s own approval has no subagent');
+});
+
+test('a failure the CLI also says as a synthetic reply shows once, as the error card', () => {
+  const events = [
+    { seq: 1, kind: 'user', text: 'hi' },
+    { seq: 2, kind: 'message', id: 'syn', model: '<synthetic>', blocks: [{ type: 'text', text: 'Invalid API key · Fix external API key' }] },
+    { seq: 3, kind: 'result', status: 'failed', text: 'Invalid API key · Fix external API key' },
+  ];
+  assert.deepEqual(fromReplay({ events, seq: 3 }).items.map(item => item.kind), ['user', 'error']);
+  const kept = fromReplay({ events: [events[0], { ...events[1], blocks: [{ type: 'text', text: '다른 답' }] }, events[2]], seq: 3 });
+  assert.deepEqual(kept.items.map(item => item.kind), ['user', 'assistant', 'error'], 'a real reply before the failure stays');
+});
+
+test('a Monitor or background shell is tracked as a job until the CLI reports its end', () => {
+  const items = [{ kind: 'assistant', key: 'a', id: 'a', sub: false, blocks: [
+    { type: 'tool_use', id: 'm1', name: 'Monitor', input: { command: 'ping -n 3 127.0.0.1', description: 'ping three times' } },
+    { type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'npm test', run_in_background: true } },
+    { type: 'tool_use', id: 'b2', name: 'Bash', input: { command: 'ls' } },
+  ] }];
+  const results = { m1: { content: 'Monitor started', isError: false }, b1: { content: 'running in background', isError: false }, b2: { content: 'a', isError: false } };
+  const running = agentsOf(items, results, { m1: { description: 'ping three times' }, b1: {} }, true);
+  assert.deepEqual(running.map(job => [job.id, job.type, job.status, job.job]), [['m1', 'Monitor', 'running', true], ['b1', '백그라운드 셸', 'running', true]], 'a plain shell call is no job');
+  const ended = agentsOf(items, results, { m1: { status: 'completed', report: 'stream ended' }, b1: { status: 'failed' } }, false);
+  assert.deepEqual(ended.map(job => job.status), ['done', 'error']);
+  assert.match(ended[0].prompt, /ping -n 3/);
+});
+
+test('a tool call refused at its approval card is remembered as refused, not failed', () => {
+  let view = { ...emptyView(), ready: true };
+  view = reduce(view, { kind: 'approval', phase: 'request', requestId: 'r1', tool: 'Write', input: {}, toolUseId: 't1' });
+  view = reduce(view, { kind: 'approval', phase: 'answer', requestId: 'r1', tool: 'Write', allow: false });
+  view = reduce(view, { kind: 'approval', phase: 'request', requestId: 'r2', tool: 'Bash', input: {}, toolUseId: 't2' });
+  view = reduce(view, { kind: 'approval', phase: 'answer', requestId: 'r2', tool: 'Bash', allow: true });
+  assert.deepEqual(view.denied, { t1: true });
 });
