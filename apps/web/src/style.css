@@ -1871,20 +1871,25 @@ dialog.chat-stats > header small { flex: 1; color: var(--faint); font-family: va
 
 /* Plan review: tall, readable body; footer outside the scroller; full-size dialog on demand. */
 .chat-plan { border-color: var(--agent); background: color-mix(in srgb, var(--agent) 5%, var(--raised)); }
-.chat-plan header { padding: 10px 14px; color: var(--agent); } .chat-plan header span { flex: 1; min-width: 0; } .chat-plan header small { color: var(--faint); font-variant-numeric: tabular-nums; }
+.chat-plan header { padding: 10px 14px; color: var(--agent); }
+/* Header: [icon + label] [title, centered] [count + buttons]; equal side columns keep the title on the dialog's midline. */
+.chat-plan header, dialog.plan-modal > header { display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr); align-items: center; gap: 10px; }
+.chat-plan header .plan-label, dialog.plan-modal > header .plan-label { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--agent); white-space: nowrap; }
+.chat-plan header .plan-head-end, dialog.plan-modal > header .plan-head-end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; justify-self: end; }
+.plan-head-end small { color: var(--faint); font-variant-numeric: tabular-nums; }
 .chat-plan-body { max-height: min(62dvh, 640px); overflow: auto; padding: 6px 20px 14px; border-top: 1px solid var(--border); font-size: 14px; line-height: 1.7; overscroll-behavior: contain; }
 .chat-plan footer, dialog.plan-modal footer { padding: 12px 14px; } .chat-plan footer .primary, dialog.plan-modal footer .primary { padding: 7px 16px; font-weight: 600; }
 .chat-approval footer.plan-actions, .plan-revise .plan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .chat-approval footer.plan-revise { display: grid; gap: 8px; } .plan-revise label { font-size: 12px; color: var(--muted); } .plan-revise textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 72px; max-height: 240px; line-height: 1.6; }
 dialog.plan-modal { width: min(940px, calc(100vw - 48px)); height: calc(100dvh - 64px); padding: 0; overflow: hidden; }
 dialog.plan-modal[open] { display: flex; flex-direction: column; }
-dialog.plan-modal > header { color: var(--fg); display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-dialog.plan-modal > header h2 { margin: 0; font-size: 15px; } dialog.plan-modal > header small { flex: 1; color: var(--faint); font-variant-numeric: tabular-nums; }
+dialog.plan-modal > header { color: var(--fg); padding: 12px 16px; border-bottom: 1px solid var(--border); }
+dialog.plan-modal > header h2 { margin: 0; min-width: 0; font-size: 15px; text-align: center; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 10px max(24px, calc(50% - 400px)) 24px; font-size: 15px; line-height: 1.75; }
 dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions .plan-back { margin-left: auto; }
 
 /* Plan review, sectioned: chip outline (the section in view is lit), folding sections, and the dialog's side outline. */
-.chat-plan header .plan-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+.chat-plan header .plan-title { min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
 .plan-toc { display: flex; gap: 6px; overflow-x: auto; padding: 8px 14px; border-top: 1px solid var(--border); scrollbar-width: none; }
 .plan-toc button { flex: none; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12px; }
 .plan-toc button:hover { color: var(--fg); }
