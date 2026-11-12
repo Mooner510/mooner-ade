@@ -36,7 +36,7 @@ import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore } from './feedback-store.js';
-import { runFeedbackDraft } from './feedback-agent.js';
+import { runFeedbackDraft, FEEDBACK_MODELS, FEEDBACK_EFFORTS } from './feedback-agent.js';
 import { createFeedbackQueue } from './feedback-queue.js';
 import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
 
@@ -118,7 +118,9 @@ const feedbackQueue = createFeedbackQueue({
 async function feedbackSubmit(id) {
   if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
   const item = await feedback.get(id);
-  if (!item.title.trim() || !item.body.trim()) throw fault('INVALID_INPUT', '제목과 본문을 쓴 뒤 제출하세요.');
+  if (!item.body.trim()) throw fault('INVALID_INPUT', '내용을 쓴 뒤 제출하세요.');
+  // No title written: the first line of the text becomes it.
+  if (!item.title.trim()) await feedback.update(id, { title: item.body.split('\n').map(line => line.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? '' });
   if (item.source !== 'human' && !item.reviewed) throw fault('FEEDBACK_UNREVIEWED', 'AI가 쓴 초안은 직접 확인한 뒤에 제출할 수 있습니다.', 409);
   const available = feedbackAvailability();
   if (!available.ok) throw fault('FEEDBACK_UNAVAILABLE', available.reason || '지금은 피드백을 제출할 수 없습니다.', 503);
@@ -133,10 +135,10 @@ async function feedbackAiDraft(id, input) {
     const item = await feedback.get(id);
     previous = item.status;
     await feedback.setStatus(id, 'drafting', { error: undefined }, { from: ['draft', 'review', 'failed'] });
-    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), title: item.title, body: item.body, note, context, env: pluginEnv });
+    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), model: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }[input.model] ?? (FEEDBACK_MODELS.includes(input.model) ? input.model : 'claude-haiku-5-5'), effort: FEEDBACK_EFFORTS.includes(input.effort) ? input.effort : 'low', title: item.title, body: item.body, note, context, env: pluginEnv });
     return await feedback.setStatus(id, 'review', { title: draft.title || item.title, body: draft.body, source: 'ai', reviewed: false });
   } catch (error) {
-    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 초안 실패: ${error.message}` }).catch(() => {});
+    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 정리 실패: ${error.message}` }).catch(() => {});
     throw error;
   } finally { feedbackRunning.delete(id); }
 }
@@ -651,21 +653,9 @@ async function feedbackRoute(action, input) {
     case 'feedback/ai-draft': return feedbackAiDraft(id(), input);
     case 'feedback/submit': return feedbackSubmit(id());
     case 'feedback/unqueue': return feedbackQueue.cancel(id());
-    case 'feedback/markdown': return feedback.markdown(id());
     case 'feedback/status': return feedbackAvailability();
-    case 'feedback/open-folder': {
-      const folder = feedback.folder(id());
-      await fs.access(path.join(folder, 'feedback.json')).catch(() => { throw fault('NOT_FOUND', '피드백을 찾을 수 없습니다.', 404); });
-      openFolder(folder);
-      return { ok: true };
-    }
     default: throw fault('NOT_FOUND', '지원하지 않는 작업입니다.', 404);
   }
-}
-// The OS file manager on a folder MoonerADE made itself (never a path from the page).
-function openFolder(folder) {
-  const [command, args] = process.platform === 'win32' ? ['explorer.exe', [folder]] : process.platform === 'darwin' ? ['open', [folder]] : ['xdg-open', [folder]];
-  execFile(command, args, { windowsHide: true }, () => {});
 }
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();

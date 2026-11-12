@@ -379,3 +379,14 @@ test('after a lost answer the retry goes the same way, so a sign-in in between c
   assert.equal(surelyNotCreated({ code: 'PLUGIN_STOPPED' }), false);
   assert.equal(surelyNotCreated({ code: 'upstream_failed' }), true);
 });
+
+test('runFeedbackDraft passes --model and --effort only for known values', async () => {
+  const run = async (model, effort) => {
+    let args;
+    await runFeedbackDraft({ model, effort, cwd: process.cwd(), images: [], spawnProcess: (_cmd, list) => { args = list; throw new Error('stop'); } }).catch(() => {});
+    return args;
+  };
+  assert.deepEqual((await run('claude-haiku-5-5', 'medium')).slice(0, 4), ['--model', 'claude-haiku-5-5', '--effort', 'medium']);
+  const unknown = await run('gpt-4', 'turbo');
+  assert.ok(!unknown.includes('--model') && !unknown.includes('--effort'));
+});

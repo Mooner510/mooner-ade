@@ -11,7 +11,7 @@ import { MAX_BODY, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TITLE, imageInfo } from './f
 
 export const TOOL = {
   name: 'ade_feedback_draft',
-  description: 'MoonerADE(지금 이 에이전트를 실행 중인 데스크톱 개발 환경) 자체의 UI/UX 문제나 개선점을 발견했을 때만, 개발자에게 보낼 피드백 초안을 MoonerADE의 피드백 창고에 넣습니다. '
+  description: 'MoonerADE(지금 이 에이전트를 실행 중인 데스크톱 개발 환경) 자체의 UI/UX 문제나 개선점을 발견했을 때만, 개발자에게 보낼 피드백 초안을 MoonerADE의 피드백 요청에 넣습니다. '
     + '사용자가 작업 중인 프로젝트의 버그나 할 일에는 쓰지 마세요. 초안은 사람이 검토한 뒤에만 제출됩니다. 본문은 한국어 마크다운으로 문제, 기대 동작, 개선 제안을 적으세요.',
   inputSchema: {
     type: 'object',
@@ -71,7 +71,7 @@ export function createFeedbackMcp({ incoming, write = line => process.stdout.wri
         if (params?.name !== TOOL.name) return failure(id, -32602, `알 수 없는 도구입니다: ${params?.name}`);
         try {
           const result = await writeDraft(incoming, params.arguments ?? {});
-          return reply(id, { content: [{ type: 'text', text: `MoonerADE 피드백 창고에 초안을 넣었습니다(이미지 ${result.images}장). 사용자가 검토한 뒤 제출합니다.` }] });
+          return reply(id, { content: [{ type: 'text', text: `MoonerADE 피드백 요청에 초안을 넣었습니다(이미지 ${result.images}장). 사용자가 검토한 뒤 제출합니다.` }] });
         } catch (error) {
           return reply(id, { isError: true, content: [{ type: 'text', text: `초안을 넣지 못했습니다: ${error.message}` }] });
         }

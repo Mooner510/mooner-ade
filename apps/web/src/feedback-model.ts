@@ -1,4 +1,4 @@
-// Feedback inbox ("피드백 창고"): types shared with the local server (FEEDBACK_CONTRACT section C) and the pure rules and geometry the UI uses.
+// Feedback requests ("피드백 요청"): types shared with the local server (FEEDBACK_CONTRACT section C) and the pure rules and geometry the UI uses.
 // No DOM or React here, so tests/feedback-model.test.mjs can bundle and run it in node.
 
 export type FeedbackSource = 'human' | 'ai' | 'agent';
@@ -19,18 +19,25 @@ export interface FeedbackQueue { size: number; nextAt?: number }
 
 export const MAX_IMAGES = 10;
 export const MAX_TITLE = 120;
+// The AI pickers offer Haiku 5.5 / Sonnet 5.5 / Opus 5.5 and low / medium only. Older saved values (aliases, '' = Claude Code's own, high) map to the nearest allowed one.
+export const feedbackModelId = (value: string | undefined) => value === 'sonnet' || value === 'claude-sonnet-5-5' ? 'claude-sonnet-5-5' : value === 'opus' || value === 'claude-opus-5-5' ? 'claude-opus-5-5' : 'claude-haiku-5-5';
+export const feedbackEffort = (value: string | undefined) => value === 'medium' ? 'medium' : 'low';
+// A title is optional: without one the first line of the text stands in (the server does the same when submitting).
+export const displayTitle = (item: Pick<Feedback, 'title' | 'body'>) => item.title.trim() || item.body.split('\n').map(line => line.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean)?.slice(0, MAX_TITLE) || '';
 export const MAX_BODY_BYTES = 65536;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 export const statusLabels: Record<FeedbackStatus, string> = {
   draft: '작성 중', review: '검토 필요', drafting: 'AI 작성 중', queued: '전송 대기', submitting: '전송 중', submitted: '제출됨', failed: '제출 실패'
 };
-export const sourceLabels: Record<FeedbackSource, string> = { human: '직접 작성', ai: 'AI 초안', agent: '에이전트 초안' };
+export const sourceLabels: Record<FeedbackSource, string> = { human: '직접 작성', ai: 'AI 정리', agent: '에이전트 초안' };
 
 // Title, body and images can only change in these states (the server refuses edits while drafting, queued, submitting and after submit).
 export const isEditable = (item: Pick<Feedback, 'status'>) => item.status === 'draft' || item.status === 'review' || item.status === 'failed';
 // An AI or agent draft that no human has opened yet.
 export const needsReview = (item: Pick<Feedback, 'source' | 'reviewed'>) => item.source !== 'human' && !item.reviewed;
+// A human draft with no title, text or images is nothing worth keeping: leaving it removes it instead of saving it.
+export const isEmptyDraft = (item: Pick<Feedback, 'status' | 'source' | 'title' | 'body' | 'images'>) => item.status === 'draft' && item.source === 'human' && !item.title.trim() && !item.body.trim() && !item.images.length;
 // Agent-injected drafts waiting in the inbox: the status-bar badge counts these.
 export const pendingReviewCount = (items: Pick<Feedback, 'status' | 'reviewed'>[]) => items.filter(item => item.status === 'review' && !item.reviewed).length;
 
@@ -44,9 +51,8 @@ export function canSubmit(item: Pick<Feedback, 'title' | 'body' | 'source' | 'st
   if (item.status === 'submitted') return no('이미 제출한 피드백입니다.');
   if (!isEditable(item)) return no('지금은 제출할 수 없습니다.');
   if (needsReview(item)) return no('AI가 쓴 초안은 먼저 열어서 검토해야 합니다.');
-  if (!item.title.trim()) return no('제목을 입력하세요.');
   if (item.title.trim().length > MAX_TITLE) return no(`제목은 ${MAX_TITLE}자 이하로 입력하세요.`);
-  if (!item.body.trim()) return no('본문을 입력하세요.');
+  if (!item.body.trim()) return no('내용을 입력하세요.');
   if (utf8Length(item.body) > MAX_BODY_BYTES) return no('본문이 너무 깁니다. 64KB 이하로 줄이세요.');
   if (item.images.length > MAX_IMAGES) return no(`이미지는 ${MAX_IMAGES}장까지 보낼 수 있습니다.`);
   if (!available?.ok) return no(available?.reason || '지금은 피드백을 보낼 수 없습니다.');
@@ -67,9 +73,10 @@ export function queueEta(item: Pick<Feedback, 'status' | 'nextAttemptAt'>, queue
 // How a submission will be sent, for the confirm dialog and the settings row.
 export function submitModeText(available: FeedbackAvailability | null | undefined): string {
   if (!available?.ok) return available?.reason || '지금은 피드백을 보낼 수 없습니다.';
-  if (available.mode === 'anonymous') return '익명 제출 (이 기기에서 5분에 1건씩 자동 전송)';
+  if (available.mode === 'anonymous') return '로그인 없이 제출';
   return available.account ? `${available.account} 계정으로 제출` : '계정으로 제출';
 }
+export const submitModeNote = (available: FeedbackAvailability | null | undefined) => available?.ok && available.mode === 'anonymous' ? '이 기기에서 5분에 1건씩 순서대로 자동 전송' : '';
 
 // ---- capture geometry ----
 export type Point = { x: number; y: number };

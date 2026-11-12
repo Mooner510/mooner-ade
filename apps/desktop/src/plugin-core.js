@@ -227,7 +227,7 @@ export function grantsFor(manifest) {
     manifest.terminal && `새로 여는 MoonerADE 터미널에 명령${manifest.terminal.bin ? `(${manifest.terminal.bin} 폴더)` : ''}과 환경 변수${manifest.terminal.envPrefix ? `(${manifest.terminal.envPrefix}*)` : ''}를 추가합니다.`,
     manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
     manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.',
-    manifest.feedback && '피드백 창고에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.'
+    manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.'
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.

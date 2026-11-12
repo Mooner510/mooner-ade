@@ -1,4 +1,4 @@
-// The feedback inbox (피드백 창고): drafts of "n screenshots + one markdown body" that a person, the AI draft button or an agent's
+// The feedback inbox (피드백 요청): drafts of "n screenshots + one markdown body" that a person, the AI draft button or an agent's
 // MCP tool (feedback-mcp.js) starts, and a person reviews and submits. Everything lives under <dataRoot>/feedback:
 //   <id>/feedback.json   metadata (title, source, status, image list, submit result)
 //   <id>/body.md         the markdown body
@@ -230,7 +230,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
   // because the Hub answers the same key with the same issue.
   async function recover() {
     for (const item of await list()) {
-      if (item.status === 'drafting') await setStatus(item.id, item.source === 'human' ? 'draft' : 'review', { error: 'AI 초안을 만드는 중에 앱이 종료되었습니다.' });
+      if (item.status === 'drafting') await setStatus(item.id, item.source === 'human' ? 'draft' : 'review', { error: 'AI 정리 중에 앱이 종료되었습니다.' });
       // Sent again from the queue: the Hub answers the same key with the same issue, so nothing is doubled.
       else if (item.status === 'submitting') await setStatus(item.id, 'queued', { nextAttemptAt: now(), error: '전송 결과를 확인하지 못해 다시 보냅니다.' });
     }
