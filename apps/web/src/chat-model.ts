@@ -507,6 +507,7 @@ export function shortModel(model: string | null): string {
   const million = /\[1m\]$/i.test(model) ? ' (1M)' : '';
   const gpt = /^gpt-(\d+(?:\.\d+)?)-(astra|sol|terra|luna)(?=$|[\[-])/i.exec(model);
   if (gpt) return `GPT ${gpt[1]} ${gpt[2][0].toUpperCase()}${gpt[2].slice(1).toLowerCase()}${million}`;
+  if (/^gpt-\d/i.test(model)) return modelDisplayName(model) + million; // gpt-6, gpt-6.1-codex …: no codename, still not shown raw
   const match = /(?:^|[^a-z])(fable|opus|sonnet|haiku|astra|sol|terra|luna)(?:-(\d{1,2})(?!\d)(?:-(\d{1,2})(?!\d))?)?/i.exec(model);
   if (!match) return model.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[1m\]$/i, '') + million;
   return `${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}${match[2] ? ` ${match[2]}${match[3] ? `.${match[3]}` : ''}` : ''}${million}`;
