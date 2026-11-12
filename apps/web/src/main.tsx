@@ -405,7 +405,7 @@ function Shell() {
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
-    <nav className="projects" aria-label="프로젝트와 탭">
+    <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
         {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
