@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine } from '../apps/local-server/src/chat-claude.js';
+import { ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
 
 const askInput = { questions: [
   { question: 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.', header: '웹 서비스', multiSelect: true, options: [{ label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { label: 'DONGPO', description: '' }] },
@@ -185,4 +185,22 @@ test('the interactive-UI instructions are passed as an appended system prompt fi
   const args = buildClaudeArgs({ promptFile: '/tmp/ade-ui-prompt.md' });
   assert.equal(args[args.indexOf('--append-system-prompt-file') + 1], '/tmp/ade-ui-prompt.md');
   assert.ok(!buildClaudeArgs({}).includes('--append-system-prompt-file'));
+});
+test('subagent task events normalize by their Agent call id (fields as recorded from claude 2.1.322)', () => {
+  const base = { type: 'system', task_id: 'a1', run_id: 'r', tool_use_id: 'toolu_A', subagent_type: 'Explore', session_id: 's', uuid: 'u' };
+  assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_started', description: 'count files', is_backgrounded: true, task_type: 'local_agent', prompt: 'p' }),
+    [{ kind: 'task', phase: 'start', toolUseId: 'toolu_A', description: 'count files', agentType: 'Explore', background: true }]);
+  assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_progress', description: 'Running List files', usage: { total_tokens: 18509, tool_uses: 2, duration_ms: 9905 }, last_tool_name: 'Bash' }),
+    [{ kind: 'task', phase: 'progress', toolUseId: 'toolu_A', activity: 'Running List files', lastTool: 'Bash', tokens: 18509, toolUses: 2, durationMs: 9905 }]);
+  assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_notification', status: 'completed', summary: 'see hand-back', handback_report: { text: 'Count: 28' }, usage: { total_tokens: 21194, tool_uses: 3, duration_ms: 14803 } }),
+    [{ kind: 'task', phase: 'end', toolUseId: 'toolu_A', status: 'completed', report: 'Count: 28', tokens: 21194, toolUses: 3, durationMs: 14803 }]);
+  // task_updated names no Agent call; it stays a raw, live-only event.
+  assert.deepEqual(normalizeClaude({ type: 'system', subtype: 'task_updated', task_id: 'a1', patch: { status: 'completed' } }), [{ kind: 'raw', original: 'system' }]);
+});
+
+test('wantsArtifact matches an explicit Artifact request only', () => {
+  assert.equal(wantsArtifact('이거 Artifact로 만들어줘'), true);
+  assert.equal(wantsArtifact('아티팩트 올려줘'), true);
+  assert.equal(wantsArtifact('build artifacts are in dist'), true); // ponytail: any mention counts; a false hit only costs ~12.9k tokens for that chat
+  assert.equal(wantsArtifact('일반 질문입니다'), false);
 });

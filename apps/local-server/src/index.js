@@ -893,8 +893,10 @@ async function route(action, input, project) {
       const images = Array.isArray(input.images) ? input.images : [];
       const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
       if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > 2_500_000 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
+      // Small JPEG thumbnails the chat shows in the thread (the full images only go to the agent). Anything malformed is just dropped.
+      const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= 150_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
       chat.setInteractiveUi(input.interactiveUi);
-      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true });
+      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true, artifact: input.artifact === true, previews });
       return {};
     }
     case 'chat/branch': {
@@ -987,6 +989,16 @@ async function route(action, input, project) {
         if (commandsProbes.size > 32) commandsProbes.delete(commandsProbes.keys().next().value);
       }
       return cached.promise;
+    }
+    case 'files/list': {
+      // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
+      // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
+      const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+      const result = await runtime.processes.exec('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeoutMs: 10_000, maxOutputBytes: 32 * 1024 * 1024 }).catch(() => null);
+      if (!result || result.exitCode !== 0) return { files: [] };
+      const files = result.stdout.split('\0').filter(Boolean).slice(0, 50_000), dirs = new Set();
+      for (const file of files) for (let at = file.indexOf('/'); at > 0; at = file.indexOf('/', at + 1)) dirs.add(file.slice(0, at + 1));
+      return { files: [...dirs, ...files] };
     }
     case 'terminal/follow-up': {
       const prompt = text(input.prompt, '후속 입력', 16000), requestId = text(input.requestId, '요청 ID', 100);

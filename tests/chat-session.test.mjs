@@ -547,3 +547,22 @@ test('Cursor: text before a tool keeps the id it streamed with, later text gets 
   assert.equal(events.filter(event => event.kind === 'tool_result').length, 1);
 });
 
+
+test('Claude: the picked model and Effort survive a reopen, and a chat keeps the model it ran with when the global default changes', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-pin-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'pin'), launches = [];
+  await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, 'meta.json'), JSON.stringify({ configDir })); // an empty settings folder: no default model or Effort to read
+  const options = { directory, id: 'pin', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
+    spawnProcess: (command, args, spawnOptions) => { launches.push(args); return spawn(command, args, spawnOptions); } };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  await session.send('one'); await until(() => session.state().status === 'idle');
+  assert.equal(session.state().model, 'fake-model');
+  await session.set({ effort: 'low' }); // replaces the child; the next start must carry the model it ran with
+  await session.send('two'); await until(() => session.state().turns === 2 && session.state().status === 'idle');
+  assert.deepEqual(launches[1].slice(launches[1].indexOf('--model'), launches[1].indexOf('--model') + 2), ['--model', 'fake-model']);
+  await session.set({ model: 'opus', effort: 'high' });
+  await session.close(); session = await openChatSession(options); // the stored init event still says fake-model
+  assert.equal(session.state().model, 'opus');
+  assert.equal(session.state().effort, 'high');
+});
