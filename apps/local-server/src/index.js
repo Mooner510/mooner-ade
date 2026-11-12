@@ -35,6 +35,10 @@ import { createWakaTime, PULSE } from './wakatime.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
+import { createFeedbackStore } from './feedback-store.js';
+import { runFeedbackDraft } from './feedback-agent.js';
+import { createFeedbackQueue } from './feedback-queue.js';
+import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -77,6 +81,79 @@ const pty = ptyHost
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
 const projects = new Map();
+// The feedback inbox (feedback-store.js). Every screen is told when an item changes and fetches the list again.
+const feedback = createFeedbackStore({ root: path.join(dataRoot, 'feedback'), onChange: id => { for (const socket of clients) send(socket, { type: 'feedback/changed', ...(id && { id }) }); } });
+const feedbackIncoming = feedback.incomingDir;
+await fs.mkdir(feedbackIncoming, { recursive: true, mode: 0o700 });
+// Whether a plugin can submit for a signed-in account (pushed by the app as `feedback/status`). Without one, feedback goes to
+// the Hub anonymously (feedback-hub.js), unless ADE_FEEDBACK_ANONYMOUS=0.
+let pluginFeedback = { ok: false };
+const feedbackAnonymous = process.env.ADE_FEEDBACK_ANONYMOUS !== '0', feedbackHubUrl = process.env.ADE_HUB_URL || DEFAULT_HUB_URL;
+const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'account', ...(pluginFeedback.account && { account: pluginFeedback.account }) }
+  : feedbackAnonymous ? { ok: true, mode: 'anonymous' }
+  : { ok: false, reason: pluginFeedback.reason || '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.' };
+const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
+let feedbackRequestId = 0;
+function submitThroughApp(meta, images) {
+  if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: 'MoonerADE 앱이 아니어서 계정으로 제출할 수 없습니다.' } });
+  const id = ++feedbackRequestId;
+  return new Promise(resolve => {
+    // A little longer than the app's own wait for the plugin, so its answer (even a timeout) arrives first.
+    const timer = setTimeout(() => { feedbackRequests.delete(id); resolve({ ok: false, error: { code: 'FEEDBACK_TIMEOUT', message: '앱이 제출 결과를 알려 주지 않았습니다. 잠시 뒤 다시 제출하세요.' } }); }, 130_000);
+    timer.unref();
+    feedbackRequests.set(id, value => { clearTimeout(timer); resolve(value); });
+    process.send({ type: 'feedback/submit', id, meta, images }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: error.message } }); });
+  });
+}
+const feedbackRunning = new Set(); // ids with an AI draft in flight in this process
+let feedbackDevice = null;
+// "제출" puts the item in the persistent queue (feedback-queue.js), which sends it when it can: through the signed-in plugin,
+// or anonymously at most once per 5 minutes. The item id is the Hub's idempotency key, so a resend never doubles an issue.
+const feedbackQueue = createFeedbackQueue({
+  store: feedback, stateFile: path.join(feedback.root, 'queue.json'), availability: feedbackAvailability,
+  metaOf: item => ({ clientKey: item.id, title: item.title, body: item.body, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` }),
+  sendAccount: submitThroughApp,
+  sendAnonymous: async (meta, images) => postAnonymousFeedback({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), meta, images })
+});
+async function feedbackSubmit(id) {
+  if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
+  const item = await feedback.get(id);
+  if (!item.title.trim() || !item.body.trim()) throw fault('INVALID_INPUT', '제목과 본문을 쓴 뒤 제출하세요.');
+  if (item.source !== 'human' && !item.reviewed) throw fault('FEEDBACK_UNREVIEWED', 'AI가 쓴 초안은 직접 확인한 뒤에 제출할 수 있습니다.', 409);
+  const available = feedbackAvailability();
+  if (!available.ok) throw fault('FEEDBACK_UNAVAILABLE', available.reason || '지금은 피드백을 제출할 수 없습니다.', 503);
+  return feedbackQueue.enqueue(id);
+}
+async function feedbackAiDraft(id, input) {
+  if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
+  const note = typeof input.note === 'string' ? input.note.slice(0, 4000) : '', context = typeof input.context === 'string' ? input.context.slice(0, 8000) : '';
+  feedbackRunning.add(id);
+  let previous;
+  try {
+    const item = await feedback.get(id);
+    previous = item.status;
+    await feedback.setStatus(id, 'drafting', { error: undefined }, { from: ['draft', 'review', 'failed'] });
+    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), title: item.title, body: item.body, note, context, env: pluginEnv });
+    return await feedback.setStatus(id, 'review', { title: draft.title || item.title, body: draft.body, source: 'ai', reviewed: false });
+  } catch (error) {
+    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 초안 실패: ${error.message}` }).catch(() => {});
+    throw error;
+  } finally { feedbackRunning.delete(id); }
+}
+// Agents' drafts arrive as files; picked up when they appear (watchFeedback, once the server is up) and whenever the list is read.
+let feedbackImport = Promise.resolve();
+const importFeedback = () => (feedbackImport = feedbackImport.then(() => feedback.importIncoming()).catch(error => { console.warn(`피드백 초안을 가져오지 못했습니다: ${error.message}`); return []; }));
+async function watchFeedback() {
+  await feedback.recover().catch(error => console.warn(`피드백 상태를 복구하지 못했습니다: ${error.message}`));
+  try {
+    let importTimer = null;
+    const watcher = fsSync.watch(feedbackIncoming, () => { clearTimeout(importTimer); importTimer = setTimeout(() => void importFeedback(), 300); });
+    watcher.on('error', error => { watcher.close(); console.warn(`피드백 폴더 감시 오류: ${error.message}`); });
+    watcher.unref();
+  } catch (error) { console.warn(`피드백 폴더를 감시할 수 없습니다: ${error.message}`); }
+  void importFeedback();
+  feedbackQueue.kick();
+}
 // Opening and closing are serialized per project only, so restoring many projects at startup does not queue them behind each other.
 const openings = new Map();
 const opening = id => { if (!openings.has(id)) openings.set(id, serial()); return openings.get(id); };
@@ -97,9 +174,10 @@ const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname
 const wakatime = createWakaTime({ version: appVersion });
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
-let activeProjectId = '', wakatimeBackground = true, terminalShell = '';
+let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true;
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
+  if (feedbackAgentTool !== (state?.settings?.feedbackAgentTool !== false)) { feedbackAgentTool = !feedbackAgentTool; applyMcpServers(); }
   terminalShell = typeof state?.settings?.terminalShell === 'string' ? state.settings.terminalShell : '';
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
@@ -314,7 +392,14 @@ function configurePlugins(config) {
   const plugins = Array.isArray(config?.plugins) ? config.plugins.filter(plugin => plugin && typeof plugin.id === 'string' && plugin.env && typeof plugin.env === 'object' && strings(plugin.path) && Object.values(plugin.env).every(value => typeof value === 'string')
     && (plugin.mcp === null || (typeof plugin.mcp?.name === 'string' && typeof plugin.mcp.command === 'string' && strings(plugin.mcp.args) && (plugin.mcp.disabledTools === undefined || strings(plugin.mcp.disabledTools))))) : [];
   pluginTerminal = { node: typeof config?.node === 'string' ? config.node : null, plugins };
-  setAgentMcpServers(plugins.map(plugin => plugin.mcp).filter(Boolean));
+  applyMcpServers();
+}
+// MoonerADE's own MCP server for the agents it starts: `ade_feedback_draft` (feedback-mcp.js) leaves a draft in the feedback
+// inbox for a person to review. Off with the setting "채팅 에이전트가 피드백 초안을 넣을 수 있게". It runs on the terminals' Node
+// (outside the install folder, see the desktop's setupPlugins) when there is one.
+function applyMcpServers() {
+  const own = feedbackAgentTool ? [{ name: 'ade_feedback', command: pluginTerminal.node || process.execPath, args: [path.join(import.meta.dirname, 'feedback-mcp.js'), feedbackIncoming] }] : [];
+  setAgentMcpServers([...own, ...pluginTerminal.plugins.map(plugin => plugin.mcp).filter(Boolean).filter(server => server.name !== 'ade_feedback')]);
 }
 const agentModelProbes = new Map();
 let modelsProbe = null; // { at, root, promise } for chat/models; the default model can come from a project's own settings, so it is per project folder
@@ -546,6 +631,42 @@ async function terminalToChat(project, id, newId, workspace) {
 }
 // Where this project's `claude` keeps its history: the account its .envrc or running agent names, and always the default folder.
 const cliConfigDirs = async project => [(await accounts('claude', project).catch(() => null))?.dir || defaultClaudeDir(), defaultClaudeDir()];
+async function feedbackRoute(action, input) {
+  const id = () => text(input.id, '피드백 ID', 64);
+  const image = () => {
+    if (typeof input.data !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(input.data)) throw fault('INVALID_INPUT', '이미지 데이터가 올바르지 않습니다.');
+    return Buffer.from(input.data, 'base64');
+  };
+  switch (action) {
+    case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability(), queue: await feedbackQueue.info() };
+    case 'feedback/get': return feedback.get(id());
+    case 'feedback/create': return feedback.create({ title: input.title, body: input.body });
+    case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, reviewed: input.reviewed });
+    case 'feedback/delete': return feedback.remove(id());
+    case 'feedback/image/add': return feedback.addImage(id(), image(), input.mime);
+    case 'feedback/image/replace': return feedback.replaceImage(id(), input.name, image());
+    case 'feedback/image/restore': return feedback.restoreImage(id(), input.name);
+    case 'feedback/image/remove': return feedback.removeImage(id(), input.name);
+    case 'feedback/image/move': return feedback.moveImage(id(), input.name, input.to);
+    case 'feedback/ai-draft': return feedbackAiDraft(id(), input);
+    case 'feedback/submit': return feedbackSubmit(id());
+    case 'feedback/unqueue': return feedbackQueue.cancel(id());
+    case 'feedback/markdown': return feedback.markdown(id());
+    case 'feedback/status': return feedbackAvailability();
+    case 'feedback/open-folder': {
+      const folder = feedback.folder(id());
+      await fs.access(path.join(folder, 'feedback.json')).catch(() => { throw fault('NOT_FOUND', '피드백을 찾을 수 없습니다.', 404); });
+      openFolder(folder);
+      return { ok: true };
+    }
+    default: throw fault('NOT_FOUND', '지원하지 않는 작업입니다.', 404);
+  }
+}
+// The OS file manager on a folder MoonerADE made itself (never a path from the page).
+function openFolder(folder) {
+  const [command, args] = process.platform === 'win32' ? ['explorer.exe', [folder]] : process.platform === 'darwin' ? ['open', [folder]] : ['xdg-open', [folder]];
+  execFile(command, args, { windowsHide: true }, () => {});
+}
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
   // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
@@ -580,6 +701,7 @@ async function route(action, input, project) {
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
+  if (action.startsWith('feedback/')) return feedbackRoute(action, input);
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();
@@ -902,10 +1024,11 @@ function authenticated(request) {
   const match = /(?:^|;\s*)ade_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.cookie || '');
   return match && sessions.has(match[1]);
 }
-async function body(request) {
+// Feedback images (8 MB, base64) are the only requests allowed past 3 MB.
+async function body(request, limit = 3 * 1024 * 1024) {
   if (request.headers['content-type'] !== 'application/json') throw fault('INVALID_CONTENT_TYPE', 'JSON 요청만 허용됩니다.', 415);
   const chunks = []; let size = 0;
-  for await (const chunk of request) { size += chunk.length; if (size > 3 * 1024 * 1024) throw fault('PAYLOAD_TOO_LARGE', '요청이 너무 큽니다.', 413); chunks.push(chunk); }
+  for await (const chunk of request) { size += chunk.length; if (size > limit) throw fault('PAYLOAD_TOO_LARGE', '요청이 너무 큽니다.', 413); chunks.push(chunk); }
   let value;
   try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fault('INVALID_JSON', '잘못된 JSON입니다.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fault('INVALID_INPUT', '객체 요청이 필요합니다.');
@@ -922,7 +1045,7 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, origin);
     if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
-      const input = await body(request);
+      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') ? 12 * 1024 * 1024 : undefined);
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
@@ -940,6 +1063,17 @@ const server = http.createServer(async (request, response) => {
       if (request.method !== 'GET') throw fault('NOT_FOUND', '경로가 없습니다.', 404);
       // Interactive chat UIs run in an iframe on this page; it has its own, much tighter CSP and needs no session.
       if (url.pathname === '/ade-ui-frame.html') { response.setHeader('Content-Security-Policy', UI_FRAME_CSP); response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(UI_FRAME_HTML); return; }
+      // Feedback screenshots for the inbox: same session cookie as the API, names checked by the store.
+      if (url.pathname.startsWith('/feedback-file/')) {
+        if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
+        const [, , id, name] = url.pathname.split('/');
+        const file = feedback.filePath(decodeURIComponent(id ?? ''), decodeURIComponent(name ?? ''));
+        const content = await fs.readFile(file);
+        response.setHeader('Content-Type', file.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        response.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        response.end(content);
+        return;
+      }
       if (vite) {
         await new Promise((resolve, reject) => { response.once('close', resolve); vite.middlewares(request, response, error => reject(error || fault('NOT_FOUND', '경로가 없습니다.', 404))); });
         return;
@@ -1136,6 +1270,7 @@ pluginBufferTimer.unref();
 // agents is working, and with `wakatimeBackground` so do other projects whose agents are working.
 // wakatime-cli also picks up Claude/Codex transcripts on each call.
 applyAppState(await readJson(path.join(dataRoot, 'app-state.json'), null));
+applyMcpServers();
 const agentWorking = project => [...project.terminals.values()].some(terminal => !terminal.exited && terminal.status.status?.state === 'working');
 let wakatimeTurn = 0;
 function wakatimePulse() {
@@ -1267,6 +1402,7 @@ async function busyReport() {
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
+void watchFeedback();
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 // The 3 s poll records each Claude's session id; one last pass means an update restart resumes the conversation as it is now, not as of a few seconds ago.
@@ -1280,7 +1416,7 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
@@ -1301,6 +1437,15 @@ process.on('message', message => {
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
   }
   else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
+  else if (message?.type === 'feedback/status' && message.status && typeof message.status === 'object') {
+    const status = message.status;
+    pluginFeedback = status.ok === true
+      ? { ok: true, ...(typeof status.account === 'string' && { account: status.account.slice(0, 100) }) }
+      : { ok: false, ...(typeof status.reason === 'string' && { reason: status.reason.slice(0, 200) }) };
+    for (const socket of clients) send(socket, { type: 'feedback/changed' });
+    feedbackQueue.kick();
+  }
+  else if (message?.type === 'feedback/result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
   // A plugin host (in the main process) relays its workspace sessions to this process this way.
   else if (message?.type === 'plugin/workspace') pluginWorkspace(message);
 });
