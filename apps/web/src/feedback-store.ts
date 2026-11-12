@@ -75,20 +75,40 @@ export const desktopCapture = () => (window as unknown as { adeDesktop?: Capture
 const hasDisplayMedia = () => typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 export const canCapture = () => typeof desktopCapture()?.capture === 'function' || hasDisplayMedia();
 
-// Browser capture (no desktop bridge): the browser's own screen-share of this tab, one frame, cropped to `rect` (CSS px).
-// The browser asks permission each time. If the user shares something other than this tab, the whole frame is kept.
-// ponytail: the crop assumes the shared frame is exactly this viewport; a browser that shifts the page (share banner) crops slightly off.
-export async function browserCapture(rect?: { x: number; y: number; width: number; height: number }): Promise<Uint8Array> {
+// Browser capture (no desktop bridge): the browser's own screen-share of this tab. The share starts first and the region is picked afterwards:
+// starting it adds the browser's "sharing this tab" bar, which shrinks the viewport and rescales the frame, so coordinates picked before the
+// share would no longer match what the frame shows. The browser asks permission each time. If the user shares something other than this tab,
+// the whole frame is kept.
+export type CaptureRect = { x: number; y: number; width: number; height: number };
+export type BrowserShare = { grab(rect?: CaptureRect): Promise<Uint8Array>; stop(): void };
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// The frame is usable once the video and the viewport have kept their size for a moment (the share bar and the rescale land over a few hundred ms).
+async function settle(video: HTMLVideoElement) {
+  const size = () => `${video.videoWidth}x${video.videoHeight}/${innerWidth}x${innerHeight}`;
+  let last = '', same = 0;
+  for (let i = 0; i < 30 && same < 3; i++) { await pause(100); const now = size(); same = now === last ? same + 1 : 0; last = now; }
+}
+export async function openBrowserShare(onEnded: () => void): Promise<BrowserShare> {
   const stream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'browser' }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' } as DisplayMediaStreamOptions);
+  const stop = () => stream.getTracks().forEach(track => track.stop());
   try {
-    const video = document.createElement('video'); video.muted = true; video.srcObject = stream; await video.play();
-    await new Promise(resolve => setTimeout(resolve, 500)); // lets the share dialog fade out of the frame
-    const scale = video.videoWidth / innerWidth, ownTab = stream.getVideoTracks()[0]?.getSettings().displaySurface === 'browser';
-    const crop = rect && ownTab ? { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale } : { x: 0, y: 0, width: video.videoWidth, height: video.videoHeight };
-    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(crop.width)); canvas.height = Math.max(1, Math.round(crop.height));
-    canvas.getContext('2d')!.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) throw new Error('화면을 이미지로 만들지 못했습니다.');
-    return new Uint8Array(await blob.arrayBuffer());
-  } finally { stream.getTracks().forEach(track => track.stop()); }
+    const track = stream.getVideoTracks()[0], video = document.createElement('video');
+    track?.addEventListener('ended', onEnded); // the user pressed the browser's "Stop sharing" while picking
+    video.muted = true; video.srcObject = stream; await video.play(); await settle(video);
+    return {
+      stop,
+      async grab(rect) {
+        try {
+          await settle(video); // also long enough for the picking overlay to leave the frame
+          const scale = video.videoWidth / innerWidth, ownTab = track?.getSettings().displaySurface === 'browser';
+          const crop = rect && ownTab ? { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale } : { x: 0, y: 0, width: video.videoWidth, height: video.videoHeight };
+          const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(crop.width)); canvas.height = Math.max(1, Math.round(crop.height));
+          canvas.getContext('2d')!.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+          const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) throw new Error('화면을 이미지로 만들지 못했습니다.');
+          return new Uint8Array(await blob.arrayBuffer());
+        } finally { stop(); }
+      }
+    };
+  } catch (cause) { stop(); throw cause; }
 }
