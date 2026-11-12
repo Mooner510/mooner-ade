@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './Icon';
 import { captureRect, dragRect, type Box, type Point } from './feedback-model';
-import { desktopCapture, type CaptureMode } from './feedback-store';
+import { browserCapture, canCapture, desktopCapture, type CaptureMode } from './feedback-store';
 
 const modes: { id: CaptureMode; label: string; icon: IconName; hint: string }[] = [
   { id: 'element', label: '요소', icon: 'captureElement', hint: '캡쳐할 영역을 클릭하세요 · Alt: 커서 아래 요소 그대로' },
@@ -32,14 +32,17 @@ export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCan
     if (busy.current) return; busy.current = true;
     const bridge = desktopCapture();
     try {
-      if (!bridge?.capture) throw new Error('화면 캡쳐는 데스크톱 앱에서만 쓸 수 있습니다.');
-      const zoom = bridge.zoomFactor?.() || fallbackZoom || 1;
+      if (!canCapture()) throw new Error('이 브라우저는 화면 캡쳐를 지원하지 않습니다. 이미지를 붙여넣거나 파일로 추가하세요.');
+      // The desktop app captures in zoomed DIPs; a browser shares at CSS-pixel scale (browserCapture rescales by the frame size).
+      const zoom = bridge?.capture ? bridge.zoomFactor?.() || fallbackZoom || 1 : 1;
       const rect = box ? captureRect(box, zoom, { width: innerWidth, height: innerHeight }) : undefined;
       if (rect === null) { busy.current = false; setDrag(null); return; } // nothing on screen: keep picking
       setHidden(true); await frame(); await frame();
-      const bytes = await bridge.capture(rect);
-      await onCaptured(bytes);
-    } catch (cause) { onError(cause); }
+      await onCaptured(bridge?.capture ? await bridge.capture(rect) : await browserCapture(rect));
+    } catch (cause) {
+      // Closing the browser's share dialog is a cancel, not an error.
+      if (cause instanceof DOMException && cause.name === 'NotAllowedError') onCancel(); else onError(cause);
+    }
   }
 
   useEffect(() => { if (mode === 'window') void shoot(null); }, [mode]);
@@ -80,7 +83,7 @@ export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCan
   const current = modes.find(item => item.id === mode)!;
   return createPortal(<div ref={root} popover="manual" className={`feedback-capture mode-${mode}`} style={hidden ? { visibility: 'hidden' } : undefined}
     role="dialog" aria-label="피드백 화면 캡쳐" onPointerMove={onMove} onPointerDown={onDown} onPointerUp={onUp} onPointerLeave={() => setHover(null)}>
-    {shown && <div className="feedback-capture-box" style={{ left: shown.left, top: shown.top, width: shown.width, height: shown.height }}>
+    {shown && <div className={`feedback-capture-box${shown.top < 28 ? ' label-in' : ''}`} style={{ left: shown.left, top: shown.top, width: shown.width, height: shown.height }}>
       {mode === 'element' && hover && <span>{hover.label}</span>}
       {mode === 'range' && <span>{Math.round(shown.width)} × {Math.round(shown.height)}</span>}
     </div>}

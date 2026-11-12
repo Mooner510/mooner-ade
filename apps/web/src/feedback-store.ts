@@ -47,7 +47,7 @@ export function applyItem(item: Feedback) {
 export const feedbackCall = async (action: string, input: object) => applyItem(await api<Feedback>(action, input));
 export const openFeedback = (id: string) => set({ currentId: id });
 export const removeLocal = (id: string) => set({ items: state.items.filter(item => item.id !== id), currentId: state.currentId === id ? '' : state.currentId });
-export const createFeedback = async () => { const item = await feedbackCall('feedback/create', {}); openFeedback(item.id); return item; };
+export const createFeedback = async () => { const item = await feedbackCall('feedback/create', {}); set({ currentId: item.id }); return item; };
 // The open item if it can still take images, else a fresh draft.
 export async function ensureDraft() {
   const current = state.items.find(item => item.id === state.currentId);
@@ -72,4 +72,23 @@ export const endCapture = () => set({ capture: null });
 
 type CaptureBridge = { capture?(rect?: { x: number; y: number; width: number; height: number }): Promise<Uint8Array>; zoomFactor?(): number };
 export const desktopCapture = () => (window as unknown as { adeDesktop?: CaptureBridge }).adeDesktop;
-export const canCapture = () => typeof desktopCapture()?.capture === 'function';
+const hasDisplayMedia = () => typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+export const canCapture = () => typeof desktopCapture()?.capture === 'function' || hasDisplayMedia();
+
+// Browser capture (no desktop bridge): the browser's own screen-share of this tab, one frame, cropped to `rect` (CSS px).
+// The browser asks permission each time. If the user shares something other than this tab, the whole frame is kept.
+// ponytail: the crop assumes the shared frame is exactly this viewport; a browser that shifts the page (share banner) crops slightly off.
+export async function browserCapture(rect?: { x: number; y: number; width: number; height: number }): Promise<Uint8Array> {
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: 'browser' }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' } as DisplayMediaStreamOptions);
+  try {
+    const video = document.createElement('video'); video.muted = true; video.srcObject = stream; await video.play();
+    await new Promise(resolve => setTimeout(resolve, 500)); // lets the share dialog fade out of the frame
+    const scale = video.videoWidth / innerWidth, ownTab = stream.getVideoTracks()[0]?.getSettings().displaySurface === 'browser';
+    const crop = rect && ownTab ? { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale } : { x: 0, y: 0, width: video.videoWidth, height: video.videoHeight };
+    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(crop.width)); canvas.height = Math.max(1, Math.round(crop.height));
+    canvas.getContext('2d')!.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('화면을 이미지로 만들지 못했습니다.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally { stream.getTracks().forEach(track => track.stop()); }
+}

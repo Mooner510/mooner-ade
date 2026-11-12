@@ -25,7 +25,7 @@ export const appKeyDefs = [
   { id: 'palette', group: '화면 · 도구', label: '명령 팔레트', keys: 'mod+shift+p' },
   { id: 'palette2', group: '화면 · 도구', label: '명령 팔레트(F1)', keys: 'f1' },
   // Ids are camelCase like the rest: the server's appKeys validation only accepts [a-zA-Z][a-zA-Z0-9]*.
-  { id: 'feedback', group: '화면 · 도구', label: '피드백 창고', keys: 'mod+alt+f' },
+  { id: 'feedback', group: '화면 · 도구', label: '피드백 요청', keys: 'mod+alt+f' },
   { id: 'feedbackCapture', group: '화면 · 도구', label: '피드백 화면 캡쳐', keys: 'mod+alt+shift+f' },
   { id: 'addProject', group: '프로젝트', label: '프로젝트 열기…', keys: 'mod+alt+o' },
   { id: 'toggleProjects', group: '화면 · 도구', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b' },

@@ -101,7 +101,7 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   환경 변수 `ADE_CHAT_ID`, `ADE_PROJECT_ID`, `ADE_CHAT_AGENT`(claude, codex, cursor)로 받습니다. 이 변수는 채팅에서만 생깁니다.
 - `workspace: true`는 플러그인이 이 PC의 프로젝트와 터미널을 열고 조작할 수 있는 권한입니다. 승인 확인 창에 표시됩니다.
   선언하지 않은 플러그인의 `workspace` 메시지는 무시됩니다.
-- `feedback: true`는 피드백 창고에서 제출한 피드백(본문과 스크린샷 파일)을 받아 대신 보내는 권한입니다. 승인 확인 창에
+- `feedback: true`는 피드백 요청에서 제출한 피드백(본문과 스크린샷 파일)을 받아 대신 보내는 권한입니다. 승인 확인 창에
   표시됩니다. 아래 [피드백](#피드백-feedback)을 보세요.
 
 ## 호스트 프로토콜 (apiVersion 1)
@@ -199,14 +199,14 @@ MoonerADE → 플러그인
 
 ### 피드백 (`feedback`)
 
-`plugin.json`에 `"feedback": true`가 있는 플러그인은 피드백 창고의 **제출**을 맡습니다. 피드백은 사람이 확인하고 제출을 누른
+`plugin.json`에 `"feedback": true`가 있는 플러그인은 피드백 요청의 **제출**을 맡습니다. 피드백은 사람이 확인하고 제출을 누른
 것만 옵니다(AI·에이전트가 쓴 초안도 사람이 연 뒤에만 제출할 수 있습니다).
 
 플러그인 → MoonerADE
 
 | 메시지 | 뜻 |
 |---|---|
-| `{type:'feedback', available, account?, reason?}` | 지금 제출할 수 있는지. `ready` 뒤에 한 번, 바뀔 때마다 보내세요. `account`(100자)는 피드백 창고에 보이는 계정 이름, `reason`(200자)은 제출할 수 없을 때 보여 줄 한 문장입니다 |
+| `{type:'feedback', available, account?, reason?}` | 지금 제출할 수 있는지. `ready` 뒤에 한 번, 바뀔 때마다 보내세요. `account`(100자)는 피드백 요청에 보이는 계정 이름, `reason`(200자)은 제출할 수 없을 때 보여 줄 한 문장입니다 |
 | `{type:'feedback/result', id, ok, issueUrl?, issueNumber?, error?}` | `feedback/submit`에 대한 답. `issueUrl`은 `https://github.com/<owner>/<repo>/issues/<n>` 모양만 받습니다. `error`는 `{code, message, retryAfter?}`이고 `message`가 사용자에게 보입니다. `retryAfter`(초)가 있으면 그만큼 기다렸다 다시 보냅니다 |
 
 MoonerADE → 플러그인

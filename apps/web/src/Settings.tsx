@@ -13,7 +13,8 @@ import { playSound, soundIds, sounds } from './sound';
 import { resetTips } from './toast';
 import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
 import { useFeedback } from './feedback-store';
-import { submitModeText } from './feedback-model';
+import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
+import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -21,8 +22,13 @@ const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).a
 // Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
 function FeedbackAvailabilityRow() {
   const { available, loaded, error } = useFeedback();
-  const text = !loaded ? '확인 중…' : error || submitModeText(available);
-  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 익명으로 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다. 제출한 피드백은 순서대로 자동 전송됩니다."><span className={`feedback-availability${available?.ok ? ' ok' : ''}`}>{text}</span></Row>;
+  const kind = !loaded ? 'checking' : error || !available?.ok ? 'off' : available.mode === 'anonymous' ? 'anonymous' : 'account', note = loaded && !error ? submitModeNote(available) : '';
+  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 로그인 없이 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다. 제출한 피드백은 순서대로 자동 전송됩니다.">
+    <span className="feedback-mode-wrap">
+      <span className={`feedback-mode ${kind}`}><Icon name={kind === 'account' ? 'person' : kind === 'off' ? 'alert' : 'info'} size={14} />{!loaded ? '확인 중…' : error || submitModeText(available)}</span>
+      {note && <small>{note}</small>}
+    </span>
+  </Row>;
 }
 
 function AboutSettings() {
@@ -594,8 +600,10 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {(searching || section === 'plugins') && <SectionFrame label="플러그인" searching={searching}><PluginSettings query={query} /></SectionFrame>}
         {(searching || section === 'feedback') && <SectionFrame label="피드백" searching={searching}>
           <FeedbackAvailabilityRow />
-          <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 ADE 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
-          <Row title="AI 초안에 화면 정보 포함" hint="AI 초안에 화면 구성·최근 오류 정보 포함. 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+          <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
+          <Row title="AI 정리에 화면 정보 포함" hint="'AI로 정리'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+          <Row title="AI 정리 모델" hint="'AI로 정리'에 쓸 Claude 모델입니다. 피드백 작성 화면 하단에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 정리 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
+          <Row title="AI 정리 Effort" hint="높을수록 정교하지만 느립니다. 피드백에서는 보통(Medium)까지만 고를 수 있고, 기본은 낮음(Low)입니다."><Dropdown label="AI 정리 Effort" className={`chat-effort effort-${feedbackEffort(settings.feedbackAiEffort)}`} value={feedbackEffort(settings.feedbackAiEffort)} options={AI_EFFORTS} onChange={value => set('feedbackAiEffort', value as Settings['feedbackAiEffort'])} /></Row>
         </SectionFrame>}
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>

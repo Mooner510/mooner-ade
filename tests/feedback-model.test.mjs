@@ -26,9 +26,9 @@ test('canSubmit: title, body, images, review, status and availability', async t 
   const ok = { ok: true, account: 'me' };
   assert.deepEqual(canSubmit(item(), ok), { ok: true, reason: '' });
   assert.equal(canSubmit(item({ images: [image(1)] }), ok).ok, true);
-  assert.match(canSubmit(item({ title: '  ' }), ok).reason, /제목/);
+  assert.equal(canSubmit(item({ title: '  ' }), ok).ok, true); // the title is optional
   assert.match(canSubmit(item({ title: 'x'.repeat(121) }), ok).reason, /120자/);
-  assert.match(canSubmit(item({ body: '\n ' }), ok).reason, /본문/);
+  assert.match(canSubmit(item({ body: '\n ' }), ok).reason, /내용/);
   assert.match(canSubmit(item({ body: '가'.repeat(22000) }), ok).reason, /64KB/); // 66 000 bytes in UTF-8
   assert.match(canSubmit(item({ images: Array.from({ length: 11 }, (_, i) => image(i)) }), ok).reason, /10장/);
   assert.equal(canSubmit(item({ images: Array.from({ length: 10 }, (_, i) => image(i)) }), ok).ok, true);
@@ -88,7 +88,7 @@ test('annotation geometry and base64', async t => {
 });
 
 test('queue eta and submit mode text', async t => {
-  const { queueEta, submitModeText } = await load(t);
+  const { queueEta, submitModeText, submitModeNote, feedbackModelId, feedbackEffort } = await load(t);
   const now = 1_000_000_000_000, queued = patch => ({ status: 'queued', ...patch });
   assert.equal(queueEta(queued({}), { size: 1 }, now), '곧 전송');
   assert.equal(queueEta(queued({ nextAttemptAt: now - 5000 }), { size: 1, nextAt: now + 30_000 }, now), '곧 전송');
@@ -98,7 +98,23 @@ test('queue eta and submit mode text', async t => {
   assert.equal(queueEta(queued({ nextAttemptAt: now + 120 * 60_000 }), undefined, now), '약 2시간 뒤 전송');
   assert.equal(queueEta({ status: 'submitting' }, { size: 1, nextAt: now + 600_000 }, now), '전송 중');
   assert.equal(submitModeText({ ok: true, mode: 'account', account: 'mooner' }), 'mooner 계정으로 제출');
-  assert.match(submitModeText({ ok: true, mode: 'anonymous' }), /^익명 제출/);
+  assert.equal(submitModeText({ ok: true, mode: 'anonymous' }), '로그인 없이 제출');
+  assert.match(submitModeNote({ ok: true, mode: 'anonymous' }), /5분에 1건/);
+  assert.equal(submitModeNote({ ok: true, mode: 'account', account: 'a' }), '');
+  // AI pickers: only Haiku/Sonnet/Opus 5.5 and low/medium; anything else falls back to the default.
+  assert.deepEqual(['sonnet', 'claude-opus-5-5', '', 'x'].map(feedbackModelId), ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5', 'claude-haiku-5-5']);
+  assert.deepEqual(['medium', 'high', '', undefined].map(feedbackEffort), ['medium', 'low', 'low', 'low']);
   assert.equal(submitModeText({ ok: false, reason: '익명 제출이 꺼져 있습니다' }), '익명 제출이 꺼져 있습니다');
   assert.equal(submitModeText(null), '지금은 피드백을 보낼 수 없습니다.');
+});
+
+test('isEmptyDraft: only a human draft with no title, text or images is dropped', async t => {
+  const { isEmptyDraft } = await load(t);
+  const empty = { title: ' ', body: '\n', images: [] };
+  assert.equal(isEmptyDraft(item(empty)), true);
+  assert.equal(isEmptyDraft(item({ ...empty, title: '제목' })), false);
+  assert.equal(isEmptyDraft(item({ ...empty, body: '내용' })), false);
+  assert.equal(isEmptyDraft(item({ ...empty, images: [image(1)] })), false);
+  assert.equal(isEmptyDraft(item({ ...empty, source: 'agent' })), false);
+  assert.equal(isEmptyDraft(item({ ...empty, status: 'review' })), false);
 });

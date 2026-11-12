@@ -24,9 +24,9 @@ export async function anonymousDeviceId(root) {
 const MESSAGES = {
   400: ['bad_request', '피드백 내용이 올바르지 않아 Hub가 받지 않았습니다.'],
   413: ['too_large', '이미지가 너무 커서 Hub가 받지 않았습니다.'],
-  429: ['rate_limited', '익명 제출은 5분에 1건씩 보낼 수 있습니다. 순서대로 자동 전송합니다.'],
+  429: ['rate_limited', '로그인 없는 제출은 5분에 1건씩 보낼 수 있습니다. 순서대로 자동 전송합니다.'],
   502: ['upstream_failed', 'Hub가 GitHub에 올리지 못했습니다. 잠시 뒤 다시 보냅니다.'],
-  503: ['feedback_disabled', 'Hub가 지금 익명 피드백을 받지 않습니다.']
+  503: ['feedback_disabled', 'Hub가 지금 로그인 없는 피드백을 받지 않습니다.']
 };
 const retryAfterOf = (response, body) => {
   const value = Number(response.headers.get('retry-after') ?? body?.error?.retryAfter);
