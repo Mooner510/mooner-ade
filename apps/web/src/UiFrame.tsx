@@ -30,5 +30,5 @@ export const UiFrame = memo(function UiFrame({ chatId, html }: { chatId: string;
     return () => window.removeEventListener('message', onMessage);
   }, [chatId, html]);
   // sandbox without allow-same-origin: the frame cannot reach the app's cookies, storage or DOM.
-  return <iframe ref={frame} className="ade-ui" title="인터랙티브 UI" sandbox="allow-scripts" src="/ade-ui-frame.html" style={{ height }} onLoad={init} />;
+  return <iframe ref={frame} className="ade-ui" title="인터랙티브 UI" sandbox="allow-scripts" src="/ade-ui-frame.html" style={{ height: height + 2 /* the 1px border sits inside the border-box */ }} onLoad={init} />;
 });
