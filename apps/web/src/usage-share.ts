@@ -9,7 +9,6 @@ const round1 = (value: number) => Math.round(value * 10) / 10;
 // Under 0.1%p three decimals, from 0.1%p one; under 0.001%p nothing is worth showing.
 export const TINY = 0.001;
 const shown = (value: number) => value < 0.1 ? String(Math.round(value * 1000) / 1000) : String(round1(value));
-const sign = (value: number) => value > 0 ? `+${value}` : `${value}`;
 // resets_at jitters by under a second between calls; a different window is at least hours away.
 export const sameWindow = (a: number | null | undefined, b: number | null | undefined) => a != null && b != null && Math.abs(a - b) < 60_000;
 
@@ -28,7 +27,8 @@ export function contribution({ before, after, costUsd, cal }: { before?: Reading
     const d = after.util - before.util;
     out.observed = d; bound = [Math.max(0, d - 1), d + 1]; // the true change lies strictly between d-1 and d+1
   }
-  if (est === null) { if (bound) { out.label = `${sign(out.observed!)}%p`; out.quality = 'delta'; } return out; }
+  // whole-percent readings: a 0 change only means "under 1%p"
+  if (est === null) { if (bound) { out.label = out.observed! >= 1 ? `≈${out.observed}%p` : '<1%p'; out.quality = 'delta'; } return out; }
   if (!bound) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'estimate'; return out; }
   const [lo, hi] = bound;
   if (est >= lo - 1e-9 && est <= hi + 1e-9) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'consistent'; return out; }

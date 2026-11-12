@@ -63,8 +63,8 @@ export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd
       const sum = sums[`${usage.plan}|${key}`], cal = learnedK(sum);
       const share = contribution({ before: first && first.cost === 0 ? first.readings[key] : null, after: reading, costUsd, cal });
       if (share.quality === 'tiny') continue;
-      // "5.6%p(5시간)": the window goes right after the number, whatever note follows it
-      parts.push((share.label || `보정 중 ${Math.min(10, Math.round(sum?.dUtil ?? 0))}/10%p`).replace('≈', '').replace(/(\S+?%p)/, `$1(${WINDOWS[key]})`));
+      if (!share.label) continue; // nothing trustworthy yet (k not learned, no starting reading): show nothing rather than a placeholder
+      parts.push(share.label.replace(/(\S+?%p)/, `$1(${WINDOWS[key]})`)); // "≈5.6%p(5시간)"
     }
     return parts.length ? parts.join(' ') : null;
     // `tick` bumps whenever the stored first reading or k changed
