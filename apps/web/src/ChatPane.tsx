@@ -1204,7 +1204,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
               if (event.key === 'Escape') { event.preventDefault(); setMentionOff(mentionAt); return; }
             }
             if (event.key === 'Tab' && !event.shiftKey && busy && ctx.settings.followUpQueue && (text.trim() || images.length)) { event.preventDefault(); void submit('queue'); return; }
+            // `/…` lines are one-line commands: typed line breaks and Tab's focus move are blocked (pasted newlines still go in).
+            if (event.key === 'Tab' && text.startsWith('/')) { event.preventDefault(); return; }
             if (event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
+            else if (event.key === 'Enter' && text.startsWith('/')) event.preventDefault();
             else if (event.key === 'Escape' && busy) { event.preventDefault(); if (view.steers.length && caps?.cancelSteer !== false) void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); else interrupt(); }
           }} />
         </div>
