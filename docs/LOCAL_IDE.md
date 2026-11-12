@@ -16,6 +16,9 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 - 빈 상태에서는 사용자 홈 폴더를 엽니다. **프로젝트 열기**에서 경로를 입력하거나, 데스크톱 폴더 선택·GitHub 클론을 사용할 수 있습니다.
 - 터미널·Claude Code·Codex 실행을 선택합니다. Claude/Codex CLI는 별도 설치와 로그인이 필요합니다. CLI의 파일 수정·명령 실행 권한은 CLI 자체 설정과 승인 화면을 따릅니다.
 - 오른쪽 **변경사항 Diff 패널**에서 HEAD 대비 파일과 읽기 전용 inline diff를 확인합니다. 기본적으로 첫 파일만 펼치며 전체 펼치기·접기·큰 화면 diff를 제공합니다.
+- 오른쪽 패널 자리는 **변경사항 Diff**, **오류 목록**, **피드백 요청**이 나눠 씁니다. 하나를 열면 나머지는 가려지고(피드백 요청은 상단 바 버튼, `mod+Alt+F`, 명령 팔레트로 엽니다), 프로젝트가 없는 시작 화면에도 피드백 요청 버튼이 있습니다. 앱 창을 캡쳐해 개선 요청을 쓰고 개발자 Hub로 보내는 기능이며 구조는 [아키텍처](ARCHITECTURE.md#피드백-요청)에 있습니다.
+- pane·패널 헤더의 아이콘 버튼은 마우스를 올리면 앱 스타일 툴팁이 뜨고(닫기 X는 툴팁 없음), 쓸 수 없는 버튼은 흐리게 두지 않고 숨깁니다: Diff 패널의 모두 펼치기·모두 접기는 변경이 있을 때만, 오류 패널의 모두 지우기는 오류가 있을 때만, 터미널의 Chat 전환은 Claude이고 SSH가 아니며 승인 대기·작업 중이 아닐 때만 나옵니다.
+- 하단 상태바의 서버 연결 표시는 정상일 때 아무것도 보이지 않습니다. 연결이 `연결됨`이 아닐 때만(시작 직후 "연결 대기", 끊기면 "연결 끊김 · 재연결 중") 글자와 함께 나타납니다.
 - 파일 편집·탐색·검색·스테이징·커밋 화면은 없습니다. 커밋은 터미널이나 에이전트에서 하세요.
 - 프로젝트가 Git 저장소가 아니면 바로 아래의 저장소를 탐색합니다. 여러 저장소를 찾으면 Diff 패널에서 Git 대상 저장소를 선택하며 터미널의 루트는 열린 상위 폴더입니다.
 - 작업 중·응답 필요·완료 상태는 Claude Code/Codex가 직접 보내는 OSC 7501 상태 보고로 표시합니다. 서버가 지원 질의에 응답하고 마지막 상태를 보관해 창 새로고침·재연결에도 복원합니다. 일반 출력·제목·출력 없는 시간을 작업 상태로 추측하지 않습니다. 상태 보고가 없는 세션의 질문/승인 표시는 화면 문구를 보조적으로 확인합니다. 제공자 권한 검사를 대체하지 않습니다.
@@ -49,6 +52,8 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 | `mod+Shift+Enter` | pane 최대화 전환 |
 | `Alt+Shift+방향키` / `Cmd(Ctrl)+Shift+방향키` | pane 포커스 이동 (Shift 없는 Alt·Cmd+방향키는 터미널로 전달: 단어·줄 이동) |
 | `mod+Shift+G` / `mod+,` | Diff 패널 / 설정 |
+| `mod+Alt+F` | 피드백 요청 패널 전환 |
+| `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 시작 |
 
 터미널에 포커스가 있을 때 일반 Ctrl 조합은 셸·CLI로 전달합니다. 분할은 pane의 도구 버튼 또는 명령 팔레트를 사용하세요. 과거 안내의 Ctrl+D 좌우 분할은 현재 터미널 입력 정책과 일치하지 않습니다.
 
@@ -68,7 +73,7 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 - 앱과 호스트는 연결할 때 버전을 확인합니다. 새 앱이 이전 호스트와 맞지 않으면 그 터미널을 몰래 끄지 않고 새 호스트로 시작하며, 이전 터미널은 넘겨받지 못했고 몇 분 뒤 정리된다고 알립니다.
 - 호스트를 띄우지 못하거나 실행 중에 호스트가 끝나면 이후 터미널은 예전처럼 서버 프로세스 안에서 열리고, 이때는 업데이트가 터미널 작업을 다시 기다립니다.
 
-ADE의 Claude Code/Codex 실행 메뉴와 터미널에 직접 입력한 `claude`·`codex` 모두 각각의 대화 ID로 복구합니다. bash/zsh/sh/dash/fish/PowerShell에서 사용자 시작 설정을 먼저 읽고 ADE 셸에만 실행 함수를 연결합니다. 프로젝트 데이터의 `terminal-sessions/<terminalId>/`에 Claude의 `SessionStart` 훅 기록 또는 Codex의 터미널별 실행 로그를 보관합니다. Claude의 `/clear`·`/resume`, Codex의 새 대화·복구로 ID가 바뀌면 다음 복구에 반영합니다. ID가 없는 기존 기록은 `claude --resume` / `codex resume` 선택 화면을 엽니다. 최근 대화를 임의로 선택하지 않습니다.
+ADE의 Claude Code/Codex 실행 메뉴와 터미널에 직접 입력한 `claude`·`codex` 모두 각각의 대화 ID로 복구합니다. bash/zsh/sh/dash/fish/PowerShell에서 사용자 시작 설정을 먼저 읽고 ADE 셸에만 실행 함수를 연결합니다. 셸 히스토리는 비어 시작하지 않도록 따로 맞춥니다(`terminal-sessions.js`). zsh는 macOS의 `/etc/zshrc`가 세션 폴더(`ZDOTDIR`)를 기준으로 `HISTFILE`을 정해 위쪽 화살표 기록과 자동완성이 비던 것을, 사용자 `.zshrc`를 읽기 전에 사용자 `ZDOTDIR`(없으면 홈)의 `.zsh_history`로 되돌려 막습니다. 사용자가 `HISTFILE`을 직접 정했다면 그 값이 남습니다. PowerShell은 PSReadLine 2.1 이상에서 히스토리 예측이 꺼져(`None`) 있을 때만 `History`로 켭니다. 프로젝트 데이터의 `terminal-sessions/<terminalId>/`에 Claude의 `SessionStart` 훅 기록 또는 Codex의 터미널별 실행 로그를 보관합니다. Claude의 `/clear`·`/resume`, Codex의 새 대화·복구로 ID가 바뀌면 다음 복구에 반영합니다. ID가 없는 기존 기록은 `claude --resume` / `codex resume` 선택 화면을 엽니다. 최근 대화를 임의로 선택하지 않습니다.
 
 Codex는 다른 터미널과 기록이 섞이지 않도록 이 실행에만 `--no-daemon`과 `log_dir`를 지정합니다. 세션 추적은 Codex 0.163.0의 root session 시작 로그 형식과 Claude 2.1.304의 `SessionStart` 훅을 기준으로 합니다. Codex는 `--no-daemon`을 지원해야 하며, 로그 형식이 바뀌거나 Claude 훅이 비활성화되어 ID를 확인하지 못하면 자동 복구 대신 선택 화면이 필요합니다. 전역 CLI 설정 파일은 변경하지 않습니다.
 
@@ -84,4 +89,4 @@ Codex는 다른 터미널과 기록이 섞이지 않도록 이 실행에만 `--n
 
 로컬 서버가 실행한 Git은 저장소의 fsmonitor와 hooks를 끕니다. 터미널에서 직접 실행하는 Git과 에이전트 CLI의 Git은 사용자의 환경을 따릅니다. 프로젝트 루트 경로 검사는 터미널과 에이전트를 격리하지 않습니다. [보안 제한](SECURITY_REVIEW.md)을 참고하세요.
 
-Claude follow-up의 버전 조건·중단·재연결 시 동작은 [README](../README.md#claude-code-terminal-follow-up)에 모았습니다.
+Claude follow-up의 버전 조건·중단·재연결 시 동작은 [README](../README.md#claude가-일하는-동안-다음-요청-예약하기)에 모았습니다.
