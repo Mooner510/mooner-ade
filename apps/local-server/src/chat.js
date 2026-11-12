@@ -756,13 +756,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
-    async close({ forget = false } = {}) {
+    async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
       closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
       if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM'); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
-      else { await saveMeta(); }
+      else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
     }
   };
 }

@@ -639,14 +639,23 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (refs.focus.current === id) setFocusLeaf(leaves(activePane())[0] || '');
     clearAttention(id);
     setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+  // One switch per chat at a time (rapid clicks must not race the close with the other agent's open). Earlier history moves to another id: this id would
+  // otherwise keep the old agent in its stored meta and the new agent's open would be refused.
+  const switchingChats = useRef(new Set<string>());
   }
   // Start screen only: the same pane becomes a fresh chat of another provider. A chat with earlier (cleared) history keeps its transcript for /resume.
   async function switchChatAgent(id: string, agent: Agent, forget: boolean) {
-    const tree = treeOf(id), old = findLeaf(tree, id);
-    if (!tree || old?.kind !== 'chat' || old.agent === agent) return;
-    await call('chat/close', { id, forget });
-    chatBus.current.delete(id); chatPrev.current.delete(id);
-    commitFor(id, mapLeaf(tree, id, leaf => leaf.kind === 'chat' ? { ...leaf, agent } : leaf)); setFocusLeaf(id);
+    if (switchingChats.current.has(id)) return false;
+    const old = findLeaf(treeOf(id), id);
+    if (old?.kind !== 'chat' || old.agent === agent) return false;
+    switchingChats.current.add(id);
+    try {
+      await call('chat/close', { id, forget, ...(forget ? {} : { archiveAs: newId() }) });
+      chatBus.current.delete(id); chatPrev.current.delete(id);
+      const tree = treeOf(id); if (!tree) return false;
+      commitFor(id, mapLeaf(tree, id, leaf => leaf.kind === 'chat' ? { ...leaf, agent } : leaf)); setFocusLeaf(id);
+      return true;
+    } finally { switchingChats.current.delete(id); }
   }
   // Closing a chat ends its child process and keeps the transcript for /resume.
   async function closeChat(id: string) {
@@ -913,7 +922,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const chatCtx: ChatCtx = {
-    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => run(() => switchChatAgent(id, agent, forget)),
+    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
