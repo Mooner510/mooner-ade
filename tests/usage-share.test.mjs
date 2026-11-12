@@ -19,7 +19,8 @@ test('usage share: another window (reset time moved), first sample, no window, n
   assert.equal(contribution({ before: r(99), after: r(2, reset + 7 * 86_400_000), costUsd: 4.4, cal }).label, '≈0.5%p');
   assert.equal(contribution({ before: null, after: r(40), costUsd: 1.8, cal }).label, '≈0.2%p');
   assert.equal(contribution({ before: r(91), after: null, costUsd: 5, cal }).label, '');
-  assert.equal(contribution({ before: r(50), after: r(53), costUsd: 5, cal: null }).label, '+3%p');
+  assert.equal(contribution({ before: r(50), after: r(53), costUsd: 5, cal: null }).label, '≈3%p');
+  assert.equal(contribution({ before: r(50), after: r(50), costUsd: 5, cal: null }).label, '<1%p');
   assert.equal(contribution({ before: null, after: r(53), costUsd: 5, cal: null }).label, '');
 });
 test('usage share: k is learned from whole turns and needs 10 points before it is trusted', () => {
