@@ -586,8 +586,9 @@ function PlanCard({ plan, modes, onAnswer }: { plan: string; modes: string[]; on
   const jump = (index: number) => { setFold(index, false); requestAnimationFrame(() => card.go(index)); };
   const toc = (spy: ReturnType<typeof usePlanSpy>, onPick: (index: number) => void) => titledAt.map(index => <button key={index} type="button" aria-current={spy.active === index || undefined} onClick={() => onPick(index)}>{sections[index].title}</button>);
   return <div className="chat-approval chat-plan" role="alertdialog" aria-label="계획 검토">
-    <header><Icon name="alert" size={15} /><strong>계획 검토</strong><span className="plan-title" title={title || undefined}>{title || '이 계획대로 진행할까요?'}</span><small>{titledAt.length ? `섹션 ${titledAt.length} · ` : ''}{lines}줄</small>
-      <IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="maximize" label="크게 보기" onClick={() => setOpen(true)} /></header>
+    <header><span className="plan-label"><Icon name="alert" size={15} /><strong>계획 검토</strong></span><span className="plan-title" title={title || undefined}>{title || '이 계획대로 진행할까요?'}</span>
+      <span className="plan-head-end"><small>{titledAt.length ? `섹션 ${titledAt.length} · ` : ''}{lines}줄</small>
+        <IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="maximize" label="크게 보기" onClick={() => setOpen(true)} /></span></header>
     {outline && <nav className="plan-toc" aria-label="계획 목차">{toc(card, jump)}
       <button type="button" className="plan-toc-all" onClick={() => setShut(shut.size ? new Set() : new Set(titledAt))}>{shut.size ? '모두 펼치기' : '모두 접기'}</button></nav>}
     <div className="chat-plan-body" ref={card.body} onScroll={card.onScroll}>
@@ -599,7 +600,8 @@ function PlanCard({ plan, modes, onAnswer }: { plan: string; modes: string[]; on
     </div>
     <PlanActions modes={modes} onAnswer={decide} />
     {open && <Modal className="plan-modal" labelledBy="plan-title" onClose={() => setOpen(false)}>
-      <header><h2 id="plan-title">{title || '계획 검토'}</h2><small>{lines}줄</small><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></header>
+      <header><span className="plan-label"><Icon name="alert" size={15} /><strong>계획 검토</strong></span><h2 id="plan-title">{title || '이 계획대로 진행할까요?'}</h2>
+        <span className="plan-head-end"><small>{lines}줄</small><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></span></header>
       <div className="plan-modal-main">
         {outline && <nav className="plan-modal-toc" aria-label="계획 목차">{toc(dialog, dialog.go)}</nav>}
         <div className="plan-modal-body" ref={dialog.body} onScroll={dialog.onScroll}>
