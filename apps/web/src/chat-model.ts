@@ -11,6 +11,7 @@ export type ChatState = {
   status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sandbox?: string | null; network?: boolean; runEverything?: boolean; configuring?: boolean; restartPending?: boolean; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
   contextTokens: number; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
   segmentTitles?: ChatSegmentTitles; chatTitle?: string;
+  liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
   // Claude: the prompt cache clock read from the session's transcript (same shape as the terminal's ClaudeCache); null before the first reply.
   cache?: { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } } | null;
 };
@@ -26,8 +27,9 @@ type ItemBase = { key: string; fresh?: boolean };
 export type Tone = { value: string; color: string; icon?: string; bars?: number };
 /** What the user switched with /model, /effort and /permissions since the last thing said in the thread. */
 export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone };
+const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previews) ? event.previews.filter((url): url is string => typeof url === 'string' && url.startsWith('data:image/')) : undefined;
 export type Item = ItemBase & (
-  | { kind: 'user'; text: string; images: number }
+  | { kind: 'user'; text: string; images: number; previews?: string[] }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
@@ -41,7 +43,8 @@ export type ChatView = {
   // Streamed output grows inside `items` (the assistant item of its message id), so the stored message lands on the same item.
   // `live`: message ids streaming in this turn and whether they belong to a subagent; `liveId` takes deltas that name no message.
   live: Record<string, { sub: boolean; parent?: string }>; liveId: string | null;
-  thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
+  tasks: Record<string, TaskInfo>; // what the CLI reported about each subagent, by its Agent call's tool_use id
+  thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number; previews?: string[] }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
 export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null, autoCompact: null,
   tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, slashCommands: [], tools: [], pending: 0, error: null, startedAt: Date.now(), segmentTitles: {}, chatTitle: '' });
@@ -64,7 +67,7 @@ export const resolveChatTitle = (titles: ChatSegmentTitles = {}, users: { kind: 
   return first ? first.slice(0, 80) : '';
 };
 const refreshViewTitle = (view: ChatView, segmentTitles: ChatSegmentTitles) => ({ ...view, state: { ...view.state, segmentTitles, chatTitle: resolveChatTitle(segmentTitles, titleUsersFromItems(view.items)) } });
-export const emptyView = (): ChatView => ({ items: [], results: {}, live: {}, liveId: null, thinkingTokens: 0, compacting: false, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
+export const emptyView = (): ChatView => ({ items: [], results: {}, live: {}, liveId: null, tasks: {}, thinkingTokens: 0, compacting: false, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
 
 const MAX_ITEMS = 2000, MAX_TOOL_JSON = 8192;
 // Array#findLastIndex without the ES2023 lib.
@@ -86,7 +89,8 @@ export function processGroups(blocks: { block: Block; sub: boolean }[]): { plain
   let cut = blocks.length;
   while (cut > 0 && blocks[cut - 1].block.type === 'text' && !blocks[cut - 1].sub) cut -= 1; // the closing text
   const isStep = (entry: { block: Block; sub: boolean }) => entry.block.type !== 'text' || entry.sub; // a sub-agent's text is process by nature
-  const plain = blocks.map((entry, at) => at >= cut || (entry.block.type === 'text' && !entry.sub && isResultText(entry.block.text)));
+  // An Agent call is a card of its own (its subagent is tracked apart), so it never folds away under "과정".
+  const plain = blocks.map((entry, at) => at >= cut || (entry.block.type === 'text' && !entry.sub && isResultText(entry.block.text)) || (entry.block.type === 'tool_use' && isAgentTool(entry.block.name)));
   const groups: ProcessGroup[] = [];
   for (let at = 0; at < blocks.length;) {
     if (plain[at]) { at += 1; continue; }
@@ -243,7 +247,7 @@ export function reduce(view: ChatView, event: any): ChatView {
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return refreshViewTitle(append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, fresh }), view.state.segmentTitles ?? {});
+    case 'user': return refreshViewTitle(append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -262,6 +266,13 @@ export function reduce(view: ChatView, event: any): ChatView {
       const prev = view.items[at] as AssistantItem, items = [...view.items];
       items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), blocks: absorb(prev.blocks, incoming) };
       return { ...view, items };
+    }
+    case 'task': {
+      const id = typeof event.toolUseId === 'string' ? event.toolUseId : '';
+      if (!id) return view;
+      const prev = view.tasks[id] ?? {}, at = Number(event.at) || Date.now(), { kind: _k, phase, toolUseId: _t, seq: _s, at: _a, ...info } = event;
+      const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
+      return { ...view, tasks: { ...view.tasks, [id]: next } };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
     case 'command_output': {
@@ -309,8 +320,8 @@ export function reduce(view: ChatView, event: any): ChatView {
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
     case 'steer': {
       const rest = view.steers.filter(item => item.uuid !== event.uuid);
-      if (event.phase === 'queued') return { ...view, steers: [...rest, { uuid: String(event.uuid), text: String(event.text ?? ''), images: Number(event.images) || 0 }] };
-      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, fresh }), steers: rest };
+      if (event.phase === 'queued') return { ...view, steers: [...rest, { uuid: String(event.uuid), text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event) }] };
+      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), steers: rest };
       return { ...view, steers: rest };
     }
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).
@@ -556,6 +567,63 @@ export function withSettingChange(items: Item[], change: SettingsChange, key: st
   return result;
 }
 
+// ---- subagents (Claude's Agent/Task calls) ----
+export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task';
+export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number };
+export type AgentStatus = 'running' | 'done' | 'error' | 'stopped';
+export type SubAgent = { id: string; type: string; description: string; prompt: string; background: boolean; status: AgentStatus; startedAt?: number; endedAt?: number; durationMs?: number;
+  tokens?: number; toolCount: number; now: string; report: string; items: AssistantItem[] };
+type ToolUse = Extract<Block, { type: 'tool_use' }>;
+// Every Agent call in `items`, in order, with what its subagent did (its own messages are the items whose `parent` is the call).
+// Status: the CLI's end report wins; a background one without it runs while its child lives (`liveTasks`); a foreground one is over once its result is in.
+export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[]): SubAgent[] {
+  const children = new Map<string, AssistantItem[]>();
+  for (const item of items) if (item.kind === 'assistant' && item.parent) { const list = children.get(item.parent); if (list) list.push(item); else children.set(item.parent, [item]); }
+  const agents: SubAgent[] = [];
+  for (const item of items) {
+    if (item.kind !== 'assistant') continue;
+    for (const block of item.blocks) {
+      if (block.type !== 'tool_use' || !isAgentTool(block.name)) continue;
+      const input = block.input ?? {}, task = tasks[block.id], result = results[block.id], kids = children.get(block.id) ?? [];
+      const background = task?.background ?? input.run_in_background === true;
+      const tools = kids.flatMap(kid => kid.blocks.filter((child): child is ToolUse => child.type === 'tool_use'));
+      const work = tools.filter(tool => tool.name !== 'SubagentHandback'), last = work.at(-1), handback = tools.filter(tool => tool.name === 'SubagentHandback').at(-1);
+      let status: AgentStatus;
+      if (task?.status) status = task.status === 'completed' ? 'done' : task.status === 'failed' ? 'error' : 'stopped';
+      else if (result?.isError) status = 'error';
+      else if (background) status = task ? (liveTasks ? (liveTasks.includes(block.id) ? 'running' : 'stopped') : 'running') : busy ? 'running' : 'done';
+      else status = result ? 'done' : busy ? 'running' : 'stopped';
+      agents.push({
+        id: block.id, type: String(task?.agentType || input.subagent_type || 'general-purpose'), description: String(task?.description || input.description || ''), prompt: String(input.prompt ?? ''), background, status,
+        startedAt: task?.startedAt, endedAt: task?.endedAt, durationMs: task?.durationMs, tokens: task?.tokens,
+        toolCount: Math.max(work.length, task?.toolUses ?? 0),
+        now: status !== 'running' ? '' : task?.activity || (last ? `${toolLabel(last.name)} ${toolSummary(last.name, last.input ?? {})}`.trim() : task?.lastTool ?? ''),
+        report: task?.report || (!background && result && !result.isError ? result.content : '') || (handback ? String(handback.input?.message ?? '') : ''),
+        items: kids
+      });
+    }
+  }
+  return agents;
+}
+
+// ---- a plan (ExitPlanMode) cut into its `##` sections, so a long one can be skimmed ----
+// The leading `# ` line is the plan's title. Text before the first `##` is a section with no title. Fenced code is never split.
+export type PlanSection = { title: string; body: string; items: number };
+export function planSections(plan: string): { title: string; sections: PlanSection[] } {
+  const lines = plan.replace(/\r\n?/g, '\n').split('\n'), first = lines.findIndex(line => line.trim());
+  let title = '';
+  if (first >= 0 && /^#\s/.test(lines[first])) { title = lines[first].replace(/^#\s+/, '').trim(); lines.splice(first, 1); }
+  const sections: PlanSection[] = [];
+  let current = { title: '', rows: [] as string[] }, fence = false;
+  const flush = () => { const body = current.rows.join('\n').trim(); if (current.title || body) sections.push({ title: current.title, body, items: current.rows.filter(row => /^\s*(?:[-*+]|\d+\.)\s/.test(row)).length }); };
+  for (const line of lines) {
+    if (/^\s*(?:```|~~~)/.test(line)) fence = !fence;
+    if (!fence && /^##\s/.test(line)) { flush(); current = { title: line.replace(/^##\s+/, '').replace(/\s*#+\s*$/, '').trim(), rows: [] }; } else current.rows.push(line);
+  }
+  flush();
+  return { title, sections };
+}
+
 // Which Agent tool call a subagent's message belongs to (its tool_use id), so parallel subagents stay apart.
 const parentOf = (event: any): { parent?: string } => typeof event.parentToolUseId === 'string' && event.parentToolUseId ? { parent: event.parentToolUseId } : {};
 
@@ -563,7 +631,48 @@ const parentOf = (event: any): { parent?: string } => typeof event.parentToolUse
 export const dollars = (value: number) => value < 0.1 ? value.toFixed(5) : value.toFixed(2);
 
 // One name for what a tool is called in the UI (internal ones read as what they do).
-export const toolLabel = (name: string) => name === 'SubagentHandback' ? '보고' : name;
+export const toolLabel = (name: string) => name === 'SubagentHandback' ? '보고' : mcpTool(name) ? `${mcpTool(name)!.server} · ${mcpTool(name)!.tool}` : name;
+
+// An MCP tool is called `mcp__<server>__<tool>`: shown as the server ("Claude Docs") and the tool ("update"), not the raw id.
+export function mcpTool(name: string): { server: string; tool: string } | null {
+  const hit = /^mcp__(.+?)__(.+)$/.exec(name);
+  return hit ? { server: hit[1].replace(/^claude_ai_/, '').replace(/[_-]+/g, ' ').trim() || hit[1], tool: hit[2] } : null;
+}
+
+// What an MCP call is about, from its input: the first readable field (title, name, query, path …) found up to three levels deep, else a few key=value pairs.
+// A string list (guide topics) joins; markdown heading marks are dropped, so an inline "## 개요 …" reads as 개요 ….
+const MCP_KEYS = ['title', 'name', 'query', 'q', 'url', 'path', 'description', 'text', 'content', 'message', 'command', 'topic', 'items', 'id'];
+export function mcpSummary(input: any): string {
+  const clean = (value: string) => value.replace(/^[\s#>*-]+/, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  const find = (value: any, key: string, depth: number): string => {
+    if (!value || typeof value !== 'object' || depth > 3) return '';
+    const own = value[key];
+    if (typeof own === 'string' && own.trim()) return clean(own);
+    if (Array.isArray(own) && own.length && own.every(item => typeof item === 'string')) return clean(own.join(', '));
+    for (const child of Array.isArray(value) ? value : Object.values(value)) { const hit = find(child, key, depth + 1); if (hit) return hit; }
+    return '';
+  };
+  for (const key of MCP_KEYS) { const hit = find(input, key, 0); if (hit) return hit; }
+  const pairs = Object.entries(input ?? {}).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).slice(0, 3).map(([key, value]) => `${key}: ${value}`);
+  return pairs.length ? clean(pairs.join(' · ')) : '';
+}
+
+// A document / page the agent published on claude.ai (the Artifact tool, or the Claude Docs connector): the link comes back in the tool's result.
+export type ArtifactRef = { url: string; title: string; toolUseId: string };
+const ARTIFACT_URL = /https:\/\/claude\.ai\/artifact\/[A-Za-z0-9_-]+/;
+export function artifactsOf(blocks: Block[], results: Record<string, { content: string; isError: boolean }>): ArtifactRef[] {
+  const found = new Map<string, ArtifactRef>();
+  for (const block of blocks) {
+    if (block.type !== 'tool_use' || !(block.name === 'Artifact' || /^mcp__.+__(batch|create|update|publish)$/.test(block.name))) continue; // read / guide results may quote other links
+    const result = results[block.id], url = !result || result.isError ? undefined : ARTIFACT_URL.exec(result.content)?.[0];
+    if (!url) continue;
+    const input = block.input ?? {}, title = String(input.title ?? input.name ?? input.container?.create?.name ?? input.container?.create?.title ?? '').trim();
+    const prev = found.get(url);
+    if (!prev) found.set(url, { url, title, toolUseId: block.id });
+    else if (!prev.title && title) prev.title = title;
+  }
+  return [...found.values()];
+}
 
 // A one-line summary of a tool call for its collapsed card.
 export function toolSummary(name: string, input: any): string {
@@ -580,7 +689,8 @@ export function toolSummary(name: string, input: any): string {
     case 'ExitPlanMode': return line((text(input?.plan).split(/\r?\n/).filter(row => row.trim()).find(row => !/^\s*#/.test(row)) ?? text(input?.plan).split(/\r?\n/).filter(row => row.trim())[0] ?? '').replace(/^[\s#>*-]+/, ''));
     case 'SubagentHandback': return line(text(input?.message));
     case 'TodoWrite': return `${Array.isArray(input?.todos) ? input.todos.length : 0}개 항목`;
-    default: return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || JSON.stringify(input ?? {}));
+    default: if (mcpTool(name)) return mcpSummary(input);
+      return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || JSON.stringify(input ?? {}));
   }
 }
 

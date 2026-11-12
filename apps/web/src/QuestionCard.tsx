@@ -23,14 +23,14 @@ export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAns
           {question.options?.map((option, at) => {
             const on = pick.options.includes(option.id);
             return <label key={option.id} className={`chat-q-option${on ? ' on' : ''}`}>
-              <input type={kind} name={name} checked={on} autoFocus={index === 0 && at === 0} onChange={() => update(question, pickOption(question, pick, option.id))} />
+              <input type={kind} name={name} checked={on} onChange={() => update(question, pickOption(question, pick, option.id))} />
               <span className="chat-q-mark" aria-hidden="true" />
               <span className="chat-q-text"><b>{option.label}</b>{option.description && <small>{option.description}</small>}</span>
             </label>;
           })}
           {(question.allowOther || !hasOptions) && <label className={`chat-q-option other${typing && pick.other ? ' on' : ''}`}>
             {hasOptions && <><input type={kind} name={name} checked={typing} aria-label="직접 입력" onChange={() => update(question, pickOther(question, pick, typing && question.allowMultiple ? null : ''))} /><span className="chat-q-mark" aria-hidden="true" /></>}
-            <input className="chat-q-input" type={question.secret ? 'password' : 'text'} autoFocus={!hasOptions && index === 0} aria-label={hasOptions ? `${question.prompt} — 직접 입력` : question.prompt}
+            <input className="chat-q-input" type={question.secret ? 'password' : 'text'} aria-label={hasOptions ? `${question.prompt} — 직접 입력` : question.prompt}
               placeholder={hasOptions ? '직접 입력…' : '답변을 입력하세요'} value={pick.other ?? ''} autoComplete="off"
               onFocus={() => { if (!typing) update(question, pickOther(question, pick, '')); }} onChange={event => update(question, pickOther(question, pick, event.target.value))} />
           </label>}

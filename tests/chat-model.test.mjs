@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary } from '../apps/web/src/chat-model.ts';
+import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
@@ -519,4 +519,60 @@ test('autoDenial: only the auto-mode classifier refusal is a denial, and it carr
   assert.deepEqual(autoDenial(text), { reason: 'Create Unsafe Agents' });
   assert.deepEqual(autoDenial('Permission for this action was denied by the Claude Code auto mode classifier.'), { reason: '' });
   assert.equal(autoDenial('Error: ENOENT'), null);
+});
+
+test('an Agent call stays a visible card: it splits the process around it instead of folding into it', () => {
+  const agent = { block: { type: 'tool_use', id: 'A', name: 'Agent', input: {} }, sub: false };
+  assert.equal(shapeOf([T('1'), T('2'), agent, T('3'), ...flow('끝')]), 'PpRPR');
+});
+
+test('subagents: the end report wins; a background one runs while its child lives; a foreground one ends with its result', () => {
+  const call = (id, input) => ({ type: 'tool_use', id, name: 'Agent', input });
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [call('bg', { description: 'scan', subagent_type: 'Explore', run_in_background: true }), call('fg', { description: 'read', prompt: 'go' })] });
+  view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'bg', description: 'scan', agentType: 'Explore', background: true, at: 1000 });
+  view = reduce(view, { seq: 3, kind: 'tool_result', toolUseId: 'bg', content: 'Async agent launched', isError: false });
+  view = reduce(view, { seq: 4, kind: 'message', id: 's1', parentToolUseId: 'bg', blocks: [{ type: 'tool_use', id: 'g', name: 'Grep', input: { pattern: 'x' } }] });
+  view = reduce(view, { kind: 'task', phase: 'progress', toolUseId: 'bg', activity: 'Running grep', toolUses: 1 });
+  let [bg, fg] = agentsOf(view.items, view.results, view.tasks, false, ['bg']);
+  assert.equal(bg.status, 'running'); assert.equal(bg.now, 'Running grep'); assert.equal(bg.toolCount, 1); assert.equal(bg.items.length, 1); assert.equal(bg.startedAt, 1000);
+  assert.equal(fg.status, 'stopped', 'idle chat, no result: it never finished');
+  assert.equal(agentsOf(view.items, view.results, view.tasks, true, ['bg'])[1].status, 'running');
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'stopped', 'its child is gone');
+  view = reduce(view, { seq: 5, kind: 'tool_result', toolUseId: 'fg', content: 'found it', isError: false });
+  view = reduce(view, { seq: 6, kind: 'task', phase: 'end', toolUseId: 'bg', status: 'completed', report: 'Count: 28', durationMs: 14803, at: 16000 });
+  [bg, fg] = agentsOf(view.items, view.results, view.tasks, false, []);
+  assert.equal(bg.status, 'done'); assert.equal(bg.report, 'Count: 28'); assert.equal(bg.now, ''); assert.equal(bg.durationMs, 14803);
+  assert.equal(fg.status, 'done'); assert.equal(fg.report, 'found it'); assert.equal(fg.prompt, 'go');
+  view = reduce(view, { seq: 7, kind: 'task', phase: 'end', toolUseId: 'bg', status: 'failed' });
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false)[0].status, 'error');
+});
+
+test('a plan splits into its ## sections; the # line is its title and fenced code is never cut', () => {
+  const plan = ['# 계획', '', '머리말', '', '## Context', '- a', '- b', '', '## 코드', '```md', '## not a section', '```', '1. step'].join('\n');
+  const { title, sections } = planSections(plan);
+  assert.equal(title, '계획');
+  assert.deepEqual(sections.map(section => [section.title, section.items]), [['', 0], ['Context', 2], ['코드', 1]]);
+  assert.match(sections[2].body, /## not a section/);
+  assert.deepEqual(planSections('just text').sections, [{ title: '', body: 'just text', items: 0 }]);
+});
+
+test('MCP tools: readable label and summary instead of raw JSON', () => {
+  assert.equal(toolLabel('mcp__claude_ai_Claude_Docs__update'), 'Claude Docs · update');
+  assert.equal(toolLabel('Bash'), 'Bash');
+  assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__guide', { items: ['topic.index', 'topic.editing'] }), 'topic.index, topic.editing');
+  assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__batch', { container: { kind: 'project', create: { name: '작업 내용' } } }), '작업 내용');
+  assert.equal(toolSummary('mcp__x__update', { ref: { id: 'a' }, payload: { ops: [{ with: { from: { content: '## 개요\n본문' } } }] } }), '개요 본문');
+  assert.equal(toolSummary('mcp__x__ping', { flag: true, n: 2 }), 'flag: true · n: 2');
+});
+
+test('artifacts: a created doc is found by the claude.ai link in its result', () => {
+  const url = 'https://claude.ai/artifact/1wrqK8ndBdUqv356KQ2syF';
+  const blocks = [
+    { type: 'tool_use', id: 'g', name: 'mcp__claude_ai_Claude_Docs__guide', input: {} },
+    { type: 'tool_use', id: 'b', name: 'mcp__claude_ai_Claude_Docs__batch', input: { container: { create: { name: '작업 내용' } } } },
+    { type: 'tool_use', id: 'u', name: 'mcp__claude_ai_Claude_Docs__update', input: {} }
+  ];
+  const results = { g: { content: `see ${url}`, isError: false }, b: { content: `{"frame":{"url":"${url}"}}`, isError: false }, u: { content: `{"url":"${url}"}`, isError: false } };
+  assert.deepEqual(artifactsOf(blocks, results), [{ url, title: '작업 내용', toolUseId: 'b' }]);
+  assert.deepEqual(artifactsOf(blocks, { b: { content: url, isError: true } }), []);
 });

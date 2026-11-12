@@ -229,7 +229,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 ### 사용량 기여도 (상태 줄 `사용량 기여도`)
 - 이 채팅이 플랜 한도(5시간·주간)에서 차지한 **%p**를 보여 줍니다. 기본 상태 줄 오른쪽에 켜져 있습니다.
 - 서버가 정수 %만 알려 주므로, 턴 전후로 한도를 한 번씩 더 읽어 변화를 재고, 턴 비용과 짝지어 **1%p당 비용(k)**을 학습합니다. 그 k로 채팅 비용을 %p로 환산합니다.
-- 값이 충분히 모이기 전에는 "보정 중 N/10%p"로 보입니다. 다른 사용이 같은 한도를 쓰면 오차가 생깁니다.
+- 값은 항상 대략치(`≈N%p`)입니다. 비용 환산이 아직 안 되면 한도 변화만으로 `≈N%p`(1%p 미만이면 `<1%p`)를 보이고, 그것도 없으면 칸을 숨깁니다. 다른 사용이 같은 한도를 쓰면 오차가 생깁니다.
 - 외부로 보내는 데이터는 없습니다. k 값은 브라우저 `localStorage`(플랜·창별)에만 저장합니다. Ultra 플랜은 5시간 창이 없어 주간만 보입니다.
 
 ### 세션 통계 (`/stats`, Claude 전용)
@@ -487,7 +487,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 이 문서는 master만 기준으로 합니다. 아래는 원격·로컬 브랜치에 있지만 master에 없는 작업입니다(2026-11-12 확인).
 
-- **`origin/feat/feedback-inbox`** (커밋 2개, 미머지): 피드백 창고(캡처·AI 초안·Hub 전송). 채팅과 관련된 부분은 채팅 탭과 입력창에 피드백 캡처 영역(`data-feedback-region`)이 추가되고, 설정에 `feedbackAgentTool`(채팅 에이전트가 피드백 초안을 넣을 수 있음)·`feedbackAiContext`(AI 초안 요청에 화면 배치와 최근 오류를 포함)가 들어옵니다. master에 들어오기 전까지는 이 문서의 기능이 아닙니다.
+- **`origin/feat/feedback-inbox`** (커밋 2개, 미머지): 피드백 요청(캡처·AI 초안·Hub 전송). 채팅과 관련된 부분은 채팅 탭과 입력창에 피드백 캡처 영역(`data-feedback-region`)이 추가되고, 설정에 `feedbackAgentTool`(채팅 에이전트가 피드백 초안을 넣을 수 있음)·`feedbackAiContext`(AI 초안 요청에 화면 배치와 최근 오류를 포함)가 들어옵니다. master에 들어오기 전까지는 이 문서의 기능이 아닙니다.
 - **로컬 `fix/mac-ctrl-shortcuts`** (2026-10-25, 미머지, 원격 없음): 커밋 제목 기준 "macOS에서 Ctrl 단축키를 Cmd로 바꾸지 않고 Ctrl로 유지". §18 단축키 설명과 관련이 있습니다. 커밋은 두 개이며 모두 master에 없습니다: 단축키 수정(`7ad95c0`)과, 단축키와 무관한 CI 러너 변경(`fadfe8c`, "run checks on GitHub-hosted runners"). 그대로 머지하면 CI 설정이 바뀝니다. 오래된 브랜치라 master와 충돌할 수 있습니다.
 - **`chat/pc-talk`** (로컬과 `origin/chat/pc-talk`, 미머지): 채팅 기능과 무관한 `PC-TALK.md`·`pc-talk.sh`만 있는 초기화 커밋입니다.
 - 이미 master에 들어온 브랜치: `feat/agent-bus`, `feat/chat-mode`, `feat/chat-mode-on-master`(정리 가능).
