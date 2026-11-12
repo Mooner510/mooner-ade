@@ -543,7 +543,7 @@ body.resizing .xterm-host { pointer-events: none; }
 .statusbar .stat { padding: 0 6px; font-variant-numeric: tabular-nums; }
 .statusbar .stat.warn { color: var(--warn); }
 .statusbar button ins, .statusbar button del { margin-left: 4px; }
-.statusbar .conn { color: var(--del); display: inline-flex; padding: 0 6px; }
+.statusbar .conn { color: var(--del); display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; font-size: 11px; }
 .statusbar .conn.ok { color: var(--add); }
 .readiness summary::-webkit-details-marker { display: none; }
 
@@ -1969,3 +1969,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .welcome-feedback-button { position: fixed; top: 8px; right: 12px; z-index: 21; -webkit-app-region: no-drag; app-region: no-drag; }
 .welcome > .welcome-feedback { position: fixed; z-index: 20; top: 48px; bottom: 6px; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .welcome > .welcome-feedback.wide { width: calc(100% - 12px); }
+/* Tab-header icon buttons (IconButton tip="header"): a tooltip in the app's own style, instead of the slow native title. */
+.icon-btn { position: relative; }
+.icon-btn[data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: max-content; max-width: 260px; padding: 4px 8px; word-break: keep-all; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; font-weight: 400; line-height: 1.4; text-align: left; white-space: normal; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .12s, transform .12s; }
+.icon-btn[data-tip]:is(:hover, :focus-visible)::after { opacity: 1; transform: none; transition-delay: .3s; }

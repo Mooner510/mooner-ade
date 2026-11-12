@@ -111,7 +111,7 @@ function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, s
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
-      <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
+      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
     <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
@@ -610,22 +610,16 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
-  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), switchable = attention[id] !== 'attention' && !workingSet.has(id);
+  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = agent === 'claude' && !isSsh && attention[id] !== 'attention' && !workingSet.has(id); // hidden, not dimmed, while the switch cannot work
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-feedback-region="터미널 pane" data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
-        {agent && !isSsh && <IconButton icon="claude-chat" label={agent !== 'claude' ? 'Chat으로 전환 — 이 CLI는 세션과 대기 상태를 확인할 수 없어 전환할 수 없습니다' : switchable ? 'Chat으로 전환 (Claude를 종료하고 같은 대화를 이어갑니다)' : 'Chat으로 전환 — 응답이 끝나고 대기 중일 때만 가능'} className={agent !== 'claude' || !switchable ? 'soft-disabled' : ''} onClick={() => {
-          // Never a dead button: when the switch cannot happen, say why in the header instead of ignoring the click.
-          const why = agent !== 'claude' ? '이 CLI는 세션과 대기 상태를 확인할 수 없어 Chat으로 전환할 수 없습니다.' : attention[id] === 'attention' ? '승인 또는 질문에 먼저 답한 뒤 Chat으로 전환할 수 있습니다.' : workingSet.has(id) ? '응답이 끝난 뒤 Chat으로 전환할 수 있습니다.' : '';
-          if (why) { setTip(why); clearTimeout(tipTimer.current); tipTimer.current = window.setTimeout(() => setTip(''), 6000); return; }
-          setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id);
-        }} />}
-        {agent === 'claude' && !isSsh && <i className="pane-sep" aria-hidden="true" />}
-        <IconButton icon="splitH" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} /><IconButton icon="splitV" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
-        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
-        <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
+        {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" onClick={() => { setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
+        <IconButton icon="splitH" tip="header" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} /><IconButton icon="splitV" tip="header" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
+        <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
+        <IconButton icon="x" tip="none" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
     {otherSize && !exited && <div className="pane-size-note" role="status">
@@ -667,7 +661,7 @@ function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Le
       <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''}`}
         onClick={() => ctx.onSelectTab(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
         <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
-      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
+      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" tip="none" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
     {active ? <DiffTab key={active} spec={active} ctx={ctx} />
       : <div className="empty"><h2>열린 diff가 없습니다</h2><p>오른쪽 변경사항 패널에서 파일을 선택하세요.</p></div>}
   </section>;

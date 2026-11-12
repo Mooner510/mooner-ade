@@ -894,7 +894,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
-    connection: <span className={`conn ${connection === '연결됨' ? 'ok' : ''}`} title={connection}><Icon name="wifi" size={13} /></span>,
+    // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
+    connection: connection !== '연결됨' && <span className="conn" role="status" title="로컬 서버와 연결이 끊겼습니다. 자동으로 다시 연결합니다."><Icon name="wifi" size={13} />{connection}</span>,
     path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     changes: <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>,
