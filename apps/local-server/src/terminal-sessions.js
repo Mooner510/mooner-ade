@@ -140,7 +140,9 @@ export async function terminalSessionShell(directory, id, shell) {
       : `unalias ${command.split(' ')[0]} 2>/dev/null\n${command.split(' ')[0]}() { command \\${command} "$@"; }`).join('\n');
   const init = path.join(root, windows ? 'init.ps1' : 'init.sh');
   if (windows) {
-    await fs.writeFile(init, functions);
+    // PSReadLine 2.1+ can suggest from history, but Windows PowerShell leaves it off; respect any source the profile chose.
+    const predictions = `$readLine = Get-Module PSReadLine | Select-Object -First 1\nif ($readLine -and $readLine.Version -ge [version]'2.1' -and (Get-PSReadLineOption).PredictionSource -eq 'None') { Set-PSReadLineOption -PredictionSource History }\nRemove-Variable readLine`;
+    await fs.writeFile(init, `${predictions}\n${functions}`);
     return { args: ['-NoExit', '-Command', `. ${quote(init, true)}`], env: {}, tracked: true };
   }
   if (name === 'fish') {
@@ -150,7 +152,10 @@ export async function terminalSessionShell(directory, id, shell) {
   if (name === 'zsh') {
     const original = process.env.ZDOTDIR || os.homedir();
     await fs.writeFile(path.join(root, '.zshenv'), `${process.env.ZDOTDIR === undefined ? 'unset ZDOTDIR' : `export ZDOTDIR=${quote(original, false)}`}\n[ ! -r ${quote(path.join(original, '.zshenv'), false)} ] || . ${quote(path.join(original, '.zshenv'), false)}\nADE_SESSION_ZDOTDIR=\${ZDOTDIR-$HOME}\nexport ZDOTDIR=${quote(root, false)}\n`);
-    await fs.writeFile(path.join(root, '.zshrc'), `export ZDOTDIR="$ADE_SESSION_ZDOTDIR"\nunset ADE_SESSION_ZDOTDIR\n[ ! -r "$ZDOTDIR/.zshrc" ] || . "$ZDOTDIR/.zshrc"\n${functions}\n`);
+    // macOS /etc/zshrc derives HISTFILE from ZDOTDIR while it still points here, which would give every terminal an empty history
+    // (no up-arrow recall or zsh-autosuggestions); repoint it before the user's .zshrc so their own HISTFILE still wins.
+    const history = quote(path.join(root, '.zsh_history'), false);
+    await fs.writeFile(path.join(root, '.zshrc'), `export ZDOTDIR="$ADE_SESSION_ZDOTDIR"\nunset ADE_SESSION_ZDOTDIR\n[ "$HISTFILE" != ${history} ] || HISTFILE="$ZDOTDIR/.zsh_history"\n[ ! -r "$ZDOTDIR/.zshrc" ] || . "$ZDOTDIR/.zshrc"\n${functions}\n`);
     // A Finder-launched app has no login environment (Homebrew PATH, zsh plugins), so macOS terminals run as login shells like Terminal.app.
     const login = process.platform === 'darwin';
     if (login) await fs.writeFile(path.join(root, '.zprofile'), `[ ! -r "$ADE_SESSION_ZDOTDIR/.zprofile" ] || . "$ADE_SESSION_ZDOTDIR/.zprofile"\n`);
