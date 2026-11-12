@@ -3,8 +3,8 @@ import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { join, dirname, delimiter } from 'node:path';
+import { mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 // HERE: this folder (the fake `claude` lives in HERE/bin). ROOT: the checkout. S: where env.json, screenshots and results go (VERIFY_OUT, default a temp folder).
 export const HERE = dirname(fileURLToPath(import.meta.url));
@@ -32,18 +32,20 @@ export async function fakeHub() {
 }
 
 // A server of this checkout in its own HOME/data dir; `claude` on PATH is the fake. Never touches the installed app.
-export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false } = {}) {
-  const temp = await realpath(await mkdtemp(join(tmpdir(), 'ade-verify-')));
+// `temp`: reuse an earlier boot's folder (its data, home and repo, so a saved API key or chat survives a restart) instead of a new one.
+export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false, temp: reuse } = {}) {
+  const temp = await realpath(reuse || await mkdtemp(join(tmpdir(), 'ade-verify-')));
   data ??= join(temp, 'data'); home ??= join(temp, 'home'); const repo = join(temp, 'repo');
   for (const d of [data, home, repo]) await mkdir(d, { recursive: true });
   const git = (...a) => execFileSync('git', ['-c', 'user.name=v', '-c', 'user.email=v@example.invalid', '-c', 'core.hooksPath=/dev/null', ...a], { cwd: repo, stdio: 'ignore' });
-  if (repoFiles) {
+  if (repoFiles && !(reuse && existsSync(join(repo, '.git')))) {
     git('init', '-q', '-b', 'main'); await mkdir(join(repo, 'src')); await writeFile(join(repo, 'a.txt'), 'hello\n'); await writeFile(join(repo, 'src/b.ts'), 'export const x = 1;\n'); await writeFile(join(repo, '.gitignore'), 'ignored.log\n');
     git('add', '.'); git('commit', '-q', '-m', 'init'); await writeFile(join(repo, 'untracked.md'), 'u\n'); await writeFile(join(repo, 'ignored.log'), 'i\n');
   }
   const log = join(temp, 'fake-claude.jsonl'), ctlFile = join(temp, 'ctl.json'); await writeFile(log, ''); await writeFile(ctlFile, '{}');
-  const PATH = minimalPath ? `${dirname(process.execPath)}:/usr/bin:/bin` : `${join(HERE, 'bin')}:${process.env.PATH}`;
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+  // REAL_AGENTS=1: the real CLIs on PATH instead of the fake (still the temp HOME, so only an API key saved in Settings > AI 툴 can sign them in).
+  const PATH = minimalPath ? `${dirname(process.execPath)}:/usr/bin:/bin` : process.env.REAL_AGENTS ? process.env.PATH : `${join(HERE, 'bin')}${delimiter}${process.env.PATH}`;
+  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     env: { ...process.env, HOME: home, USERPROFILE: home, PATH, FAKE_LOG: log, FAKE_CTL: ctlFile, ADE_DEV: '0', ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env } });
   let stderr = ''; child.stderr.on('data', c => stderr += c);
   const line = await new Promise((resolve, reject) => { let out = ''; child.stdout.on('data', c => { out += c; if (/#token=\w+/.test(out)) resolve(out); }); child.once('exit', () => reject(new Error('server exited: ' + stderr))); setTimeout(() => reject(new Error('startup timeout')), 20000); });

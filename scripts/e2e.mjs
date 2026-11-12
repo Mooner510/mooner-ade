@@ -18,7 +18,7 @@ const chromePath = process.env.CHROME_PATH || [
   process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe')
 ].filter(Boolean).find(existsSync);
 if (!chromePath) throw new Error('Chrome not found; set CHROME_PATH');
-if (!existsSync(join(root, 'apps/web/dist/index.html'))) throw new Error('Build the web UI first: pnpm --filter @mooner/ade-web build');
+// No web build: the server runs ADE_DEV=1 and serves apps/web/src through its Vite dev server.
 
 const cleanup = [];
 async function stop(child) {
@@ -37,7 +37,7 @@ async function main() {
   git('init', '-q', '-b', 'main');
   await writeFile(join(repo, 'hello-e2e.txt'), 'hello\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
   const server = spawn(process.execPath, ['apps/local-server/src/index.js'], {
-    cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home, ADE_DEV: '0', ADE_PTY_ENDPOINT: '', ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit']
+    cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home, ADE_DEV: '1', ADE_PTY_ENDPOINT: '', ADE_PORT: '0', ADE_DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit']
   });
   cleanup.push(() => stop(server));
   const url = await new Promise((resolve, reject) => {
