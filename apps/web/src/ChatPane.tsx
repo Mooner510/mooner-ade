@@ -520,13 +520,13 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'user') {
     const preview = item.text.replace(/\s+/g, ' ').trim() || (item.images > 0 ? `이미지 ${item.images}장` : '');
     const slash = parseChatSlashCommand(item.text);
-    if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><div className="chat-bubble command"><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}<UserImages previews={item.previews} count={item.images} /></div></div>;
+    if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble command"><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</div></div>;
     const bus = parseBusMessages(item.text);
     if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><div className="chat-bubble bus">{bus.map((message, index) => <div className="chat-bus" key={index}>
       <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지 · {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span>{message.hop > 0 && <small>답장 {message.hop}/{message.maxHops}</small>}</div>
       <Markdown text={message.text} />
     </div>)}</div></div>;
-    return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><div className="chat-bubble">{!(item.images > 0 && item.text === '(이미지)') && <Markdown text={item.text} />}<UserImages previews={item.previews} count={item.images} /></div></div>;
+    return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <div className="chat-bubble"><Markdown text={item.text} /></div>}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
   if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{item.trigger === 'auto' ? '자동 압축' : '컨텍스트 압축'}{item.preTokens != null && item.postTokens != null ? ` · ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
@@ -1152,7 +1152,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. Esc로 취소할 수 있습니다.">스티어링 · 대기 중 · Esc로 취소</small>{item.text}<UserImages previews={item.previews} count={item.images} /></div></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. Esc로 취소할 수 있습니다.">스티어링 · 대기 중 · Esc로 취소</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1167,7 +1167,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} />)}
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
-        <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
+        <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       <div className="chat-status-slot" inert={empty} aria-hidden={empty}><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} /></div></div>
       <div className="chat-composer" data-feedback-region="채팅 입력창" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>

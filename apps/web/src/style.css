@@ -1193,6 +1193,9 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-empty-mark { display: inline-grid; place-items: center; flex: none; color: var(--agent); }
 .chat-msg.user { display: flex; justify-content: flex-end; width: 100%; min-width: 0; }
 .chat-msg.user:has(.md-table) { justify-content: stretch; }
+/* A message with pictures: the pictures sit on their own row above, the text bubble stays below. */
+.chat-msg.user:has(> .chat-user-images, > .chat-images) { flex-direction: column; align-items: flex-end; gap: 6px; }
+.chat-msg.user > .chat-user-images { margin-top: 0; max-width: 85%; } .chat-msg.user > .chat-images { margin-top: 0; }
 .chat-msg.user:has(.md-table) .chat-bubble { max-width: 100%; width: 100%; }
 .chat-bubble.steer { border: 1px dashed color-mix(in srgb, var(--fg) 50%, transparent); background: color-mix(in srgb, var(--fg) 9%, var(--raised)); }
 .chat-steer { display: block; margin-bottom: 2px; font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
@@ -1376,6 +1379,8 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-queue { color: var(--muted); font-size: 12px; }
 .chat-queue ol { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
 .chat-queue li { display: flex; align-items: flex-start; gap: 6px; padding: 2px 8px; border-radius: 6px; background: var(--raised); }
+.chat-queue .chat-user-images { margin: 0; flex-wrap: nowrap; }
+.chat-queue .chat-user-images img { max-width: 40px; max-height: 40px; }
 .chat-queue li span { flex: 1; min-width: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .chat-composer { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 10px 8px 16px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--input); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
 .chat-composer:focus-within { border-color: color-mix(in srgb, var(--fg) 38%, var(--border-strong)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent); }
