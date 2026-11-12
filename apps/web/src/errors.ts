@@ -11,7 +11,10 @@ let seq = 1;
 
 const emit = (scope: string) => listeners.get(scope)?.forEach(fn => fn());
 
+// A fetch that never reached the server (stopped, restarting) throws a bare TypeError: "Failed to fetch" (Chrome), "Load failed" (Safari), "NetworkError…" (Firefox).
+const NETWORK_FAILURE = /^(failed to fetch|load failed|networkerror)/i;
 export function errorText(cause: unknown) {
+  if (cause instanceof TypeError && NETWORK_FAILURE.test(cause.message)) return '서버에 연결할 수 없습니다. 연결이 돌아오면 다시 시도하세요.';
   return (cause instanceof Error ? cause.message : String(cause ?? '')).trim() || '알 수 없는 오류';
 }
 
