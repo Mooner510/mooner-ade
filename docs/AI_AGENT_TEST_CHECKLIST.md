@@ -4,13 +4,13 @@
 나머지(단위·HTTP·fake CLI·브라우저)는 별도로 끝냈거나 진행 중이며 `docs/VERIFICATION.md`에 결과를 남깁니다. 이 문서의 항목은 **아직 하나도 실행하지 않았습니다.**
 
 ## 공통 사전조건
-- 격리 서버·가짜 Hub·보이는 Chrome은 `node scripts/verify/start-ui.mjs`로 띄울 수 있다(사용법: [E2E_HANDOFF](E2E_HANDOFF.md) 4절). 실제 `claude`를 쓰려면 PATH 앞에 있는 `scripts/verify/bin/claude`(가짜)가 가리지 않게 `PATH`를 바꿔 직접 서버를 띄운다.
+- 격리 서버·가짜 Hub·보이는 Chrome은 `node scripts/verify/start-ui.mjs`로 띄울 수 있다(사용법: [E2E_HANDOFF](E2E_HANDOFF.md) 4절). 실제 `claude`를 쓰려면 PATH 앞에 있는 `scripts/verify/bin/claude`(가짜)가 가리지 않게 `PATH`를 바꿔 직접 서버를 띄운다. 이 세션은 웹 빌드 없이 Vite 개발 서버(`ADE_DEV=1`, HMR)로 돌고, 이미 떠 있는 세션이 있으면 새로 띄우지 않고 재활용한다. 서버 코드를 고쳤을 때는 Chrome을 끄지 말고 `scripts/verify/restart-ui.mjs`로 서버만 재시작한다(E2E_HANDOFF 4.1절 운영 규칙).
 - Chrome은 "Entire screen" 자동 선택 플래그 없이(이 탭만 공유) 띄우고 `Page.bringToFront`로 앞에 둔다. 가려진 창에서는 캡쳐가 실패한다.
 - 사용자의 실제 MoonerADE 앱을 건드리지 않는다: `apps/local-server/src/index.js`를 `ADE_DATA_DIR=<임시>`, `ADE_DEV=1`, `ADE_PORT=0`, `ADE_PTY_ENDPOINT=`, throwaway git 저장소로 띄운다. Electron 개발 앱은 띄우지 않는다.
 - 보이는 Chrome(`--remote-debugging-port`, 별도 `--user-data-dir`)으로 구동한다.
 - **모델은 `claude-haiku-5-5`, Effort는 low**로 명시한다(채팅 모델 드롭다운 기본값은 CLI 기본 모델이라 sonnet이 돌 수 있음). `claude` 래퍼로 `--effort low`를 붙이고, `ps` 인자와 저장된 이벤트의 `model`로 확인한다.
 - 피드백 제출이 실제 Hub로 나가지 않게 `ADE_FEEDBACK_ANONYMOUS=0` 또는 로컬 fake Hub(`ADE_HUB_URL`)를 쓴다.
-- 끝나면 서버·Chrome 종료, 남은 `~/.claude/projects/*scratchpad*` 세션 폴더를 사용자에게 알린다.
+- 끝나면 내가 띄운 세션의 서버·Chrome만 종료(PID 하나씩, 이름으로 일괄 종료 금지), 남은 `~/.claude/projects/*scratchpad*` 세션 폴더를 사용자에게 알린다.
 
 기호: `[ ]` 미실행 · 각 항목에 결과(통과/실패/메모)를 적는다.
 
@@ -35,10 +35,10 @@
 - [ ] C3. 백그라운드 서브에이전트는 자식 프로세스가 살아있는 동안 running, 포그라운드는 결과 도착 시 완료로 보이는가. 프로세스 교체/종료 후 liveTasks가 비워지는가.
 
 ## D. 계획 검토 (C2)
-- [ ] D1. plan 모드에서 실제 `ExitPlanMode` 입력으로 계획 카드가 뜨고 목차 칩·섹션 접기·크게 보기가 동작하는가.
-- [ ] D2. "자동 모드로 진행" / "편집 허용으로 진행" 승인 → CLI가 `setMode`(`updatedPermissions`)를 수용하고 실제로 그 모드로 바뀌는가.
+- [ ] D1. plan 모드에서 실제 `ExitPlanMode` 입력으로 계획 카드가 뜨고(본문 그대로, 칩·접기 없음) 크게 보기가 동작하는가. 카드가 떠 있는 동안 입력창이 숨는가.
+- [ ] D2. "자동 모드로 승인" / "편집 허용으로 승인" → CLI가 `setMode`(`updatedPermissions`)를 수용하고 실제로 그 모드로 바뀌는가.
 - [ ] D3. "수정 요청…" 메시지 → 모델이 plan 모드에 머물며 재계획하는가(`planRevision` 문구).
-- [ ] D4. "계획대로 진행"/반려 후 계획 이전 권한 모드(`prePlanMode`)로 돌아가는가. 창을 닫았다 다시 열어 승인해도 같은가.
+- [ ] D4. 반려("수정 요청…" › 의견 없이 반려) 뒤 권한 모드 표시가 맞는가. 승인 뒤 서버를 재시작해도 모드가 계획으로 되돌아가지 않는가(`meta.json` 저장).
 
 ## E. 이미지 첨부 (C3)
 - [ ] E1. 이미지 첨부 후 전송 → 모델이 이미지를 실제로 읽는가(이미지에만 있는 정보를 묻기).

@@ -169,7 +169,7 @@ pnpm dev     # 개발 모드: 웹 HMR + 서버 변경 시 재시작
 ```sh
 pnpm typecheck    # 웹 타입 검사
 pnpm check        # 웹 타입 검사 + Node 테스트
-pnpm e2e          # 웹 빌드 후 실제 Chrome/PTY로 UI 검증, 모델 호출 없음
+pnpm e2e          # 빌드 없이 Vite 개발 서버로 띄운 서버와 실제 Chrome/PTY로 UI 검증, 모델 호출 없음
 pnpm audit        # lockfile 의존성 보안 검사
 ```
 

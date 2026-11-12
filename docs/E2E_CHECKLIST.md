@@ -3,7 +3,7 @@
 다음 Full E2E의 기준표입니다. 환경 구성은 [E2E_HANDOFF](E2E_HANDOFF.md) 4절, 항목별 절차는 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)를 따릅니다.
 
 - 결과 표기: ✅ 통과 · ❌ 실패(수정 여부 병기) · 📖 코드 읽기로 판정(실행 생략) · ⏭ 이번에 안 함 · ⬜ 미실행
-- **번들 주의:** 서버는 `apps/web/dist`를 서빙합니다. 웹 소스를 고친 뒤에는 `pnpm --filter @mooner/ade-web build`를 하고 페이지를 `Page.reload(ignoreCache)` 해야 합니다. 이번 검증에서 처음 몇 건은 수정 전 번들(18:42)을 보고 있어서 재빌드(19:13) 후 다시 확인했습니다.
+- **번들 없음:** 서버는 `ADE_DEV=1`(Vite 개발 서버)로 `apps/web/src`를 직접 서빙하므로 웹 소스를 고쳐도 빌드하지 않습니다. 열린 페이지에 HMR로 바로 반영되고, 서버 코드를 고쳤을 때는 `scripts/verify/restart-ui.mjs`로 서버만 재시작합니다(Chrome은 그대로, 탭만 새 주소로 이동). 세션 운영 규칙 전체는 [E2E_HANDOFF](E2E_HANDOFF.md) 4.1절. 예전 문서의 `pnpm --filter @mooner/ade-web build` + `Page.reload(ignoreCache)` 절차는 더 쓰지 않습니다.
 - **창 규칙:** 사용자가 배치한 Chrome 창의 위치·크기를 바꾸지 않습니다(`Browser.setWindowBounds` 금지). `Page.bringToFront`는 캡쳐처럼 꼭 필요할 때만.
 
 ## 2026-11-12 (feat/ui-frame 작업 트리, 격리 서버·가짜 claude·가짜 Hub·Chrome 157, 실제 AI 없음)
@@ -40,7 +40,7 @@
 | 이미지 첨부: 말풍선·스티어링 썸네일, 재시작 후 유지(previews만 저장) | ✅ | `chat/close` 후 새로고침으로 확인. **서버 재시작은 안 함** |
 | 이미지 첨부: **대기열 썸네일** | ❌→✅ 수정 | 후속 큐 항목에 이미지가 안 보임 → `ChatPane.tsx` 큐 항목에 `UserImages`(40px) 추가·재빌드 후 확인 |
 | QuestionCard: 자동 포커스 안 뺏음·아이콘·방향키 선택·Ctrl/⌘+Enter 제출 | ✅ | 숫자키 선택 없음, radio에서 Enter만으로는 제출 안 됨(`QuestionCard.tsx:14`) — 의도 확인 필요 |
-| 계획 카드: 자동 모드로 진행 / 편집 허용으로 진행 | ✅ | reply에 `updatedPermissions:[setMode …]`, 칩 갱신 |
+| 계획 카드: 자동 모드로 승인 / 편집 허용으로 승인 | ✅ | reply에 `updatedPermissions:[setMode …]`, 칩 갱신 |
 | 계획 카드: 수정 요청… / 의견 없이 반려 | ✅ | `deny`+문구, 칩은 "계획" 유지 |
 | 계획 카드: 계획 이전 모드로 복귀, 다른 탭에 갔다 와서 승인 | ✅ | |
 | 계획 카드: 탭을 닫았다 다시 열어 승인 | ⬜ | 응답 대기 중 닫으면 중단 확인창 → 대기 중인 계획을 두고 닫는 경로를 못 만듦 |
