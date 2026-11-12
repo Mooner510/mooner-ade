@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formMessage, parseUi } from '../apps/web/src/ui-spec.ts';
+import { formMessage, niceTicks, parseUi } from '../apps/web/src/ui-spec.ts';
 
 test('known components parse, unknown or broken JSON do not', () => {
   assert.equal(parseUi('not json'), null);
@@ -34,4 +34,12 @@ test('form fields get sane defaults and submit as a plain message', () => {
   assert.equal(form.submit, 'Go'); assert.equal(form.fill, false);
   assert.equal(formMessage(form, { seats: '5', c: 'yearly', ok: 'true', n: 'Bo' }), 'Plan\n- Seats: 5\n- Billing: yearly\n- Ok: yes\n- Name: Bo');
   assert.equal(parseUi('["draft","t","s",["text","a","A"]]')[0].fill, true);
+});
+
+test('chart gridlines fall on round steps that cover every value', () => {
+  assert.deepEqual(niceTicks(0, 7), [0, 2, 4, 6, 8]);
+  assert.deepEqual(niceTicks(0, 100), [0, 50, 100]);
+  assert.deepEqual(niceTicks(0, 1), [0, 0.5, 1]);
+  assert.deepEqual(niceTicks(-3, 9), [-5, 0, 5, 10], 'negative values get their own steps below zero');
+  assert.deepEqual(niceTicks(0, 0), [0]);
 });

@@ -51,3 +51,13 @@ export function formMessage(form: Extract<Spec, { t: 'form' }>, values: Record<s
   const rows = form.fields.map(f => `- ${f.label}: ${f.type === 'check' ? (values[f.k] === 'true' ? 'yes' : 'no') : values[f.k] ?? ''}`).join('\n');
   return (form.title ? `${form.title}\n` : '') + rows;
 }
+
+// Round axis steps (1, 2, 5 × 10ⁿ) covering lo..hi, about `count` of them, so the gridlines read as 0 · 2 · 4 · 6 · 8 rather than one odd maximum.
+export function niceTicks(lo: number, hi: number, count = 4): number[] {
+  if (hi === lo) return [lo];
+  const raw = (hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 5, 10].map(k => k * mag).find(k => k >= raw) ?? 10 * mag;
+  const ticks: number[] = [];
+  for (let v = Math.floor(lo / step) * step; v <= hi + step * 1e-9; v += step) ticks.push(+v.toPrecision(12));
+  if (ticks[ticks.length - 1] < hi) ticks.push(+(ticks[ticks.length - 1] + step).toPrecision(12));
+  return ticks;
+}

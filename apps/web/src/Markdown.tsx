@@ -1,4 +1,5 @@
-import { Fragment, memo, useContext, type ReactNode } from 'react';
+import { Fragment, memo, useContext, useEffect, useState, type ReactNode } from 'react';
+import { colorize } from './Editor';
 import { Icon } from './Icon';
 import { copyText } from './toast';
 import { holdBack, INLINE, parse, stableSplit, type Node } from './markdown-parse';
@@ -7,9 +8,9 @@ import { UI_LANG } from './ui-frame-protocol';
 import { NATIVE_LANG, parseUi } from './ui-spec';
 import { UiSpecView } from './UiBlocks';
 
-// A small Markdown renderer for chat replies. It builds React elements (never HTML strings), so model output cannot inject markup,
+// A small Markdown renderer for chat replies. It builds React elements (no HTML strings except Monaco's escaped syntax colouring), so model output cannot inject markup,
 // and links go through the app's own "open external link?" dialog (ade:link).
-// shortcut: no nested lists beyond two levels, no HTML, no syntax highlighting; add a library only if replies need more.
+// shortcut: no nested lists beyond two levels, no HTML; code is coloured by Monaco's tokenizer (CodeBlock). Add a library only if replies need more.
 
 function link(href: string, label: ReactNode, key: number) {
   if (!/^https?:\/\//i.test(href)) return <Fragment key={key}>{label}</Fragment>;
@@ -30,8 +31,23 @@ export function inline(source: string): ReactNode[] {
   return out;
 }
 
-export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
-  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" title="코드 복사" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header><pre><code>{code}</code></pre></div>;
+// Syntax colours arrive a moment after the text (Monaco loads lazily, and a streaming block is coloured once it pauses). Until then the
+// part already coloured stays coloured and only the newer tail is plain, so a growing block never flickers back to monochrome.
+function useColored(code: string, hint?: string) {
+  const [done, setDone] = useState<{ code: string; html: string } | null>(null);
+  useEffect(() => {
+    if (!hint) return;
+    let live = true;
+    const timer = setTimeout(() => { void colorize(code, hint).then(html => { if (live && html) setDone({ code, html: html.replace(/(<br\/>)+$/, '') }); }, () => {}); }, 120);
+    return () => { live = false; clearTimeout(timer); };
+  }, [code, hint]);
+  return done && code.startsWith(done.code) ? done : null;
+}
+// lang is the header label; syntax (default: lang) picks the colours, so a header like "src/a.ts · 새 파일 · 7줄" can still colour as TypeScript.
+export function CodeBlock({ code, lang, syntax }: { code: string; lang?: string; syntax?: string }) {
+  const colored = useColored(code, syntax ?? lang);
+  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" title="코드 복사" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header>
+    <pre><code>{colored ? <><span dangerouslySetInnerHTML={{ __html: colored.html }} />{code.slice(colored.code.length)}</> : code}</code></pre></div>;
 }
 
 // A ```ui fence (JSON drawn natively, see ui-spec.ts) or an ```ade-ui fence (HTML/JS in a sandboxed iframe): the UI once the fence is closed (half-written code must not run),
@@ -56,7 +72,8 @@ function renderNode(node: Node, key: string, live: boolean) {
     case 'hr': return <hr key={key} />;
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul';
-      return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={node.ordered ? item.num : undefined} className={item.depth ? 'nested' : ''}>{inline(item.text)}</li>)}</Tag>;
+      return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={node.ordered ? item.num : undefined} className={item.depth ? 'nested' : ''}>
+        {inline(item.text)}{item.blocks?.map((block, b) => renderNode(block, `${key}-${i}-${b}`, live))}</li>)}</Tag>;
     }
     case 'table': return <div className="md-table" key={key}><table><thead><tr>{node.head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
       <tbody>{node.rows.map((row, r) => <tr key={r}>{node.head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table></div>;

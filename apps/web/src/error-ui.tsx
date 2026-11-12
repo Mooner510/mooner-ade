@@ -58,15 +58,17 @@ export function ErrorToast({ scope, active = true }: { scope: string; active?: b
 
   if (!view) return null;
   return <div ref={ref} popover="manual" role="alert" className={`error-toast ${view.phase}`} onAnimationEnd={event => { if (event.target === event.currentTarget && view.phase === 'out') setView(null); }}>
-    <Icon name="siren" size={16} /><p>{view.message}</p>
+    <Icon name="error" size={16} /><p>{view.message}</p>
     <IconButton icon="x" label="닫기" onClick={() => setView(current => current ? { ...current, phase: 'out' } : current)} />
   </div>;
 }
 
 export function ErrorTabButton({ scope, pressed, onClick, className = '' }: { scope: string; pressed: boolean; onClick(): void; className?: string }) {
   const { items } = useLog(scope);
+  // Only there once something failed (or while its panel is open, so clearing the list does not pull the button out from under the pointer).
+  if (!items.length && !pressed) return null;
   return <button type="button" data-error-scope={scope} className={`bar-button error-tab ${pressed ? 'on' : ''} ${items.length ? 'hot' : ''} ${className}`} title="오류" aria-label={items.length ? `오류 ${items.length}개` : '오류'} aria-pressed={pressed} onClick={onClick}>
-    <Icon name="siren" />{items.length > 0 && <span className="error-count">{items.length}</span>}
+    <Icon name="error" />{items.length > 0 && <span className="error-count">{items.length}</span>}
   </button>;
 }
 
@@ -75,7 +77,7 @@ export function ErrorPanel({ scope, wide, toggleWide }: { scope: string; wide: b
   const when = (item: AppError) => new Date(item.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return <div className="review-panel error-panel">
     <header className="panel-head">
-      <Icon name="siren" /><strong>오류</strong>
+      <Icon name="error" /><strong>오류</strong>
       <span className="spacer" />
       {items.length > 0 && <button type="button" onClick={() => clearErrors(scope)}>모두 지우기</button>}
       <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
@@ -83,7 +85,7 @@ export function ErrorPanel({ scope, wide, toggleWide }: { scope: string; wide: b
     <div className="review-list">
       {!items.length && <div className="review-empty"><Icon name="check" size={22} /><strong>오류 없음</strong><p>문제가 생기면 여기에 남습니다.</p></div>}
       {items.map(item => <article key={item.id} className="error-row">
-        <Icon name="siren" size={15} />
+        <Icon name="error" size={15} />
         <div><p>{item.message}</p><time dateTime={new Date(item.at).toISOString()}>{when(item)}</time></div>
         <IconButton icon="x" label="이 오류 지우기" onClick={() => dismissError(scope, item.id)} />
       </article>)}
