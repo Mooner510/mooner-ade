@@ -43,6 +43,9 @@ export const FEEDBACK_EFFORTS = ['low', 'medium']; // Effort stops at Medium for
 // Startup, not the model, is what makes a draft slow: a plain `claude -p` also boots every MCP server, skill and project setting the user has (one-line answer on a dev Mac: 10-21s
 // that way, ~5-6s without them; `--bare` would be cleaner still but never reads the OAuth login, only ANTHROPIC_API_KEY, so it is not used). This run needs none of it. `--setting-sources user` still reads the user's own settings (login, proxy, env).
 const ISOLATED = ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', 'user', '--disable-slash-commands', '--no-session-persistence'];
+// Only "AI로 정리" needs a Claude Code login; submitting never does (it goes anonymously when nobody is signed in), so the message says so.
+export const loginProblem = text => /not logged in|please run \/login|invalid api key|authentication_error|oauth token has expired/i.test(String(text ?? ''));
+export const LOGIN_HINT = 'AI 정리는 Claude Code 로그인이 필요합니다. 터미널에서 claude를 실행해 로그인한 뒤 다시 시도하세요. 제출은 로그인 없이도 할 수 있으니, 직접 쓴 내용을 그대로 제출해도 됩니다.';
 export function runFeedbackDraft({ executable = 'claude', executableArgs = [], model = '', effort = '', cwd, images, title, body, note, context, env = {}, spawnProcess = spawn, timeoutMs = 120_000 }) {
   const prompt = feedbackPrompt({ images, title, body, note, context });
   return new Promise((resolve, reject) => {
@@ -65,7 +68,7 @@ export function runFeedbackDraft({ executable = 'claude', executableArgs = [], m
     const settle = code => {
       let result = null;
       try { const value = JSON.parse(stdout); result = value?.is_error ? null : value?.result; if (value?.is_error) stderr = String(value.result ?? stderr); } catch { /* not JSON */ }
-      if (code !== 0 || typeof result !== 'string') return finish(reject, fault('AGENT_PROTOCOL', (stderr.trim() || `AI 정리를 하지 못했습니다 (${code}).`).slice(0, 500), 502));
+      if (code !== 0 || typeof result !== 'string') return finish(reject, fault(loginProblem(stderr) ? 'AGENT_LOGIN' : 'AGENT_PROTOCOL', loginProblem(stderr) ? LOGIN_HINT : (stderr.trim() || `AI 정리를 하지 못했습니다 (${code}).`).slice(0, 500), loginProblem(stderr) ? 401 : 502));
       try { finish(resolve, parseFeedbackDraft(result)); } catch (error) { finish(reject, error); }
     };
     proc.stdout?.on('data', chunk => {

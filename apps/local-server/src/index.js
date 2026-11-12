@@ -26,12 +26,13 @@ import { watchProjectFiles } from './project-watch.js';
 import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
-import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog } from './chat.js';
+import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { UI_PROMPT } from './chat-ui-prompt.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
+import { createAgentKeys } from './agent-keys.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
@@ -174,6 +175,8 @@ await fs.rm(path.join(dataRoot, 'token'), { force: true });
 let origin;
 const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8').catch(() => '{}')).version || '0.0.0';
 const wakatime = createWakaTime({ version: appVersion });
+const agentKeys = createAgentKeys({ file: path.join(dataRoot, 'agent-keys.json') });
+await agentKeys.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
 let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true;
@@ -410,7 +413,7 @@ const commandsProbes = new Map(); // cwd + config -> { at, promise }
 // the default model share one answer per folder and hour. Never rejects; a failed answer (null) is dropped so the next call asks again.
 const initProbes = new Map(); // cwd + config -> { at, promise }
 function claudeInit(cwd, env, refresh = false) {
-  const configDir = (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR ?? '', key = JSON.stringify([cwd, configDir]);
+  const configDir = (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR ?? '', key = JSON.stringify([cwd, configDir, agentKeys.signature('claude')]);
   let cached = initProbes.get(key);
   if (!cached || refresh || Date.now() - cached.at > 3_600_000) {
     cached = { at: Date.now(), promise: probeInit({ env, cwd }) };
@@ -419,6 +422,22 @@ function claudeInit(cwd, env, refresh = false) {
     if (initProbes.size > 32) initProbes.delete(initProbes.keys().next().value);
   }
   return cached.promise;
+}
+// What a chat of `agent` launches with: the plugin environment plus the API key when the user chose one for that agent (Settings > AI 툴).
+const chatEnv = agent => () => ({ ...pluginEnv(), ...agentKeys.launch(agent).env });
+const chatArgs = agent => () => agentKeys.launch(agent).args;
+// Claude's model list: with an API key the CLI keeps no catalog of its own, so ask the Models API (cached an hour per key); otherwise the CLI's catalog.
+let apiCatalog = null; // { key, at, promise }
+async function claudeCatalog(refresh = false) {
+  const env = chatEnv('claude')(), apiKey = env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return readModelCatalog();
+  if (!apiCatalog || apiCatalog.key !== apiKey || refresh || Date.now() - apiCatalog.at > 3_600_000) {
+    const entry = { key: apiKey, at: Date.now(), promise: fetchApiModelCatalog({ apiKey, baseURL: env.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL }) };
+    apiCatalog = entry;
+    entry.promise.then(list => { if (!list.length && apiCatalog === entry) apiCatalog = null; }); // a failed request is retried next time
+  }
+  const list = await apiCatalog.promise;
+  return list.length ? list : readModelCatalog();
 }
 function pluginEnv() {
   if (!pluginTerminal.plugins.length) return {};
@@ -689,6 +708,13 @@ async function route(action, input, project) {
   if (action === 'dialog/folder') return chooseFolder(input);
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
+  if (action === 'agent-keys/status') return agentKeys.status();
+  if (action === 'agent-keys/config') {
+    const status = await agentKeys.write(input); agentModelProbes.clear(); modelsProbe = null; apiCatalog = null;
+    // Chats already running were launched with the old key in their environment; they relaunch (same session) so the new one is used.
+    for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
+    return status;
+  }
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
@@ -856,7 +882,8 @@ async function route(action, input, project) {
         try {
           const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent: input.agent === undefined ? 'claude' : input.agent, env: pluginEnv,
+          const agent = input.agent === undefined ? 'claude' : input.agent;
+          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent),
             onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
             prepare: chatLaunchFiles, recover: () => checkAgents(), defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
           project.chats.set(id, chat);
@@ -925,6 +952,16 @@ async function route(action, input, project) {
       await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
       return {};
     }
+    case 'chat/rename': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return chat.rename(text(input.title, '이름', 200));
+    }
+    case 'chat/autocompact': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return chat.setAutoCompact(text(input.value, '창 크기', 40));
+    }
     case 'chat/warm': await project.chats.get(input.id)?.warm(); return {};
     case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
     case 'chat/close': {
@@ -937,10 +974,10 @@ async function route(action, input, project) {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       if (agent !== 'claude') {
-        const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '']);
+        const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '', agentKeys.signature(agent)]);
         let cached = agentModelProbes.get(key);
         if (!cached || input.refresh === true || Date.now() - cached.at > 3_600_000) {
-          cached = { at: Date.now(), promise: probeAgentModels({ agent, cwd: workspace.root, env: pluginEnv }) };
+          cached = { at: Date.now(), promise: probeAgentModels({ agent, cwd: workspace.root, env: chatEnv(agent), executableArgs: chatArgs(agent) }) };
           agentModelProbes.set(key, cached);
           cached.promise.catch(() => { if (agentModelProbes.get(key) === cached) agentModelProbes.delete(key); });
           if (agentModelProbes.size > 32) agentModelProbes.delete(agentModelProbes.keys().next().value);
@@ -950,18 +987,22 @@ async function route(action, input, project) {
         return result;
       }
       if (!modelsProbe || modelsProbe.root !== workspace.root || input.refresh === true || Date.now() - modelsProbe.at > 3_600_000) {
-        const entry = { at: Date.now(), root: workspace.root, promise: resolveModels({ env: pluginEnv, cwd: workspace.root, init: () => claudeInit(workspace.root, pluginEnv, input.refresh === true) }).catch(() => ({})) };
+        const entry = { at: Date.now(), root: workspace.root, promise: resolveModels({ env: chatEnv('claude'), cwd: workspace.root, init: () => claudeInit(workspace.root, chatEnv('claude'), input.refresh === true) }).catch(() => ({})) };
         modelsProbe = entry;
         entry.promise.then(models => { if (!Object.keys(models).length && modelsProbe === entry) modelsProbe = null; }); // a failed probe is retried next time
       }
-      const [models, catalog] = await Promise.all([modelsProbe.promise, readModelCatalog()]);
+      const [probed, catalog] = await Promise.all([modelsProbe.promise, claudeCatalog(input.refresh === true)]);
+      // An alias the settings don't pin (always the case with an API key in a fresh HOME) is the newest model of its family, so the picker
+      // shows "haiku" as that model's row instead of a second, unversioned "Haiku".
+      const models = { ...probed };
+      for (const alias of ['opus', 'sonnet', 'haiku']) if (!models[alias]) { const row = catalog.find(item => item.main && item.family === alias); if (row) models[alias] = row.id; }
       const chat = project.chats.get(input.id); if (chat?.agent === 'claude') chat.loadCatalog(catalog, models['']);
       return { models, catalog };
     }
-    // Just the CLI's own model list (see readModelCatalog); cheap, so the "more models" window reads it fresh each time it opens.
+    // Just the model list (claudeCatalog: the CLI's own, or the Models API with an API key); cheap or cached, so the "more models" window reads it fresh each time it opens.
     case 'chat/model-catalog': {
       if (input.agent && input.agent !== 'claude') return route('chat/models', input, project);
-      return { catalog: await readModelCatalog() };
+      return { catalog: await claudeCatalog() };
     }
     case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
     // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
@@ -1064,7 +1105,7 @@ const server = http.createServer(async (request, response) => {
     } else {
       if (request.method !== 'GET') throw fault('NOT_FOUND', '경로가 없습니다.', 404);
       // Interactive chat UIs run in an iframe on this page; it has its own, much tighter CSP and needs no session.
-      if (url.pathname === '/ade-ui-frame.html') { response.setHeader('Content-Security-Policy', UI_FRAME_CSP); response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(UI_FRAME_HTML); return; }
+      if (url.pathname === '/ade-ui-frame.html') { response.setHeader('Content-Security-Policy', UI_FRAME_CSP.replace('font-src data:', `font-src data: http://${request.headers.host}`)); response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(UI_FRAME_HTML); return; }
       // Feedback screenshots for the inbox: same session cookie as the API, names checked by the store.
       if (url.pathname.startsWith('/feedback-file/')) {
         if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
@@ -1076,6 +1117,8 @@ const server = http.createServer(async (request, response) => {
         response.end(content);
         return;
       }
+      // The app's font files are public; an interactive UI frame (opaque origin) loads them too, which needs CORS.
+      if (/\.(woff2?|ttf)$/.test(url.pathname)) response.setHeader('Access-Control-Allow-Origin', '*');
       if (vite) {
         await new Promise((resolve, reject) => { response.once('close', resolve); vite.middlewares(request, response, error => reject(error || fault('NOT_FOUND', '경로가 없습니다.', 404))); });
         return;
@@ -1094,7 +1137,11 @@ const server = http.createServer(async (request, response) => {
 });
 const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 server.on('upgrade', (request, socket, head) => {
-  if (request.url !== '/ws' || !trusted(request) || !authenticated(request)) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
+  // With ADE_DEV=1 Vite's own listener (hmr.server is this server) answers its HMR sockets (/?token=…, protocol vite-hmr / vite-ping), so this handler must
+  // not close them: they get the same same-origin + signed-in check as /ws and are then left to Vite. Without it every edit needed a manual reload.
+  const hmr = devWeb && /^vite-(hmr|ping)$/.test(request.headers['sec-websocket-protocol'] ?? '');
+  if ((request.url !== '/ws' && !hmr) || !trusted(request) || !authenticated(request)) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
+  if (hmr) return;
   wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
 });
 // Pasted images are files the agent CLI reads by path. They live in the app's own folder (not the shared temp folder, where

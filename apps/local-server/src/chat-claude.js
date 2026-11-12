@@ -22,6 +22,9 @@ export const cliPermissionMode = (mode) =>
 export const uiPermissionMode = (mode) =>
   mode === "manual" || mode === "defaultMode" ? "default" : mode;
 // A plan answered with feedback: the model reads this as the tool error, so say what to do with it.
+// A refusal with an instruction ("다르게 하기"), worded like Claude Code's own: as a bare tool result the model reads the words as untrusted tool
+// output and may refuse to follow them; this way they are plainly the user's.
+export const refusalWith = (instruction) => `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n${instruction}`;
 export const planRevision = (feedback) => `The user rejected this plan and asks for changes. Stay in plan mode, revise the plan to address the feedback, and present it again.\n\nUser feedback:\n${feedback}`;
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"]; // `claude --effort`
 

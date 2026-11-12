@@ -245,8 +245,11 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         const params = { cwd, model: meta.model ?? null, approvalPolicy: permissions.approvalPolicy, approvalsReviewer: permissions.approvalsReviewer, sandbox: permissions.sandboxMode,
           config: { ...(config.effort && { model_reasoning_effort: config.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs], 'sandbox_workspace_write.network_access': meta.network === true,
             ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args, ...(s.env && { env: s.env }), ...(s.autoApprove && { default_tools_approval_mode: 'approve' }), ...(s.disabledTools?.length && { disabled_tools: s.disabledTools }) }])) } };
+        // A thread keeps the provider it was started with and resumes with it, so switching between the login and an API key (Settings > AI 툴) would not
+        // reach an existing chat, and a chat started with the key could not resume once its provider is gone. Resume with the provider configured now.
+        const provider = meta.resumeAt || meta.sessionId ? await request('config/read', { includeLayers: false }).then(result => result?.config?.model_provider || 'openai', () => null) : null;
         const response = await request(meta.resumeAt ? 'thread/fork' : meta.sessionId ? 'thread/resume' : 'thread/start', {
-          ...params, ...(instructions && { developerInstructions: instructions }), ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
+          ...params, ...(provider && { modelProvider: provider }), ...(instructions && { developerInstructions: instructions }), ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
         sessionId = response.thread.id;
         const resumed = agentTitle(response.thread?.name);
         if (resumed) emit(resumed);
