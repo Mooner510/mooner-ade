@@ -21,6 +21,11 @@ export const cliPermissionMode = (mode) =>
   !mode || mode === "default" ? "manual" : mode;
 export const uiPermissionMode = (mode) =>
   mode === "manual" || mode === "defaultMode" ? "default" : mode;
+// A plan answered with feedback: the model reads this as the tool error, so say what to do with it.
+// A refusal with an instruction ("다르게 하기"), worded like Claude Code's own: as a bare tool result the model reads the words as untrusted tool
+// output and may refuse to follow them; this way they are plainly the user's.
+export const refusalWith = (instruction) => `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n${instruction}`;
+export const planRevision = (feedback) => `The user rejected this plan and asks for changes. Stay in plan mode, revise the plan to address the feedback, and present it again.\n\nUser feedback:\n${feedback}`;
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"]; // `claude --effort`
 
 export const validMessageUuid = (value) =>
@@ -36,6 +41,7 @@ export function buildClaudeArgs({
   permissionMode,
   settingsFile,
   mcpFile,
+  promptFile,
   resumeAt,
   fork,
 } = {}) {
@@ -69,6 +75,7 @@ export function buildClaudeArgs({
   if (permissionMode) args.push("--permission-mode", cliPermissionMode(permissionMode));
   if (settingsFile) args.push("--settings", settingsFile);
   if (mcpFile) args.push("--mcp-config", mcpFile);
+  if (promptFile) args.push("--append-system-prompt-file", promptFile);
   return args;
 }
 
@@ -89,6 +96,10 @@ export function userLine(text, images = [], uuid) {
     }) + "\n"
   );
 }
+// The Artifact tools cost ~12.9k tokens per request (measured, claude 2.1.322) and `claude -p` leaves them off, so a chat turns them on only
+// once the user asks for one (or the setting says always). Starting a turn that mentions it is enough; the CLI takes the env from a flag-settings update.
+export const wantsArtifact = (text) => /artifact|아티팩트/i.test(text);
+export const ARTIFACT_FLAG_SETTINGS = { env: { CLAUDE_CODE_ARTIFACT: "1" } };
 export const controlLine = (requestId, request) =>
   JSON.stringify({ type: "control_request", request_id: requestId, request }) +
   "\n";
@@ -115,13 +126,13 @@ export const askUserInput = (input, questions, answers) => ({
 export const ASK_SKIPPED = "The user chose not to answer these questions. Do not ask them again right away: continue with your best judgment, or ask in plain text if you cannot proceed without an answer.";
 export function approvalLine(
   requestId,
-  { allow, input, message, suggestions },
+  { allow, input, message, suggestions, mode },
 ) {
   const response = allow
     ? {
         behavior: "allow",
         updatedInput: input ?? {},
-        ...(suggestions?.length && { updatedPermissions: suggestions }),
+        ...((suggestions?.length || mode) && { updatedPermissions: [...(suggestions ?? []), ...(mode ? [{ type: "setMode", mode: cliPermissionMode(mode), destination: "session" }] : [])] }),
       }
     : { behavior: "deny", message: message || "사용자가 거부했습니다." };
   return (
@@ -155,6 +166,21 @@ const compactEvent = (meta, at) => ({
   postTokens: Number.isFinite(meta?.post_tokens ?? meta?.postTokens) ? (meta.post_tokens ?? meta.postTokens) : null,
   ...(at && { at }),
 });
+
+const TASK_PHASES = { task_started: "start", task_progress: "progress", task_notification: "end" };
+function taskEvent(raw) {
+  const phase = TASK_PHASES[raw.subtype], usage = raw.usage ?? {};
+  return {
+    kind: "task",
+    phase,
+    toolUseId: raw.tool_use_id,
+    ...(phase === "start" && { description: raw.description ?? "", agentType: raw.subagent_type ?? "", background: raw.is_backgrounded === true }),
+    // A progress `description` is what it is doing now ("Running …"), not its name.
+    ...(phase === "progress" && { activity: raw.description ?? "", lastTool: raw.last_tool_name ?? "" }),
+    ...(phase === "end" && { status: raw.status ?? "completed", report: String(raw.handback_report?.text ?? raw.summary ?? "").slice(0, 64_000) }),
+    ...(Number.isFinite(usage.total_tokens) && { tokens: usage.total_tokens, toolUses: usage.tool_uses ?? 0, durationMs: usage.duration_ms ?? 0 }),
+  };
+}
 
 // What a local slash command printed (/compact, /context, /cost, /mcp, ...): the CLI echoes it as a user message wrapped in these tags.
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
@@ -208,6 +234,9 @@ export function normalizeClaude(raw) {
     return [{ kind: "delta", phase: "compacting", active: raw.status === "compacting" }];
   if (raw.type === "system" && raw.subtype === "compact_boundary")
     return [compactEvent(raw.compact_metadata)];
+  // A subagent (Agent/Task call) started, made progress (live only) or ended. Keyed by its Agent call's tool_use id, which the pane tracks it by.
+  if (raw.type === "system" && TASK_PHASES[raw.subtype] && typeof raw.tool_use_id === "string")
+    return [taskEvent(raw)];
   if (raw.type === "stream_event") {
     // Every live event names its subagent (null for the main thread), so the server can keep parallel streams apart.
     const event = raw.event ?? {},

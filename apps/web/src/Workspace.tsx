@@ -21,6 +21,11 @@ import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { ReviewPanel } from './Review';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
+import { errorLog } from './errors';
+import { FeedbackPanel } from './FeedbackPanel';
+import { FeedbackCapture } from './FeedbackCapture';
+import { aiContext, bytesToBase64, pendingReviewCount } from './feedback-model';
+import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
@@ -88,9 +93,11 @@ const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
 const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
   const { usage, loading, load } = useUsage(provider, projectId, active, refresh), panel = `usage-${useId()}`;
-  if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
-  const windows = provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  const windows = !usage ? [] : provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  // Not installed or not signed in here (no login found) and a failed first reading both leave no windows: show nothing instead of a dead "—".
+  // The hook keeps polling, so the item appears by itself once a reading succeeds.
+  if (!usage || !windows.length) return null;
   const preferred = usageStatusKeys[provider];
   const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
   const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
@@ -120,7 +127,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
-  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [reviewWide, setReviewWide] = useState(false);
+  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [reviewWide, setReviewWide] = useState(false);
+  const feedback = useFeedback();
   const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
   const launcherButton = useRef<HTMLButtonElement>(null);
   const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
@@ -633,12 +641,21 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
   }
   // Start screen only: the same pane becomes a fresh chat of another provider. A chat with earlier (cleared) history keeps its transcript for /resume.
+  // One switch per chat at a time (rapid clicks must not race the close with the other agent's open). Earlier history moves to another id: this id would
+  // otherwise keep the old agent in its stored meta and the new agent's open would be refused.
+  const switchingChats = useRef(new Set<string>());
   async function switchChatAgent(id: string, agent: Agent, forget: boolean) {
-    const tree = treeOf(id), old = findLeaf(tree, id);
-    if (!tree || old?.kind !== 'chat' || old.agent === agent) return;
-    await call('chat/close', { id, forget });
-    chatBus.current.delete(id); chatPrev.current.delete(id);
-    commitFor(id, mapLeaf(tree, id, leaf => leaf.kind === 'chat' ? { ...leaf, agent } : leaf)); setFocusLeaf(id);
+    if (switchingChats.current.has(id)) return false;
+    const old = findLeaf(treeOf(id), id);
+    if (old?.kind !== 'chat' || old.agent === agent) return false;
+    switchingChats.current.add(id);
+    try {
+      await call('chat/close', { id, forget, ...(forget ? {} : { archiveAs: newId() }) });
+      chatBus.current.delete(id); chatPrev.current.delete(id);
+      const tree = treeOf(id); if (!tree) return false;
+      commitFor(id, mapLeaf(tree, id, leaf => leaf.kind === 'chat' ? { ...leaf, agent } : leaf)); setFocusLeaf(id);
+      return true;
+    } finally { switchingChats.current.delete(id); }
   }
   // Closing a chat ends its child process and keeps the transcript for /resume.
   async function closeChat(id: string) {
@@ -738,9 +755,27 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
   // The git poll already keeps the state fresh; the extra refresh waits out the slide-in so it does not re-render the workspace mid-animation.
-  const showReview = () => { setErrorsOpen(false); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
-  const toggleReview = () => { if (errorsOpen) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
-  const toggleErrors = () => setErrorsOpen(value => !value);
+  const showReview = () => { setErrorsOpen(false); setFeedbackOpen(false); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
+  const toggleReview = () => { if (errorsOpen || feedbackOpen) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
+  const toggleErrors = () => { setFeedbackOpen(false); setErrorsOpen(value => !value); };
+  // The feedback inbox shares the right panel slot: opening it closes the error list and covers the diff, like the error list does.
+  const showFeedback = () => { setErrorsOpen(false); setFeedbackOpen(true); };
+  const toggleFeedback = () => { setErrorsOpen(false); setFeedbackOpen(value => !value); };
+  const startCapture = () => { if (!canCapture()) throw new Error('이 브라우저는 화면 캡쳐를 지원하지 않습니다. 이미지를 붙여넣거나 파일로 추가하세요.'); requestCapture('element'); };
+  // Text for an AI draft about what is on screen: app version, open panes, project, the last few errors of this project.
+  const feedbackContext = async () => {
+    if (!settingsRef.current.feedbackAiContext) return undefined;
+    const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
+    const appVersion = await desktop?.appInfo?.().then(info => info.version, () => undefined);
+    const kinds: Record<string, string> = { terminal: '터미널', editor: 'diff 편집기', chat: '채팅', launcher: '새 창' };
+    const paneName = (leaf: Leaf) => {
+      if (leaf.kind === 'chat') return `${kinds.chat}(${leaf.agent ?? 'claude'})`;
+      if (leaf.kind && leaf.kind !== 'terminal') return kinds[leaf.kind];
+      const agent = agentOf(leaf.id); return agent ? `${kinds.terminal}(${agent})` : kinds.terminal;
+    };
+    const panes = refs.paneTabs.current.map((tab, index) => `${tab.id === refs.activeTab.current ? '*' : ''}탭${index + 1}[${leafList(tab.pane).map(paneName).join(' | ') || '빈 탭'}]`);
+    return aiContext({ appVersion, project: basename((refs.project.current?.root ?? root).replace(/\\/g, '/')), panes, errors: errorLog(root).items.slice(0, 5).map(item => item.message) }) || undefined;
+  };
   const hiddenAgents = useHiddenAgents(settings.agentsOff);
   const launchers = launchersFor(settings.defaultMode, shellLabel(shells, settings.terminalShell)).filter(item => !hiddenAgents.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
@@ -781,6 +816,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'focusModdown', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
     { id: 'focusModup', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
     { id: 'review', label: '변경사항(Diff) 패널 전환', run: toggleReview },
+    { id: 'feedback', label: '피드백 요청', run: toggleFeedback },
+    { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', run: startCapture },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', run: switchBranch },
@@ -793,10 +830,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!refs.project.current || !refs.active.current || event.isComposing) return;
-      if (document.querySelector('.tour, dialog[open]')) return; // the tutorial's practice keys must not touch real projects
+      if (document.querySelector('.tour, .feedback-capture')) return; // the tutorial's practice keys must not touch real projects; a capture in progress owns the keys
       const inTerminal = event.target instanceof Element && event.target.closest('.xterm');
       const command = refs.commands.current.find(item => item.keys && matches(item.keys, event));
       if (!command) return;
+      // A dialog keeps the keys to itself, except the feedback capture, which is how a dialog gets into a screenshot.
+      if (document.querySelector('dialog[open]') && command.id !== 'feedbackCapture') return;
       // Preserve shell Ctrl bindings unless the user explicitly assigned one to an app action.
       if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['splitRight', 'splitDown'].includes(command.id) && !settingsRef.current.appKeys?.[command.id]) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
@@ -849,20 +888,23 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing'); setSettings(previous => previous.reviewWidth === width ? previous : { ...previous, reviewWidth: width }); };
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
   };
-  const reviewShown = rightVisible && !errorsOpen;
-  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''}`} aria-label={errorsOpen ? '오류' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
+  const reviewShown = rightVisible && !errorsOpen && !feedbackOpen;
+  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : feedbackOpen ? '피드백 요청' : '변경사항 패널'} aria-label={errorsOpen ? '오류' : feedbackOpen ? '피드백 요청' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
     <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="변경사항 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
     {errorsOpen ? <ErrorPanel scope={root} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
+      : feedbackOpen ? <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />
       : <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
         openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
         hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />}
   </aside>;
   const shown = (id: string) => settings.statusItems.includes(id);
+  const reviewCount = pendingReviewCount(feedback.items);
   const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
-    connection: <span className={`conn ${connection === '연결됨' ? 'ok' : ''}`} title={connection}><Icon name="wifi" size={13} /></span>,
+    // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
+    connection: connection !== '연결됨' && <span className="conn" role="status" title="로컬 서버와 연결이 끊겼습니다. 자동으로 다시 연결합니다."><Icon name="wifi" size={13} />{connection}</span>,
     path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     changes: <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>,
@@ -880,7 +922,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
   const chatCtx: ChatCtx = {
-    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => run(() => switchChatAgent(id, agent, forget)),
+    call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
@@ -888,7 +930,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
-    <header className="tabbar">
+    <header className="tabbar" data-feedback-region="상단 바">
       <div className="split-button">
         <button className="bar-button new-tab" title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
         <button ref={launcherButton} className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
@@ -897,17 +939,21 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       </div>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
+      {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
+      <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${reviewShown ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
+      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
+      </div>
     </header>
     <ErrorToast scope={root} active={active} />
     {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
-    <div className="workbench">{center}{(rightVisible || errorsOpen) && rightPanel}</div>
-    <footer className="statusbar">
+    <div className="workbench">{center}{(rightVisible || errorsOpen || feedbackOpen) && rightPanel}</div>
+    <footer className="statusbar" data-feedback-region="상태바">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right"><PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title={`검토할 피드백 초안 ${reviewCount}개 · 피드백 요청 열기`} aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
     {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="새 Chat 모드 안내">
       <img src="/chat-mode-preview.png" alt="Chat 모드에서 요청과 응답, 코드 변경 내용을 대화로 보는 화면" width="480" height="300" />
@@ -919,6 +965,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       </div>
       <IconButton icon="x" label="Chat 모드 안내 다시 보지 않기" onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))} />
     </aside>}
+    {active && feedback.capture && <FeedbackCapture mode={feedback.capture} fallbackZoom={settings.uiZoom / 100} onCancel={endCapture} onError={cause => { endCapture(); report(cause); }}
+      onCaptured={async bytes => {
+        endCapture();
+        const item = await ensureDraft();
+        await feedbackCall('feedback/image/add', { id: item.id, data: bytesToBase64(bytes), mime: 'image/png' });
+        openFeedback(item.id); showFeedback();
+      }} />}
     {quickDialog}
   </main>;
 }));

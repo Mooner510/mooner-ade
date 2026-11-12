@@ -1,5 +1,5 @@
 import { showAppKey } from './shortcuts';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
 import { agentNames, defaultSettings, migrateSettings, type Settings } from './Editor';
@@ -14,6 +14,10 @@ import { Splash } from './Splash';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { errorText, pushError } from './errors';
 import { ErrorCorner } from './error-ui';
+import { FeedbackPanel } from './FeedbackPanel';
+import { FeedbackCapture } from './FeedbackCapture';
+import { bytesToBase64 } from './feedback-model';
+import { endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/noto-sans-kr/wght.css';
@@ -71,6 +75,8 @@ function useHub(enabled: boolean) {
         if (stopped) return;
         let message: any;
         try { message = JSON.parse(event.data); } catch { return; }
+        // The feedback inbox is global: the screen with no project open (no subscribers) must hear it too; the store folds a burst into one reload.
+        if (message.type === 'feedback/changed') { void refreshFeedback(); return; }
         // Errors that name no project are shown by every project; everything else goes to its owner.
         if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.(message);
         else for (const handler of state.current.subs.values()) handler(message);
@@ -223,6 +229,21 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
     </div></>;
 }
 
+// The feedback inbox is global, so it also opens from the screen with no project (the workspace has its own copy in its right panel).
+// ponytail: window.prompt/confirm stand in for the workspace's quick dialogs; no AI screen context without a project.
+const plainAsk = { input: async (title: string, initial = '') => window.prompt(title, initial), confirm: async (message: string) => window.confirm(message) };
+function WelcomeFeedback({ settings, setSettings }: { settings: Settings; setSettings: Dispatch<SetStateAction<Settings>> }) {
+  const [open, setOpen] = useState(false), [wide, setWide] = useState(false), { capture } = useFeedback();
+  const fail = (cause: unknown) => pushError('shell', errorText(cause));
+  return <>
+    <button type="button" className="bar-button welcome-feedback-button" title="피드백 요청" aria-label="피드백 요청" aria-pressed={open} onClick={() => setOpen(value => !value)}><Icon name="feedback" /></button>
+    {open && <aside className={`right-panel welcome-feedback feedback-side ${wide ? 'wide' : ''}`} aria-label="피드백 요청">
+      <FeedbackPanel ask={plainAsk} fail={fail} wide={wide} toggleWide={() => setWide(value => !value)} onClose={() => setOpen(false)} aiContext={async () => undefined} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />
+    </aside>}
+    {capture && <FeedbackCapture mode={capture} fallbackZoom={settings.uiZoom / 100} onCancel={endCapture} onError={cause => { endCapture(); fail(cause); }}
+      onCaptured={async bytes => { endCapture(); const item = await ensureDraft(); await feedbackCall('feedback/image/add', { id: item.id, data: bytesToBase64(bytes), mime: 'image/png' }); openFeedback(item.id); setOpen(true); }} />}
+  </>;
+}
 function Shell() {
   const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [bootError, setBootError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
@@ -402,10 +423,10 @@ function Shell() {
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
-    <nav className="projects" aria-label="프로젝트와 탭">
+    <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
         {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}

@@ -26,13 +26,20 @@ import { watchProjectFiles } from './project-watch.js';
 import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
-import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog } from './chat.js';
+import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
+import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
+import { UI_PROMPT } from './chat-ui-prompt.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
+import { createAgentKeys } from './agent-keys.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
+import { createFeedbackStore } from './feedback-store.js';
+import { runFeedbackDraft, FEEDBACK_MODELS, FEEDBACK_EFFORTS } from './feedback-agent.js';
+import { createFeedbackQueue } from './feedback-queue.js';
+import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -75,6 +82,81 @@ const pty = ptyHost
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
 const projects = new Map();
+// The feedback inbox (feedback-store.js). Every screen is told when an item changes and fetches the list again.
+const feedback = createFeedbackStore({ root: path.join(dataRoot, 'feedback'), onChange: id => { for (const socket of clients) send(socket, { type: 'feedback/changed', ...(id && { id }) }); } });
+const feedbackIncoming = feedback.incomingDir;
+await fs.mkdir(feedbackIncoming, { recursive: true, mode: 0o700 });
+// Whether a plugin can submit for a signed-in account (pushed by the app as `feedback/status`). Without one, feedback goes to
+// the Hub anonymously (feedback-hub.js), unless ADE_FEEDBACK_ANONYMOUS=0.
+let pluginFeedback = { ok: false };
+const feedbackAnonymous = process.env.ADE_FEEDBACK_ANONYMOUS !== '0', feedbackHubUrl = process.env.ADE_HUB_URL || DEFAULT_HUB_URL;
+const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'account', ...(pluginFeedback.account && { account: pluginFeedback.account }) }
+  : feedbackAnonymous ? { ok: true, mode: 'anonymous' }
+  : { ok: false, reason: pluginFeedback.reason || '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.' };
+const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
+let feedbackRequestId = 0;
+function submitThroughApp(meta, images) {
+  if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: 'MoonerADE 앱이 아니어서 계정으로 제출할 수 없습니다.' } });
+  const id = ++feedbackRequestId;
+  return new Promise(resolve => {
+    // A little longer than the app's own wait for the plugin, so its answer (even a timeout) arrives first.
+    const timer = setTimeout(() => { feedbackRequests.delete(id); resolve({ ok: false, error: { code: 'FEEDBACK_TIMEOUT', message: '앱이 제출 결과를 알려 주지 않았습니다. 잠시 뒤 다시 제출하세요.' } }); }, 130_000);
+    timer.unref();
+    feedbackRequests.set(id, value => { clearTimeout(timer); resolve(value); });
+    process.send({ type: 'feedback/submit', id, meta, images }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: error.message } }); });
+  });
+}
+const feedbackRunning = new Set(); // ids with an AI draft in flight in this process
+let feedbackDevice = null;
+// "제출" puts the item in the persistent queue (feedback-queue.js), which sends it when it can: through the signed-in plugin,
+// or anonymously at most once per 5 minutes. The item id is the Hub's idempotency key, so a resend never doubles an issue.
+const feedbackQueue = createFeedbackQueue({
+  store: feedback, stateFile: path.join(feedback.root, 'queue.json'), availability: feedbackAvailability,
+  metaOf: item => ({ clientKey: item.id, title: item.title, body: item.body, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` }),
+  sendAccount: submitThroughApp,
+  sendAnonymous: async (meta, images) => postAnonymousFeedback({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), meta, images })
+});
+async function feedbackSubmit(id) {
+  if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
+  const item = await feedback.get(id);
+  if (!item.body.trim()) throw fault('INVALID_INPUT', '내용을 쓴 뒤 제출하세요.');
+  // No title written: the first line of the text becomes it.
+  if (!item.title.trim()) await feedback.update(id, { title: item.body.split('\n').map(line => line.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? '' });
+  if (item.source !== 'human' && !item.reviewed) throw fault('FEEDBACK_UNREVIEWED', 'AI가 쓴 초안은 직접 확인한 뒤에 제출할 수 있습니다.', 409);
+  const available = feedbackAvailability();
+  if (!available.ok) throw fault('FEEDBACK_UNAVAILABLE', available.reason || '지금은 피드백을 제출할 수 없습니다.', 503);
+  return feedbackQueue.enqueue(id);
+}
+async function feedbackAiDraft(id, input) {
+  if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
+  const note = typeof input.note === 'string' ? input.note.slice(0, 4000) : '', context = typeof input.context === 'string' ? input.context.slice(0, 8000) : '';
+  feedbackRunning.add(id);
+  let previous;
+  try {
+    const item = await feedback.get(id);
+    previous = item.status;
+    await feedback.setStatus(id, 'drafting', { error: undefined }, { from: ['draft', 'review', 'failed'] });
+    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), model: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }[input.model] ?? (FEEDBACK_MODELS.includes(input.model) ? input.model : 'claude-haiku-5-5'), effort: FEEDBACK_EFFORTS.includes(input.effort) ? input.effort : 'low', title: item.title, body: item.body, note, context, env: pluginEnv });
+    return await feedback.setStatus(id, 'review', { title: draft.title || item.title, body: draft.body, source: 'ai', reviewed: false });
+  } catch (error) {
+    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 정리 실패: ${error.message}` }).catch(() => {});
+    throw error;
+  } finally { feedbackRunning.delete(id); }
+}
+// Agents' drafts arrive as files; picked up when they appear (watchFeedback, once the server is up) and whenever the list is read.
+let feedbackImport = Promise.resolve();
+const importFeedback = () => (feedbackImport = feedbackImport.then(() => feedback.importIncoming()).catch(error => { console.warn(`피드백 초안을 가져오지 못했습니다: ${error.message}`); return []; }));
+async function watchFeedback() {
+  await feedback.recover().catch(error => console.warn(`피드백 상태를 복구하지 못했습니다: ${error.message}`));
+  try {
+    let importTimer = null;
+    const watcher = fsSync.watch(feedbackIncoming, () => { clearTimeout(importTimer); importTimer = setTimeout(() => void importFeedback(), 300); });
+    watcher.on('error', error => { watcher.close(); console.warn(`피드백 폴더 감시 오류: ${error.message}`); });
+    watcher.unref();
+  } catch (error) { console.warn(`피드백 폴더를 감시할 수 없습니다: ${error.message}`); }
+  void importFeedback();
+  feedbackQueue.kick();
+}
 // Opening and closing are serialized per project only, so restoring many projects at startup does not queue them behind each other.
 const openings = new Map();
 const opening = id => { if (!openings.has(id)) openings.set(id, serial()); return openings.get(id); };
@@ -93,11 +175,14 @@ await fs.rm(path.join(dataRoot, 'token'), { force: true });
 let origin;
 const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8').catch(() => '{}')).version || '0.0.0';
 const wakatime = createWakaTime({ version: appVersion });
+const agentKeys = createAgentKeys({ file: path.join(dataRoot, 'agent-keys.json') });
+await agentKeys.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
-let activeProjectId = '', wakatimeBackground = true, terminalShell = '';
+let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true;
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
+  if (feedbackAgentTool !== (state?.settings?.feedbackAgentTool !== false)) { feedbackAgentTool = !feedbackAgentTool; applyMcpServers(); }
   terminalShell = typeof state?.settings?.terminalShell === 'string' ? state.settings.terminalShell : '';
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
@@ -312,7 +397,14 @@ function configurePlugins(config) {
   const plugins = Array.isArray(config?.plugins) ? config.plugins.filter(plugin => plugin && typeof plugin.id === 'string' && plugin.env && typeof plugin.env === 'object' && strings(plugin.path) && Object.values(plugin.env).every(value => typeof value === 'string')
     && (plugin.mcp === null || (typeof plugin.mcp?.name === 'string' && typeof plugin.mcp.command === 'string' && strings(plugin.mcp.args) && (plugin.mcp.disabledTools === undefined || strings(plugin.mcp.disabledTools))))) : [];
   pluginTerminal = { node: typeof config?.node === 'string' ? config.node : null, plugins };
-  setAgentMcpServers(plugins.map(plugin => plugin.mcp).filter(Boolean));
+  applyMcpServers();
+}
+// MoonerADE's own MCP server for the agents it starts: `ade_feedback_draft` (feedback-mcp.js) leaves a draft in the feedback
+// inbox for a person to review. Off with the setting "채팅 에이전트가 피드백 초안을 넣을 수 있게". It runs on the terminals' Node
+// (outside the install folder, see the desktop's setupPlugins) when there is one.
+function applyMcpServers() {
+  const own = feedbackAgentTool ? [{ name: 'ade_feedback', command: pluginTerminal.node || process.execPath, args: [path.join(import.meta.dirname, 'feedback-mcp.js'), feedbackIncoming] }] : [];
+  setAgentMcpServers([...own, ...pluginTerminal.plugins.map(plugin => plugin.mcp).filter(Boolean).filter(server => server.name !== 'ade_feedback')]);
 }
 const agentModelProbes = new Map();
 let modelsProbe = null; // { at, root, promise } for chat/models; the default model can come from a project's own settings, so it is per project folder
@@ -321,7 +413,7 @@ const commandsProbes = new Map(); // cwd + config -> { at, promise }
 // the default model share one answer per folder and hour. Never rejects; a failed answer (null) is dropped so the next call asks again.
 const initProbes = new Map(); // cwd + config -> { at, promise }
 function claudeInit(cwd, env, refresh = false) {
-  const configDir = (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR ?? '', key = JSON.stringify([cwd, configDir]);
+  const configDir = (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR ?? '', key = JSON.stringify([cwd, configDir, agentKeys.signature('claude')]);
   let cached = initProbes.get(key);
   if (!cached || refresh || Date.now() - cached.at > 3_600_000) {
     cached = { at: Date.now(), promise: probeInit({ env, cwd }) };
@@ -330,6 +422,22 @@ function claudeInit(cwd, env, refresh = false) {
     if (initProbes.size > 32) initProbes.delete(initProbes.keys().next().value);
   }
   return cached.promise;
+}
+// What a chat of `agent` launches with: the plugin environment plus the API key when the user chose one for that agent (Settings > AI 툴).
+const chatEnv = agent => () => ({ ...pluginEnv(), ...agentKeys.launch(agent).env });
+const chatArgs = agent => () => agentKeys.launch(agent).args;
+// Claude's model list: with an API key the CLI keeps no catalog of its own, so ask the Models API (cached an hour per key); otherwise the CLI's catalog.
+let apiCatalog = null; // { key, at, promise }
+async function claudeCatalog(refresh = false) {
+  const env = chatEnv('claude')(), apiKey = env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return readModelCatalog();
+  if (!apiCatalog || apiCatalog.key !== apiKey || refresh || Date.now() - apiCatalog.at > 3_600_000) {
+    const entry = { key: apiKey, at: Date.now(), promise: fetchApiModelCatalog({ apiKey, baseURL: env.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL }) };
+    apiCatalog = entry;
+    entry.promise.then(list => { if (!list.length && apiCatalog === entry) apiCatalog = null; }); // a failed request is retried next time
+  }
+  const list = await apiCatalog.promise;
+  return list.length ? list : readModelCatalog();
 }
 function pluginEnv() {
   if (!pluginTerminal.plugins.length) return {};
@@ -495,14 +603,17 @@ function trimRecent(list) {
 // A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
 async function chatLaunchFiles(root, context) {
   const servers = chatMcpServers(context);
-  if (!servers.length) return {};
+  // The interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
+  const promptFile = context.interactiveUi ? path.join(root, 'ade-ui-prompt.md') : undefined;
+  if (promptFile) await fs.writeFile(promptFile, UI_PROMPT, { mode: 0o600 });
+  if (!servers.length) return { promptFile };
   const mcpFile = path.join(root, 'claude-mcp.json');
   await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
   const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-  if (!denied.length && !allowed.length) return { mcpFile };
+  if (!denied.length && !allowed.length) return { mcpFile, promptFile };
   const settingsFile = path.join(root, 'claude-settings.json');
   await fs.writeFile(settingsFile, JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }), { mode: 0o600 });
-  return { mcpFile, settingsFile };
+  return { mcpFile, settingsFile, promptFile };
 }
 // Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
@@ -535,12 +646,36 @@ async function terminalToChat(project, id, newId, workspace) {
   if (alive(pid)) { process.kill(pid, 'SIGKILL'); await new Promise(resolve => setTimeout(resolve, 300)); }
   if (alive(pid)) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
   if (file) await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
-  else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [], permissionMode: 'default' } });
+  else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [] } });
   terminal.native.close(); project.terminals.delete(id);
   return { cwd };
 }
 // Where this project's `claude` keeps its history: the account its .envrc or running agent names, and always the default folder.
 const cliConfigDirs = async project => [(await accounts('claude', project).catch(() => null))?.dir || defaultClaudeDir(), defaultClaudeDir()];
+async function feedbackRoute(action, input) {
+  const id = () => text(input.id, '피드백 ID', 64);
+  const image = () => {
+    if (typeof input.data !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(input.data)) throw fault('INVALID_INPUT', '이미지 데이터가 올바르지 않습니다.');
+    return Buffer.from(input.data, 'base64');
+  };
+  switch (action) {
+    case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability(), queue: await feedbackQueue.info() };
+    case 'feedback/get': return feedback.get(id());
+    case 'feedback/create': return feedback.create({ title: input.title, body: input.body });
+    case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, reviewed: input.reviewed });
+    case 'feedback/delete': return feedback.remove(id());
+    case 'feedback/image/add': return feedback.addImage(id(), image(), input.mime);
+    case 'feedback/image/replace': return feedback.replaceImage(id(), input.name, image());
+    case 'feedback/image/restore': return feedback.restoreImage(id(), input.name);
+    case 'feedback/image/remove': return feedback.removeImage(id(), input.name);
+    case 'feedback/image/move': return feedback.moveImage(id(), input.name, input.to);
+    case 'feedback/ai-draft': return feedbackAiDraft(id(), input);
+    case 'feedback/submit': return feedbackSubmit(id());
+    case 'feedback/unqueue': return feedbackQueue.cancel(id());
+    case 'feedback/status': return feedbackAvailability();
+    default: throw fault('NOT_FOUND', '지원하지 않는 작업입니다.', 404);
+  }
+}
 async function route(action, input, project) {
   if (action === 'system/info') return systemInfo();
   // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
@@ -573,8 +708,16 @@ async function route(action, input, project) {
   if (action === 'dialog/folder') return chooseFolder(input);
   if (action === 'wakatime/status') return wakatime.status();
   if (action === 'wakatime/config') return wakatime.writeConfig(input);
+  if (action === 'agent-keys/status') return agentKeys.status();
+  if (action === 'agent-keys/config') {
+    const status = await agentKeys.write(input); agentModelProbes.clear(); modelsProbe = null; apiCatalog = null;
+    // Chats already running were launched with the old key in their environment; they relaunch (same session) so the new one is used.
+    for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
+    return status;
+  }
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
+  if (action.startsWith('feedback/')) return feedbackRoute(action, input);
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();
@@ -739,7 +882,8 @@ async function route(action, input, project) {
         try {
           const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent: input.agent === undefined ? 'claude' : input.agent, env: pluginEnv,
+          const agent = input.agent === undefined ? 'claude' : input.agent;
+          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent),
             onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
             prepare: chatLaunchFiles, recover: () => checkAgents(), defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
           project.chats.set(id, chat);
@@ -776,7 +920,10 @@ async function route(action, input, project) {
       const images = Array.isArray(input.images) ? input.images : [];
       const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
       if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > 2_500_000 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
-      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true });
+      // Small JPEG thumbnails the chat shows in the thread (the full images only go to the agent). Anything malformed is just dropped.
+      const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= 150_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
+      chat.setInteractiveUi(input.interactiveUi);
+      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true, artifact: input.artifact === true, previews });
       return {};
     }
     case 'chat/branch': {
@@ -796,7 +943,7 @@ async function route(action, input, project) {
     case 'chat/approve': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.slice(0, 500) : undefined });
+      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.trim().slice(0, 4000) || undefined : undefined, mode: typeof input.mode === 'string' ? input.mode : undefined });
       return {};
     }
     case 'chat/set': {
@@ -805,11 +952,21 @@ async function route(action, input, project) {
       await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
       return {};
     }
+    case 'chat/rename': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return chat.rename(text(input.title, '이름', 200));
+    }
+    case 'chat/autocompact': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return chat.setAutoCompact(text(input.value, '창 크기', 40));
+    }
     case 'chat/warm': await project.chats.get(input.id)?.warm(); return {};
     case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
     case 'chat/close': {
       const chat = project.chats.get(input.id);
-      if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true }); }
+      if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true, ...(typeof input.archiveAs === 'string' && { archiveAs: input.archiveAs }) }); }
       return {};
     }
     // Concrete model behind each alias (see resolveModels). Cached for an hour.
@@ -817,10 +974,10 @@ async function route(action, input, project) {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       if (agent !== 'claude') {
-        const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '']);
+        const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '', agentKeys.signature(agent)]);
         let cached = agentModelProbes.get(key);
         if (!cached || input.refresh === true || Date.now() - cached.at > 3_600_000) {
-          cached = { at: Date.now(), promise: probeAgentModels({ agent, cwd: workspace.root, env: pluginEnv }) };
+          cached = { at: Date.now(), promise: probeAgentModels({ agent, cwd: workspace.root, env: chatEnv(agent), executableArgs: chatArgs(agent) }) };
           agentModelProbes.set(key, cached);
           cached.promise.catch(() => { if (agentModelProbes.get(key) === cached) agentModelProbes.delete(key); });
           if (agentModelProbes.size > 32) agentModelProbes.delete(agentModelProbes.keys().next().value);
@@ -830,18 +987,22 @@ async function route(action, input, project) {
         return result;
       }
       if (!modelsProbe || modelsProbe.root !== workspace.root || input.refresh === true || Date.now() - modelsProbe.at > 3_600_000) {
-        const entry = { at: Date.now(), root: workspace.root, promise: resolveModels({ env: pluginEnv, cwd: workspace.root, init: () => claudeInit(workspace.root, pluginEnv, input.refresh === true) }).catch(() => ({})) };
+        const entry = { at: Date.now(), root: workspace.root, promise: resolveModels({ env: chatEnv('claude'), cwd: workspace.root, init: () => claudeInit(workspace.root, chatEnv('claude'), input.refresh === true) }).catch(() => ({})) };
         modelsProbe = entry;
         entry.promise.then(models => { if (!Object.keys(models).length && modelsProbe === entry) modelsProbe = null; }); // a failed probe is retried next time
       }
-      const [models, catalog] = await Promise.all([modelsProbe.promise, readModelCatalog()]);
+      const [probed, catalog] = await Promise.all([modelsProbe.promise, claudeCatalog(input.refresh === true)]);
+      // An alias the settings don't pin (always the case with an API key in a fresh HOME) is the newest model of its family, so the picker
+      // shows "haiku" as that model's row instead of a second, unversioned "Haiku".
+      const models = { ...probed };
+      for (const alias of ['opus', 'sonnet', 'haiku']) if (!models[alias]) { const row = catalog.find(item => item.main && item.family === alias); if (row) models[alias] = row.id; }
       const chat = project.chats.get(input.id); if (chat?.agent === 'claude') chat.loadCatalog(catalog, models['']);
       return { models, catalog };
     }
-    // Just the CLI's own model list (see readModelCatalog); cheap, so the "more models" window reads it fresh each time it opens.
+    // Just the model list (claudeCatalog: the CLI's own, or the Models API with an API key); cheap or cached, so the "more models" window reads it fresh each time it opens.
     case 'chat/model-catalog': {
       if (input.agent && input.agent !== 'claude') return route('chat/models', input, project);
-      return { catalog: await readModelCatalog() };
+      return { catalog: await claudeCatalog() };
     }
     case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
     // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
@@ -870,6 +1031,16 @@ async function route(action, input, project) {
       }
       return cached.promise;
     }
+    case 'files/list': {
+      // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
+      // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
+      const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+      const result = await runtime.processes.exec('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeoutMs: 10_000, maxOutputBytes: 32 * 1024 * 1024 }).catch(() => null);
+      if (!result || result.exitCode !== 0) return { files: [] };
+      const files = result.stdout.split('\0').filter(Boolean).slice(0, 50_000), dirs = new Set();
+      for (const file of files) for (let at = file.indexOf('/'); at > 0; at = file.indexOf('/', at + 1)) dirs.add(file.slice(0, at + 1));
+      return { files: [...dirs, ...files] };
+    }
     case 'terminal/follow-up': {
       const prompt = text(input.prompt, '후속 입력', 16000), requestId = text(input.requestId, '요청 ID', 100);
       if (!prompt.trim() || /[\x00-\x08\x0b-\x1f\x7f]/.test(prompt) || !Number.isSafeInteger(input.sequence)) throw fault('INVALID_INPUT', '후속 입력을 확인하세요.');
@@ -896,10 +1067,11 @@ function authenticated(request) {
   const match = /(?:^|;\s*)ade_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.cookie || '');
   return match && sessions.has(match[1]);
 }
-async function body(request) {
+// Feedback images (8 MB, base64) are the only requests allowed past 3 MB.
+async function body(request, limit = 3 * 1024 * 1024) {
   if (request.headers['content-type'] !== 'application/json') throw fault('INVALID_CONTENT_TYPE', 'JSON 요청만 허용됩니다.', 415);
   const chunks = []; let size = 0;
-  for await (const chunk of request) { size += chunk.length; if (size > 3 * 1024 * 1024) throw fault('PAYLOAD_TOO_LARGE', '요청이 너무 큽니다.', 413); chunks.push(chunk); }
+  for await (const chunk of request) { size += chunk.length; if (size > limit) throw fault('PAYLOAD_TOO_LARGE', '요청이 너무 큽니다.', 413); chunks.push(chunk); }
   let value;
   try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fault('INVALID_JSON', '잘못된 JSON입니다.'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fault('INVALID_INPUT', '객체 요청이 필요합니다.');
@@ -909,14 +1081,14 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
-  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     if (closing) throw fault('SHUTTING_DOWN', '서버가 종료 중입니다.', 503);
     if (!trusted(request, false)) throw fault('UNTRUSTED_HOST', '잘못된 Host입니다.', 403);
     const url = new URL(request.url, origin);
     if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
-      const input = await body(request);
+      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') ? 12 * 1024 * 1024 : undefined);
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
@@ -932,6 +1104,21 @@ const server = http.createServer(async (request, response) => {
       response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value));
     } else {
       if (request.method !== 'GET') throw fault('NOT_FOUND', '경로가 없습니다.', 404);
+      // Interactive chat UIs run in an iframe on this page; it has its own, much tighter CSP and needs no session.
+      if (url.pathname === '/ade-ui-frame.html') { response.setHeader('Content-Security-Policy', UI_FRAME_CSP.replace('font-src data:', `font-src data: http://${request.headers.host}`)); response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(UI_FRAME_HTML); return; }
+      // Feedback screenshots for the inbox: same session cookie as the API, names checked by the store.
+      if (url.pathname.startsWith('/feedback-file/')) {
+        if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
+        const [, , id, name] = url.pathname.split('/');
+        const file = feedback.filePath(decodeURIComponent(id ?? ''), decodeURIComponent(name ?? ''));
+        const content = await fs.readFile(file);
+        response.setHeader('Content-Type', file.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        response.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        response.end(content);
+        return;
+      }
+      // The app's font files are public; an interactive UI frame (opaque origin) loads them too, which needs CORS.
+      if (/\.(woff2?|ttf)$/.test(url.pathname)) response.setHeader('Access-Control-Allow-Origin', '*');
       if (vite) {
         await new Promise((resolve, reject) => { response.once('close', resolve); vite.middlewares(request, response, error => reject(error || fault('NOT_FOUND', '경로가 없습니다.', 404))); });
         return;
@@ -950,7 +1137,11 @@ const server = http.createServer(async (request, response) => {
 });
 const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 server.on('upgrade', (request, socket, head) => {
-  if (request.url !== '/ws' || !trusted(request) || !authenticated(request)) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
+  // With ADE_DEV=1 Vite's own listener (hmr.server is this server) answers its HMR sockets (/?token=…, protocol vite-hmr / vite-ping), so this handler must
+  // not close them: they get the same same-origin + signed-in check as /ws and are then left to Vite. Without it every edit needed a manual reload.
+  const hmr = devWeb && /^vite-(hmr|ping)$/.test(request.headers['sec-websocket-protocol'] ?? '');
+  if ((request.url !== '/ws' && !hmr) || !trusted(request) || !authenticated(request)) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
+  if (hmr) return;
   wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
 });
 // Pasted images are files the agent CLI reads by path. They live in the app's own folder (not the shared temp folder, where
@@ -1128,6 +1319,7 @@ pluginBufferTimer.unref();
 // agents is working, and with `wakatimeBackground` so do other projects whose agents are working.
 // wakatime-cli also picks up Claude/Codex transcripts on each call.
 applyAppState(await readJson(path.join(dataRoot, 'app-state.json'), null));
+applyMcpServers();
 const agentWorking = project => [...project.terminals.values()].some(terminal => !terminal.exited && terminal.status.status?.state === 'working');
 let wakatimeTurn = 0;
 function wakatimePulse() {
@@ -1259,6 +1451,7 @@ async function busyReport() {
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
+void watchFeedback();
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
 let closing = false;
 // The 3 s poll records each Claude's session id; one last pass means an update restart resumes the conversation as it is now, not as of a few seconds ago.
@@ -1272,7 +1465,7 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 async function shutdown() {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer);
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
@@ -1293,6 +1486,15 @@ process.on('message', message => {
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
   }
   else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
+  else if (message?.type === 'feedback/status' && message.status && typeof message.status === 'object') {
+    const status = message.status;
+    pluginFeedback = status.ok === true
+      ? { ok: true, ...(typeof status.account === 'string' && { account: status.account.slice(0, 100) }) }
+      : { ok: false, ...(typeof status.reason === 'string' && { reason: status.reason.slice(0, 200) }) };
+    for (const socket of clients) send(socket, { type: 'feedback/changed' });
+    feedbackQueue.kick();
+  }
+  else if (message?.type === 'feedback/result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
   // A plugin host (in the main process) relays its workspace sessions to this process this way.
   else if (message?.type === 'plugin/workspace') pluginWorkspace(message);
 });

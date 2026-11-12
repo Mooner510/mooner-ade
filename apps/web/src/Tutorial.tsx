@@ -118,7 +118,7 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
   if (leaf.kind === 'launcher') return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={pick}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
-      <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={close} /></span></div>
+      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={close} /></span></div>
     <LaunchPicker shell={settings.terminalShell} autoFocus={focused} onLaunch={agent => dispatch({ type: 'launch', target: id, agent })} />
   </section>;
   const agent = tour.agents[id], claude = tour.claude?.leaf === id ? tour.claude : null;
@@ -129,10 +129,10 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
       <span className="pane-title"><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{tour.labels[id]}</span>
         {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
-        <IconButton icon="splitH" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={() => dispatch({ type: 'split', dir: 'row' })} />
-        <IconButton icon="splitV" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={() => dispatch({ type: 'split', dir: 'column' })} />
-        <IconButton icon={zoomed ? 'minimize' : 'maximize'} label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
-        <IconButton icon="x" label="터미널 종료" onClick={close} /></span></div>
+        <IconButton icon="splitH" tip="header" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={() => dispatch({ type: 'split', dir: 'row' })} />
+        <IconButton icon="splitV" tip="header" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={() => dispatch({ type: 'split', dir: 'column' })} />
+        <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
+        <IconButton icon="x" tip="none" label="터미널 종료" onClick={close} /></span></div>
     <TourTerminal lines={tour.lines[id] ?? []} prompt={ctx.prompt(id)} settings={settings} focused={focused} focusKey={ctx.focusKey} onSubmit={text => ctx.submit(id, text)} onTab={text => ctx.tab(id, text)} />
     {claude && claude.queue.length > 0 && <div className="claude-follow-up">
       <div className="follow-up-heading" role="status">Follow-up {claude.queue.length}개 · 현재 작업 완료 후 순서대로 전송</div>
@@ -382,7 +382,6 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       </div>
       <footer className="statusbar">
         <div className="status-left">
-          <span className="conn ok" title="연결됨"><Icon name="wifi" size={13} /></span>
           <span className="stat" title={item.root}><Icon name="folder" size={13} />{item.root}</span>
           <button title="브랜치 전환" onClick={() => note('실제 앱에서는 여기서 브랜치를 바꿀 수 있습니다.')}><Icon name="branch" size={13} />main</button>
           <button title="변경사항 열기" onClick={() => { if (!tour.diff) dispatch({ type: 'diff' }); }}><Icon name="diff" size={13} />{changes}개 파일<ins>+{changes}</ins><del>−{changes}</del></button>

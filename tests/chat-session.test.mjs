@@ -195,6 +195,17 @@ test('Claude streaming usage updates live tokens once and commits on result', as
   assert.ok(committedOutputs.includes(35));
 });
 
+test('Claude: a turn with several API calls only ever adds to the shown tokens, and ends on the result total', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-multi-'));
+  const seen = [];
+  const session = await openChatSession({ directory, id: 'multi', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-multi-call-stream.mjs', import.meta.url))], onState: state => seen.push(state.tokens) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  await session.send('hello');
+  await until(() => session.state().status === 'idle');
+  for (let i = 1; i < seen.length; i++) for (const key of ['input', 'output']) assert.ok(seen[i][key] >= seen[i - 1][key], `${key} went back: ${JSON.stringify(seen[i - 1])} -> ${JSON.stringify(seen[i])}`);
+  assert.deepEqual(session.state().tokens, { input: 250, output: 50, cacheRead: 0, cacheCreate: 0 });
+});
+
 test('Claude: the session cost keeps adding up when a setting change replaces the child (its total_cost_usd starts over)', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-cost-'));
   const session = await openChatSession({ directory, id: 'cost', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))] });
@@ -220,6 +231,18 @@ test('Claude: the auto Compact window the gauge shows is handed to the CLI; a wi
     t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
     await session.send('hello'); await until(() => session.state().status === 'idle');
     assert.equal(windows[0] || undefined, expected, JSON.stringify(settings));
+  }
+});
+
+test('Claude: the MCP startup wait is capped so a slow MCP server cannot hold the first message for ~30s; the user\'s own value wins', async t => {
+  for (const [env, expected] of [[{ CLAUDE_CODE_MCP_STARTUP_WAIT_MS: undefined }, '3000'], [{ CLAUDE_CODE_MCP_STARTUP_WAIT_MS: '9000' }, '9000']]) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-mcpwait-'));
+    const waits = [];
+    const session = await openChatSession({ directory, id: 'mcpwait', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
+      env, spawnProcess: (command, args, options) => { waits.push(options.env.CLAUDE_CODE_MCP_STARTUP_WAIT_MS); return spawn(command, args, options); } });
+    t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+    await session.send('hello'); await until(() => session.state().status === 'idle');
+    assert.equal(waits[0], expected);
   }
 });
 
@@ -389,6 +412,18 @@ test('Run Everything is Cursor-only', async t => {
   await assert.rejects(ctx.session.set({ runEverything: true }), /Cursor에서만/);
 });
 
+test('Claude: a permission mode picked after the first message survives /clear and reopening', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-mode-'));
+  const options = { directory, id: 'mode', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))] };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  await session.send('hello'); await until(() => session.state().status === 'idle');
+  await session.set({ permissionMode: 'auto' });
+  await session.close();
+  session = await openChatSession(options);
+  assert.equal(session.state().permissionMode, 'auto');
+});
+
 test('new chat defaults apply only to modes and efforts the agent supports', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-defaults-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -512,3 +547,22 @@ test('Cursor: text before a tool keeps the id it streamed with, later text gets 
   assert.equal(events.filter(event => event.kind === 'tool_result').length, 1);
 });
 
+
+test('Claude: the picked model and Effort survive a reopen, and a chat keeps the model it ran with when the global default changes', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-pin-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'pin'), launches = [];
+  await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, 'meta.json'), JSON.stringify({ configDir })); // an empty settings folder: no default model or Effort to read
+  const options = { directory, id: 'pin', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
+    spawnProcess: (command, args, spawnOptions) => { launches.push(args); return spawn(command, args, spawnOptions); } };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  await session.send('one'); await until(() => session.state().status === 'idle');
+  assert.equal(session.state().model, 'fake-model');
+  await session.set({ effort: 'low' }); // replaces the child; the next start must carry the model it ran with
+  await session.send('two'); await until(() => session.state().turns === 2 && session.state().status === 'idle');
+  assert.deepEqual(launches[1].slice(launches[1].indexOf('--model'), launches[1].indexOf('--model') + 2), ['--model', 'fake-model']);
+  await session.set({ model: 'opus', effort: 'high' });
+  await session.close(); session = await openChatSession(options); // the stored init event still says fake-model
+  assert.equal(session.state().model, 'opus');
+  assert.equal(session.state().effort, 'high');
+});

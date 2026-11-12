@@ -42,3 +42,19 @@ test('ordered list items keep the number they were written with', () => {
   assert.deepEqual(nums('3. a\n4. b\n\n본문\n\n6. c\n7. d\n\n본문\n\n9. e\n11. f'), [3, 4, 6, 7, 9, 11]);
   assert.deepEqual(nums('- a\n- b'), [undefined, undefined]);
 });
+
+test('a code fence is `open` only while its closing fence has not arrived', () => {
+  assert.deepEqual(parse('```ade-ui\n<b>x</b>\n```'), [{ t: 'code', lang: 'ade-ui', code: '<b>x</b>' }]);
+  assert.deepEqual(parse('```ade-ui\n<b>x'), [{ t: 'code', lang: 'ade-ui', code: '<b>x', open: true }]);
+  assert.deepEqual(parse('```ade-ui'), [{ t: 'code', lang: 'ade-ui', code: '', open: true }]);
+});
+
+test('a code fence indented under a list item is that item\'s code block, not text glued onto its line', () => {
+  const [list] = parse('- Create `a.ts` with:\n  ```ts\n  export const x = 1;\n    nested();\n  ```\n  then run it.\n- next');
+  assert.deepEqual(list, { t: 'list', ordered: false, items: [
+    { text: 'Create `a.ts` with:', depth: 0, num: undefined, blocks: [{ t: 'code', lang: 'ts', code: 'export const x = 1;\n  nested();' }, { t: 'p', text: 'then run it.' }] },
+    { text: 'next', depth: 0, num: undefined },
+  ] });
+  assert.deepEqual(parse('1. a\n   ```sh\n   ls')[0].items[0].blocks, [{ t: 'code', lang: 'sh', code: 'ls', open: true }], 'still open while streaming');
+  assert.deepEqual(parse('1. a\n2. b')[0].items.map(item => 'blocks' in item), [false, false], 'items without code carry no blocks');
+});

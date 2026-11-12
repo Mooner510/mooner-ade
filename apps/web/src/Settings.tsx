@@ -1,7 +1,7 @@
 import { appKey, appKeyDefs, combosOverlap, showAppKey } from './shortcuts';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
-import { agentNames, chatStatusLayout, defaultSettings, monoFont, statusLayout, usageHue, type Settings } from './Editor';
+import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { chatItemView, chatStatusDefs, chatStatusLabels } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -12,9 +12,24 @@ import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
 import { resetTips } from './toast';
 import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
+import { useFeedback } from './feedback-store';
+import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
+import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
+
+// Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
+function FeedbackAvailabilityRow() {
+  const { available, loaded, error } = useFeedback();
+  const kind = !loaded ? 'checking' : error || !available?.ok ? 'off' : available.mode === 'anonymous' ? 'anonymous' : 'account', note = loaded && !error ? submitModeNote(available) : '';
+  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 로그인 없이 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다. 제출한 피드백은 순서대로 자동 전송됩니다.">
+    <span className="feedback-mode-wrap">
+      <span className={`feedback-mode ${kind}`}><Icon name={kind === 'account' ? 'person' : kind === 'off' ? 'alert' : 'info'} size={14} />{!loaded ? '확인 중…' : error || submitModeText(available)}</span>
+      {note && <small>{note}</small>}
+    </span>
+  </Row>;
+}
 
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null);
@@ -31,16 +46,17 @@ function AboutSettings() {
   </>;
 }
 
-export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'keys' | 'about';
+export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'feedback' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
   { id: 'ai', label: 'AI 툴', icon: 'claude' },
   { id: 'chat', label: '채팅', icon: 'chat' },
-  { id: 'status', label: '상태바', icon: 'info' },
+  { id: 'status', label: '상태바', icon: 'statusBar' },
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'plugins', label: '플러그인', icon: 'plugin' },
+  { id: 'feedback', label: '피드백', icon: 'feedback' },
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
 ];
@@ -68,7 +84,7 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
   </span>;
   const time = new Date(2025, 0, 1, 14, 32, 8).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: settings.clockSeconds ? '2-digit' : undefined, hour12: settings.clock12h });
   return {
-    connection: <span className="conn ok"><Icon name="wifi" size={13} /></span>,
+    connection: <span className="conn"><Icon name="wifi" size={13} />연결 끊김</span>,
     path: <span className="stat"><Icon name="folder" size={13} />~/projects/my-app</span>,
     branch: <span className="stat"><Icon name="branch" size={13} />main</span>,
     changes: <span className="stat"><Icon name="diff" size={13} />3개 파일<ins>+42</ins><del>−7</del></span>,
@@ -95,7 +111,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
   const layout = chat ? chatStatusLayout(settings) : statusLayout(settings), items = chat ? settings.chatStatusItems : settings.statusItems, shown = new Set(items);
   const keys_ = chat ? { items: 'chatStatusItems', left: 'chatStatusLeft', right: 'chatStatusRight' } as const : { items: 'statusItems', left: 'statusLeft', right: 'statusRight' } as const;
   const labels = chat ? chatStatusLabels : statusLabels, base = statusSamples(settings);
-  const sample = (id: string) => { const view = chat ? chatItemView(id, { state: sampleChat }) : null; return chat ? <span className="stat" style={{ color: view?.color }}>{view?.text}</span> : base[id]; };
+  const sample = (id: string) => { const view = chat ? chatItemView(id, { state: sampleChat }) : null; return chat ? <span className="stat" style={{ color: view?.color }}>{view?.text}{view?.extra && ` ${view.extra.text}`}</span> : base[id]; };
   const [dragging, setDragging] = useState(''), [drop, setDrop] = useState<{ side: Side; index: number } | null>(null);
   const place = (id: string, side: Side, index: number) => {
     const next = { left: layout.left.filter(item => item !== id), right: layout.right.filter(item => item !== id) };
@@ -194,6 +210,36 @@ function WakaTimeSettings({ settings, set, onChange }: { settings: Settings; set
   </>;
 }
 
+// API key the chat mode runs this agent with instead of the CLI's login. The key stays on the local server; only its last four characters come back.
+type KeyAgent = 'claude' | 'codex' | 'cursor';
+type AgentKeyStatus = Record<KeyAgent, { use: boolean; key: string }>;
+const keySources: Record<KeyAgent, { placeholder: string; where: string; billing: string }> = {
+  claude: { placeholder: 'sk-ant-…', where: 'console.anthropic.com의 API Keys', billing: 'Anthropic API 사용량' },
+  codex: { placeholder: 'sk-…', where: 'platform.openai.com의 API keys', billing: 'OpenAI API 사용량' },
+  cursor: { placeholder: 'key_…', where: 'cursor.com 대시보드의 Integrations > User API Keys', billing: 'Cursor 계정의 API 키 사용량' },
+};
+function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
+  const [status, setStatus] = useState<AgentKeyStatus | null>(null), [key, setKey] = useState(''), [message, setMessage] = useState('');
+  useEffect(() => { void api<AgentKeyStatus>('agent-keys/status').then(setStatus, () => {}); }, []);
+  const save = (input: { key?: string; use?: boolean }, done: string) => api<AgentKeyStatus>('agent-keys/config', { agent, ...input }).then(next => { setStatus(next); setKey(''); setMessage(done); }, (error: Error) => setMessage(error.message));
+  const entry = status?.[agent], source = keySources[agent];
+  return <>
+    <h4 className="setting-group">채팅 인증</h4>
+    <Row title="채팅 인증 방식" hint={`채팅 모드에서 ${agentNames[agent]}를 실행할 계정입니다. API 키를 고르면 ${source.billing}으로 과금되고, 터미널(CLI)로 연 에이전트와 상태바 사용량은 계속 CLI 로그인 기준입니다. 다음에 시작하는 채팅부터 적용됩니다.`}>
+      {status && <Dropdown label={`${agentNames[agent]} 채팅 인증 방식`} value={entry?.use ? 'key' : 'login'}
+        options={[{ value: 'login', label: 'CLI 로그인' }, { value: 'key', label: 'API 키', ...(!entry?.key && { hint: '먼저 키를 저장하세요' }) }]}
+        onChange={value => void save({ use: value === 'key' }, value === 'key' ? 'API 키로 실행합니다.' : 'CLI 로그인으로 실행합니다.')} />}
+    </Row>
+    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ' · 사용 중' : ' · 저장만 됨'} · 이 컴퓨터에만 저장되며 화면에는 끝 4자리만 보입니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
+      <input type="password" value={key} placeholder={source.placeholder} autoComplete="off" spellCheck={false} aria-label={`${agentNames[agent]} API 키`}
+        onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && key.trim()) void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.'); }} />
+      <button disabled={!key.trim()} onClick={() => void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.')}>저장</button>
+      {entry?.key && <button onClick={() => void save({ key: '' }, '삭제했습니다. CLI 로그인으로 실행합니다.')}>삭제</button>}
+    </Row>
+    {message && <p className="setting-note" role="status">{message}</p>}
+  </>;
+}
+
 function ShellSetting({ settings, set }: { settings: Settings; set<K extends keyof Settings>(key: K, value: Settings[K]): void }) {
   const list = useShells();
   const auto = list?.shells.find(item => item.id === list.default);
@@ -282,7 +328,7 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
   if (!id || id === 'none') return <aside className="look-preview" aria-label="설정 미리보기"><p className="look-empty">미리보기가 없습니다</p></aside>;
   const paint = lookThemes[settings.theme];
   const accent = settings.accentColor || paint.accent;
-  const mono = (name: string) => name.trim() ? `${name.trim()}, ${monoFont}` : monoFont;
+  const mono = terminalFontStack;
   const family = id.startsWith('term') ? 'term' : id.startsWith('chat') ? 'chat' : id.startsWith('diff') ? 'diff' : id;
   const shell = family === 'theme' || family === 'accent' || family === 'dim' || family === 'zoom' || family === 'sidebar' || family === 'sidebarWidth';
   return <aside className="look-preview" aria-label="설정 미리보기">
@@ -333,7 +379,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -341,7 +387,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const statusSwitch = (id: string, label: string) =>
     <input type="checkbox" role="switch" aria-label={label} checked={settings.statusItems.includes(id)} onChange={event => set('statusItems', event.target.checked ? [...settings.statusItems.filter(item => item !== id), id] : settings.statusItems.filter(item => item !== id))} />;
   const installedFonts = useMemo(() => installedTerminalFonts(), []);
-  const terminalFontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedFonts, '기본'), [installedFonts, settings.terminalFont]);
+  const terminalFontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedFonts, '시스템 기본'), [installedFonts, settings.terminalFont]);
   const diffFontOptions = useMemo(() => monoFontDropdownOptions(settings.diffFont, installedFonts, '터미널과 같음'), [installedFonts, settings.diffFont]);
   const argsRow = (agent: 'claude' | 'codex' | 'cursor', key: 'claudeArgs' | 'codexArgs' | 'cursorArgs', example: string) =>
     <Row title={`${agentNames[agent]} 추가 실행 인자`} hint={`실행할 때 명령 뒤에 붙입니다. 예: ${example} · 새로 여는 터미널과 되살리는 터미널에 적용되고, 이미 실행 중인 에이전트는 그대로입니다.`}>
@@ -369,6 +415,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     {tab === 'claude' && argsRow('claude', 'claudeArgs', '--model opus')}
     {tab === 'codex' && argsRow('codex', 'codexArgs', '--model gpt-5')}
     {tab === 'cursor' && argsRow('cursor', 'cursorArgs', '--model auto')}
+    <ChatAuthSettings agent={tab} />
     <h4 className="setting-group">알림</h4>
     <Row title="이 에이전트의 알림" hint="끄면 알림과 소리를 모두 끕니다. 사이드바의 표시는 그대로입니다. 알림 종류와 소리는 ‘공용’에서 정합니다.">{inList('agentsMuted', tab, `${agentNames[tab]} 알림`)}</Row>
     {tab !== 'cursor' && <>
@@ -394,9 +441,11 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <Row title="팁 표시" hint="컨텍스트가 길어졌을 때 /clear·/compact 안내, 마우스로 한 동작의 단축키 같은 도움말을 pane 모서리에 잠깐 띄웁니다.">{toggle('tips')}<button type="button" onClick={() => { resetTips(); }}>팁 기록 초기화</button></Row>
       {settings.tips && <Row title="컨텍스트 팁 기준(k 토큰)" hint="Claude 대화 컨텍스트가 이 크기 이상일 때 메시지를 보내면 /clear 팁을 보여 줍니다. 기본 400k는 1M 컨텍스트의 40%입니다. 같은 팁은 10분에 한 번만 나옵니다. (50–1000)">{number('contextTipK', 50, 1000)}</Row>}
       <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
+      <Row title="인터랙티브 UI" hint="에이전트가 계산기·폼·미리보기처럼 UI가 더 나은 답변에 한해 채팅 안에 직접 조작하는 UI를 보여줍니다. UI는 격리된 샌드박스에서 실행되며, 끄면 일반 코드 블록으로 표시됩니다. 켜고 끄면 새 채팅부터 에이전트 지침에 반영됩니다.">{toggle('interactiveUi')}</Row>
+      <Row title="Artifact 항상 켜기" hint="Chat에서 Artifact 도구는 기본으로 꺼져 있다가 메시지에 ‘artifact’ 또는 ‘아티팩트’가 들어가면 그 채팅에서 자동으로 켜집니다. 켜면 모든 채팅이 처음부터 Artifact를 갖지만, 요청마다 컨텍스트가 약 1.3만 토큰 늘어납니다. 한번 켜진 채팅은 닫기 전까지 꺼지지 않습니다.">{toggle('artifactAlways')}</Row>
     </>}
   </>;
-  return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" onClose={onClose}>
+  return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" region="설정" onClose={onClose}>
     <settingsQuery.Provider value={query}>
     <lookHover.Provider value={lookApi}>
     <div className={`settings${searching ? ' settings-searching' : ''}`} ref={root}>
@@ -406,12 +455,14 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         <span className="spacer" />
         <button onClick={() => onChange({ ...defaultSettings, theme: settings.theme, onboarded: settings.onboarded, chatTipPending: settings.chatTipPending })}><Icon name="refresh" />기본값으로</button>
       </nav>
+      <div className="settings-main">
+      <header className="settings-drag" onPointerDown={dragSettings}>
+        <h3>{searching ? '검색' : sections.find(item => item.id === section)?.label}</h3>
+        <input type="search" className="settings-search" placeholder="설정 검색" aria-label="설정 검색" value={query} onChange={event => setQuery(event.target.value)} />
+        <IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} />
+      </header>
+      <div className="settings-content">
       <div className="settings-body">
-        <header className="settings-drag" onPointerDown={dragSettings}>
-          <h3>{searching ? '검색' : sections.find(item => item.id === section)?.label}</h3>
-          <input type="search" className="settings-search" placeholder="설정 검색" aria-label="설정 검색" value={query} onChange={event => setQuery(event.target.value)} />
-          <IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} />
-        </header>
         {searching && <p className="search-empty">일치하는 설정이 없습니다.</p>}
         {(searching || section === 'appearance') && <SectionFrame label="외관" searching={searching}>
           <Group title="전체">
@@ -581,6 +632,13 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
         {(searching || section === 'wakatime') && <SectionFrame label="WakaTime" searching={searching}><WakaTimeSettings settings={settings} set={set} onChange={onChange} /></SectionFrame>}
         {(searching || section === 'plugins') && <SectionFrame label="플러그인" searching={searching}><PluginSettings query={query} /></SectionFrame>}
+        {(searching || section === 'feedback') && <SectionFrame label="피드백" searching={searching}>
+          <FeedbackAvailabilityRow />
+          <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
+          <Row title="AI 정리에 화면 정보 포함" hint="'AI로 정리'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+          <Row title="AI 정리 모델" hint="'AI로 정리'에 쓸 Claude 모델입니다. 피드백 작성 화면 하단에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 정리 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
+          <Row title="AI 정리 Effort" hint="높을수록 정교하지만 느립니다. 피드백에서는 보통(Medium)까지만 고를 수 있고, 기본은 낮음(Low)입니다."><Dropdown label="AI 정리 Effort" className={`chat-effort effort-${feedbackEffort(settings.feedbackAiEffort)}`} value={feedbackEffort(settings.feedbackAiEffort)} options={AI_EFFORTS} onChange={value => set('feedbackAiEffort', value as Settings['feedbackAiEffort'])} /></Row>
+        </SectionFrame>}
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>
           <ShortcutKeys settings={settings} onChange={onChange} />
@@ -588,6 +646,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
       </div>
       {wide && <LookPreview id={look} settings={settings} />}
+      </div>
+      </div>
     </div>
     </lookHover.Provider>
     </settingsQuery.Provider>

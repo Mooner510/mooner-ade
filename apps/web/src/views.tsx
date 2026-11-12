@@ -17,10 +17,11 @@ export type Ask = { input(title: string, initial?: string): Promise<string | nul
 export type GitChange = { path: string; status: string; original?: string; added?: number; deleted?: number };
 export type GitState = { branch: string; changes: GitChange[]; additions: number; deletions: number };
 
-export function Modal({ children, onClose, className = '', labelledBy }: { children: ReactNode; onClose(): void; className?: string; labelledBy: string }) {
+// `region` names the dialog for the feedback element capture (data-feedback-region).
+export function Modal({ children, onClose, className = '', labelledBy, region = '대화상자' }: { children: ReactNode; onClose(): void; className?: string; labelledBy: string; region?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
-  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
+  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} data-feedback-region={region} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
 }
 // A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.
 export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };
@@ -74,6 +75,6 @@ export function Dropdown({ value, options, onChange, label, className = '', plac
       root.current!.open = true;
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? selected : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
       buttons[next].focus();
-    }}><summary aria-label={locked ? `${label} · ${locked}` : label} aria-haspopup="listbox" aria-disabled={locked ? true : undefined} onClick={locked ? event => event.preventDefault() : undefined}>{(() => { const selected = options.find(option => option.value === value); return <span className="dd-label" style={{ color: selected?.color }}><DdIcon icon={selected?.icon} bars={selected?.bars} />{selected?.label ? <ModelLabel text={selected.label} /> : placeholder}</span>; })()}<Icon name="chevronDown" size={14} /></summary>
+    }}><summary aria-label={locked ? `${label} · ${locked}` : label} aria-haspopup="listbox" aria-disabled={locked ? true : undefined} onClick={locked ? event => event.preventDefault() : undefined}>{(() => { const selected = options.find(option => option.value === value); return <span className="dd-label" style={{ color: selected?.color }}><DdIcon icon={selected?.icon} bars={selected?.bars} /><span className="dd-text">{selected?.label ? <ModelLabel text={selected.label} /> : placeholder}</span></span>; })()}<Icon name="chevronDown" size={14} /></summary>
     <div role="listbox" popover="manual" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} data-divider={option.divider || undefined} key={option.value} onClick={() => { onChange(option.value); close(); }}><span className="dd-label" style={{ color: option.color }}><DdIcon icon={option.icon} bars={option.bars} /><ModelLabel text={option.label} />{option.hint && <small className="dd-hint">{option.hint}</small>}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
 }

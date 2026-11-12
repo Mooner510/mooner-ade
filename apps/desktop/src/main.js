@@ -124,7 +124,16 @@ function startServer() {
       if (match && !origin) { origin = match[1]; plugins?.push(); resolve(`${match[1]}/#token=${match[2]}`); }
     });
     child.stderr.on('data', chunk => process.stderr.write(chunk));
-    child.on('message', message => { if (message?.type === 'plugin/workspace' && server === child) plugins?.fromServer(message); });
+    child.on('message', message => {
+      if (server !== child) return;
+      if (message?.type === 'plugin/workspace') plugins?.fromServer(message);
+      // Feedback submissions go out through the plugin that declared `feedback` (docs/PLUGINS.md); the answer goes back by id.
+      else if (message?.type === 'feedback/submit' && Number.isSafeInteger(message.id)) {
+        const answer = value => { if (child.connected) child.send({ type: 'feedback/result', id: message.id, ...value }); };
+        if (!plugins) answer({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: '플러그인을 쓸 수 없어 피드백을 제출할 수 없습니다.' } });
+        else plugins.submitFeedback(message).then(answer, error => answer({ ok: false, error: { code: 'PLUGIN_FEEDBACK', message: error.message } }));
+      }
+    });
     child.once('error', error => { if (server === child) server = null; reject(error); });
     child.once('exit', code => {
       // A replaced server exiting late must not be mistaken for the current one dying.
@@ -285,6 +294,23 @@ ipcMain.handle('ade:pick-folder', async (event, options) => {
   return result.canceled ? null : result.filePaths[0];
 });
 ipcMain.on('ade:write-clipboard', (_event, text) => { if (typeof text === 'string' && text.length <= 8 * 1024 * 1024) clipboard.writeText(text); });
+// Feedback capture: a PNG of the app's own window, or of a rectangle of it (DIP, window coordinates). Only the app's page in the
+// main window may ask, and only for that window: nothing outside MoonerADE is ever captured.
+ipcMain.handle('ade:capture', async (event, rect) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || window !== mainWindow || !sameOrigin(event.senderFrame?.url ?? '')) throw new Error('허용되지 않은 요청입니다.');
+  const [width, height] = window.getContentSize();
+  let area;
+  if (rect && typeof rect === 'object') {
+    const x = Math.max(0, Math.floor(Number(rect.x))), y = Math.max(0, Math.floor(Number(rect.y)));
+    const right = Math.min(width, Math.ceil(Number(rect.x) + Number(rect.width))), bottom = Math.min(height, Math.ceil(Number(rect.y) + Number(rect.height)));
+    if (![x, y, right, bottom].every(Number.isFinite) || right - x < 1 || bottom - y < 1) throw new Error('캡쳐할 영역이 올바르지 않습니다.');
+    area = { x, y, width: right - x, height: bottom - y };
+  }
+  const image = await window.webContents.capturePage(area);
+  if (image.isEmpty()) throw new Error('화면을 캡쳐하지 못했습니다.');
+  return new Uint8Array(image.toPNG());
+});
 
 // Asks the server what an app restart would cut off (running agent turns, background tasks, commands). The answer is
 // { busy, reasons }; a missing or silent server rejects, which the updater counts as busy instead of guessing idle.

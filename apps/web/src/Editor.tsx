@@ -10,7 +10,7 @@ export type Settings = {
   // AI tools: `agentsOff` hides an agent from the launchers, `agentsMuted` silences its alerts; *Args are appended to its launch command.
   agentsOff: string[]; agentsMuted: string[]; claudeArgs: string; codexArgs: string; cursorArgs: string; notifyLooking: boolean;
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
-  cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; usageRefresh: number;
+  cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; interactiveUi: boolean; artifactAlways: boolean; usageRefresh: number;
   // Chat composer shortcut overrides (id -> combo, see chat-model chatKeyDefs); a missing id uses its default.
   chatKeys: Record<string, string>; appKeys: Record<string, string>;
   defaultMode: AgentMode; chatTipPending: boolean;
@@ -33,6 +33,8 @@ export type Settings = {
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean;
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
+  // Feedback inbox: feedbackAgentTool lets chat agents put drafts in it; feedbackAiContext adds screen layout and recent errors to an AI draft request.
+  feedbackAgentTool: boolean; feedbackAiContext: boolean; feedbackAiModel: '' | 'claude-haiku-5-5' | 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'sonnet' | 'opus'; feedbackAiEffort: '' | 'low' | 'medium' | 'high';
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -85,7 +87,7 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
@@ -95,11 +97,14 @@ export const defaultSettings: Settings = {
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'cli', chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false,
-  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true
+  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
+  feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low'
 };
-export const monoFont = "'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
-const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => { const own = settings.diffFont.trim() || settings.terminalFont.trim(); return own ? `${own}, ${monoFont}` : monoFont; };
+// Terminal default = the OS's own monospace font (Mac: Menlo, Windows: Cascadia Mono); a chosen font goes first and falls back to it.
+const systemMono = /Mac|iPhone|iPad/.test(navigator.platform) ? "Menlo, Monaco, monospace" : /Windows/.test(navigator.userAgent) ? "'Cascadia Mono', Consolas, monospace" : "'DejaVu Sans Mono', ui-monospace, monospace";
+export const terminalFontStack = (name: string) => name.trim() ? `${name.trim()}, ${systemMono}` : systemMono;
+const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => terminalFontStack(settings.diffFont.trim() || settings.terminalFont);
 const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';
 
 let monacoPromise: Promise<typeof Monaco> | null = null;
@@ -139,7 +144,25 @@ async function init() {
 // The Monaco editor is created once per mount and later content/option changes are applied to it in place: the review list
 // reloads its files while an agent edits, and rebuilding an editor (plus two models and a diff computation) on each change made it stutter.
 export const preloadMonaco = () => { void loadMonaco(); };
-export function DiffView({ original, modified, path, settings, compact = false, onHeight }: { original: string; modified: string; path: string; settings: Settings; compact?: boolean; onHeight?(height: number): void }) {
+
+// Syntax colours for a code block in the chat, from Monaco's tokenizer (already in the app for diffs). `hint` is a fence language ("ts",
+// "bash") or a file name ("src/a.ts"); anything unknown, and very long code, stays plain (null). The HTML is Monaco's own escaped markup.
+const FENCE_ALIASES: Record<string, string> = { bash: 'shell', zsh: 'shell', console: 'shell', shellscript: 'shell', pwsh: 'powershell', ps: 'powershell', jsonc: 'json', yml: 'yaml' };
+const languageOf = (monaco: typeof Monaco, hint: string) => {
+  const raw = hint.trim().toLowerCase(), name = FENCE_ALIASES[raw] ?? raw, file = name.split(/[\\/]/).pop() ?? name, dot = file.lastIndexOf('.');
+  const ext = dot > 0 ? file.slice(dot) : dot < 0 ? `.${file}` : ''; // a bare fence tag ("py", "rs") is also tried as an extension
+  return monaco.languages.getLanguages().find(lang => lang.id === name || lang.aliases?.some(alias => alias.toLowerCase() === name)
+    || (ext && lang.extensions?.includes(ext)) || lang.filenames?.some(known => known.toLowerCase() === file))?.id ?? null;
+};
+export async function colorize(code: string, hint: string): Promise<string | null> {
+  if (!hint.trim() || !code || code.length > 100_000) return null;
+  const monaco = await loadMonaco(), id = languageOf(monaco, hint);
+  if (!id) return null;
+  // The token colours (.mtk*) are global CSS that follows the theme, so set it to the app's own before colouring.
+  monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'ade-light' : 'ade-dark');
+  return monaco.editor.colorize(code, id, { tabSize: 2 });
+}
+export function DiffView({ original, modified, path, settings, compact = false, minHeight = 60, onHeight }: { original: string; modified: string; path: string; settings: Settings; compact?: boolean; minHeight?: number; onHeight?(height: number): void }) {
   const host = useRef<HTMLDivElement>(null);
   const live = useRef<{ monaco: typeof Monaco; diff: Monaco.editor.IStandaloneDiffEditor; a: Monaco.editor.ITextModel; b: Monaco.editor.ITextModel } | null>(null);
   const latest = useRef({ original, modified, settings, onHeight }); latest.current = { original, modified, settings, onHeight };
@@ -153,20 +176,29 @@ export function DiffView({ original, modified, path, settings, compact = false, 
       const diff = monaco.editor.createDiffEditor(host.current, {
         automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: sideBySide(now), useInlineViewWhenSpaceIsLimited: now.diffLayout === 'auto', renderSideBySideInlineBreakpoint: 760,
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
-        ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
+        ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
       const uri = (side: string) => monaco.Uri.from({ scheme: 'diff', path: `/${side}/${path}`, query: String(Math.random()) });
       const a = monaco.editor.createModel(latest.current.original, undefined, uri('a')), b = monaco.editor.createModel(latest.current.modified, undefined, uri('b'));
       diff.setModel({ original: a, modified: b });
       live.current = { monaco, diff, a, b };
       const sized = compact ? diff.getModifiedEditor().onDidContentSizeChange(event => {
-        const height = Math.min(720, Math.max(60, event.contentHeight));
+        const height = Math.min(720, Math.max(minHeight, event.contentHeight));
         // Ignore 1px jitter: the height depends on the width (wrapping), which a scrollbar appearing in the list changes in turn.
         if (!host.current || Math.abs(height - host.current.offsetHeight) < 2) return;
         host.current.style.height = `${height}px`;
         latest.current.onHeight?.(height);
       }) : null;
-      cleanup = () => { live.current = null; sized?.dispose(); diff.dispose(); a.dispose(); b.dispose(); };
+      // One click on the bar between the two sides puts it back in the middle (Monaco resets only on a double click); dragging still resizes.
+      const box = host.current; let pressed: { x: number; y: number } | null = null;
+      const onDown = (event: PointerEvent) => { pressed = (event.target as Element | null)?.closest?.('.monaco-sash') ? { x: event.clientX, y: event.clientY } : null; };
+      const onUp = (event: PointerEvent) => {
+        const sash = pressed && (event.target as Element | null)?.closest?.('.monaco-sash');
+        if (sash && Math.hypot(event.clientX - pressed!.x, event.clientY - pressed!.y) < 4) sash.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        pressed = null;
+      };
+      box.addEventListener('pointerdown', onDown, true); box.addEventListener('pointerup', onUp, true);
+      cleanup = () => { live.current = null; box.removeEventListener('pointerdown', onDown, true); box.removeEventListener('pointerup', onUp, true); sized?.dispose(); diff.dispose(); a.dispose(); b.dispose(); };
     });
     return () => { disposed = true; cleanup(); };
   }, [path, compact, settings.diffFoldUnchanged, settings.diffContextLines]);

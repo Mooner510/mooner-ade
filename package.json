@@ -19,6 +19,6 @@
     "typecheck": "pnpm --filter @mooner/ade-web typecheck",
     "test": "node --test tests/*.test.mjs",
     "check": "pnpm typecheck && node --test tests/*.test.mjs",
-    "e2e": "pnpm --filter @mooner/ade-web build && node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs"
   }
 }

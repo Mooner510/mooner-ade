@@ -55,10 +55,10 @@ export function ReviewPanel(props: Props) {
       <Icon name="diff" /><strong>변경사항</strong>
       {props.hasRepository && !props.selectionRequired && <><span className="chip" title="현재 브랜치"><Icon name="branch" size={12} /> {git.branch || '브랜치 없음'}</span><span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span></>}
       <span className="spacer" />
-      <IconButton icon="expandAll" label="모두 펼치기" disabled={!total} onClick={() => setExpanded(new Set(changes.map(change => change.path)))} />
-      <IconButton icon="collapseAll" label="모두 접기" disabled={!total} onClick={() => setExpanded(new Set())} />
-      <IconButton icon="refresh" label="새로고침" onClick={() => guard(refresh)} />
-      <IconButton icon={props.wide ? 'minimize' : 'maximize'} label={props.wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={props.toggleWide} />
+      {total > 0 && <><IconButton icon="expandAll" tip="header" label="모두 펼치기" onClick={() => setExpanded(new Set(changes.map(change => change.path)))} />
+      <IconButton icon="collapseAll" tip="header" label="모두 접기" onClick={() => setExpanded(new Set())} /></>}
+      <IconButton icon="refresh" tip="header" label="새로고침" onClick={() => guard(refresh)} />
+      <IconButton icon={props.wide ? 'minimize' : 'maximize'} tip="header" label={props.wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={props.toggleWide} />
     </header>
     {props.controls && <div className="review-controls">{props.controls}</div>}
     {!props.hasRepository ? <p className="hint">Git 저장소가 없습니다.</p> : props.selectionRequired ? <p className="hint">저장소를 선택하세요.</p> : <div className="review-list">
