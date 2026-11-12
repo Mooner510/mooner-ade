@@ -640,13 +640,13 @@ export function mcpTool(name: string): { server: string; tool: string } | null {
   return hit ? { server: hit[1].replace(/^claude_ai_/, '').replace(/[_-]+/g, ' ').trim() || hit[1], tool: hit[2] } : null;
 }
 
-// What an MCP call is about, from its input: the first readable field (title, name, query, path …) found up to three levels deep, else a few key=value pairs.
+// What an MCP call is about, from its input: the first readable field (title, name, query, path …) found up to six levels deep (Claude Docs nests the text in payload.ops[].with.from.content), else a few key=value pairs.
 // A string list (guide topics) joins; markdown heading marks are dropped, so an inline "## 개요 …" reads as 개요 ….
 const MCP_KEYS = ['title', 'name', 'query', 'q', 'url', 'path', 'description', 'text', 'content', 'message', 'command', 'topic', 'items', 'id'];
 export function mcpSummary(input: any): string {
   const clean = (value: string) => value.replace(/^[\s#>*-]+/, '').replace(/\s+/g, ' ').trim().slice(0, 140);
   const find = (value: any, key: string, depth: number): string => {
-    if (!value || typeof value !== 'object' || depth > 3) return '';
+    if (!value || typeof value !== 'object' || depth > 6) return '';
     const own = value[key];
     if (typeof own === 'string' && own.trim()) return clean(own);
     if (Array.isArray(own) && own.length && own.every(item => typeof item === 'string')) return clean(own.join(', '));
