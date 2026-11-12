@@ -93,9 +93,11 @@ const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
 const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
   const { usage, loading, load } = useUsage(provider, projectId, active, refresh), panel = `usage-${useId()}`;
-  if (!usage) return null;
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
-  const windows = provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  const windows = !usage ? [] : provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  // Not installed or not signed in here (no login found) and a failed first reading both leave no windows: show nothing instead of a dead "—".
+  // The hook keeps polling, so the item appears by itself once a reading succeeds.
+  if (!usage || !windows.length) return null;
   const preferred = usageStatusKeys[provider];
   const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
   const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
@@ -937,11 +939,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       </div>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
+      {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
+      <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${reviewShown ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
+      </div>
     </header>
     <ErrorToast scope={root} active={active} />
     {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}

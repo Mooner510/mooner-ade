@@ -37,6 +37,7 @@ const glyphs = {
   send: 'send',
   wifi: 'wifi',
   alert: 'warning',
+  error: 'error', // round badge with "!", used for the error log (no triangle or sharp corners)
   block: 'block',
   check: 'check',
   externalLink: 'open_in_new',
@@ -72,7 +73,9 @@ const glyphs = {
   captureWindow: 'screenshot_monitor',
   captureRange: 'screenshot_region',
   shapeRect: 'crop_square',
-  shapeArrow: 'north_east'
+  shapeArrow: 'north_east',
+  plan: 'assignment',
+  statusBar: 'call_to_action'
 } as const;
 
 // Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's filled cube logo.
@@ -83,20 +86,6 @@ const brands = {
   'claude-chat': <><path d="M6.5 3.5h11A2.5 2.5 0 0 1 20 6v8a2.5 2.5 0 0 1-2.5 2.5H11.5L7 20.5v-4h-.5A2.5 2.5 0 0 1 4 14V6a2.5 2.5 0 0 1 2.5-2.5z" /><path d="M12 6.6v6.8M9 8.3l6 3.4M15 8.3l-6 3.4" /></>,
   // The cube fills the whole 24 box (the other glyphs keep a margin), so shrink it about the centre.
   cursor: <g transform="translate(2.4 2.4) scale(.8)"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" /></g>
-} satisfies Record<string, ReactNode>;
-
-// Lucide "siren" (stroke icon, drawn in the same stroke as the other icons).
-const strokes = {
-  siren: <>
-    <path d="M7 18v-6a5 5 0 1 1 10 0v6" />
-    <path d="M5 21a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2z" />
-    <path d="M21 12h1" />
-    <path d="M18.5 4.5 18 5" />
-    <path d="M2 12h1" />
-    <path d="M12 2v1" />
-    <path d="m4.929 4.929.707.707" />
-    <path d="M12 12v6" />
-  </>
 } satisfies Record<string, ReactNode>;
 
 const effortBars = [{ x: 2.5, h: 6 }, { x: 7.5, h: 9.5 }, { x: 12.5, h: 13 }, { x: 17.5, h: 16.5 }] as const;
@@ -115,9 +104,12 @@ export function SettingGlyph({ icon, bars, size = 15 }: { icon?: string; bars?: 
   return <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{icon}</span>;
 }
 
-export type IconName = keyof typeof glyphs | keyof typeof brands | keyof typeof strokes;
+export type IconName = keyof typeof glyphs | keyof typeof brands;
+// The tick inside a checked box or a done step: drawn (a font glyph is hairline-thin and off-centre at this size), in currentColor.
+export function Tick({ size = 12 }: { size?: number }) {
+  return <svg className="tick" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.4l3.1 3.1 6.5-6.9" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
-  if (name in strokes) return <svg className="icon" width={size + 2} height={size + 2} viewBox="0 0 24 24" aria-hidden="true">{strokes[name as keyof typeof strokes]}</svg>;
   if (name in brands) return <svg className={`icon brand-${name}`} width={size + 2} height={size + 2} viewBox="0 0 24 24" aria-hidden="true">{brands[name as keyof typeof brands]}</svg>;
   return <span className="icon material-symbols-outlined" style={{ fontSize: size + 2 }} aria-hidden="true">{glyphs[name as keyof typeof glyphs]}</span>;
 }

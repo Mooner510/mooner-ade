@@ -6,6 +6,8 @@ import { compact, dollars, contextGauge, contextPercent, contextReported, contex
 export type ChatStatusContext = { state: ChatState; share?: string | null };
 type Def = {
   label: string; hint?: string; icon: string; format: string;
+  // A second icon + text group after the main one (tokens: the cache icon with cache writes ↑ and reads ↓). Hidden when `show` says no.
+  extra?: { icon: string; format: string; show?(context: ChatStatusContext): boolean };
   // `{token}` values for the template; the item is hidden when this returns null.
   values(context: ChatStatusContext): Record<string, string> | null;
   // 0 (green) to 120 (red) hue, for items that grade like the usage windows.
@@ -27,34 +29,43 @@ export const chatStatusDefs: Record<string, Def> = {
     hue: ({ state }) => usageHue(contextPercent(state)),
     color: ({ state }) => contextGauge(state).autoCompact ? 'var(--term-magenta)' : undefined,
     hint: '마지막 응답까지 쌓인 토큰 ÷ 기준 창. Auto Compact가 켜져 있으면 %는 Auto Compact 창 기준(게이지·상세와 동일), 아니면 최대 컨텍스트(CLI 보고값, 첫 응답 전에는 추정). {percent} {used} {window}' },
-  tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), total: compact(state.tokens.input + state.tokens.output) }),
-    hint: '이 채팅의 누적. {input} {output} {cache}(캐시 읽기) {total}' },
+  tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), cacheWrite: compact(state.tokens.cacheCreate), total: compact(state.tokens.input + state.tokens.output) }),
+    extra: { icon: 'database', format: '↑{cacheWrite} ↓{cache}', show: ({ state }) => state.tokens.cacheRead + state.tokens.cacheCreate > 0 },
+    hint: '이 채팅의 누적. 뒤의 캐시 아이콘 구간은 ↑캐시 쓰기 ↓캐시 읽기. {input} {output} {cache}(캐시 읽기) {cacheWrite}(캐시 쓰기) {total}' },
   cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)' },
-  share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ share }) => share ? { share } : null,
-    hint: '이 채팅이 플랜 한도(5h·주)에서 차지한 %p. 서버가 정수 %만 알려 주므로 비용 ÷ (1%p당 비용)으로 추정하고, 턴마다 한도 변화를 읽어 1%p당 비용을 보정합니다. 다른 사용이 겹치면 오차가 생길 수 있습니다.' },
+  // Until a turn has been measured (and always on an API key, or for Codex/Cursor) the item names what this chat is billed against; the measured share replaces it.
+  share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ state, share }) => ({ share: usageBasis(state, share) }),
+    hint: 'API 키로 실행하는 채팅은 토큰 단위로 과금되므로 ‘API Usage’, CLI 로그인 채팅은 첫 응답 전까지 ‘Plan Usage’(구독 플랜 한도를 씀)로 표시하고, 측정되면 이 채팅이 플랜 한도(5h·주)에서 차지한 %p로 바뀝니다. 서버가 정수 %만 알려 주므로 비용 ÷ (1%p당 비용)으로 추정하고, 턴마다 한도 변화를 읽어 1%p당 비용을 보정합니다. 다른 사용이 겹치면 오차가 생길 수 있습니다.' },
   turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }) },
   duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }) },
   session: { label: '세션 ID', icon: 'tag', format: '{short}', values: ({ state }) => state.sessionId ? { short: state.sessionId.slice(0, 8), id: state.sessionId } : null },
 };
+// What a chat's usage is counted against: an API key's tokens, or the CLI login's plan (its measured share once there is one).
+export const usageBasis = (state: ChatState, share?: string | null) => state.apiKey ? 'API Usage' : share || 'Plan Usage';
 export const chatStatusLabels: Record<string, string> = Object.fromEntries(Object.entries(chatStatusDefs).map(([id, def]) => [id, def.label]));
 
-export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string } | null => {
+export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string; extra?: { text: string; icon: string } } | null => {
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
   if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
-  return { text: fillFormat(def.format, values), icon: def.icon, color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };
+  const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon } : undefined;
+  return { text: fillFormat(def.format, values), icon: def.icon, extra, color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };
 };
 
 function ChatItem({ id, view }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>> }) {
   return <span className={`stat chat-stat chat-stat-${id}`} title={chatStatusLabels[id]} style={view.color ? { color: view.color } as CSSProperties : undefined}>
-    <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{view.icon}</span>{view.text}</span>;
+    <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{view.icon}</span>
+    {/* The usage item turns from its label into the measured share: a new key fades the new text in. */}
+    {id === 'share' ? <span key={view.text} className="chat-stat-swap">{view.text}</span> : view.text}
+    {view.extra && <><span className="icon material-symbols-outlined" style={{ fontSize: 15, marginLeft: 6 }} aria-hidden="true">{view.extra.icon}</span>{view.extra.text}</>}</span>;
 }
 
-export function ChatStatusLine({ settings, context }: { settings: Settings; context: ChatStatusContext }) {
-  const layout = chatStatusLayout(settings), shown = new Set(settings.chatStatusItems), separator = settings.chatStatusSeparator;
+// `only`: show just these items (the start screen keeps only the usage item, in its usual place).
+export function ChatStatusLine({ settings, context, only }: { settings: Settings; context: ChatStatusContext; only?: string[] }) {
+  const layout = chatStatusLayout(settings), shown = new Set(settings.chatStatusItems.filter(id => !only || only.includes(id))), separator = settings.chatStatusSeparator;
   // Each item's view is computed once (it was computed again inside the item).
   const nodes = (ids: string[]) => ids.filter(id => shown.has(id)).flatMap(id => { const view = chatItemView(id, context); return view ? [{ id, node: <ChatItem id={id} view={view} /> }] : []; });
   const render = (list: { id: string; node: ReactNode }[]) => list.map((item, index) => <Fragment key={item.id}>{index > 0 && separator && <span className="chat-sep" aria-hidden="true">{separator}</span>}{item.node}</Fragment>);

@@ -52,7 +52,8 @@ export function pruneDead(pane: Pane | null, live: Set<string>): Pane | null {
   for (const leaf of leafList(pane)) if (isTerminal(leaf) && !live.has(leaf.id)) next = next && remove(next, leaf.id);
   return next;
 }
-export const basename = (path: string) => path.split('/').pop() || path;
+// Either slash: tool inputs on Windows carry "C:\repo\src\a.ts", which a '/'-only split returned whole.
+export const basename = (path: string) => path.split(/[\\/]/).pop() || path;
 export const isDiffTab = (path: string) => path.startsWith('diff:');
 
 // Paths are only ever chosen in the OS folder dialog, never typed: the desktop app uses Electron's, the browser asks the local server to open one.

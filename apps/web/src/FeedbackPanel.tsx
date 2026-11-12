@@ -219,6 +219,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWi
       <strong className="feedback-head-title">{displayTitle(live) || '새 피드백'}</strong>
       <span className={`feedback-status status-${item.status}`}>{drafting ? statusLabels.drafting : statusLabels[item.status]}</span>
       <span className="spacer" />
+      {item.status !== 'submitting' && <><IconButton icon="trash" tip="header" className="feedback-head-delete" label="이 피드백 삭제" disabled={drafting || busy === 'delete'} onClick={remove} /><i className="feedback-head-sep" aria-hidden="true" /></>}
       <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
       <IconButton icon="x" tip="none" label="피드백 요청 닫기" onClick={onClose} />
     </header>
@@ -275,21 +276,20 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWi
       </section>
     </div>
     <AvailabilityNote available={editable ? available : null} />
-    <footer className="feedback-actions">
-      {item.status !== 'submitting' && <button type="button" className="danger" disabled={drafting} onClick={remove}><Icon name="trash" size={14} />삭제</button>}
-      <span className="spacer" />
-      {editable && <>
+    {editable && <>
+      {!verdict.ok && <p className="feedback-reason" role="status"><Icon name="info" size={13} />{verdict.reason}</p>}
+      <footer className="feedback-actions">
         <span className="feedback-pick">
           <Dropdown className="chat-model" label="AI 모델" value={model} options={AI_MODELS} onChange={value => onAiChange({ feedbackAiModel: value as AiModel })} />
           <Dropdown className={`chat-effort effort-${effort}`} label="Effort" value={effort} options={AI_EFFORTS} onChange={value => onAiChange({ feedbackAiEffort: value as AiEffort })} />
         </span>
-        <button type="button" className="feedback-ai-btn" disabled={!canDraft} title={canDraft ? '내용을 AI가 문제·기대 동작·제안으로 정리합니다 (⌘/Ctrl+Enter)' : '내용을 적거나 이미지를 넣어 주세요'} onClick={draft}><Icon name="sparkles" size={14} />{drafting ? 'AI 작성 중…' : 'AI로 정리'}</button>
+        <span className="spacer" />
+        <button type="button" className="feedback-ai-btn" disabled={!canDraft} aria-label="AI로 정리" title={canDraft ? 'AI로 정리: 내용을 문제·기대 동작·제안으로 정리합니다 (⌘/Ctrl+Enter)' : 'AI로 정리: 내용을 적거나 이미지를 넣어 주세요'} onClick={draft}><Icon name="sparkles" size={14} /><span className="feedback-btn-text">{drafting ? 'AI 작성 중…' : 'AI로 정리'}</span></button>
         <span title={verdict.ok ? (available?.mode === 'anonymous' ? '로그인 없이 제출' : '제출') : verdict.reason}>
           <button type="button" className="primary" disabled={!verdict.ok || !!busy} onClick={submit}><Icon name="send" size={14} />{busy === 'submit' ? '제출 중…' : item.status === 'failed' ? '다시 제출' : '제출'}</button>
         </span>
-      </>}
-    </footer>
-    {!verdict.ok && editable && <p className="feedback-reason">{verdict.reason}</p>}
+      </footer>
+    </>}
     {annotating && <AnnotateImage src={feedbackFileUrl(item, annotating)} name={annotating} onClose={() => setAnnotating('')}
       onSave={async data => { try { await feedbackCall('feedback/image/replace', { id, name: annotating, data }); } catch (cause) { fail(cause); throw cause; } }} />}
   </>;

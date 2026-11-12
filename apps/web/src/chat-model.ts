@@ -12,6 +12,8 @@ export type ChatState = {
   contextTokens: number; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
   segmentTitles?: ChatSegmentTitles; chatTitle?: string;
   liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
+  cwd?: string; // the folder the CLI runs in (file paths under it are shown relative)
+  apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
   // Claude: the prompt cache clock read from the session's transcript (same shape as the terminal's ClaudeCache); null before the first reply.
   cache?: { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } } | null;
 };
@@ -19,14 +21,14 @@ export type ChatState = {
 // `partial` marks a block that is still streaming. `slot` is a streamed tool's content-block index, `partialJson` its input so far.
 type BlockBase = { key?: string; partial?: boolean };
 export type Block = BlockBase & ({ type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
-export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[] };
+export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[]; exists?: boolean };
 export type ChatQuestion = { id: string; prompt: string; header?: string; secret?: boolean; allowMultiple?: boolean; allowOther?: boolean; options?: { id: string; label: string; description?: string }[] };
 // `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
 type ItemBase = { key: string; fresh?: boolean };
 /** The part of a system line that names what changed (a model, an Effort, a permission mode) and the colour it is drawn in elsewhere in the UI. */
 export type Tone = { value: string; color: string; icon?: string; bars?: number };
 /** What the user switched with /model, /effort and /permissions since the last thing said in the thread. */
-export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone };
+export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone; compact?: Tone; title?: Tone };
 const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previews) ? event.previews.filter((url): url is string => typeof url === 'string' && url.startsWith('data:image/')) : undefined;
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[] }
@@ -44,6 +46,7 @@ export type ChatView = {
   // `live`: message ids streaming in this turn and whether they belong to a subagent; `liveId` takes deltas that name no message.
   live: Record<string, { sub: boolean; parent?: string }>; liveId: string | null;
   tasks: Record<string, TaskInfo>; // what the CLI reported about each subagent, by its Agent call's tool_use id
+  denied?: Record<string, true>; // tool calls the user refused at their approval card (their error result is a refusal, not a failure)
   thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number; previews?: string[] }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
 export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null, autoCompact: null,
@@ -231,6 +234,7 @@ function lastSlashName(view: ChatView): string {
   return '';
 }
 
+const ranLine = (name?: string) => name ? `/${name} 명령을 실행했습니다.` : '명령을 실행했습니다.';
 // A finished turn that showed nothing (a slash command answered only in `result`, or not at all) still gets a line under its command.
 function commandFallback(view: ChatView, event: any, key: string): ChatView {
   let user = -1;
@@ -238,7 +242,7 @@ function commandFallback(view: ChatView, event: any, key: string): ChatView {
   if (user < 0 || view.items.slice(user + 1).some(item => item.kind === 'assistant' || item.kind === 'command' || item.kind === 'info' || item.kind === 'compact' || item.kind === 'error')) return view;
   const text = typeof event.text === 'string' ? event.text.trim() : '', lead = view.items[user] as Extract<Item, { kind: 'user' }>;
   if (text) return append(view, CHAT_FORMAT.has(parseChatSlashCommand(lead.text)?.name ?? '') ? { kind: 'info', key, text, fresh: view.ready } : { kind: 'command', key, text, isError: false, fresh: view.ready });
-  return isChatSlashCommand(lead.text) ? append(view, { kind: 'command', key, text: '', isError: false, fresh: view.ready }) : view;
+  return isChatSlashCommand(lead.text) ? append(view, { kind: 'command', key, text: ranLine(parseChatSlashCommand(lead.text)?.name), isError: false, fresh: view.ready }) : view;
 }
 
 // Applies one server event. Stored events carry `seq` (a replayed or doubly delivered one is ignored); `delta` events are live-only.
@@ -279,6 +283,8 @@ export function reduce(view: ChatView, event: any): ChatView {
       const text = String(event.text ?? ''), isError = event.isError === true;
       // The CLI confirms a model switch itself; the line ADE writes (with the model's colour) already says so.
       if (!isError && /^Set model to /.test(text)) return view;
+      // A command that printed nothing is not shown as an empty result: one line says it ran.
+      if (!isError && !text.trim()) return append(view, { kind: 'command', key, text: ranLine(lastSlashName(view)), isError: false, fresh });
       return !isError && text.trim() && CHAT_FORMAT.has(lastSlashName(view)) ? append(view, { kind: 'info', key, text, fresh }) : append(view, { kind: 'command', key, text, isError, fresh });
     }
     case 'delta': {
@@ -300,8 +306,10 @@ export function reduce(view: ChatView, event: any): ChatView {
       return { ...view, items, liveId: messageId };
     }
     case 'approval': {
-      if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [] }] };
-      return { ...view, approvals: view.approvals.filter(item => item.requestId !== event.requestId) };
+      if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [], ...(typeof event.exists === 'boolean' && { exists: event.exists }) }] };
+      const answered = view.approvals.find(item => item.requestId === event.requestId);
+      const denied = event.allow === false && answered?.toolUseId && !answered.questions?.length ? { denied: { ...view.denied, [answered.toolUseId]: true as const } } : {};
+      return { ...view, ...denied, approvals: view.approvals.filter(item => item.requestId !== event.requestId) };
     }
     case 'result': {
       let results = view.results;
@@ -311,7 +319,12 @@ export function reduce(view: ChatView, event: any): ChatView {
       }
       view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null };
       if (event.status === 'interrupted') return { ...append(view, { kind: 'note', key, text: '응답을 중단했습니다.', fresh }), approvals: [] };
-      if (event.status === 'failed') return append(view, { kind: 'error', key, message: event.text || '응답에 실패했습니다.', fresh });
+      if (event.status === 'failed') {
+        // The CLI also says the failure as a synthetic reply in the same words ("Invalid API key · …"); the error card says it once.
+        const last = view.items[view.items.length - 1], said = String(event.text ?? '').trim();
+        if (said && last?.kind === 'assistant' && !last.sub && last.blocks.length === 1 && last.blocks[0].type === 'text' && last.blocks[0].text.trim() === said) view = { ...view, items: view.items.slice(0, -1) };
+        return append(view, { kind: 'error', key, message: event.text || '응답에 실패했습니다.', fresh });
+      }
       return commandFallback(view, event, key);
     }
     case 'error': return { ...append(view, { kind: 'error', key, message: String(event.message ?? '오류'), recoverable: event.recoverable === true, fresh }), state: { ...view.state, error: String(event.message ?? '오류'), recoverable: event.recoverable === true || view.state.recoverable } };
@@ -541,7 +554,9 @@ export function ro(word: string): string {
 // The line that says what was switched. Model and Effort share one kind of line ("이제부터 Sonnet 5.5, 높음으로 작업합니다."), a permission mode has its own
 // ("계획 모드로 변경했습니다."). The particle after an Effort follows its last sound.
 export function settingsLine(change: SettingsChange): { text: string; tones: Tone[] } {
-  const { model, effort, mode } = change;
+  const { model, effort, mode, compact, title } = change;
+  if (title) return { text: `채팅 이름을 ${title.value}${ro(title.value)} 바꿨습니다.`, tones: [title] };
+  if (compact) return { text: `Auto Compact 창을 ${compact.value}${ro(compact.value)} 설정했습니다.`, tones: [compact] };
   if (mode) return { text: `${mode.value}로 변경했습니다.`, tones: [mode] };
   if (model && effort) return { text: `이제부터 ${model.value}, ${effort.value}${ro(effort.value)} 작업합니다.`, tones: [model, effort] };
   if (model) return { text: `이제부터 ${model.value} 모델로 작업합니다.`, tones: [model] };
@@ -553,10 +568,12 @@ export function settingsLine(change: SettingsChange): { text: string; tones: Ton
 // model or Effort, a mode line for a mode). A model and an Effort switched back to back share one line, and a setting that was changed once stays on its line even
 // when it is switched back to what it was. Anything in between (a message, an answer, the other kind of line) means the next switch gets a line of its own.
 export function withSettingChange(items: Item[], change: SettingsChange, key: string): Item[] {
-  const { mode, ...rest } = change;
+  const { mode, compact, title, ...rest } = change;
+  // Each kind of switch keeps its own line: repeating /autocompact or /rename edits the one just above instead of adding another.
+  const kindOf = (value: SettingsChange) => value.title ? 'title' : value.compact ? 'compact' : value.mode ? 'mode' : 'model';
   const upsert = (list: Item[], next: SettingsChange, id: string): Item[] => {
     const last = list.at(-1);
-    if (last?.kind === 'note' && last.local && last.change && Boolean(last.change.mode) === Boolean(next.mode)) {
+    if (last?.kind === 'note' && last.local && last.change && kindOf(last.change) === kindOf(next)) {
       const merged = { ...last.change, ...next };
       return [...list.slice(0, -1), { ...last, change: merged, ...settingsLine(merged), rev: (last.rev ?? 0) + 1, fresh: false }];
     }
@@ -565,6 +582,8 @@ export function withSettingChange(items: Item[], change: SettingsChange, key: st
   let result = items;
   if (rest.model || rest.effort) result = upsert(result, rest, key);
   if (mode) result = upsert(result, { mode }, `${key}m`);
+  if (compact) result = upsert(result, { compact }, `${key}c`);
+  if (title) result = upsert(result, { title }, `${key}t`);
   return result;
 }
 
@@ -573,9 +592,12 @@ export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task'
 export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number };
 export type AgentStatus = 'running' | 'done' | 'error' | 'stopped';
 export type SubAgent = { id: string; type: string; description: string; prompt: string; background: boolean; status: AgentStatus; startedAt?: number; endedAt?: number; durationMs?: number;
-  tokens?: number; toolCount: number; now: string; report: string; items: AssistantItem[] };
+  tokens?: number; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };
 type ToolUse = Extract<Block, { type: 'tool_use' }>;
-// Every Agent call in `items`, in order, with what its subagent did (its own messages are the items whose `parent` is the call).
+// Work that keeps running after its tool call returns: a Monitor, or a shell started with run_in_background. It is tracked like a background
+// subagent (the CLI reports its start and end the same way), shown as a job: its command instead of a prompt, no steps of its own.
+export const isJobTool = (block: { name: string; input?: any }) => block.name === 'Monitor' || ((block.name === 'Bash' || block.name === 'PowerShell') && block.input?.run_in_background === true);
+// Every Agent call in `items`, in order, with what its subagent did (its own messages are the items whose `parent` is the call), and every job.
 // Status: the CLI's end report wins; a background one without it runs while its child lives (`liveTasks`); a foreground one is over once its result is in.
 export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[]): SubAgent[] {
   const children = new Map<string, AssistantItem[]>();
@@ -584,8 +606,16 @@ export function agentsOf(items: Item[], results: ChatView['results'], tasks: Cha
   for (const item of items) {
     if (item.kind !== 'assistant') continue;
     for (const block of item.blocks) {
-      if (block.type !== 'tool_use' || !isAgentTool(block.name)) continue;
+      if (block.type !== 'tool_use') continue;
       const input = block.input ?? {}, task = tasks[block.id], result = results[block.id], kids = children.get(block.id) ?? [];
+      if (isJobTool(block)) {
+        const command = String(input.command ?? ''), status: AgentStatus = task?.status ? (task.status === 'completed' ? 'done' : task.status === 'failed' ? 'error' : 'stopped')
+          : result?.isError ? 'error' : task ? (liveTasks ? (liveTasks.includes(block.id) ? 'running' : 'stopped') : 'running') : busy ? 'running' : 'done';
+        agents.push({ id: block.id, job: true, type: block.name === 'Monitor' ? 'Monitor' : '백그라운드 셸', description: String(task?.description || input.description || command), prompt: command ? `\`\`\`${block.name === 'PowerShell' ? 'powershell' : 'shell'}\n${command}\n\`\`\`` : '',
+          background: true, status, startedAt: task?.startedAt, endedAt: task?.endedAt, durationMs: task?.durationMs, toolCount: 0, now: status === 'running' ? task?.activity || command : '', report: task?.report || '', items: [] });
+        continue;
+      }
+      if (!isAgentTool(block.name)) continue;
       const background = task?.background ?? input.run_in_background === true;
       const tools = kids.flatMap(kid => kid.blocks.filter((child): child is ToolUse => child.type === 'tool_use'));
       const work = tools.filter(tool => tool.name !== 'SubagentHandback'), last = work.at(-1), handback = tools.filter(tool => tool.name === 'SubagentHandback').at(-1);
@@ -629,7 +659,8 @@ export function planSections(plan: string): { title: string; sections: PlanSecti
 const parentOf = (event: any): { parent?: string } => typeof event.parentToolUseId === 'string' && event.parentToolUseId ? { parent: event.parentToolUseId } : {};
 
 // A session's cost: under $0.1 five decimals (small turns still show), from $0.1 two.
-export const dollars = (value: number) => value < 0.1 ? value.toFixed(5) : value.toFixed(2);
+// Enough digits to see a cheap turn move (a Haiku reply is a fraction of a cent), without five zeros for nothing.
+export const dollars = (value: number) => value === 0 ? '0.00' : value < 1 ? value.toFixed(4) : value.toFixed(2);
 
 // One name for what a tool is called in the UI (internal ones read as what they do).
 export const toolLabel = (name: string) => name === 'SubagentHandback' ? '보고' : mcpTool(name) ? `${mcpTool(name)!.server} · ${mcpTool(name)!.tool}` : name;
@@ -676,23 +707,147 @@ export function artifactsOf(blocks: Block[], results: Record<string, { content: 
 }
 
 // A one-line summary of a tool call for its collapsed card.
-export function toolSummary(name: string, input: any): string {
+// A path under the chat's folder, relative to it ("src/b.ts"); anything else as given. Windows paths compare without case and with either slash.
+export function relativePath(file: string, root = ''): string {
+  if (!root || !file) return planFile(file);
+  const norm = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, ''), base = norm(root), full = norm(file);
+  const windows = /^[a-z]:\//i.test(base), same = (a: string, b: string) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
+  if (full.length > base.length && full[base.length] === '/' && same(full.slice(0, base.length), base)) return full.slice(base.length + 1);
+  return planFile(file);
+}
+export function toolSummary(name: string, input: any, root = ''): string {
   const text = (value: unknown) => typeof value === 'string' ? value : '';
   const line = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 140);
   switch (name) {
-    case 'Bash': return line(text(input?.description) || text(input?.command));
-    case 'Read': case 'Write': case 'Edit': case 'MultiEdit': case 'NotebookEdit': return line(text(input?.file_path) || text(input?.notebook_path));
+    case 'Bash': case 'PowerShell': case 'Monitor': return line(text(input?.description) || text(input?.command));
+    case 'Read': case 'Write': case 'Edit': case 'MultiEdit': return line(relativePath(text(input?.file_path) || text(input?.notebook_path), root));
     case 'Glob': case 'Grep': return line(text(input?.pattern));
     case 'WebFetch': return line(text(input?.url));
     case 'WebSearch': return line(text(input?.query));
+    // "select:WebSearch,WebFetch" loads those tools by name; anything else is a keyword search for tools.
+    case 'ToolSearch': { const query = text(input?.query); return query.startsWith('select:') ? `${query.slice(7).split(',').map(name => name.trim()).filter(Boolean).join(', ')} 불러오기` : line(query); }
     case 'Task': case 'Agent': return line(text(input?.description) || text(input?.prompt));
     case 'AskUserQuestion': { const asked = Array.isArray(input?.questions) ? input.questions : []; return line(text(asked[0]?.question)) + (asked.length > 1 ? ` 외 ${asked.length - 1}개` : ''); }
-    case 'ExitPlanMode': return line((text(input?.plan).split(/\r?\n/).filter(row => row.trim()).find(row => !/^\s*#/.test(row)) ?? text(input?.plan).split(/\r?\n/).filter(row => row.trim())[0] ?? '').replace(/^[\s#>*-]+/, ''));
+    // The plan in the tool input can be a stale copy (the CLI reads the plan file when it asks), so the row names the step; the card shows the plan.
+    case 'ExitPlanMode': return '계획 승인 요청';
     case 'SubagentHandback': return line(text(input?.message));
     case 'TodoWrite': return `${Array.isArray(input?.todos) ? input.todos.length : 0}개 항목`;
+    // Scheduling: the cron line and what it will say ("57 8 * * * · 테스트 알림 · 반복"); a job is named by its id.
+    case 'CronCreate': return line([text(input?.cron), text(input?.prompt), input?.recurring ? '반복' : ''].filter(Boolean).join(' · '));
+    case 'CronDelete': case 'TaskStop': return line(text(input?.id) || text(input?.task_id) || text(input?.shell_id));
+    case 'NotebookEdit': return line([relativePath(text(input?.notebook_path), root), text(input?.edit_mode) === 'insert' ? '셀 추가' : text(input?.edit_mode) === 'delete' ? '셀 삭제' : ''].filter(Boolean).join(' · '));
     default: if (mcpTool(name)) return mcpSummary(input);
-      return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || JSON.stringify(input ?? {}));
+      // A tool called with no input (CronList, ListAgents, EnterPlanMode) has nothing to summarize: no "{}".
+      return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || (input && Object.keys(input).length ? JSON.stringify(input) : ''));
   }
+}
+
+// ---- a decided plan (ExitPlanMode) in the record ----
+// Plans are saved under ~/.claude/plans; the home part of that path is noise in a narrow card.
+export const planFile = (path: string) => path.replace(/^.*?[\\/](\.claude[\\/]plans[\\/].+)$/, (_, rest: string) => `~/${rest.replace(/\\/g, '/')}`);
+// The CLI answers an approval with "User has approved your plan…" and the whole plan again; a revision request (sent as planRevision on
+// the server) carries the user's words after "User feedback:". Only the decision and those words are worth showing.
+export function planVerdict(content: string, isError: boolean): { approved: boolean; feedback?: string } {
+  if (!isError) return { approved: true };
+  const feedback = /User feedback:\n([\s\S]*)$/.exec(content)?.[1].trim();
+  return feedback ? { approved: false, feedback } : { approved: false };
+}
+
+// Claude's WebSearch result: 'Web search results for query: "…"', then one or more "Links: [{title, url}, …]" JSON arrays, then the
+// model's own notes on what it found. Split into the links (deduplicated, for a clickable list) and the notes; null if it is not that shape.
+export type WebLink = { title: string; url: string; host: string };
+export function webSearchResult(text: string): { links: WebLink[]; notes: string } | null {
+  const links: WebLink[] = [], seen = new Set<string>();
+  let notes = text.replace(/^Web search results for query: .*\n*/, ''), at: number;
+  while ((at = notes.indexOf('Links: [')) >= 0) {
+    // Find the array's closing bracket, skipping brackets inside JSON strings (a title may contain "]").
+    let depth = 0, end = -1, quoted = false;
+    for (let i = at + 7; i < notes.length; i++) {
+      const ch = notes[i];
+      if (quoted) { if (ch === '\\') i += 1; else if (ch === '"') quoted = false; continue; }
+      if (ch === '"') quoted = true; else if (ch === '[') depth += 1; else if (ch === ']' && --depth === 0) { end = i; break; }
+    }
+    if (end < 0) break;
+    try {
+      for (const item of JSON.parse(notes.slice(at + 7, end + 1))) {
+        const url = typeof item?.url === 'string' ? item.url : '';
+        if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        let host = url; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { /* keep the url */ }
+        const title = typeof item.title === 'string' ? item.title.replace(/^[>#\s]+/, '').trim() : '';
+        links.push({ title: title || host, url, host });
+      }
+    } catch { return null; }
+    notes = notes.slice(0, at) + notes.slice(end + 1);
+  }
+  return links.length ? { links, notes: notes.trim() } : null;
+}
+
+// "+N −M" for a chat diff's header: the lines between the common head and tail (an Edit's old/new strings are short, so this is the
+// changed block, not a full line diff).
+export function lineChanges(from: string, to: string) {
+  const a = from ? from.split('\n') : [], b = to ? to.split('\n') : [];
+  let head = 0, tail = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  return { added: b.length - head - tail, removed: a.length - head - tail };
+}
+
+// Tools held at an approval prompt: they have not run yet, so their rows say "승인 대기" instead of spinning. Claude names the tool call in
+// the request; an agent that does not is matched to the newest unanswered call of the same tool.
+export function awaitingTools(items: readonly Item[], approvals: readonly Approval[], results: Readonly<Record<string, unknown>>): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!approvals.length) return ids;
+  const open = items.flatMap(item => item.kind === 'assistant' ? item.blocks.flatMap(block => block.type === 'tool_use' && !results[block.id] ? [block] : []) : []);
+  for (const approval of approvals) {
+    if (approval.toolUseId) { ids.add(approval.toolUseId); continue; }
+    const at = lastIndexWhere(open, block => block.name === approval.tool && !ids.has(block.id));
+    if (at >= 0) ids.add(open[at].id);
+  }
+  return ids;
+}
+
+// Which subagent asked for each pending approval (requestId -> the subagent's Agent tool call id): the approved tool call sits in one of that
+// subagent's messages. Approvals from the main conversation are not in the map.
+export function approvalAgents(items: readonly Item[], approvals: readonly Approval[]): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  if (!approvals.some(approval => approval.toolUseId)) return out;
+  const owner = new Map<string, string>();
+  for (const item of items) if (item.kind === 'assistant' && item.parent) for (const block of item.blocks) if (block.type === 'tool_use') owner.set(block.id, item.parent);
+  for (const approval of approvals) { const agent = approval.toolUseId ? owner.get(approval.toolUseId) : undefined; if (agent) out.set(approval.requestId, agent); }
+  return out;
+}
+
+// A tool's input as labelled fields for its opened card ("패턴 export · 경로 src"), instead of raw JSON. Known keys get a Korean label and
+// readable values; paths under the chat's folder become relative. Unknown keys keep their own name. A value that is a list of objects
+// (TodoWrite's todos, MultiEdit's edits) is only counted; the raw JSON stays one click away under the fields.
+const INPUT_LABELS: Record<string, string> = {
+  pattern: '패턴', path: '경로', file_path: '파일', notebook_path: '노트북', glob: '파일 필터', type: '파일 형식', output_mode: '출력',
+  '-i': '대소문자 무시', '-n': '줄 번호', '-A': '뒤 줄', '-B': '앞 줄', '-C': '앞뒤 줄', context: '앞뒤 줄', multiline: '여러 줄', head_limit: '최대 개수',
+  offset: '시작', limit: '개수', pages: '페이지', url: 'URL', prompt: '요청', query: '검색어', allowed_domains: '허용 도메인', blocked_domains: '제외 도메인',
+  description: '설명', command: '명령', timeout: '제한 시간', run_in_background: '백그라운드', replace_all: '모두 바꾸기', cell_id: '셀', cell_type: '셀 종류', edit_mode: '편집 방식',
+  subagent_type: '에이전트', model: '모델', skill: '스킬', args: '인자', todos: '할 일', edits: '편집', max_results: '최대 개수', mode: '모드',
+};
+const OUTPUT_MODES: Record<string, string> = { files_with_matches: '파일 목록', content: '일치하는 줄', count: '개수' };
+const PATH_KEYS = new Set(['path', 'file_path', 'notebook_path', 'cwd', 'directory', 'dir']);
+export type ToolField = { key: string; label: string; value: string; mono: boolean; long: boolean };
+export function toolInputFields(input: unknown, root = ''): ToolField[] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return [];
+  return Object.entries(input as Record<string, unknown>).flatMap(([key, raw]): ToolField[] => {
+    if (raw === undefined || raw === null || raw === '') return [];
+    const label = INPUT_LABELS[key] ?? key;
+    let value: string, mono = true;
+    if (typeof raw === 'boolean') { value = raw ? '예' : '아니오'; mono = false; }
+    else if (typeof raw === 'number') value = key === 'timeout' && raw >= 1000 ? `${Math.round(raw / 1000)}초` : String(raw);
+    else if (typeof raw === 'string') {
+      value = PATH_KEYS.has(key) ? (relativePath(`${raw.replace(/[\\/]+$/, '')}/.`, root).replace(/\/?\.$/, '') || '.') : key === 'output_mode' ? OUTPUT_MODES[raw] ?? raw : raw;
+      mono = !['description', 'prompt', 'query'].includes(key) && !(key === 'output_mode' && raw in OUTPUT_MODES);
+    } else if (Array.isArray(raw)) {
+      if (raw.some(item => item && typeof item === 'object')) { value = `${raw.length}개`; mono = false; }
+      else value = raw.join(', ');
+    } else { value = JSON.stringify(raw); }
+    return [{ key, label, value, mono, long: value.length > 80 || value.includes('\n') }];
+  });
 }
 
 // ---- answering a question (Claude's AskUserQuestion, Codex's requestUserInput, Cursor's ask_question) ----

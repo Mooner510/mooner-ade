@@ -52,7 +52,7 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'terminal', label: '터미널', icon: 'terminal' },
   { id: 'ai', label: 'AI 툴', icon: 'claude' },
   { id: 'chat', label: '채팅', icon: 'chat' },
-  { id: 'status', label: '상태바', icon: 'info' },
+  { id: 'status', label: '상태바', icon: 'statusBar' },
   { id: 'diff', label: '변경사항', icon: 'diff' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'plugins', label: '플러그인', icon: 'plugin' },
@@ -111,7 +111,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
   const layout = chat ? chatStatusLayout(settings) : statusLayout(settings), items = chat ? settings.chatStatusItems : settings.statusItems, shown = new Set(items);
   const keys_ = chat ? { items: 'chatStatusItems', left: 'chatStatusLeft', right: 'chatStatusRight' } as const : { items: 'statusItems', left: 'statusLeft', right: 'statusRight' } as const;
   const labels = chat ? chatStatusLabels : statusLabels, base = statusSamples(settings);
-  const sample = (id: string) => { const view = chat ? chatItemView(id, { state: sampleChat }) : null; return chat ? <span className="stat" style={{ color: view?.color }}>{view?.text}</span> : base[id]; };
+  const sample = (id: string) => { const view = chat ? chatItemView(id, { state: sampleChat }) : null; return chat ? <span className="stat" style={{ color: view?.color }}>{view?.text}{view?.extra && ` ${view.extra.text}`}</span> : base[id]; };
   const [dragging, setDragging] = useState(''), [drop, setDrop] = useState<{ side: Side; index: number } | null>(null);
   const place = (id: string, side: Side, index: number) => {
     const next = { left: layout.left.filter(item => item !== id), right: layout.right.filter(item => item !== id) };
@@ -207,6 +207,36 @@ function WakaTimeSettings({ settings, set, onChange }: { settings: Settings; set
         <Row title="마지막 전송" hint={status.lastError ?? undefined}><span>{status.lastSent ? new Date(status.lastSent).toLocaleTimeString() : '아직 없음'}</span></Row>
       </>}
     </>}
+  </>;
+}
+
+// API key the chat mode runs this agent with instead of the CLI's login. The key stays on the local server; only its last four characters come back.
+type KeyAgent = 'claude' | 'codex' | 'cursor';
+type AgentKeyStatus = Record<KeyAgent, { use: boolean; key: string }>;
+const keySources: Record<KeyAgent, { placeholder: string; where: string; billing: string }> = {
+  claude: { placeholder: 'sk-ant-…', where: 'console.anthropic.com의 API Keys', billing: 'Anthropic API 사용량' },
+  codex: { placeholder: 'sk-…', where: 'platform.openai.com의 API keys', billing: 'OpenAI API 사용량' },
+  cursor: { placeholder: 'key_…', where: 'cursor.com 대시보드의 Integrations > User API Keys', billing: 'Cursor 계정의 API 키 사용량' },
+};
+function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
+  const [status, setStatus] = useState<AgentKeyStatus | null>(null), [key, setKey] = useState(''), [message, setMessage] = useState('');
+  useEffect(() => { void api<AgentKeyStatus>('agent-keys/status').then(setStatus, () => {}); }, []);
+  const save = (input: { key?: string; use?: boolean }, done: string) => api<AgentKeyStatus>('agent-keys/config', { agent, ...input }).then(next => { setStatus(next); setKey(''); setMessage(done); }, (error: Error) => setMessage(error.message));
+  const entry = status?.[agent], source = keySources[agent];
+  return <>
+    <h4 className="setting-group">채팅 인증</h4>
+    <Row title="채팅 인증 방식" hint={`채팅 모드에서 ${agentNames[agent]}를 실행할 계정입니다. API 키를 고르면 ${source.billing}으로 과금되고, 터미널(CLI)로 연 에이전트와 상태바 사용량은 계속 CLI 로그인 기준입니다. 다음에 시작하는 채팅부터 적용됩니다.`}>
+      {status && <Dropdown label={`${agentNames[agent]} 채팅 인증 방식`} value={entry?.use ? 'key' : 'login'}
+        options={[{ value: 'login', label: 'CLI 로그인' }, { value: 'key', label: 'API 키', ...(!entry?.key && { hint: '먼저 키를 저장하세요' }) }]}
+        onChange={value => void save({ use: value === 'key' }, value === 'key' ? 'API 키로 실행합니다.' : 'CLI 로그인으로 실행합니다.')} />}
+    </Row>
+    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ' · 사용 중' : ' · 저장만 됨'} · 이 컴퓨터에만 저장되며 화면에는 끝 4자리만 보입니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
+      <input type="password" value={key} placeholder={source.placeholder} autoComplete="off" spellCheck={false} aria-label={`${agentNames[agent]} API 키`}
+        onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && key.trim()) void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.'); }} />
+      <button disabled={!key.trim()} onClick={() => void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.')}>저장</button>
+      {entry?.key && <button onClick={() => void save({ key: '' }, '삭제했습니다. CLI 로그인으로 실행합니다.')}>삭제</button>}
+    </Row>
+    {message && <p className="setting-note" role="status">{message}</p>}
   </>;
 }
 
@@ -385,6 +415,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     {tab === 'claude' && argsRow('claude', 'claudeArgs', '--model opus')}
     {tab === 'codex' && argsRow('codex', 'codexArgs', '--model gpt-5')}
     {tab === 'cursor' && argsRow('cursor', 'cursorArgs', '--model auto')}
+    <ChatAuthSettings agent={tab} />
     <h4 className="setting-group">알림</h4>
     <Row title="이 에이전트의 알림" hint="끄면 알림과 소리를 모두 끕니다. 사이드바의 표시는 그대로입니다. 알림 종류와 소리는 ‘공용’에서 정합니다.">{inList('agentsMuted', tab, `${agentNames[tab]} 알림`)}</Row>
     {tab !== 'cursor' && <>
@@ -424,12 +455,14 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         <span className="spacer" />
         <button onClick={() => onChange({ ...defaultSettings, theme: settings.theme, onboarded: settings.onboarded, chatTipPending: settings.chatTipPending })}><Icon name="refresh" />기본값으로</button>
       </nav>
+      <div className="settings-main">
+      <header className="settings-drag" onPointerDown={dragSettings}>
+        <h3>{searching ? '검색' : sections.find(item => item.id === section)?.label}</h3>
+        <input type="search" className="settings-search" placeholder="설정 검색" aria-label="설정 검색" value={query} onChange={event => setQuery(event.target.value)} />
+        <IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} />
+      </header>
+      <div className="settings-content">
       <div className="settings-body">
-        <header className="settings-drag" onPointerDown={dragSettings}>
-          <h3>{searching ? '검색' : sections.find(item => item.id === section)?.label}</h3>
-          <input type="search" className="settings-search" placeholder="설정 검색" aria-label="설정 검색" value={query} onChange={event => setQuery(event.target.value)} />
-          <IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} />
-        </header>
         {searching && <p className="search-empty">일치하는 설정이 없습니다.</p>}
         {(searching || section === 'appearance') && <SectionFrame label="외관" searching={searching}>
           <Group title="전체">
@@ -613,6 +646,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
       </div>
       {wide && <LookPreview id={look} settings={settings} />}
+      </div>
+      </div>
     </div>
     </lookHover.Provider>
     </settingsQuery.Provider>

@@ -34,3 +34,10 @@ test('the agent instructions name both fences and the helpers, say when not to u
   for (const word of ['```ui', 'ade-ui', 'ade.send', 'ade.prefill', 'never for ordinary answers']) assert.ok(UI_PROMPT.includes(word), word);
   assert.ok(UI_PROMPT.length < 2000, `prompt is sent every turn: ${UI_PROMPT.length} chars`);
 });
+
+test('a frame laid out at a fixed width reports how far it reaches, so its card shrinks to fit', () => {
+  assert.equal(parseFrameMessage({ ade: 1, type: 'height', height: 300, width: 436.4 }).width, 437);
+  assert.equal(parseFrameMessage({ ade: 1, type: 'height', height: 300, width: 20 }).width, 200, 'never narrower than MIN_WIDTH');
+  assert.equal('width' in parseFrameMessage({ ade: 1, type: 'height', height: 300, width: 'wide' }), false);
+  assert.equal('width' in parseFrameMessage({ ade: 1, type: 'height', height: 300 }), false);
+});
