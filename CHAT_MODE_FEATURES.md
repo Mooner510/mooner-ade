@@ -1,7 +1,8 @@
 # Chat 모드 기능 정리
 
-> 기준: `feat/chat-mode-on-master` 브랜치의 **작업 트리**(미커밋 변경 포함), 2026-11-11 시점.
-> 이 보고서를 쓰는 동안에도 `chat.js`, `chat-model.ts`, `ChatPane.tsx`가 계속 바뀌었습니다. 세부 값은 코드와 다를 수 있으니, 수치나 동작을 인용하기 전에 해당 파일을 다시 확인하세요.
+> 기준: `master` 커밋 `1646d18`(`chore: release 0.5.2-beta2`), 2026-11-12 시점.
+> 이전 기준(`feat/chat-mode-on-master`, 2026-11-11)에서 master에 들어온 변경(질문 카드, 세션 통계, 캐시 타이머, 사용량 기여도, Claude 기본값, 에이전트 버스, 플러그인 도구 제어)을 반영했습니다.
+> 세부 값은 코드와 다를 수 있으니, 수치나 동작을 인용하기 전에 해당 파일을 다시 확인하세요. master 밖의 작업은 §26을 보세요.
 
 ---
 
@@ -13,7 +14,10 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
  · 입력·렌더링                     chat-claude.js  (Claude 변환)          codex app-server (JSON-RPC) [Codex]
  · chat-model.ts (상태 리듀서)     chat-rpc.js     (Codex·Cursor 프로토콜) cursor-agent acp (JSON-RPC) [Cursor]
  · ChatStatus.tsx (상태 줄)        slash-commands.js (명령 목록)
-                                   claude-auto-compact.js, usage.js, cursor-*.js
+ · ChatStats.tsx (/stats 모달)     chat-stats.js   (transcript 통계)
+ · QuestionCard.tsx (질문 카드)    claude-cache.js · claude-defaults.js · claude-auto-compact.js
+ · CacheTimer.tsx (캐시 타이머)    usage.js, cursor-*.js, agent-spawn.js
+ · use-usage-share.ts (기여도)     내장 플러그인 agent-bus (apps/desktop/builtin-plugins)
 ```
 
 - 인증·모델 호출·도구 실행은 전부 공식 CLI 안에서 일어납니다. ADE는 CLI의 로그인과 세션을 빌려 쓰고, 메시지 텍스트는 셸을 거치지 않고 argv/stdin으로만 전달합니다(`chat.js`의 `shell: false`).
@@ -36,15 +40,18 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 과거 지점 되돌리기(Rewind) | ✅ | ✅ | ❌ |
 | 이미지 입력 | ✅ | ✅ (모델별) | ✅ (ACP가 허용할 때) |
 | 추가 작업 폴더(`--add-dir`) | ✅ (최대 8개) | ✅ | ❌ |
-| 워크트리 격리 | ✅ | ✅ | ✅ |
+| 워크트리 격리 (서버 옵션, 화면 컨트롤 없음 — §20) | ✅ | ✅ | ✅ |
 | 비용(USD) 표시 | ✅ | ❌ | ❌ |
 | 토큰 집계 | ✅ | ✅ | ❌ |
 | 컨텍스트 사용률 | ✅ | ✅ (사용량 이벤트 수신 후) | ✅ (실험적: CLI 세션 저장소 읽기) |
+| 세션 통계(`/stats`) | ✅ | ❌ | ❌ |
+| 프롬프트 캐시 타이머 | ✅ | ❌ | ❌ |
 | 터미널 → Chat 전환 | ✅ | ❌ | ❌ |
 | Chat → 터미널 전환 | ✅ | ✅ | ✅ |
 | 권한 모드 | default, acceptEdits, plan, auto, bypassPermissions | 같음 | default(agent), plan, ask (ACP가 알려 준 목록) |
 | Effort | low, medium, high, xhigh, max | 모델 카탈로그가 알려 준 값 | ACP config option에서 찾은 값 |
 | 사용 한도 표시 | ✅ | ✅ | ✅ (`usage.js`의 Cursor 로그인 조회) |
+| 에이전트 버스(다른 채팅과 메시지) | ✅ | ✅ | ✅ (Cursor는 응답이 끝난 뒤 전달) |
 
 - 제공되지 않는 기능은 버튼이 회색으로 바뀌고, 마우스를 올리면 이유가 나옵니다(예: "Cursor ACP는 과거 지점 분기를 제공하지 않습니다").
 
@@ -52,7 +59,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 ## 3. 채팅 탭 열기와 저장
 
-- **새 채팅**: 새 탭 메뉴 또는 탭 기본 모드(설정 › 외관 › 새 탭 기본 모드)에서 Claude·Codex·Cursor 중 고릅니다. 시작 시 설정의 "새 채팅 기본값"(권한 모드·Effort)이 그 에이전트가 지원하는 범위에서만 적용됩니다. 이미 있는 채팅은 바뀌지 않습니다.
+- **새 채팅**: 새 탭 메뉴 또는 탭 기본 모드(설정 › 외관 › 새 탭 기본 모드)에서 Claude·Codex·Cursor 중 고릅니다. 시작 시 설정의 "새 채팅 기본값"(권한 모드·Effort)이 그 에이전트가 지원하는 범위에서만 적용됩니다. 기본값은 둘 다 **CLI 설정 따름**입니다(§17). 이미 있는 채팅은 바뀌지 않습니다.
 - **다시 열기**: 같은 채팅 ID로 `chat/open`을 부르면 서버가 저장된 이벤트를 재생해 화면을 복원합니다. 연결이 끊겼다 돌아와도 `since`(마지막 seq) 이후 이벤트만 받아 이어집니다.
 - **저장 항목**: 사용자 메시지, 어시스턴트 메시지(블록 단위), 도구 결과, 승인, 상태 변화(세션·설정·사용량·압축·되돌리기 지점 등). 실시간 델타(글자 단위)는 저장하지 않습니다.
 - **보관 한도**: 메모리와 파일 모두 최근 4,000개 이벤트만 유지합니다. `/clear` 이전 내용은 구분선 위에 남습니다.
@@ -79,6 +86,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 - **Follow-up 대기열(Tab, 응답 중)**: 응답이 끝난 뒤 순서대로 보냅니다. 입력창 위에 "Follow-up N개" 목록이 뜨고 항목마다 ×로 취소할 수 있습니다. 설정의 "Follow-up 대기열 (Tab)"을 끄면 Tab은 CLI로 그대로 전달됩니다.
 - **Cursor**: 스티어링이 없으므로 응답 중 Enter도 대기열에 들어갑니다.
 - 대기열은 `/clear`를 하면 비워집니다.
+- **에이전트 버스 메시지**: 다른 채팅이 보낸 메시지는 응답 중이면 Claude·Codex는 같은 방식으로 끼워 넣고(기본 전달 방식 "작업 중이면 바로 끼워 넣기"), Cursor는 응답 후에 넣습니다. 전달 방식을 "응답이 끝난 뒤에만"으로 바꾸면 Claude·Codex도 응답이 끝난 뒤 받습니다(§8의 에이전트 버스 항목 참고).
 
 ---
 
@@ -88,6 +96,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 - **실패 안내**: 턴이 실패하면 오류 말풍선이 뜹니다. 자식 프로세스가 비정상 종료하면 "설치와 로그인을 확인하세요" 같은 안내와 함께 오류가 기록됩니다.
 - **재시도**: `/retry` 또는 오류 말풍선의 **세션 복구** 버튼이 마지막 사용자 메시지를 같은 세션으로 다시 보냅니다. 응답 중이거나 승인 대기 중에는 쓸 수 없습니다.
 - **CLI 실행 파일을 못 찾을 때**: PATH를 한 번 새로 읽고 다시 시도합니다.
+- **백그라운드 작업(Claude)**: 서브에이전트가 턴이 끝난 뒤에도 돌면 채팅은 "응답 중"으로 남고, 그들의 출력이 오면 다시 그 상태가 됩니다. 3분 동안 출력이 없으면 유휴로 돌아갑니다.
 
 ---
 
@@ -103,23 +112,37 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 - 직접 만든 가벼운 렌더러입니다(`Markdown.tsx`, `markdown-parse.ts`). React 요소로 그리므로 HTML은 주입되지 않습니다.
 - 지원: 제목(#~######), 굵게·기울임·인라인 코드, 링크, 순서·비순서 목록(2단계까지), 인용문, 구분선, 표, 코드 블록(언어 표시 + 복사 버튼).
 - 링크는 앱의 "외부 링크를 열까요?" 확인창을 거칩니다(`ade:link`).
-- 미지원: 구문 강조, HTML, 3단계 이상 중첩 목록.
+- 미지원: 구문 강조, 일반 HTML, 3단계 이상 중첩 목록. (예외: ` ```ade-ui ` 펜스는 아래 "인터랙티브 UI"로 렌더링됩니다.)
+
+### 인터랙티브 UI
+- 에이전트가 숫자 비교·추이·진행 상황·사용자 선택처럼 UI가 더 나을 때만 답변에 두 종류의 펜스를 넣을 수 있습니다. 펜스가 닫히기 전에는 "생성 중" 표시만 보이고, JSON이 깨졌거나 설정이 꺼져 있으면 일반 코드 블록으로 보입니다.
+  - ` ```ui `: 위치 기반 JSON 배열(키 이름 없음, 예: `["chart","line","제목",["1월","2월"],["Web",3,5]]`)을 앱이 직접 그립니다(`ui-spec.ts`, `UiBlocks.tsx`). 모델이 쓴 코드는 실행되지 않고 출력도 짧습니다. 컴포넌트: `stats`(수치 카드, tone), `chart`(line/bar/pie, 다중 시리즈, SVG), `steps`(단계 진행), `form`(text·number·area·select·radio·check·slider·date; 제출하면 답을 다음 user 메시지로 전송, `draft`로 쓰면 입력창에만 채움). 표·코드·인용은 기존 Markdown을 씁니다.
+  - ` ```ade-ui `: 실시간 계산이나 맞춤 미리보기가 필요할 때만 쓰는 자체 완결 HTML+JS. 아래 샌드박스 iframe(`UiFrame.tsx`)으로 렌더링됩니다.
+- 넣지 않은 ChatGPT 컴포넌트: 지도·이미지 갤러리·캐러셀·Mermaid·외부 연동 카드(네트워크/라이브러리가 필요). 필요해지면 `ui-spec.ts`에 컴포넌트를 하나씩 추가합니다.
+- iframe은 `sandbox="allow-scripts"`(origin 없음)이고 `/ade-ui-frame.html`(`ui-frame.js`)을 전용 CSP(`default-src 'none'`, 네트워크·프레임·폼 차단)로 불러옵니다. 앱 쿠키·저장소·DOM에는 접근할 수 없습니다.
+- UI 안에서는 `ade.send(text)`(다음 채팅 메시지로 즉시 전송, 에이전트 작업 중에는 follow-up 대기열)와 `ade.prefill(text)`(입력창에만 채움)을 쓸 수 있습니다. `ade.send`는 실제 클릭/키 입력이 있을 때만 동작하고, 앱 쪽에서 1.5초에 한 번으로 제한합니다.
+- 에이전트에게는 사용 기준과 API를 설정 "인터랙티브 UI"(기본 켜짐)가 켜진 동안 시스템 프롬프트로 알립니다(`chat-ui-prompt.js`; Claude는 `--append-system-prompt-file`, Codex는 `developerInstructions`). 지침(약 300토큰)은 채팅의 첫 메시지 때의 설정값으로 한 번 정해져 `meta`에 저장되고 이후 바뀌지 않습니다(시스템 프롬프트가 바뀌면 대화 전체가 프롬프트 캐시를 놓치기 때문). 이미 세션이 있던 채팅은 받지 않으며, 켜고 끄는 설정은 새 채팅부터 적용됩니다. Cursor는 지침 채널이 없어 안내하지 않습니다(펜스를 내면 렌더링은 됩니다).
+- 한계: UI 내부 상태는 저장되지 않아 새로고침하면 처음 상태로 돌아갑니다. 외부 라이브러리·네트워크는 쓸 수 없습니다(바닐라 JS/SVG/canvas).
 
 ### 메시지 구성
 - 사용자 메시지는 말풍선, 슬래시 명령은 `/이름 인자` 형태의 명령 말풍선으로 보입니다.
-- 어시스턴트 메시지 위에는 도구 카드가 순서대로 옵니다. 턴이 끝나면, 마지막 텍스트(답변)를 제외한 "과정"(도구·생각)은 **과정 접기**로 묶입니다. 펼치면 그대로 보입니다.
+- 어시스턴트 메시지 위에는 도구 카드가 순서대로 옵니다. 실행 중에는 단계가 평평한 행으로 보이고, 턴이 끝나면 마지막 텍스트(답변)를 제외한 "과정"(도구·생각)이 **과정** 상자 하나로 묶입니다. 펼치면 그대로 보입니다.
+- 다른 에이전트가 보낸 메시지(§8)는 일반 사용자 말풍선이 아니라 "다른 에이전트의 메시지 · Codex “제목”" 카드로 보입니다. 답장 깊이(`답장 2/4`)도 표시됩니다.
 - 현재 보고 있는 메시지의 요청 문장은 화면 위에 고정(핀)되어 보이고, 누르면 그 요청으로 이동합니다.
 - 화면 끝에서 멀리 올라가 있으면 오른쪽 아래에 "맨 아래로" 버튼이 뜹니다. 자동 따라가기는 설정 › 새 출력 따라가기로 끌 수 있습니다.
 - 대화 본문 폭은 설정 › 대화 너비(좁게 680 · 기본 780 · 넓게 1000 · 가득), 글자 크기는 11–20px입니다.
 
 ### 도구 카드
 - 도구마다 아이콘과 한 줄 요약(Bash 설명, 파일 경로, 검색어 등)이 있고, 상태는 대기·실행 중·완료·오류 중 하나로 표시됩니다.
-- 펼치면 Bash는 명령, Edit·MultiEdit은 diff, Write는 내용, Codex 패치는 변경 diff를 보여 주고, 아래에 결과(최대 6,000자)가 붙습니다.
-- 설정 › 도구 호출 펼쳐 보기로 기본 펼침 여부를 정합니다.
+- 펼치면 Bash는 명령, Edit·MultiEdit은 diff, Write는 내용, Codex 패치는 변경 diff를 보여 주고, 아래에 결과(최대 6,000자)가 붙습니다. `AskUserQuestion`은 질문과 답변을 읽기 전용 목록으로 보여 줍니다.
+- 설정 › 도구 호출 펼쳐 보기로 기본 펼침 여부를 정합니다(기본 끔).
+- **도구 호출 표시** (설정 › 채팅 › 대화 표시):
+  - **요약**(기본): 도구를 3개 이상 연달아 부르면 낮은 상자 하나에 묶고 실행 중에는 머리글이 지금 도구를 보여 주고, 상자 안은 도구 2.25개 높이로 스크롤되며 위에 가려진 도구가 있으면 상단에 그림자가 생깁니다. 응답이 끝나면 "도구 N개 호출 완료"(오류가 있으면 "N개 오류") 한 줄로 접히고, 클릭하면 펼칩니다.
+  - **상세**: 도구마다 한 줄씩 나열합니다.
 
 ### 구분선·알림 줄
 - `/clear` 뒤는 "새 대화" 구분선. 압축 뒤는 "컨텍스트 압축 · 전 → 후 토큰 (N% 감소)" 또는 "자동 압축" 구분선.
-- 명령 결과(`/cost`, `/status`, `/help` 등)는 기록되지 않는 로컬 메모 말풍선입니다.
+- 명령 결과(`/cost`, `/status`, `/stats`의 안내, `/help` 등)는 기록되지 않는 로컬 메모 말풍선입니다.
 
 ---
 
@@ -127,13 +150,19 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 - 도구 실행 전 **승인 카드**가 입력창 위에 뜹니다. 허용 · 거부 버튼이 있고, 제안된 "항상 허용"(이 세션 동안 비슷한 요청을 계속 허용)이 있으면 함께 보입니다.
 - Bash는 명령 전체를, Edit·Write는 파일 경로를 보여 줍니다.
-- **질문형 승인**: 객관식(라디오·체크박스), 주관식(텍스트), 비밀번호형 입력을 지원합니다. 모든 질문에 답해야 "답변" 버튼이 켜집니다.
-- **계획 승인**(Cursor `create_plan`): 계획 본문을 Markdown으로 보여 줍니다.
+- **질문 카드**(`QuestionCard.tsx`): 에이전트가 묻는 질문은 승인 카드가 아니라 질문 카드로 뜹니다. Claude의 `AskUserQuestion`, Codex의 사용자 입력 요청, Cursor의 `ask_question`이 같은 카드를 씁니다.
+  - 한 카드에 질문 여러 개가 함께 올라오고, 모두 답해야 "답변 보내기"가 켜집니다. Ctrl/⌘+Enter로도 보냅니다.
+  - 선택지마다 설명이 붙습니다. 선택지가 있는 질문도 "직접 입력" 칸이 있어 자기 답을 쓸 수 있습니다(에이전트가 막은 경우 제외).
+  - 객관식(라디오·체크박스, 여러 개 선택 표시), 주관식(텍스트), 비밀번호형 입력을 지원합니다.
+  - **건너뛰기**: 답하지 않고 넘깁니다. Claude에는 "사용자가 답하지 않았다, 판단해서 이어가거나 꼭 필요하면 평문으로 물어라"는 안내가 전달됩니다.
+  - Claude는 이 답을 도구 입력(`answers`)에 담아 돌려줍니다.
+- **계획 검토**: Claude의 계획 모드 종료(`ExitPlanMode`)와 Cursor의 `create_plan`은 계획 본문을 Markdown으로 보여 주고 "계획대로 진행 / 계속 계획"을 묻습니다. 계획 카드는 본문이 화면 높이의 약 60%까지 커지고(결정 버튼은 항상 노출), "크게 보기"로 넓은 대화상자에서 읽고 바로 결정할 수 있으며 복사도 됩니다. Claude 계획 카드에는 "자동 모드로 진행" / "편집 허용으로 진행"(승인과 동시에 권한 모드 전환)과 "수정 요청…"(의견을 적어 반려하면 계획 모드에서 다시 계획)도 있습니다. Claude에서 계획을 승인하면 권한 모드는 계획 모드 이전 값으로 돌아갑니다(모드 표시도 그에 맞춰 바뀜).
 - 응답 중 승인 대기가 생기면 탭 제목 옆에 경고 표시가 뜨고, 사이드바에서도 상태가 보입니다(`attention`).
+- **에이전트 버스 메시지**(내장 플러그인 `agent-bus`): 다른 채팅이 보낸 메시지는 승인 없이 바로 전달되고, 받는 쪽은 새 턴을 시작합니다. 자세한 규칙은 [docs/AGENT_BUS.md](docs/AGENT_BUS.md)를 보세요. 이 도구는 기본 설정("에이전트 도구 호출 자동 허용" 켬)에서 Claude·Codex·Cursor 모두 권한을 묻지 않습니다. 플러그인 설정에서 끄면 묻고, Cursor는 이 서버의 도구를 하나라도 꺼도 자동 허용이 빠집니다(셸·파일·다른 서버 도구는 항상 묻습니다). 바꾼 값은 새로 시작하는 채팅부터 적용됩니다.
 - 승인 종류별 매핑
-  - Claude: `can_use_tool` 요청(`--permission-prompt-tool stdio`). AskUserQuestion도 일반 승인 카드로 보입니다.
-  - Codex: 명령 실행, 파일 변경, 사용자 입력 요청, 추가 권한 요청.
-  - Cursor: 권한 요청, 질문(`cursor/ask_question`), 계획 승인(`cursor/create_plan`).
+  - Claude: `can_use_tool` 요청(`--permission-prompt-tool stdio`). `AskUserQuestion`은 질문 카드, `ExitPlanMode`는 계획 검토로 갑니다.
+  - Codex: 명령 실행, 파일 변경, 사용자 입력 요청(질문 카드), 추가 권한 요청.
+  - Cursor: 권한 요청, 질문(`cursor/ask_question`, 질문 카드), 계획 승인(`cursor/create_plan`, 계획 검토).
 
 ---
 
@@ -143,6 +172,8 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 - `bypassPermissions`(모든 권한 건너뛰기)는 드롭다운에서만 고를 수 있고, Shift+Tab 순환과 "새 채팅 기본값" 설정에서는 빠집니다.
 - 바꾼 모드는 실행 중인 Claude 자식 프로세스에 바로 적용됩니다(`set_permission_mode`). 적용이 안 되면 "권한 모드를 적용하지 못했습니다"가 뜹니다.
 - 표시 이름: 기본, 편집 허용, 계획, 자동, Bypass, 질문 전용(Cursor).
+- **CLI 설정 따름(Claude)**: 사용자가 이 채팅에서 고르지 않은 권한 모드는 CLI 설정(`settings.json`의 `permissions.defaultMode`)을 따릅니다. 이때 ADE는 `--permission-mode`를 넘기지 않습니다. 새 채팅 기본값도 기본적으로 이 값입니다.
+- 첫 응답 전에는 상태 줄에 `settings.json`(사용자 설정 → 프로젝트 `.claude/settings.json`·`settings.local.json` 순)의 권한 모드·모델·Effort를 미리 보여 줍니다. 저장하지 않고 플래그로도 넘기지 않습니다.
 
 ---
 
@@ -153,6 +184,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
   - 목록 출처: `~/.claude/cache/model-catalog/*-cc.json`(CLI가 로그인 상태로 받아 둔 카탈로그). 없으면 별칭(opus·sonnet·haiku)과 Fable로 대신합니다.
   - 별칭(`opus` 등)은 지금 가리키는 실제 모델 ID로 풀어서 보여 주고, 1M 컨텍스트가 필요한 구버전 모델은 "(1M)" 행이 따로 붙습니다.
   - 계열마다 색이 다릅니다(Fable·Opus·Sonnet·Haiku·Astra·Sol·Terra·Luna).
+  - 모델을 고르지 않았으면 `settings.json`의 `model`을 따릅니다(§9).
 - **Codex**: 모델 목록은 `model/list`에서 가져오고, 모델마다 지원 Effort와 이미지 입력 가능 여부가 따라옵니다.
 - **Cursor**: 모델 버튼이 모달을 열고, First Party / Third Party 탭과 Provider별 그룹으로 나뉩니다. 검색도 됩니다.
 - Claude는 모델을 바꾸면 실행 중인 프로세스에 `set_model`을 보냅니다. "기본 모델"로 되돌리는 경우에만 같은 세션으로 프로세스를 다시 띄웁니다.
@@ -160,6 +192,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 ### Effort
 - Claude: low · medium · high · xhigh · max. 드롭다운과 `/effort`, 단축키(Shift+↑/↓)로 바꿉니다.
 - Effort는 시작 옵션이라 바꾸면 자식 프로세스를 다시 띄웁니다. 응답 중이면 응답이 끝난 뒤 적용합니다.
+- 고르지 않았으면 CLI 설정(`effortLevel`, `CLAUDE_CODE_EFFORT_LEVEL`)을 따릅니다(기본 "자동 · CLI 설정 따름").
 - 최고 단계(xhigh·max)는 색과 불꽃 효과로 강조됩니다.
 
 ### Cursor 전용 옵션
@@ -175,24 +208,44 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 ### 컨텍스트 링
 - 모델 드롭다운 옆 원형 게이지가 컨텍스트 사용률을 보여 줍니다(초록 → 빨강). 클릭하면 팝오버가 열립니다.
   - 팝오버 내용: 사용 토큰 / 기준 창, Auto Compact 창(있을 때), 사용 한도(5시간·주간, 플랜명), 새로고침.
-  - 사용 한도 행은 상태바의 Claude·Codex 사용량과 같은 조회를 씁니다. 설정 › 사용량 조회 주기, 사용량 색상, Claude 세션 한도 표시 설정을 따릅니다.
+  - 사용 한도 행은 상태바의 Claude·Codex·Cursor 사용량과 같은 조회를 씁니다. 설정 › 사용량 조회 주기, 사용량 색상, Claude 세션 한도 표시 설정을 따릅니다.
 
 ### Auto Compact
 - `claude-auto-compact.js`가 Claude 설정 파일을 읽어 자동 압축 여부와 창 크기를 판단합니다. 켜져 있으면 게이지는 압축 창 기준으로 그려지고 보라색으로 바뀝니다.
 - 모델 별칭(예: `sonnet`)은 카탈로그에서 같은 계열 행으로 풀어 창 크기를 정합니다.
+- **auto 창 전달**: ADE가 정한 auto 창은 Claude Code 실행 시 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`로 넘겨, 게이지와 CLI가 같은 창을 씁니다. 모델이 바뀌어 창이 달라지면 세션을 이어 프로세스를 다시 띄웁니다(응답 중이면 턴이 끝난 뒤). 사용자가 설정이나 환경 변수로 창을 정했으면 그 값을 그대로 따릅니다.
 
 ### 수동 압축 `/compact`
 - Claude: CLI의 `/compact`를 그대로 보냅니다. 압축 시작·끝이 구분선과 토큰 감소율로 남습니다.
 - Codex: `thread/compact/start`를 씁니다.
 - Cursor: `cursor-agent -p /summarize`를 세션에 `--resume`으로 붙여 실행합니다(`cursor-summarize.js`, 최대 10분). `/compress`, `/summarize`도 같은 동작입니다. 결과 요약은 명령 결과 말풍선으로 나옵니다.
 
+### 프롬프트 캐시 타이머 (Claude)
+- 채팅 헤더에 프롬프트 캐시가 식기까지 남은 시간을 보여 줍니다. 설정의 "프롬프트 캐시 타이머"를 따르며, 터미널 헤더와 같은 값입니다.
+- 값은 화면이 계산하지 않고, 턴이 끝날 때와 압축 뒤에 세션 transcript를 읽어 갱신합니다. 남은 시간의 카운트다운은 화면에서 돌아갑니다.
+- 자동 압축이 켜진 긴 대화에서는 캐시가 식기 전에 요약될 예정 시각도 함께 봅니다. 압축이 끝난 뒤에는 이전 캐시를 쓰지 않는 것으로 봅니다.
+- 캐시 만료 전 전송 경고(설정 › AI 툴 › Claude Code, 기본 켬)는 이 값을 기준으로 합니다.
+
+### 사용량 기여도 (상태 줄 `사용량 기여도`)
+- 이 채팅이 플랜 한도(5시간·주간)에서 차지한 **%p**를 보여 줍니다. 기본 상태 줄 오른쪽에 켜져 있습니다.
+- 서버가 정수 %만 알려 주므로, 턴 전후로 한도를 한 번씩 더 읽어 변화를 재고, 턴 비용과 짝지어 **1%p당 비용(k)**을 학습합니다. 그 k로 채팅 비용을 %p로 환산합니다.
+- 값이 충분히 모이기 전에는 "보정 중 N/10%p"로 보입니다. 다른 사용이 같은 한도를 쓰면 오차가 생깁니다.
+- 외부로 보내는 데이터는 없습니다. k 값은 브라우저 `localStorage`(플랜·창별)에만 저장합니다. Ultra 플랜은 5시간 창이 없어 주간만 보입니다.
+
+### 세션 통계 (`/stats`, Claude 전용)
+- 입력창 아래 차트 아이콘 또는 `/stats`로 엽니다. 첫 메시지를 보내 세션이 생긴 뒤에만 열 수 있습니다.
+- 내용: 토큰 구성(입력·출력·캐시 읽기·캐시 쓰기), 컨텍스트 크기 추이, 모델별 요청·입력·출력·비용, 도구 사용 횟수와 오류, 5시간 블록(ccusage와 같은 방식: 첫 요청 시각의 정시부터 5시간), 턴별 기록.
+- 데이터는 CLI가 남긴 transcript와 서브에이전트 기록을 읽어 만듭니다. 외부로 보내지 않고 모델도 호출하지 않습니다.
+- 비용: CLI가 기록한 모델별 총액은 그대로 씁니다. 요청별 비용은 가중치(출력 5배, 캐시 읽기 0.1배, 캐시 쓰기 1.25배·2배)로 나눈 추정치입니다.
+- `/clear`를 했거나 CLI가 기록을 지웠으면 "기록 파일을 찾지 못했습니다"가 뜹니다.
+
 ### Cursor 컨텍스트 읽기(실험적)
 - ACP가 알려 주지 않는 사용량을 Cursor 세션 저장소에서 읽습니다(`cursor-context.js`). 응답 중과 압축 뒤에 몇 초 간격으로 확인합니다.
-- 끄려면 환경 변수 `CURSOR_STORE_CONTEXT=0`을 설정합니다.
+- 끄려면 환경 변수 `CURSOR_STORE_CONTEXT=0`을 설정합니다([ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)).
 
 ### 토큰·비용·턴
 - 상태 줄 항목으로 토큰(↑입력 ↓출력), 비용(Claude만), 턴 수, 누적 소요 시간, 세션 ID(앞 8자)가 있습니다. 여기서 토큰은 이 채팅의 누적값이고, 응답 도중에는 턴 중간값을 더해 보여 줍니다.
-- `/cost`, `/status`는 모델·Effort·권한·비용·토큰·세션 ID를 한 번에 보여 줍니다.
+- `/cost`, `/status`는 모델·Effort·권한·비용·토큰·세션 ID를 한 번에 보여 줍니다. 더 자세한 내용은 `/stats`입니다.
 - 비용은 자식 프로세스를 다시 띄워도 `costBase`로 이어집니다.
 
 ---
@@ -209,12 +262,14 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 컨텍스트 | 42% · 84k/200k | 사용률에 따라 색, Auto Compact 시 보라 |
 | 토큰 | ↑12k ↓3.1k | Cursor는 제공 안 함 |
 | 비용 | $0.42 | Claude만 |
+| 사용량 기여도 | 5.6%p | 플랜 한도 값이 있을 때만 표시(§11) |
 | 턴 수 | 6턴 | |
 | 누적 소요 시간 | 3분 5초 | |
 | 세션 ID | 0f3a9c21 | |
 
+- 기본 배치: 왼쪽 진행 상태·토큰·턴, 오른쪽 비용·사용량 기여도·소요 시간·세션 ID·모델·권한 모드·컨텍스트. 기본 표시 항목은 토큰·비용·사용량 기여도입니다(`Editor.tsx`).
+- 이전 기본값을 그대로 쓰던 설정은 `사용량 기여도`가 자동으로 추가됩니다. 직접 바꾼 설정은 유지되므로 하단 줄과 중복될 수 있습니다(설정 › 기본값으로).
 - 브랜치, 변경 수, 사용량, 시계, CPU, 메모리, 경로는 하단 상태바에만 있습니다(채팅 상태 줄에는 넣지 않음).
-- 기본 표시 항목은 코드상 `tokens`와 `cost`입니다(`Editor.tsx`). 문서(TESTING_GUIDE)에는 "진행 상태·토큰·비용"으로 적혀 있어 불일치합니다.
 
 ---
 
@@ -229,7 +284,9 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | `/model [모델]` | 모델 변경. 인자가 없으면 선택창. Cursor는 모달 |
 | `/effort [단계]` | Effort 변경. 지원하지 않는 CLI면 안내만 |
 | `/permissions [모드]` | 권한 모드 변경 |
-| `/cost`, `/status` | 상태를 로컬 메모로 표시 |
+| `/cost` | 이 채팅의 비용·토큰을 로컬 메모로 표시 |
+| `/stats` | 세션 통계 모달 열기 (Claude, 첫 메시지 뒤) — §11 |
+| `/status` | 세션 상태를 로컬 메모로 표시 |
 | `/help` | 명령 목록 |
 | `/config` | ADE 설정 열기 |
 | `/exit` | 이 채팅 닫기 |
@@ -284,19 +341,25 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 |---|---|---|---|
 | 채팅 › 입력 | 메시지 전송 키 | Enter | Enter 또는 Cmd/Ctrl+Enter |
 | 채팅 › 입력 | 입력창 최대 높이 | 220px | 120–600px |
-| 채팅 › 새 채팅 기본값 | 권한 모드 | 기본(매번 확인) | 기본 · 편집 자동 승인 · 계획 · 자동 |
-| 채팅 › 새 채팅 기본값 | Effort | 자동 | 자동 · low … max |
+| 채팅 › 새 채팅 기본값 | 권한 모드 | CLI 설정 따름 | CLI 설정 따름 · 기본(매번 확인) · 편집 자동 승인 · 계획 · 자동 |
+| 채팅 › 새 채팅 기본값 | Effort | CLI 설정 따름 | CLI 설정 따름 · low … max |
 | 채팅 › 대화 표시 | 글꼴 크기 | 13px | 11–20px |
 | 채팅 › 대화 표시 | 대화 너비 | 기본 | 좁게 · 기본 · 넓게 · 가득 |
-| 채팅 › 대화 표시 | 도구 호출 펼쳐 보기 | 끔 | |
+| 채팅 › 대화 표시 | 도구 호출 펼쳐 보기 | 끔 | 새로 그리는 도구 카드를 펼친 채로 시작 |
+| 채팅 › 대화 표시 | 도구 호출 표시 | 요약 | 요약(3개 이상 묶어 스크롤) · 상세(한 줄씩) |
 | 채팅 › 대화 표시 | 생각 과정 표시 | 응답 중에만 펼침 | 항상 펼침 · 항상 접음 |
 | 채팅 › 대화 표시 | 새 출력 따라가기 | 켬 | |
 | 채팅 › 대화 표시 | 부드러운 스트리밍 | 켬 | |
 | AI 영역 | Follow-up 대기열 (Tab) | 켬 | 끄면 Tab이 CLI로 전달 |
+| AI 툴 › Claude Code | 프롬프트 캐시 타이머 | 켬 | 채팅·터미널 헤더와 사이드바에 표시 |
+| AI 툴 › Claude Code | 캐시 만료 시 전송 경고 | 켬 | 캐시가 식기 전 경고 |
 | 단축키 | 채팅 단축키 | 아래 §18 | 입력창 단축키 재지정 |
 | 외관 | 새 탭 기본 모드 | 채팅 | 채팅 · 터미널 |
 | 외관 | 채팅 닫기 확인 | 켬 | 응답 중인 채팅을 닫을 때 확인 |
 | 상태바 › 채팅 상태 표시줄 | 항목·배치·구분자 | §12 참고 | 드래그로 배치, 항목별 색·아이콘·형식 재지정 |
+| 플러그인 › 에이전트 버스 | 메시지 전달 설정 | 켬 | [AGENT_BUS.md](docs/AGENT_BUS.md) 참고 |
+
+- 새 채팅 기본값이 "CLI 설정 따름"이면 ADE는 아무 플래그도 넘기지 않아, 평소 `claude`를 실행할 때와 같이 동작합니다.
 
 ---
 
@@ -312,6 +375,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 메뉴 항목 선택 | Tab / Enter | (고정) |
 | 스티어링 / 대기열 | Enter / Tab | (메시지 전송 키 설정에 따름) |
 | 스티어링 취소 또는 중단 | Esc | (고정) |
+| 질문 카드 보내기 | Ctrl/⌘+Enter | (고정) |
 
 - 단축키는 Ctrl·Alt·⌘ 중 하나를 포함하거나 방향키·Home/End·PageUp/Down·F키처럼 문자가 아닌 키만 쓸 수 있습니다(글자 키는 입력을 가로채기 때문).
 - Mac에서는 ⌘⌃⌥⇧ 기호로 표시됩니다.
@@ -332,8 +396,8 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 - **워크트리**: 새 대화를 시작하기 전에만 켤 수 있습니다.
   - Claude: 새 세션에서 `--worktree`를 씁니다.
   - Codex·Cursor: `<프로젝트>/worktrees/chat-<id>` 경로에 `ade/chat-<id>` 브랜치로 git 워크트리를 만듭니다.
-  - 서버는 워크트리 설정을 받고 저장합니다. **단, 현재 채팅 화면(`ChatPane.tsx`)에서 워크트리를 고르는 컨트롤은 찾지 못했습니다.** 문서(TESTING_GUIDE)의 "브랜치+워크트리 체크" 칩이 빠진 것인지 확인이 필요합니다.
-- **추가 폴더**: 절대 경로 최대 8개. 존재하는 폴더만 받습니다. Claude와 Codex만 지원하고, 적용된 개수는 입력창 아래 "폴더 +N"으로 보입니다.
+  - 서버는 워크트리 설정을 받고 저장합니다. **단, 워크트리를 켜는 체크박스는 PR #42(`6cf6567`, 이전 대화 모달)에서 채팅 화면에서 제거됐고, 지금은 화면에서 켤 방법이 없습니다.** 이미 켜진 채팅에만 서버 값이 남습니다.
+- **추가 폴더**: 절대 경로 최대 8개. 존재하는 폴더만 받습니다. Claude와 Codex만 지원합니다. 시작 화면의 폴더 추가 칩도 PR #42에서 제거돼 화면에서 추가할 방법은 없고, 이미 적용된 폴더가 있는 채팅에만 입력창 아래 "폴더 +N"이 보입니다.
 
 ---
 
@@ -349,6 +413,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 프로토콜 오류 | CLI 메시지 그대로 (`AGENT_PROTOCOL`) |
 | 저장 실패 | "채팅 저장 실패: …" |
 | 응답 한 줄이 8MB 초과 | "응답 한 줄이 너무 큽니다." 후 프로세스 종료 |
+| 통계 기록 없음 | "이 세션의 기록 파일을 찾지 못했습니다" (`/stats`) |
 
 ### 수치 한도
 | 항목 | 값 |
@@ -360,6 +425,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 이미지 | 최대 4장, 합계 약 1.8MB |
 | 추가 폴더 | 최대 8개 |
 | 유휴 프로세스 종료 | 10분 |
+| 백그라운드 출력 후 유휴 전환 | 3분 (Claude) |
 | 일반 요청 시간 제한 | 30초 |
 | 제어 요청(권한 모드 등) 응답 대기 | 5초 |
 | 중단 응답 대기 | 3초 |
@@ -368,8 +434,10 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 도구 결과 표시 | 6,000자 (넘으면 생략 표시) |
 | 승인 메모 | 500자 |
 | 질문 답변 | 4,000자 |
+| Claude 질문 | 한 번에 최대 8개, 질문당 선택지 16개 |
 | 모델 카탈로그 | 최대 64개 |
 | 터미널 → Chat 가져오기 | transcript 끝 16MB |
+| 에이전트 버스 답장 깊이 | 기본 4회 (`답장 N/4`, 설정 범위 0–20) |
 
 ---
 
@@ -384,20 +452,22 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 ## 23. 개발·테스트 관련
 
-- 자동 테스트: `tests/chat-*.test.mjs`(claude, model, session, history, title, ui), `tests/cursor-*.test.mjs`(context, summarize, usage), `tests/markdown-parse.test.mjs`, `tests/slash-commands.test.mjs`, `tests/ui-state-chat.test.mjs`, `tests/errors.test.mjs`.
+- 자동 테스트: `tests/chat-*.test.mjs`(claude, model, session, history, title, ui, stats), `tests/cursor-*.test.mjs`(context, summarize, usage), `tests/claude-*.test.mjs`(cache, cache-warning, defaults, auto-compact, follow-up, busy), `tests/usage-share.test.mjs`, `tests/agent-bus*.test.mjs`, `tests/markdown-parse.test.mjs`, `tests/slash-commands.test.mjs`, `tests/ui-state-chat.test.mjs`, `tests/errors.test.mjs`.
 - 가짜 CLI 픽스처: `tests/fixtures/fake-chat-rpc.mjs`, `fake-claude-stream.mjs`, `fake-claude-usage-stream.mjs`, `fake-claude-control.mjs`. 스트리밍·승인·중단·복구·분기 등을 실제 CLI 없이 검사합니다.
 - 실행: `pnpm test`(전체), `pnpm typecheck`.
-- 수동 확인 목록: `docs/TESTING_GUIDE.md`의 "Claude 채팅 탭", "Chat → 터미널", "Codex·Cursor Agent 채팅", "채팅 시작 화면과 이전 대화" 절.
+- 수동 확인 목록: `docs/TESTING_GUIDE.md`의 "Claude 채팅 탭", "Chat → 터미널", "Codex·Cursor Agent 채팅", "채팅 시작 화면과 이전 대화", "채팅 질문 카드 · 세션 통계 · 사용량 기여도 · 기본값(2026-11-12)" 절과 "에이전트 버스(내장 플러그인)" 절.
 - 개발 전용 기능: 입력창 임시 초안(`chat-dev-draft.ts`)은 `pnpm dev`에서만 localStorage에 저장되고, 빌드에서는 빠집니다.
 
 ---
 
 ## 24. 알려진 제한과 미구현
 
-- **Cursor**: 스티어링, 분기, 되돌리기, 추가 폴더, 비용, 토큰 집계가 없고, 터미널 → Chat 전환도 없습니다. 컨텍스트는 실험적 저장소 읽기에 의존합니다.
-- **Codex**: 비용 없음, 터미널 → Chat 전환 없음, 화면형 명령 없음.
+- **Cursor**: 분기, 되돌리기, 추가 폴더, 비용, 토큰 집계, 세션 통계, 캐시 타이머가 없고, 터미널 → Chat 전환도 없습니다. 스티어링은 없으며 에이전트 버스 메시지는 응답이 끝난 뒤 전달됩니다. 컨텍스트는 실험적 저장소 읽기에 의존합니다.
+- **Codex**: 비용 없음, 세션 통계와 캐시 타이머 없음, 터미널 → Chat 전환 없음, 화면형 명령 없음.
 - **Claude**: Windows의 `claude.cmd` 실행은 아직 지원하지 않습니다. 입력창에 음성 입력(마이크)도 없습니다.
-- **Markdown**: 구문 강조, HTML, 깊은 중첩 목록 없음.
+- **세션 통계**: 요청별 비용은 추정치입니다(CLI가 준 모델별 총액을 나눈 값).
+- **사용량 기여도**: 정수 %만 받는 한도에서 추정한 값입니다. 다른 사용이 같은 한도를 쓰면 흔들릴 수 있습니다.
+- **Markdown**: 구문 강조, 일반 HTML, 깊은 중첩 목록 없음. 인터랙티브 UI(`ui`, `ade-ui`)만 예외이며 상태 비저장·Cursor 미안내.
 - **Rewind**: 에이전트가 바꾼 파일은 되돌리지 않습니다.
 - **분기·되돌리기**: uuid가 없는 옛 메시지에는 버튼이 없습니다.
 - **bypassPermissions**: 드롭다운에서만 고를 수 있습니다.
@@ -407,11 +477,20 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 ## 25. 문서와 코드가 어긋나는 곳 (확인 필요)
 
-1. **채팅 상태 줄 기본 항목**: 문서는 "진행 상태·토큰·비용"이라 하고, 코드(`Editor.tsx`의 `chatStatusItems`)는 `['tokens', 'cost']`입니다. 진행 상태는 기본 배치에는 있으나 기본 표시에서 빠집니다.
-2. **워크트리 칩**: 문서에는 시작 화면의 "브랜치+워크트리 체크" 칩이 있다고 되어 있으나, 현재 `ChatPane.tsx`에서 워크트리 선택 UI를 찾지 못했습니다.
-3. **Cursor 사용 한도**: 문서는 "CLI가 사용 한도를 제공하지 않습니다"라고 하지만, `usage.js`에 Cursor 로그인 조회(`cursor-usage.js`)가 들어와 있어 이 문구는 오래되었습니다. 화면 팝오버 코드도 Cursor 사용량 행을 그릴 준비가 되어 있습니다.
-4. **제목 규칙의 이중 구현**: 서버(`chat-title.js`)와 화면(`chat-model.ts`)에 같은 규칙이 있습니다(§19).
-5. **Cursor 컨텍스트 저장소 읽기**: 실험적 기능이고 환경 변수로 끌 수 있으나, 이 값은 `ENVIRONMENT_VARIABLES.md`에 아직 없는 것으로 보입니다(확인 필요).
+1. **제목 규칙의 이중 구현**: 서버(`chat-title.js`)와 화면(`chat-model.ts`)에 같은 규칙이 있습니다(§19).
+
+이번 갱신에서 해결된 항목(참고): 상태 줄 기본 항목(코드와 문서 일치: 토큰·비용·사용량 기여도), Cursor 사용 한도 문구(상태바·팝오버 조회 있음), `CURSOR_STORE_CONTEXT` 환경 변수(`ENVIRONMENT_VARIABLES.md`에 추가), `AskUserQuestion` 승인 카드 설명(질문 카드로 변경), 워크트리·폴더 추가 칩(PR #42에서 제거된 것으로 확인, `TESTING_GUIDE.md` 7-2~7-4 정정).
+
+---
+
+## 26. master 밖의 작업 (아직 반영되지 않음)
+
+이 문서는 master만 기준으로 합니다. 아래는 원격·로컬 브랜치에 있지만 master에 없는 작업입니다(2026-11-12 확인).
+
+- **`origin/feat/feedback-inbox`** (커밋 2개, 미머지): 피드백 창고(캡처·AI 초안·Hub 전송). 채팅과 관련된 부분은 채팅 탭과 입력창에 피드백 캡처 영역(`data-feedback-region`)이 추가되고, 설정에 `feedbackAgentTool`(채팅 에이전트가 피드백 초안을 넣을 수 있음)·`feedbackAiContext`(AI 초안 요청에 화면 배치와 최근 오류를 포함)가 들어옵니다. master에 들어오기 전까지는 이 문서의 기능이 아닙니다.
+- **로컬 `fix/mac-ctrl-shortcuts`** (2026-10-25, 미머지, 원격 없음): 커밋 제목 기준 "macOS에서 Ctrl 단축키를 Cmd로 바꾸지 않고 Ctrl로 유지". §18 단축키 설명과 관련이 있습니다. 커밋은 두 개이며 모두 master에 없습니다: 단축키 수정(`7ad95c0`)과, 단축키와 무관한 CI 러너 변경(`fadfe8c`, "run checks on GitHub-hosted runners"). 그대로 머지하면 CI 설정이 바뀝니다. 오래된 브랜치라 master와 충돌할 수 있습니다.
+- **`chat/pc-talk`** (로컬과 `origin/chat/pc-talk`, 미머지): 채팅 기능과 무관한 `PC-TALK.md`·`pc-talk.sh`만 있는 초기화 커밋입니다.
+- 이미 master에 들어온 브랜치: `feat/agent-bus`, `feat/chat-mode`, `feat/chat-mode-on-master`(정리 가능).
 
 ---
 
@@ -419,16 +498,27 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 
 | 역할 | 파일 |
 |---|---|
-| 세션 수명·상태·저장·Branch·Rewind·압축 | `apps/local-server/src/chat.js` |
-| Claude 자식 프로세스 변환(stream-json) | `apps/local-server/src/chat-claude.js` |
+| 세션 수명·상태·저장·Branch·Rewind·압축·캐시 | `apps/local-server/src/chat.js` |
+| Claude 자식 프로세스 변환(stream-json), 질문 변환 | `apps/local-server/src/chat-claude.js` |
 | Codex·Cursor JSON-RPC, 능력 표 | `apps/local-server/src/chat-rpc.js` |
+| 세션 통계(`/stats`) | `apps/local-server/src/chat-stats.js` |
+| Claude 기본값(settings.json) 읽기 | `apps/local-server/src/claude-defaults.js` |
+| 캐시 타이머 판독 | `apps/local-server/src/claude-cache.js` |
 | 명령 목록 수집 | `apps/local-server/src/slash-commands.js` |
 | 모델 Auto Compact 판정 | `apps/local-server/src/claude-auto-compact.js` |
 | Cursor 압축·컨텍스트·사용량·제목 | `cursor-summarize.js`, `cursor-context.js`, `cursor-usage.js`, `chat-title.js` |
-| 서버 라우트(chat/*, terminal/to-chat) | `apps/local-server/src/index.js` |
+| 에이전트 실행 파일 해석(Windows) | `apps/local-server/src/agent-spawn.js` |
+| 서버 라우트(chat/*, chat/peers, chat/stats, terminal/to-chat) | `apps/local-server/src/index.js` |
+| 에이전트 버스(내장 플러그인) | `apps/desktop/builtin-plugins/agent-bus/` |
 | 채팅 탭 화면 | `apps/web/src/ChatPane.tsx` |
+| 질문 카드 | `apps/web/src/QuestionCard.tsx` |
+| 세션 통계 모달 | `apps/web/src/ChatStats.tsx` |
+| 캐시 타이머 | `apps/web/src/CacheTimer.tsx` |
+| 사용량 기여도 | `apps/web/src/usage-share.ts`, `apps/web/src/use-usage-share.ts` |
+| 에이전트 버스 메시지 카드 | `apps/web/src/bus-message.ts` |
 | 상태 리듀서·모델 목록 | `apps/web/src/chat-model.ts` |
 | 상태 줄 | `apps/web/src/ChatStatus.tsx` |
 | Markdown 렌더링 | `apps/web/src/Markdown.tsx`, `apps/web/src/markdown-parse.ts` |
+| 인터랙티브 UI | `apps/web/src/ui-spec.ts`·`UiBlocks.tsx`(네이티브 `ui` 블록), `apps/web/src/UiFrame.tsx`, `apps/web/src/ui-frame-protocol.ts`, `apps/local-server/src/ui-frame.js`(프레임 페이지·CSP), `apps/local-server/src/chat-ui-prompt.js`(에이전트 지침) |
 | 설정 화면 | `apps/web/src/Settings.tsx`, `apps/web/src/Editor.tsx`(기본값) |
 | 데스크톱 종료·재시작 확인 | `apps/desktop/src/main.js` |

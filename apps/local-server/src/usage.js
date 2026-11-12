@@ -156,30 +156,9 @@ export function findDirenv({ env = process.env, exists = file => fs.access(file)
   return dirs.reduce((found, dir) => found.then(hit => hit || exists(path.join(dir, 'direnv')).then(ok => ok ? path.join(dir, 'direnv') : null)), Promise.resolve(null));
 }
 
-// direnv refuses a blocked or denied .envrc without saying so (exec just leaves the variable unset), so the account would silently
-// fall back to the default login. This reads a plain `export NAME=value` from the nearest .envrc instead, understanding only $HOME, ~ and $PWD:
-// nothing in the file is ever executed, so an untrusted project cannot run code through a usage poll.
-// ponytail: literal exports only (no conditionals, source_up or command substitution); `direnv allow` covers those.
-export async function envrcVariable(root, name, { home = os.homedir(), readFile = fs.readFile } = {}) {
-  for (let dir = root; ; dir = path.dirname(dir)) {
-    const text = await readFile(path.join(dir, '.envrc'), 'utf8').catch(() => null);
-    if (text !== null) {
-      let value = null;
-      for (const line of text.split(/\r?\n/)) {
-        const match = line.match(new RegExp(`^\\s*export\\s+${name}=("([^"]*)"|'([^']*)'|[^\\s#;]*)`));
-        if (match) value = match[2] ?? match[3] ?? match[1];
-      }
-      if (value === null) return null;
-      const expanded = value.replace(/^~(?=\/|$)/, home).replace(/\$\{?HOME\}?/g, home).replace(/\$\{?PWD\}?/g, dir);
-      return /[$`]/.test(expanded) ? null : expanded;
-    }
-    if (path.dirname(dir) === dir) return null;
-  }
-}
-
-// A project's account is its agent CLI's config folder: what the project's .envrc sets (through direnv, or read directly when direnv
-// refuses the file), else the one a running agent in its terminals actually uses, else the server's own environment, which terminals inherit.
-export function createAccountResolver({ env = process.env, platform = process.platform, home = os.homedir(), readVariable = processVariable, direnv = findDirenv, exec = run, exists = file => fs.access(file).then(() => true, () => false), readFile = fs.readFile, now = Date.now } = {}) {
+// A project's account is its agent CLI's config folder: what the project's .envrc sets through direnv (only when it is allowed:
+// a blocked or denied .envrc makes direnv fail, so it counts as not active), else the one a running agent in its terminals actually uses, else the server's own environment, which terminals inherit.
+export function createAccountResolver({ env = process.env, platform = process.platform, home = os.homedir(), readVariable = processVariable, direnv = findDirenv, exec = run, exists = file => fs.access(file).then(() => true, () => false), now = Date.now } = {}) {
   const loaded = new Map(), seen = new Set();
   let direnvPath;
   const fromDirenv = async (root, name) => {
@@ -188,10 +167,8 @@ export function createAccountResolver({ env = process.env, platform = process.pl
     if (hit && now() - hit.at < 60_000) return hit.value;
     direnvPath ??= direnv();
     const file = await direnvPath;
-    // A blocked or missing .envrc makes direnv fail, which leaves the decision to the next source.
-    let value = file ? await exec(file, ['exec', root, '/bin/sh', '-c', `printf %s "\${${name}-}"`], { cwd: root, env: { ...env, DIRENV_LOG_FORMAT: '' } }) : null;
-    // Empty or failed: direnv may just have refused the file, so read the export itself (see envrcVariable).
-    if (!value) value = await envrcVariable(root, name, { home, readFile }).catch(() => null) ?? value;
+    // A blocked, denied or missing .envrc makes direnv fail (null), which leaves the decision to the next source.
+    const value = file ? await exec(file, ['exec', root, '/bin/sh', '-c', `printf %s "\${${name}-}"`], { cwd: root, env: { ...env, DIRENV_LOG_FORMAT: '' } }) : null;
     loaded.set(key, { at: now(), value });
     if (loaded.size > 64) loaded.delete(loaded.keys().next().value);
     return value;
@@ -218,8 +195,7 @@ export function createAccountResolver({ env = process.env, platform = process.pl
     const name = accountVariable[provider], server = env[name] || '';
     if (!project) return { dir: server, from: 'server' };
     const configured = await fromDirenv(project.root, name);
-    // A folder the project's .envrc names is the account the project is meant to use, even if an agent was started without it
-    // (a blocked .envrc is not loaded by the shell, so that agent runs on the default login).
+    // A folder an allowed .envrc names is the account the project is meant to use, even if an agent was started without it.
     if (configured) return { dir: configured, from: 'direnv' };
     for (const terminal of project.terminals?.values?.() ?? []) {
       if (terminal.exited || terminal.agent !== provider || !terminal.agentPid) continue;

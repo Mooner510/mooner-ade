@@ -15,11 +15,24 @@
 | `ADE_BUILTIN_PLUGINS_DIR` | `apps/desktop/builtin-plugins` | 앱에 들어 있는 [내장 플러그인](docs/PLUGINS.md#내장-플러그인) 폴더. 테스트용 |
 | `ADE_PTY_ENDPOINT` / `ADE_PTY_TOKEN` | 없음 | 앱이 서버·PTY 호스트에 넘기는 호스트 연결·인증. 직접 설정하지 않음. 비워서 서버를 실행하면 터미널이 서버 프로세스 안에서 열림(테스트) |
 | `ADE_PTY_LINGER_MS` / `ADE_PTY_FIRST_OWNER_MS` | `120000` / `60000` | PTY 호스트가 서버 없이 터미널을 유지하는 시간, 첫 연결을 기다리는 시간. 테스트용 |
+| `ADE_PLUGIN_NODE` | 없음 | 플러그인 MCP 서버가 쓸 Node 경로. ADE가 넘김. 직접 설정하지 않음 |
+| `ADE_CHAT_ID` / `ADE_PROJECT_ID` / `ADE_CHAT_AGENT` | 없음 | 채팅 전용 내장 플러그인([에이전트 버스](docs/AGENT_BUS.md))이 자기 채팅을 식별하도록 ADE가 넣는 값. 터미널에는 주지 않음. 직접 설정하지 않음 |
 
 macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, Windows는 `%LOCALAPPDATA%/mooner-ade`(변수 미설정 시 사용자 홈 아래)입니다. 실제 프로젝트 파일과 CLI 자체 인증 설정은 별도로 관리됩니다.
 
 | 변수 | 기본값 | 용도 |
 |---|---|---|
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code 계정 폴더(설정·세션 기록·인증). 채팅 계정(configDir)이 따로 있으면 그것이 우선. 세션 통계·캐시 타이머·사용 한도 조회가 이 폴더를 읽는다 |
+| `CODEX_HOME` | `~/.codex` | Codex 계정 폴더(`auth.json`, 세션 기록). 사용 한도 조회와 Codex 채팅이 읽는다 |
+| `CLAUDE_CODE_EFFORT_LEVEL` | 없음 | Claude Code의 Effort. 설정 파일의 값보다 우선. 채팅을 시작하기 전 상태 줄 표시에만 쓰이고, 실제 적용은 CLI가 한다 |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 없음 | Auto Compact 창 크기. 직접 지정하면 ADE가 게이지에서 정한 auto 창 대신 이 값을 따른다 |
+| `CLAUDE_CODE_MCP_STARTUP_WAIT_MS` | `3000` (Chat만) | Claude Chat이 첫 메시지 전에 MCP 서버 연결을 기다리는 최대 시간(ms). 느리거나 응답 없는 MCP 서버(예: 외부 커넥터)가 있어도 첫 응답이 최대 30초 지연되지 않도록 ADE가 3초로 제한한다. 직접 지정하면 그 값을 따른다 |
+| `DISABLE_AUTO_COMPACT` | 없음 | `1`/`true`이면 자동 압축이 꺼진 것으로 본다. 컨텍스트 게이지의 Auto Compact 창과 캐시 타이머의 "자동 compact" 예정 시각이 사라진다. 실제 동작은 CLI가 정한다 |
+| `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` | `200000` (하한 `100000`) | 유휴 자동 압축이 일어나는 최소 컨텍스트 크기. 캐시 타이머가 압축 예정 시각을 계산할 때만 읽는다 |
+| `ANTHROPIC_MODEL` | 없음 | 채팅에서 모델을 고르지 않았을 때 모델 목록이 "기본 모델"로 푸는 값. `settings.json`의 `model`보다 우선 |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` / `_SONNET_MODEL` / `_HAIKU_MODEL` | 없음 | `opus`·`sonnet`·`haiku` 별칭이 가리키는 모델 ID. 없으면 CLI 카탈로그를 따른다 |
+| `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` | 없음 | `1`/`true`이면 별칭을 해당 공급자의 모델 ID로 푼다 |
 | `CURSOR_APP_SUPPORT` | OS별 Cursor 앱 데이터 경로 | IDE 로그인 DB(`state.vscdb`) 위치 |
 | `CURSOR_ACCESS_TOKEN` / `CURSOR_REFRESH_TOKEN` | 없음 | Cursor 사용량 API용 JWT. 설정 시 Keychain 읽기 생략 |
 | `CURSOR_IDE_AUTH` | 꺼짐 | `1`이면 macOS에서 Cursor **앱** 로그인(`state.vscdb` + Safe Storage)을 쓴다. Keychain 확인 창이 뜰 수 있음. 기본은 `cursor-agent login`의 CLI Keychain만 사용 |
+| `CURSOR_STORE_CONTEXT` | 켜짐 | `0`이면 Cursor 채팅의 컨텍스트 사용률을 Cursor 세션 저장소(`~/.cursor`)에서 읽지 않는다. [채팅 기능 정리](CHAT_MODE_FEATURES.md) §11 |

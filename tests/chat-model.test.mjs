@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary } from '../apps/web/src/chat-model.ts';
+import { autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
@@ -507,5 +507,16 @@ test('tool runs: 3+ consecutive tools bundle, thoughts between tools stay inside
   // a remark splits the tools: 2 + 2 is two small stretches, 3 + 1 is one bundle
   assert.deepEqual(runsOf(flow(T('a'), T('b'), '잠깐 확인.', T('c'), T('d'), '끝.')), []);
   assert.deepEqual(runsOf(flow(T('a'), T('b'), T('c'), '잠깐 확인.', T('d'), '끝.')), [[0, 3, 3]]);
+  // a thought shown as plain text has content: it splits the tools like a remark (3 + 1 bundles, 2 + 2 does not)
+  const plainRuns = turn => toolRuns(turn, processGroups(turn).groups, 3, true).map(run => [run.start, run.end, run.tools]);
+  assert.deepEqual(plainRuns(flow(T('a'), T('b'), T('c'), think, T('d'), '끝.')), [[0, 3, 3]]);
+  assert.deepEqual(plainRuns(flow(T('a'), T('b'), think, T('c'), T('d'), '끝.')), []);
   assert.deepEqual(toolRuns(flow(T('a'), T('b'), '끝.'), processGroups(flow(T('a'), T('b'), '끝.')).groups, 2).map(run => run.tools), [2], 'the threshold is a parameter');
+});
+
+test('autoDenial: only the auto-mode classifier refusal is a denial, and it carries the reason', () => {
+  const text = 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Create Unsafe Agents]. If you have other tasks...';
+  assert.deepEqual(autoDenial(text), { reason: 'Create Unsafe Agents' });
+  assert.deepEqual(autoDenial('Permission for this action was denied by the Claude Code auto mode classifier.'), { reason: '' });
+  assert.equal(autoDenial('Error: ENOENT'), null);
 });

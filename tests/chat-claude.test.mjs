@@ -180,3 +180,9 @@ test('streamed tool input, subagent deltas and local command output are normaliz
   assert.deepEqual(normalizeClaude({ type: 'user', message: { content: [{ type: 'text', text: '<local-command-stderr>nope</local-command-stderr>' }] } }), [{ kind: 'command_output', text: 'nope', isError: true }]);
   assert.deepEqual(normalizeClaude({ type: 'user', message: { content: 'plain echo' } }), []);
 });
+
+test('the interactive-UI instructions are passed as an appended system prompt file', () => {
+  const args = buildClaudeArgs({ promptFile: '/tmp/ade-ui-prompt.md' });
+  assert.equal(args[args.indexOf('--append-system-prompt-file') + 1], '/tmp/ade-ui-prompt.md');
+  assert.ok(!buildClaudeArgs({}).includes('--append-system-prompt-file'));
+});

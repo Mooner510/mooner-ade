@@ -42,3 +42,9 @@ test('ordered list items keep the number they were written with', () => {
   assert.deepEqual(nums('3. a\n4. b\n\n본문\n\n6. c\n7. d\n\n본문\n\n9. e\n11. f'), [3, 4, 6, 7, 9, 11]);
   assert.deepEqual(nums('- a\n- b'), [undefined, undefined]);
 });
+
+test('a code fence is `open` only while its closing fence has not arrived', () => {
+  assert.deepEqual(parse('```ade-ui\n<b>x</b>\n```'), [{ t: 'code', lang: 'ade-ui', code: '<b>x</b>' }]);
+  assert.deepEqual(parse('```ade-ui\n<b>x'), [{ t: 'code', lang: 'ade-ui', code: '<b>x', open: true }]);
+  assert.deepEqual(parse('```ade-ui'), [{ t: 'code', lang: 'ade-ui', code: '', open: true }]);
+});

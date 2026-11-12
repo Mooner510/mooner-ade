@@ -1,7 +1,7 @@
 import { appKey, appKeyDefs, combosOverlap, showAppKey } from './shortcuts';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
-import { agentNames, chatStatusLayout, defaultSettings, monoFont, statusLayout, usageHue, type Settings } from './Editor';
+import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { chatItemView, chatStatusDefs, chatStatusLabels } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -282,7 +282,7 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
   if (!id || id === 'none') return <aside className="look-preview" aria-label="설정 미리보기"><p className="look-empty">미리보기가 없습니다</p></aside>;
   const paint = lookThemes[settings.theme];
   const accent = settings.accentColor || paint.accent;
-  const mono = (name: string) => name.trim() ? `${name.trim()}, ${monoFont}` : monoFont;
+  const mono = terminalFontStack;
   const family = id.startsWith('term') ? 'term' : id.startsWith('chat') ? 'chat' : id.startsWith('diff') ? 'diff' : id;
   const shell = family === 'theme' || family === 'accent' || family === 'dim' || family === 'zoom' || family === 'sidebar' || family === 'sidebarWidth';
   return <aside className="look-preview" aria-label="설정 미리보기">
@@ -333,7 +333,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -341,7 +341,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const statusSwitch = (id: string, label: string) =>
     <input type="checkbox" role="switch" aria-label={label} checked={settings.statusItems.includes(id)} onChange={event => set('statusItems', event.target.checked ? [...settings.statusItems.filter(item => item !== id), id] : settings.statusItems.filter(item => item !== id))} />;
   const installedFonts = useMemo(() => installedTerminalFonts(), []);
-  const terminalFontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedFonts, '기본'), [installedFonts, settings.terminalFont]);
+  const terminalFontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedFonts, '시스템 기본'), [installedFonts, settings.terminalFont]);
   const diffFontOptions = useMemo(() => monoFontDropdownOptions(settings.diffFont, installedFonts, '터미널과 같음'), [installedFonts, settings.diffFont]);
   const argsRow = (agent: 'claude' | 'codex' | 'cursor', key: 'claudeArgs' | 'codexArgs' | 'cursorArgs', example: string) =>
     <Row title={`${agentNames[agent]} 추가 실행 인자`} hint={`실행할 때 명령 뒤에 붙입니다. 예: ${example} · 새로 여는 터미널과 되살리는 터미널에 적용되고, 이미 실행 중인 에이전트는 그대로입니다.`}>
@@ -394,6 +394,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <Row title="팁 표시" hint="컨텍스트가 길어졌을 때 /clear·/compact 안내, 마우스로 한 동작의 단축키 같은 도움말을 pane 모서리에 잠깐 띄웁니다.">{toggle('tips')}<button type="button" onClick={() => { resetTips(); }}>팁 기록 초기화</button></Row>
       {settings.tips && <Row title="컨텍스트 팁 기준(k 토큰)" hint="Claude 대화 컨텍스트가 이 크기 이상일 때 메시지를 보내면 /clear 팁을 보여 줍니다. 기본 400k는 1M 컨텍스트의 40%입니다. 같은 팁은 10분에 한 번만 나옵니다. (50–1000)">{number('contextTipK', 50, 1000)}</Row>}
       <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
+      <Row title="인터랙티브 UI" hint="에이전트가 계산기·폼·미리보기처럼 UI가 더 나은 답변에 한해 채팅 안에 직접 조작하는 UI를 보여줍니다. UI는 격리된 샌드박스에서 실행되며, 끄면 일반 코드 블록으로 표시됩니다. 켜고 끄면 새 채팅부터 에이전트 지침에 반영됩니다.">{toggle('interactiveUi')}</Row>
     </>}
   </>;
   return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" onClose={onClose}>

@@ -77,6 +77,8 @@ export const isPartial = (item: Item) => item.kind === 'assistant' && item.block
 // header; every result stays plain text where it was said. A text is a result (not a remark) when it is the turn's closing text, long, structured
 // (heading, table, code, list), spans paragraphs, or asks something.
 const STRUCTURED = /^\s*(?:#{1,6}\s|\|.*\||```|(?:[-*]|\d+\.)\s.+\n\s*(?:[-*]|\d+\.)\s)/m;
+/** A tool call the Claude Code auto-mode classifier refused: not a tool failure, so it is drawn apart from errors. Returns the classifier's reason (may be empty), or null when the text is anything else. */
+export const autoDenial = (text: string): { reason: string } | null => /denied by the Claude Code auto mode classifier/i.test(text) ? { reason: /Reason:\s*\[([^\]]+)\]/.exec(text)?.[1] ?? '' } : null;
 export const isResultText = (text: string) => { const value = text.trim(); return value.length > 240 || (value.length > 120 && /\n\s*\n/.test(value)) || STRUCTURED.test(value) || /[?？]$/.test(value); };
 export type ProcessGroup = { start: number; end: number; steps: number; tools: number; answered: boolean }; // blocks [start, end) of the turn; `answered`: a result follows
 // `blocks` are the turn's visible blocks in order. `plain[i]` is true for the ones drawn as plain text; each group is one unbroken stretch of the rest.
@@ -100,13 +102,14 @@ export function processGroups(blocks: { block: Block; sub: boolean }[]): { plain
 // "Summary" tool display: a run of consecutive tools (thoughts in between belong to it; any text ends it) inside one process group is shown as a single
 // bundle once it holds at least `min` tools. Returns blocks [start, end) of the same flat list `processGroups` took.
 export type ToolRun = { start: number; end: number; tools: number };
-export function toolRuns(blocks: { block: Block; sub: boolean }[], groups: ProcessGroup[], min = 3): ToolRun[] {
-  const runs: ToolRun[] = [];
+// A thought drawn as plain text (`plainThinking`) has content of its own, so like a text it ends the run instead of hiding inside the bundle.
+export function toolRuns(blocks: { block: Block; sub: boolean }[], groups: ProcessGroup[], min = 3, plainThinking = false): ToolRun[] {
+  const runs: ToolRun[] = [], breaks = (block: Block) => block.type === 'text' || (plainThinking && block.type === 'thinking');
   for (const group of groups) {
     for (let at = group.start; at < group.end;) {
-      if (blocks[at].block.type === 'text') { at += 1; continue; }
+      if (breaks(blocks[at].block)) { at += 1; continue; }
       let end = at, tools = 0;
-      while (end < group.end && blocks[end].block.type !== 'text') { if (blocks[end].block.type === 'tool_use') tools += 1; end += 1; }
+      while (end < group.end && !breaks(blocks[end].block)) { if (blocks[end].block.type === 'tool_use') tools += 1; end += 1; }
       // A run that starts or ends on a thought keeps only the tools' span, so a bundle never opens or closes with a lone "생각" row.
       let from = at, to = end;
       while (from < to && blocks[from].block.type !== 'tool_use') from += 1;
