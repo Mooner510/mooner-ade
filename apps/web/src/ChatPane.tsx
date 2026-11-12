@@ -33,7 +33,7 @@ export type ChatCtx = {
   // Continue a conversation made with the plain `claude` CLI as a new chat tab.
   importCliChat(sessionId: string): Promise<void>;
   // Start screen only: replace this pane with an empty chat of another provider (forget = drop the stored empty chat).
-  switchAgent(id: string, agent: 'claude' | 'codex' | 'cursor', forget: boolean): void;
+  switchAgent(id: string, agent: 'claude' | 'codex' | 'cursor', forget: boolean): Promise<boolean>;
   onSettingsChange(settings: Settings): void;
 };
 type Props = { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: ChatCtx; onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void };
@@ -739,11 +739,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       return pick(selectedModel) || pick(aliases[''] ?? null) || modelChoices.find(option => option.value !== MORE_MODELS)?.value || ''; })(),
     busy = state.status === 'working' || state.status === 'attention';
 
+  // Set while a provider switch is under way (close, re-render, the new agent's open); the buttons stay locked so quick clicks cannot interleave sessions.
   const [providerSwap, setProviderSwap] = useState(false);
-  useEffect(() => {
-    if (!providerSwap) return;
-    if (view.ready || openError) setProviderSwap(false);
-  }, [providerSwap, view.ready, openError]);
 
   // Attach to the server's session: subscribe first, then ask for the stored events; whatever arrived in between is applied after the replay (seq makes that safe).
   useEffect(() => {
@@ -761,14 +758,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
     const open = () => ctxRef.current.call('chat/open', { id, agent, ...(leaf.cwd ? { path: leaf.cwd } : {}), defaults: { ...(ctxRef.current.settings.chatDefaultPermission !== 'cli' ? { permissionMode: ctxRef.current.settings.chatDefaultPermission } : {}), ...(ctxRef.current.settings.chatDefaultEffort !== 'auto' ? { effort: ctxRef.current.settings.chatDefaultEffort } : {}) }, since: viewRef.current.ready ? viewRef.current.seq : 0 }).then(replay => {
-      if (!alive) return; setOpenError(''); if (typeof replay.user === 'string') setUser(replay.user);
+      if (!alive) return; setProviderSwap(false); setOpenError(''); if (typeof replay.user === 'string') setUser(replay.user);
       if (!viewRef.current.ready) apply(() => fromReplay(replay));
       else apply(view => {
         let next = view; for (const event of replay.events ?? []) next = reduce(next, event);
         return { ...next, state: replay.state, approvals: (replay.approvals ?? []).map((item: any) => ({ requestId: item.requestId, tool: item.tool, input: item.input, toolUseId: item.toolUseId, questions: item.questions, suggestions: item.suggestions ?? [] })) };
       });
       ctxRef.current.onState(id, replay.state); opened = true; for (const message of early.splice(0)) handle(message);
-    }, cause => { if (alive) setOpenError(cause instanceof Error ? cause.message : String(cause)); });
+    }, cause => { if (alive) { setProviderSwap(false); setOpenError(cause instanceof Error ? cause.message : String(cause)); } });
     const stop = ctx.subscribe(id, message => { if (message.type === 'reconnect') { opened = false; void open(); } else if (opened) handle(message); else early.push(message); });
     void open();
     return () => { alive = false; stop(); };
@@ -1229,7 +1226,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     </div>
     <div className="chat-bottom-space" aria-hidden="true" />
     {providers.length > 1 && <div className="chat-start-slot chat-provider-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
-      <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy} title={item === agent ? undefined : `${PROVIDER_LABELS[item]}로 전환`} onClick={() => { if (item !== agent) ctx.switchAgent(id, item, !view.items.length); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
+      <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} title={item === agent ? undefined : `${PROVIDER_LABELS[item]}로 전환`} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
     {openedAgent && <AgentDrawer agent={openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onClose={() => setAgentOpen(null)} />}
   </section></AgentsContext.Provider></ChatUiContext.Provider>;

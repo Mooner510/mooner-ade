@@ -929,7 +929,7 @@ async function route(action, input, project) {
     case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
     case 'chat/close': {
       const chat = project.chats.get(input.id);
-      if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true }); }
+      if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true, ...(typeof input.archiveAs === 'string' && { archiveAs: input.archiveAs }) }); }
       return {};
     }
     // Concrete model behind each alias (see resolveModels). Cached for an hour.
