@@ -17,7 +17,7 @@ import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { bytesToBase64 } from './feedback-model';
-import { endCapture, ensureDraft, feedbackCall, openFeedback, useFeedback } from './feedback-store';
+import { endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/noto-sans-kr/wght.css';
@@ -75,6 +75,8 @@ function useHub(enabled: boolean) {
         if (stopped) return;
         let message: any;
         try { message = JSON.parse(event.data); } catch { return; }
+        // The feedback inbox is global: the screen with no project open (no subscribers) must hear it too; the store folds a burst into one reload.
+        if (message.type === 'feedback/changed') { void refreshFeedback(); return; }
         // Errors that name no project are shown by every project; everything else goes to its owner.
         if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.(message);
         else for (const handler of state.current.subs.values()) handler(message);

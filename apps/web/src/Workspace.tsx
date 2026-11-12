@@ -25,7 +25,7 @@ import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { aiContext, bytesToBase64, pendingReviewCount } from './feedback-model';
-import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, requestCapture, useFeedback } from './feedback-store';
+import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
@@ -422,8 +422,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     try {
           if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); }
           else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
-          // Global (no projectId), so every open project hears it; the store folds the burst into one reload.
-          else if (message.type === 'feedback/changed') void refreshFeedback();
           // A stream of file events (an agent at work) refreshes Git at most twice a second.
           else if (message.type === 'fs') {
             if (refs.active.current && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
@@ -639,11 +637,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (refs.focus.current === id) setFocusLeaf(leaves(activePane())[0] || '');
     clearAttention(id);
     setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
+  }
+  // Start screen only: the same pane becomes a fresh chat of another provider. A chat with earlier (cleared) history keeps its transcript for /resume.
   // One switch per chat at a time (rapid clicks must not race the close with the other agent's open). Earlier history moves to another id: this id would
   // otherwise keep the old agent in its stored meta and the new agent's open would be refused.
   const switchingChats = useRef(new Set<string>());
-  }
-  // Start screen only: the same pane becomes a fresh chat of another provider. A chat with earlier (cleared) history keeps its transcript for /resume.
   async function switchChatAgent(id: string, agent: Agent, forget: boolean) {
     if (switchingChats.current.has(id)) return false;
     const old = findLeaf(treeOf(id), id);

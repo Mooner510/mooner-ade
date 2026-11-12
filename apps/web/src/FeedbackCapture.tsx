@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './Icon';
 import { captureRect, dragRect, type Box, type Point } from './feedback-model';
-import { browserCapture, canCapture, desktopCapture, type CaptureMode } from './feedback-store';
+import { canCapture, desktopCapture, openBrowserShare, type BrowserShare, type CaptureMode } from './feedback-store';
 
 const modes: { id: CaptureMode; label: string; icon: IconName; hint: string }[] = [
   { id: 'element', label: '요소', icon: 'captureElement', hint: '캡쳐할 영역을 클릭하세요 · Alt: 커서 아래 요소 그대로' },
@@ -10,15 +10,18 @@ const modes: { id: CaptureMode; label: string; icon: IconName; hint: string }[] 
   { id: 'range', label: '범위', icon: 'captureRange', hint: '끌어서 범위를 정하세요' }
 ];
 const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+// A browser that cannot start a share because the page is not shown (a hidden or covered window) says only "Invalid state".
+const readable = (cause: unknown) => cause instanceof DOMException && cause.name === 'InvalidStateError' ? new Error('화면 공유를 시작하지 못했습니다. 이 창이 앞에 보이는 상태에서 다시 시도하세요.') : cause;
 const boxOf = (rect: DOMRect): Box => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
 
 // Full-window overlay for picking what to capture. It lives in the top layer (a manual popover), inside the topmost open modal
 // dialog if there is one, so it also works over the settings dialog and is not made inert by it.
-// Picking hides the overlay, waits two frames so the screen no longer shows it, then asks the desktop app for the PNG.
+// Picking hides the overlay, waits two frames so the screen no longer shows it, then asks the desktop app for the PNG. Without the desktop app the
+// browser's tab share is started when the overlay opens (so the region is picked on the settled layout) and the frame is taken from it.
 export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCancel, onError }: { mode: CaptureMode; fallbackZoom: number; onCaptured(bytes: Uint8Array): void | Promise<void>; onCancel(): void; onError(cause: unknown): void }) {
   const [mode, setMode] = useState(initial), [hidden, setHidden] = useState(false);
   const [hover, setHover] = useState<{ box: Box; label: string } | null>(null), [drag, setDrag] = useState<{ from: Point; to: Point } | null>(null);
-  const root = useRef<HTMLDivElement>(null), busy = useRef(false);
+  const root = useRef<HTMLDivElement>(null), busy = useRef(false), share = useRef<Promise<BrowserShare> | null>(null);
   const [host] = useState(() => [...document.querySelectorAll<HTMLDialogElement>('dialog[open]')].pop() ?? document.body);
 
   useLayoutEffect(() => {
@@ -26,6 +29,14 @@ export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCan
     try { element.showPopover(); } catch { /* already shown */ }
     document.documentElement.classList.add('feedback-capturing');
     return () => document.documentElement.classList.remove('feedback-capturing');
+  }, []);
+
+  // Declared before the 'window' effect below, which shoots at once and waits for this share.
+  useEffect(() => {
+    if (desktopCapture()?.capture || !canCapture()) return;
+    const started = openBrowserShare(onCancel); share.current = started;
+    started.catch(cause => { if (cause instanceof DOMException && cause.name === 'NotAllowedError') onCancel(); else onError(readable(cause)); });
+    return () => { void started.then(opened => opened.stop(), () => {}); };
   }, []);
 
   async function shoot(box: Box | null) {
@@ -38,10 +49,15 @@ export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCan
       const rect = box ? captureRect(box, zoom, { width: innerWidth, height: innerHeight }) : undefined;
       if (rect === null) { busy.current = false; setDrag(null); return; } // nothing on screen: keep picking
       setHidden(true); await frame(); await frame();
-      await onCaptured(bridge?.capture ? await bridge.capture(rect) : await browserCapture(rect));
+      if (bridge?.capture) await onCaptured(await bridge.capture(rect));
+      else {
+        const opened = await share.current!.catch(() => null); // a failed share was already reported by the effect above
+        if (!opened) return;
+        await onCaptured(await opened.grab(rect));
+      }
     } catch (cause) {
       // Closing the browser's share dialog is a cancel, not an error.
-      if (cause instanceof DOMException && cause.name === 'NotAllowedError') onCancel(); else onError(cause);
+      if (cause instanceof DOMException && cause.name === 'NotAllowedError') onCancel(); else onError(readable(cause));
     }
   }
 
