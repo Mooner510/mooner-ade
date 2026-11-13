@@ -55,7 +55,7 @@ export function createDeclined() {
 
 // The server's report is trusted only in shape: anything unreadable counts as busy, never as idle.
 // `keepsTerminals`: the server's terminals live in the pty-host and keep running through the restart; each reason they cause is
-// marked `keeps`. Only the other reasons (a plugin at work, an answer that could not be read) are work a quit would cut off.
+// marked `keeps` (and so is a chat turn whose agent runs in the pty-host too: `keepsChats`). Only the other reasons (a plugin at work, an answer that could not be read) are work a quit would cut off.
 export function normalizeReport(value) {
   if (!value || typeof value !== 'object' || typeof value.busy !== 'boolean') return unknownReport('작업 상태 응답을 이해하지 못했습니다');
   const all = Array.isArray(value.reasons) ? value.reasons.filter(item => item && typeof item === 'object') : [];
@@ -63,9 +63,9 @@ export function normalizeReport(value) {
   const reasons = keepsTerminals ? all.filter(item => item.keeps !== true) : all;
   const kept = keepsTerminals ? all.filter(item => item.keeps === true) : [];
   // An old server says busy without reasons; that stays busy.
-  return { busy: keepsTerminals ? reasons.length > 0 : value.busy, reasons, kept, keepsTerminals };
+  return { busy: keepsTerminals ? reasons.length > 0 : value.busy, reasons, kept, keepsTerminals, keepsChats: keepsTerminals && value.keepsChats === true };
 }
-export const unknownReport = detail => ({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail }], kept: [], keepsTerminals: false });
+export const unknownReport = detail => ({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail }], kept: [], keepsTerminals: false, keepsChats: false });
 
 const KIND = {
   turn: agent => `${AGENT[agent] ?? '에이전트'}가 작업 중`,

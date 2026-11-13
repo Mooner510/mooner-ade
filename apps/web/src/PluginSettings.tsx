@@ -172,7 +172,8 @@ const ago = (at: number | null | undefined) => {
   return minutes < 1 ? '방금' : minutes < 60 ? `${minutes}분 전` : minutes < 60 * 24 ? `${Math.round(minutes / 60)}시간 전` : `${Math.round(minutes / 1440)}일 전`;
 };
 
-type Notice = { text: string; error: boolean };
+// `step` is the button that ran: a plugin's own form shows its result next to its buttons, everything else at the top.
+type Notice = { text: string; error: boolean; step?: string };
 // `key` is '<where>:<step>': where the result is shown ('global' or a plugin folder) and which button shows progress.
 type Run = (key: string, step: () => Promise<PluginsState>) => void;
 
@@ -194,25 +195,13 @@ function Row({ title, hint, query = '', children }: { title: ReactNode; hint?: R
   return <div className="setting-row"><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
 }
 
-// What a plugin adds, in a few words for the list (the detail page spells each one out).
-function provides(plugin: PluginInfo) {
-  const items: { icon: IconName; text: string }[] = [];
-  if (plugin.terminal) items.push({ icon: 'terminal', text: plugin.commands?.length ? `명령 ${plugin.commands.join(', ')}` : '터미널 명령' });
-  if (plugin.mcp) {
-    const tools = plugin.tools, list = tools?.list;
-    const off = tools && !tools.enabled;
-    const on = list ? list.filter(tool => tool.enabled).length : 0;
-    items.push({ icon: 'bot', text: off ? 'MCP 도구 꺼짐' : list ? `MCP 도구 ${on === list.length ? list.length : `${on}/${list.length}`}개` : 'MCP 도구' });
-  }
-  if (plugin.workspace) items.push({ icon: 'layers', text: '프로젝트·터미널 사용' });
-  return items;
-}
-
 export function PluginSettings({ query = '' }: { query?: string }) {
   const bridge = pluginsBridge();
   const [state, setState] = useState<PluginsState | null>(null);
   const [busy, setBusy] = useState(''), [notice, setNotice] = useState<(Notice & { where: string }) | null>(null);
   const [dropOver, setDropOver] = useState(false);
+  // Which list the tabs show; null until the user picks one (then installed plugins if there are any, else built-in ones).
+  const [tab, setTab] = useState<'installed' | 'builtin' | null>(null);
   // The plugin whose detail page is open (its folder); null shows the list.
   const [selected, setSelected] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -248,10 +237,10 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   }
 
   const run: Run = (key, step) => {
-    const where = key.slice(0, key.lastIndexOf(':'));
+    const where = key.slice(0, key.lastIndexOf(':')), stepName = key.slice(key.lastIndexOf(':') + 1);
     setBusy(key); setNotice(null);
-    void step().then(value => { setState(value); if (value.message) setNotice({ where, text: value.message, error: false }); },
-      (error: Error) => setNotice({ where, text: errorText(error), error: true })).finally(() => setBusy(''));
+    void step().then(value => { setState(value); if (value.message) setNotice({ where, step: stepName, text: value.message, error: false }); },
+      (error: Error) => setNotice({ where, step: stepName, text: errorText(error), error: true })).finally(() => setBusy(''));
   };
   const noticeFor = (where: string) => notice?.where === where ? notice : null;
   const open = selected === null ? null : state.plugins.find(plugin => plugin.folder === selected) ?? null;
@@ -287,47 +276,62 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     if (!zips.length) { setNotice({ where: 'global', text: '플러그인 zip 파일만 놓을 수 있습니다.', error: true }); return; }
     const paths = zips.map(file => resolve(file)).filter(Boolean);
     if (!paths.length) return;
+    setTab('installed');
     run('global:zip', () => installPaths(paths));
   };
 
+  const builtins = shown.filter(plugin => plugin.builtin), installed = shown.filter(plugin => !plugin.builtin);
+  const shownTab = tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
+  const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
+
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
-    {!filtering && <p className="setting-note plugins-lead">MoonerADE에 없는 기능을 더합니다. 플러그인은 이 컴퓨터에서 MoonerADE와 같은 권한으로 실행되니, 믿을 수 있는 곳에서 받은 것만 설치하세요.</p>}
     {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
     {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
 
-    <Row query={query} title="플러그인 사용" hint={`${state.enabled ? '승인한 플러그인만 실행됩니다.' : '꺼져 있으면 설치한 플러그인이 실행되지 않습니다.'} 내장 플러그인은 각자 켜고 끕니다.`}>
-      <input type="checkbox" role="switch" aria-label="플러그인 사용" checked={state.enabled} disabled={working} onChange={event => { const on = event.target.checked; run('global:enable', () => bridge.setEnabled(on)); }} />
-    </Row>
-
-    {(!filtering || shown.length > 0) && <>
-    <div className="plugin-list-head">
-      <h4 className="setting-group">설치된 플러그인{state.plugins.length > 0 && <span className="plugin-count">{state.plugins.length}</span>}</h4>
-      <div className="plugin-toolbar">
-        {bridge.checkUpdates && state.plugins.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
+    {!filtering && <div className="plugin-tabbar">
+      <div className="plugin-tabs" role="tablist" aria-label="플러그인 종류">
+        {([['installed', '설치한 플러그인', installed], ['builtin', '내장 플러그인', builtins]] as const).map(([id, label, items]) =>
+          <button key={id} type="button" role="tab" aria-selected={shownTab === id} onClick={() => setTab(id)}>
+            {label}<small>{items.length}</small>{shownTab !== id && items.some(needsUser) && <i className="plugin-tab-alert" title="확인이 필요한 플러그인이 있습니다" />}
+          </button>)}
+      </div>
+      {shownTab === 'installed' && <div className="plugin-toolbar">
+        {bridge.checkUpdates && installed.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
         <IconButton icon="refresh" label="플러그인 폴더 다시 읽기" disabled={working} onClick={() => run('global:rescan', bridge.rescan)} />
         <IconButton icon="folder" label="플러그인 폴더 열기" disabled={working} onClick={() => run('global:folder', bridge.openFolder)} />
         <BusyButton className="primary" busy={working} running={busy === 'global:zip'} icon="plus" onClick={() => run('global:zip', bridge.pickZip)}>zip으로 설치</BusyButton>
-      </div>
-    </div>
+      </div>}
+    </div>}
 
-    {shown.length === 0
-      ? <div className="plugin-empty">
-          <Icon name="plugin" size={28} />
-          <strong>설치된 플러그인이 없습니다</strong>
-          <p>MoonerADE 릴리스에서 받은 플러그인 zip을 여기로 끌어다 놓거나 <b>zip으로 설치</b>로 고르세요. 확인 창에서 설치하면 바로 실행됩니다.</p>
-        </div>
-      : <ul className="plugin-list">{shown.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>}
+    {(filtering ? builtins.length > 0 : shownTab === 'builtin') && <>
+      {filtering
+        ? <div className="plugin-list-head"><h4 className="setting-group">내장 플러그인</h4></div>
+        : <p className="setting-note plugin-tab-note">MoonerADE에 포함된 플러그인입니다. 승인 없이 실행되고, 각자 켜고 끌 수 있습니다.</p>}
+      {list(builtins)}
     </>}
 
     {!filtering && state.github?.available && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
 
-    {!filtering && <details className="plugin-about">
+    {(filtering || shownTab === 'installed') && <>
+    {filtering && installed.length > 0 && <div className="plugin-list-head"><h4 className="setting-group">설치한 플러그인</h4></div>}
+    <Row query={query} title="설치한 플러그인 실행" hint="MoonerADE와 같은 권한으로 실행됩니다. 믿을 수 있는 것만 설치하세요.">
+      <input type="checkbox" role="switch" aria-label="설치한 플러그인 실행" checked={state.enabled} disabled={working} onChange={event => { const on = event.target.checked; run('global:enable', () => bridge.setEnabled(on)); }} />
+    </Row>
+    {installed.length === 0
+      ? !filtering && <div className="plugin-empty">
+          <Icon name="plugin" size={24} />
+          <p>플러그인 zip을 여기로 끌어다 놓거나 <b>zip으로 설치</b>를 누르세요.</p>
+        </div>
+      : list(installed)}
+    </>}
+
+    {!filtering && shownTab === 'installed' && <details className="plugin-about">
       <summary><Icon name="chevronRight" size={14} />설치 방법과 보안 안내</summary>
       <ul>
         <li>확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인은 업데이트되고 저장된 데이터는 남습니다.</li>
         <li>업데이트 출처(GitHub 저장소)를 알려 주는 플러그인은 그 저장소의 릴리스에서 업데이트를 받습니다. 받은 파일은 릴리스의 체크섬과 맞춰 보고, 새 권한을 요청하는 업데이트는 자동 업데이트여도 물어봅니다.</li>
-        <li>압축을 푼 폴더(안에 <span className="mono">plugin.json</span>이 있는 폴더)를 직접 넣었다면 플러그인을 열어 <b>승인하고 실행</b>을 누르세요.</li>
+        <li>압축을 푼 폴더(안에 <span className="mono">plugin.json</span>이 있는 폴더)를 직접 넣었다면 플러그인을 열어 승인하세요.</li>
         <li>승인은 그때의 파일 내용에 묶입니다. 파일이 바뀌면 다시 승인해야 실행됩니다.</li>
         <li>확인 창의 SHA-256을 배포처의 <span className="mono">SHA256SUMS</span>와 맞춰 보면 받은 파일이 그대로인지 알 수 있습니다.</li>
       </ul>
@@ -342,15 +346,14 @@ function StatePill({ state }: { state: State }) {
 
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
 function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
-  const items = provides(plugin), left = setupLeft(plugin);
+  const left = setupLeft(plugin);
   return <button type="button" className="plugin-row setting-hit" data-tone={stateTone(plugin.state)} onClick={onOpen} aria-label={`${plugin.name} 열기`}>
-    <span className="plugin-mark"><Icon name="plugin" size={18} /></span>
+    <span className="plugin-mark" data-builtin={plugin.builtin || undefined}><Icon name={plugin.builtin ? 'sparkles' : 'plugin'} size={18} /></span>
     <span className="plugin-row-text">
-      <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}{plugin.builtin && <span className="plugin-tag" data-tone="info">내장</span>}
+      <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
         {left > 0 && <span className="plugin-tag" data-tone="warn">설정 {left}단계 남음</span>}
         {plugin.update?.available && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update.latest}</span>}</span>
       {plugin.description && <span className="plugin-row-desc">{plugin.description}</span>}
-      {items.length > 0 && <span className="plugin-row-provides">{items.map(item => <span key={item.icon}><Icon name={item.icon} size={12} />{item.text}</span>)}</span>}
     </span>
     <StatePill state={plugin.state} />
     <Icon name="chevronRight" size={16} />
@@ -376,6 +379,16 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     if (!enabled) { const next = await bridge.setEnabled(true); if (!next.enabled) return next; }
     return bridge.approve(plugin.folder);
   };
+
+  // The header switch: a built-in plugin's own on/off; an installed one is on while approved (and plugins run), off revokes the approval.
+  const on = plugin.builtin ? plugin.builtinEnabled !== false : ['starting', 'running', 'error', 'stopped'].includes(plugin.state);
+  const toggle = (next: boolean) => {
+    if (!id) return;
+    if (plugin.builtin) run(`${plugin.folder}:switch`, () => bridge.setBuiltin(id, next));
+    else if (!next) run(`${plugin.folder}:switch`, () => bridge.revoke(id));
+    else run(`${plugin.folder}:switch`, plugin.state === 'off' ? () => bridge.setEnabled(true) : approve);
+  };
+
   // What MoonerADE's own steps do, as buttons inside the guide.
   const adeButton = (step: AdeStep) => {
     if (!id) return null;
@@ -398,12 +411,16 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <button ref={backRef} type="button" className="plugin-back" onClick={onBack}><Icon name="arrowLeft" size={16} />플러그인</button>
     </nav>
     <header className="plugin-detail-head" data-tone={tone}>
-      <span className="plugin-mark large"><Icon name="plugin" size={24} /></span>
+      <span className="plugin-mark large" data-builtin={plugin.builtin || undefined}><Icon name={plugin.builtin ? 'sparkles' : 'plugin'} size={24} /></span>
       <div className="plugin-title">
-        <div><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}</div>
+        <div>
+          <strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
+          <span className="plugin-tag" data-tone={plugin.builtin ? 'info' : undefined}>{plugin.builtin ? '내장' : '설치함'}</span>
+          <StatePill state={plugin.state} />
+        </div>
         {plugin.description && <p>{plugin.description}</p>}
       </div>
-      <StatePill state={plugin.state} />
+      {id && plugin.state !== 'invalid' && <input type="checkbox" role="switch" className="plugin-master" aria-label={`${plugin.name} 사용`} title={on ? '끄기' : '켜기'} checked={on} disabled={Boolean(busy)} onChange={event => toggle(event.target.checked)} />}
     </header>
     {plugin.state === 'invalid' && <Callout tone="error">{plugin.error ?? '플러그인을 읽을 수 없습니다.'}<small>plugin.json과 폴더 구성을 고친 뒤 목록의 다시 읽기를 누르세요.</small></Callout>}
     {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
@@ -417,27 +434,16 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <p className="plugin-muted">플러그인이 실행 중일 때 바꿀 수 있는 설정이 여기에 나옵니다.</p>
     </Section>}
 
-    {plugin.state !== 'invalid' && <Section title="제공하는 기능" hint="이 플러그인이 더하는 기능과 권한입니다.">
+    {plugin.state !== 'invalid' && <Section title="제공하는 기능">
       <Provides plugin={plugin} busy={busy} run={run} bridge={bridge} />
     </Section>}
 
     {id && plugin.update && <UpdateSection plugin={plugin} update={plugin.update} busy={busy} run={run} bridge={bridge} />}
 
-    {plugin.builtin && id && <Section title="사용" hint="내장 플러그인이라 승인 없이 실행됩니다. 끄면 멈추고 에이전트에 주던 도구도 빠집니다. 설정은 남습니다. MoonerADE와 함께 업데이트됩니다.">
-      <label className="plugin-switch-row">
-        <span>{plugin.name} 사용</span>
-        <input type="checkbox" role="switch" aria-label={`${plugin.name} 사용`} checked={plugin.builtinEnabled !== false} disabled={Boolean(busy)}
-          onChange={event => run(`${plugin.folder}:builtin`, () => bridge.setBuiltin(id, event.target.checked))} />
-      </label>
-    </Section>}
-
-    <Section title="정보">
+    <details className="plugin-about">
+      <summary><Icon name="chevronRight" size={14} />자세한 정보</summary>
       <PluginFacts plugin={plugin} />
-    </Section>
-
-    {id && !plugin.builtin && !['new', 'invalid'].includes(plugin.state) && <Section title="사용 중지" hint="플러그인을 멈추고 승인을 취소합니다. 저장된 키와 설정은 남고, 다시 쓰려면 승인해야 합니다.">
-      <div>{button('revoke', '사용 중지', () => bridge.revoke(id), { icon: 'stop', className: 'danger' })}</div>
-    </Section>}
+    </details>
   </>;
 }
 
@@ -676,7 +682,6 @@ function Provides({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
       <span className="plugin-cap-icon"><Icon name="terminal" size={16} /></span>
       <div className="plugin-cap-text">
         <strong>터미널 명령</strong>
-        <p>새로 여는 ADE 터미널에서 쓸 수 있는 명령을 더합니다.</p>
         {(plugin.commands?.length ?? 0) > 0 && <div className="plugin-chips">{plugin.commands!.map(command => <code key={command}>{command}</code>)}</div>}
         {(env.length > 0 || plugin.envPrefix) && <p className="plugin-muted">환경 변수 {env.length ? env.map(name => <code key={name}>{name}</code>) : <code>{plugin.envPrefix}*</code>}</p>}
       </div>
@@ -687,14 +692,7 @@ function Provides({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
     <span className="plugin-cap-icon"><Icon name="layers" size={16} /></span>
     <div className="plugin-cap-text">
       <strong>프로젝트·터미널 사용</strong>
-      <p>{plugin.builtin ? '열려 있는 채팅의 목록을 읽고 채팅에 메시지를 보냅니다.' : '이 PC의 프로젝트와 터미널을 열고 조작합니다. 원격 접속 같은 기능에 쓰입니다.'}</p>
-    </div>
-  </div>);
-  blocks.push(<div key="process" className="plugin-cap">
-    <span className="plugin-cap-icon"><Icon name="cpu" size={16} /></span>
-    <div className="plugin-cap-text">
-      <strong>별도 프로세스</strong>
-      <p>{plugin.builtin ? '플러그인이 자기 프로세스로 실행됩니다.' : '승인하면 플러그인이 자기 프로세스로 실행됩니다.'}{plugin.badge ? ' 실행 중에는 상태바에 표시가 나옵니다.' : ''}</p>
+      <p>{plugin.builtin ? '열린 채팅을 읽고 메시지를 보냅니다.' : '이 PC의 프로젝트와 터미널을 열고 조작합니다.'}</p>
     </div>
   </div>);
   return <div className="plugin-caps">{blocks}</div>;
@@ -727,8 +725,8 @@ function McpTools({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
   else if (list) body = <p className="plugin-muted">MCP 서버가 도구를 하나도 알려 주지 않았습니다.</p>;
   else if (tools?.status === 'loading') body = <p className="plugin-muted plugin-loading"><span className="plugin-spinner" aria-hidden="true" />도구 목록을 불러오는 중…</p>;
   else if (tools?.status === 'error') body = null;
-  else if (!running) body = <p className="plugin-muted">플러그인이 실행되면 MCP 서버에 물어 도구 목록을 보여 줍니다.</p>;
-  else if (!tools?.offered) body = <p className="plugin-muted">플러그인이 아직 에이전트에 도구를 주고 있지 않습니다. 아래 <b>설정</b>을 마치면 도구 목록이 나옵니다.</p>;
+  else if (!running) body = <p className="plugin-muted">실행하면 도구 목록이 나옵니다.</p>;
+  else if (!tools?.offered) body = <p className="plugin-muted">설정을 마치면 도구 목록이 나옵니다.</p>;
   else body = <p className="plugin-muted">도구 목록을 아직 불러오지 않았습니다.</p>;
 
   return <div className="plugin-cap plugin-cap-mcp">
@@ -737,15 +735,14 @@ function McpTools({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
       <div className="plugin-cap-head">
         <div>
           <strong>에이전트 도구 (MCP)</strong>
-          <p>{plugin.mcpChatOnly ? <>ADE 채팅의 AI 에이전트에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다(터미널에는 주지 않습니다).</> : <>ADE 터미널과 채팅에서 실행한 Claude Code·Codex에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다.</>} 바꾼 설정은 새로 시작하는 에이전트부터 적용됩니다.</p>
+          <p>{plugin.mcpChatOnly ? '채팅' : '터미널과 채팅'}의 AI 에이전트에 <code>{plugin.mcp}</code> 서버를 줍니다. 새로 시작하는 에이전트부터 적용됩니다.</p>
         </div>
         <div className="plugin-cap-controls">
           {running && tools?.offered && <IconButton icon="refresh" label="도구 목록 다시 불러오기" disabled={working || tools.status === 'loading'} onClick={() => run(`${plugin.folder}:tools`, () => bridge.refreshTools(id))} />}
           <input type="checkbox" role="switch" aria-label="MCP 서버 사용" checked={serverOn} disabled={working} onChange={event => set({ enabled: event.target.checked }, 'mcp')} />
         </div>
       </div>
-      {!serverOn && <p className="plugin-muted">꺼져 있어 에이전트에 이 서버를 주지 않습니다.</p>}
-      {serverOn && list && list.length > 0 && <p className="plugin-muted">도구 {list.length}개 중 {onCount}개 사용{onCount < list.length ? ' · 끈 도구가 있으면 Cursor 채팅에는 이 서버를 주지 않습니다' : ''}</p>}
+      {serverOn && list && onCount < list.length && <p className="plugin-muted">도구 {list.length}개 중 {onCount}개 사용 · 끈 도구가 있으면 Cursor 채팅에는 이 서버를 주지 않습니다</p>}
       {tools?.status === 'error' && <Callout tone="error">{tools.error ?? '도구 목록을 불러오지 못했습니다.'}</Callout>}
       {body}
     </div>
