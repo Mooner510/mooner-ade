@@ -2272,6 +2272,12 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .chat-agents li button { display: grid; grid-template-columns: auto auto minmax(0, max-content) minmax(0, 1fr) auto auto; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; border-radius: 6px; color: var(--fg); text-align: left; }
 .chat-agents li button:hover, .chat-agents li button[aria-pressed="true"] { background: var(--hover); }
 .chat-agents li strong { min-width: 0; max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.chat-agent-kind { display: inline-flex; flex: none; color: var(--agent-color, var(--agent)); }
+.chat-agents li[data-fading] { animation: chat-agent-fade .5s ease forwards; overflow: hidden; }
+.chat-agents[data-fading] { animation: chat-agent-fade-box .5s ease forwards; }
+@keyframes chat-agent-fade { to { opacity: 0; max-height: 0; } }
+@keyframes chat-agent-fade-box { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .chat-agents li[data-fading], .chat-agents[data-fading] { animation: none; opacity: 0; } }
 .chat-agents li small { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* ■ beside a running job's spinner: a thin red ring with a small rounded square inside (the spinner's own shape), shown only while its row is hovered or focused. */
 .chat-agent-state:has(> .stop-task), .chat-tool-state:has(> .stop-task) { align-items: center; gap: 7px; }
