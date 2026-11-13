@@ -47,8 +47,10 @@
 ### 4.1 테스트 세션 (서버 + 가짜 Hub + 보이는 Chrome)
 
 ```
-VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/start-ui.mjs      # 계속 실행되는 프로세스. 다른 터미널에서 이어서 작업
+VERIFY_OUT=<경로> node scripts/verify/start-ui.mjs      # 계속 실행되는 프로세스. 다른 터미널에서 이어서 작업
 ```
+
+- `<경로>`는 `mktemp -d -t ade-verify-out`으로 만든 임시 폴더입니다. `/tmp`는 macOS의 임시 폴더(`$TMPDIR`)가 아니어서 `cleanup-ui.mjs`가 지우지 않습니다. 명령마다 같은 `VERIFY_OUT`을 붙입니다(없으면 스크립트가 멈춥니다).
 
 - 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`의 서버, 가짜 Hub(`ADE_HUB_URL`), 별도 프로필의 보이는 Chrome(`--remote-debugging-port=0`)을 띄우고 `VERIFY_OUT/env.json`에 `origin`·`token`·`cookie`·`projectId`·`repo`·`data`·`temp`·`hub`·`cdp`·`pid`·`serverPids`(두 서버의 PID)·`chromePid`를 적습니다.
 - Chrome 경로는 macOS 기본값이며 `CHROME=<경로>`로 바꿉니다. 검증은 Chrome 157로 했습니다.
@@ -80,8 +82,8 @@ VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/start-ui.mjs      # 계속 �
 ### 4.2 서버 수준 스위트 (UI 없음)
 
 ```
-VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/t-feedback.mjs     # 피드백 F1~F6
-VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/t-chat.mjs         # 채팅·CSP·files/list·Artifact·UI 지침·계획·서브에이전트·압축·도구·Provider 전환
+VERIFY_OUT=<경로> node scripts/verify/t-feedback.mjs     # 피드백 F1~F6
+VERIFY_OUT=<경로> node scripts/verify/t-chat.mjs         # 채팅·CSP·files/list·Artifact·UI 지침·계획·서브에이전트·압축·도구·Provider 전환
 ONLY=F4 node scripts/verify/t-feedback.mjs                            # id가 F4로 시작하는 것만
 ```
 

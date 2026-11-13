@@ -311,6 +311,21 @@ function setup(t, { builtinDir = PLUGIN_DIR } = {}) {
   return { root, dir, store, manager, hosts, terminals };
 }
 
+test('the plugin store touches safeStorage (the macOS Keychain) only once something is sealed', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-store-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let calls = 0;
+  const base = sealer(), crypto = { ...base, isEncryptionAvailable: () => { calls++; return true; }, decryptString: buffer => { calls++; return base.decryptString(buffer); } };
+  const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto });
+  store.load();
+  assert.equal(store.available, true);
+  assert.equal(calls, 0);
+  store.save({ ...store.state, enabled: true });
+  assert.ok(calls > 0);
+  const again = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto });
+  assert.equal(again.load().enabled, true);
+});
+
 test('the shipped agent-bus plugin is a valid manifest with everything it names', () => {
   const [item] = scanPlugins(PLUGIN_DIR, { builtin: true });
   assert.equal(item.error, null);
@@ -347,6 +362,22 @@ test('the on/off choice is sealed with the other plugin settings and survives a 
   const second = createPluginStore({ file: path.join(first.root, 'plugins.bin'), crypto: sealer() });
   assert.deepEqual(second.load().builtin, { 'agent-bus': { enabled: false } });
   assert.deepEqual(validPluginState({ version: 1, builtin: { 'agent-bus': { enabled: 'no' }, 'Bad Id': { enabled: true }, x1: { enabled: true } } }).builtin, { x1: { enabled: true } });
+});
+
+test('a built-in plugin keeps its storage in a plain file, so its start never seals anything (no Keychain prompt on macOS)', t => {
+  const { root, manager, store, hosts } = setup(t);
+  let saves = 0;
+  const save = store.save.bind(store); store.save = next => { saves++; return save(next); };
+  manager.rescan();
+  hosts[0].child.emit('message', { type: 'storage', value: { link: { port: 4321 } } });
+  hosts[0].child.emit('message', { type: 'storage', value: { link: { port: 4321 } } });
+  const file = path.join(root, 'data', 'agent-bus', 'storage.json');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"link":{"port":4321}}');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(saves, 0);
+  assert.equal(fs.existsSync(path.join(root, 'plugins.bin')), false);
+  manager.setBuiltin('agent-bus', false); manager.setBuiltin('agent-bus', true);
+  assert.deepEqual(hosts.at(-1).child.sent.find(message => message.type === 'init').storage, { link: { port: 4321 } }, 'read back on the next start');
 });
 
 test('a plugin in the user folder cannot take a built-in id, and a zip with that id is refused', async t => {

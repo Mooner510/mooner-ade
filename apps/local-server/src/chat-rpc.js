@@ -51,6 +51,7 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
 export function createChatProtocol(agent, { write, emit, fail }) {
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
+  let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
@@ -195,6 +196,14 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     const option = raw.params?.options?.find(o => o.kind === 'allow_once'); if (!option) return false;
     void send({ id: raw.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } }); return true;
   }
+  function promptDone(response) {
+    if (disposed) return;
+    promptId = null; cursorFlush();
+    const hasOutput = said || [...chunks.values()].some(value => typeof value === 'object');
+    const status = response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'end_turn' && hasOutput ? 'success' : 'failed';
+    result(status, status === 'failed' ? `${hasOutput ? 'Cursor 응답이 완료되지 않았습니다' : 'Cursor가 표시할 응답 없이 종료되었습니다'} (${response.stopReason}). 다시 시도하세요.` : '');
+  }
+  function promptFailed(error) { if (disposed) return; promptId = null; result('failed', error.message); fail?.(error); }
   function serverRequest(raw) {
     const p = raw.params ?? {};
     if (agent === 'codex') {
@@ -224,6 +233,16 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         pending.delete(raw.id); clearTimeout(item.timer);
         raw.error ? item.reject(fault('AGENT_PROTOCOL', raw.error.message, 502)) : item.resolve(raw.result);
       }
+    },
+    // What a server that stops hands to the next one, which goes on with the same running agent (chat.js `detach`). Answers to our own
+    // requests other than the running Cursor prompt are dropped: the next server never waits for them.
+    snapshot: () => ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers,
+      approvals: [...approvals], chunks: [...chunks], skills: [...skills], promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
+    restore(saved) {
+      ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers } = saved);
+      for (const [map, entries] of [[approvals, saved.approvals], [chunks, saved.chunks], [skills, saved.skills]]) { map.clear(); for (const [key, value] of entries ?? []) map.set(key, value); }
+      promptId = saved.promptId ?? null;
+      if (promptId !== null) pending.set(promptId, { resolve: promptDone, reject: promptFailed, timer: null });
     },
     dispose() { disposed = true; for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
     async initialize(meta, cwd, servers = [], instructions) {
@@ -322,13 +341,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
         startedAt = Date.now(); turnId = `cursor-${startedAt}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
-        void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(response => {
-          if (disposed) return;
-          cursorFlush();
-          const hasOutput = said || [...chunks.values()].some(value => typeof value === 'object');
-          const status = response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'end_turn' && hasOutput ? 'success' : 'failed';
-          result(status, status === 'failed' ? `${hasOutput ? 'Cursor 응답이 완료되지 않았습니다' : 'Cursor가 표시할 응답 없이 종료되었습니다'} (${response.stopReason}). 다시 시도하세요.` : '');
-        }, error => { result('failed', error.message); fail?.(error); });
+        promptId = nextId + 1; // the id request() is about to use
+        void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(promptDone, promptFailed);
       }
     },
     async approve(id, answer) {
