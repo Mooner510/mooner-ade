@@ -19,6 +19,7 @@
 | `ADE_CHAT_ID` / `ADE_PROJECT_ID` / `ADE_CHAT_AGENT` | 없음 | 채팅 전용 내장 플러그인([에이전트 버스](docs/AGENT_BUS.md))이 자기 채팅을 식별하도록 ADE가 넣는 값. 터미널에는 주지 않음. 직접 설정하지 않음 |
 | `ADE_HUB_URL` | `https://ade-hub.mooner510.kr` | 로그인 없이 보내는 피드백([피드백 요청](docs/ARCHITECTURE.md#피드백-요청))이 가는 MoonerADE Hub 주소. 서버가 읽습니다 |
 | `ADE_FEEDBACK_ANONYMOUS` | 켜짐 | `0`이면 로그인 없는 피드백 제출을 끕니다. 제출 가능한 플러그인 계정이 없으면 피드백 제출을 할 수 없게 됩니다 |
+| `ADE_NVIDIA_CHECK` | 켜짐 | Windows에서 시작 후 GPU 프로세스에 NVIDIA RTX HDR 모듈(`nvppex.dll`)이 붙었는지 확인하고, 붙었으면 드라이버 설정으로 끄자고 묻습니다. `0`이면 확인하지 않습니다 |
 
 macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, Windows는 `%LOCALAPPDATA%/mooner-ade`(변수 미설정 시 사용자 홈 아래)입니다. 실제 프로젝트 파일과 CLI 자체 인증 설정은 별도로 관리됩니다.
 
