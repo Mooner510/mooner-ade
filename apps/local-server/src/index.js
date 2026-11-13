@@ -683,7 +683,7 @@ async function route(action, input, project) {
     const scope = input.scope === 'all' ? [...projects.values()] : project ? [project] : [];
     return scope.flatMap(item => [...item.chats.entries()].map(([id, chat]) => {
       const state = chat.state();
-      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, title: state.chatTitle || '', status: state.status, cwd: chat.cwd };
+      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
     }));
   }
   if (action === 'recent/remove') {

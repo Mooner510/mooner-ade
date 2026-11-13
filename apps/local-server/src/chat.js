@@ -532,6 +532,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     retry: () => resendLastUser(),
     state: () => ({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }),
+    // The latest thing the user typed in this chat (not a message from another agent). The agent bus quotes it to the chat it messages, so the receiver
+    // sees what the user actually asked for instead of taking the sender's word for it.
+    lastUserInstruction() {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i], said = event.kind === 'user' || (event.kind === 'steer' && event.phase === 'applied') ? event.text : null;
+        if (typeof said === 'string' && said.trim() && !said.startsWith('[ADE agent bus]')) return { text: said.trim().slice(0, 300), at: event.at };
+      }
+      return null;
+    },
     // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
     // right away when idle, or once the running turn ends. The next message starts a child with the new key.
     relaunch() { if (child) { if (turnOpen || approvals.size) { restartAfterTurn = true; state.restartPending = true; } else restart(); } },
