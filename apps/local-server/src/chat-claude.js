@@ -174,6 +174,7 @@ function taskEvent(raw) {
     kind: "task",
     phase,
     toolUseId: raw.tool_use_id,
+    ...(phase === "start" && typeof raw.task_id === "string" && { taskId: raw.task_id }), // stop_task names this, not the tool_use_id
     ...(phase === "start" && { description: raw.description ?? "", agentType: raw.subagent_type ?? "", background: raw.is_backgrounded === true }),
     // A progress `description` is what it is doing now ("Running …"), not its name.
     ...(phase === "progress" && { activity: raw.description ?? "", lastTool: raw.last_tool_name ?? "" }),

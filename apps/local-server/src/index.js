@@ -350,6 +350,8 @@ async function adoptTerminals(project) {
     try { const native = await ptyHost.attach(item.key); registerTerminal(project, item.meta.id, native, item.meta.cwd, native.initial, item.meta.startedAt); } catch { /* exited in the meantime */ }
   }
 }
+// A chat is busy while it answers, waits for an approval or still runs a background subagent.
+const chatBusy = chat => { const { status, liveTasks } = chat.state(); return status === 'working' || status === 'attention' || Boolean(liveTasks?.length); };
 // Releases everything a project holds. Without `force`, live terminals make it refuse so work is not killed by accident.
 // `detach` (server shutdown) leaves pty-host terminals running for the next server instead of killing them.
 function closeProject(project, { force = false, detach = false } = {}) {
@@ -357,8 +359,8 @@ function closeProject(project, { force = false, detach = false } = {}) {
     if (projects.get(project.id) !== project) return;
     const liveTerminals = [...project.terminals.values()].filter(terminal => !terminal.exited).length;
     if (!force && liveTerminals) throw fault('PROJECT_BUSY', `실행 중인 터미널 ${liveTerminals}개가 있습니다.`, 409);
-    const busyChats = [...project.chats.values()].filter(chat => ['working', 'attention'].includes(chat.state().status)).length;
-    if (!force && busyChats) throw fault('PROJECT_BUSY', `응답 중인 채팅 ${busyChats}개가 있습니다.`, 409);
+    const busyChats = [...project.chats.values()].filter(chatBusy).length;
+    if (!force && busyChats) throw fault('PROJECT_BUSY', `응답 중이거나 백그라운드 작업이 있는 채팅 ${busyChats}개가 있습니다.`, 409);
     projects.delete(project.id);
     for (const socket of clients) socket.projects.delete(project.id);
     project.watcher?.close();
@@ -939,7 +941,8 @@ async function route(action, input, project) {
       return {};
     }
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
-    case 'chat/interrupt': await project.chats.get(input.id)?.interrupt(); return {};
+    case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
+    case 'chat/stop-task': await project.chats.get(input.id)?.stopTask(String(input.toolUseId ?? '')); return {};
     case 'chat/approve': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
@@ -963,7 +966,7 @@ async function route(action, input, project) {
       return chat.setAutoCompact(text(input.value, '창 크기', 40));
     }
     case 'chat/warm': await project.chats.get(input.id)?.warm(); return {};
-    case 'chat/reset': await project.chats.get(input.id)?.reset(); return {};
+    case 'chat/reset': await project.chats.get(input.id)?.reset({ force: input.force === true }); return {};
     case 'chat/close': {
       const chat = project.chats.get(input.id);
       if (chat) { project.chats.delete(input.id); await chat.close({ forget: input.forget === true, ...(typeof input.archiveAs === 'string' && { archiveAs: input.archiveAs }) }); }
@@ -1009,7 +1012,7 @@ async function route(action, input, project) {
     case 'chat/to-terminal': {
       const id = text(input.id, '채팅 ID', 128), chat = project.chats.get(id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      const { agent, sessionId, configDir } = await chat.handoff();
+      const { agent, sessionId, configDir } = await chat.handoff({ force: input.force === true });
       await seedTerminalSession(project.directory, id, sessionId, agent);
       return { agent, restoreId: id, cwd: chat.cwd, ...(configDir && { configDir }) };
     }
@@ -1418,7 +1421,7 @@ async function busyReport() {
   // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
   const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
   // A chat turn is a child of this server, so any restart (update or dev reload) ends it; an idle chat resumes from its session id and costs nothing.
-  for (const project of projects.values()) for (const [id, chat] of project.chats) if (['working', 'attention'].includes(chat.state().status)) reasons.push({ project: path.basename(project.root), terminal: id.slice(0, 6), kind: 'turn', agent: chat.agent });
+  for (const project of projects.values()) for (const [id, chat] of project.chats) if (chatBusy(chat)) reasons.push({ project: path.basename(project.root), terminal: id.slice(0, 6), kind: 'turn', agent: chat.agent });
   // Terminals in the pty-host keep running through an app restart; the updater then only waits for what does not.
   const keepsTerminals = Boolean(ptyHost && !ptyHostLost);
   const kept = [];
