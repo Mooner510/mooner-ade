@@ -31,8 +31,8 @@ test('the frame page is a closed box: scripts and styles inline, nothing else', 
 });
 
 test('the agent instructions name both fences and the helpers, say when not to use them, and stay short', () => {
-  for (const word of ['```ui', 'ade-ui', 'ade.send', 'ade.prefill', 'never for ordinary answers']) assert.ok(UI_PROMPT.includes(word), word);
-  assert.ok(UI_PROMPT.length < 2000, `prompt is sent every turn: ${UI_PROMPT.length} chars`);
+  for (const word of ['```ui', 'ade-ui', 'ade.send', 'ade.prefill', 'stays a sentence', "don't"]) assert.ok(UI_PROMPT.includes(word), word);
+  assert.ok(UI_PROMPT.length < 3000, `cached, but every word competes for attention: ${UI_PROMPT.length} chars`);
 });
 
 test('a frame laid out at a fixed width reports how far it reaches, so its card shrinks to fit', () => {

@@ -2,7 +2,7 @@
 // names repeated it is the cheapest thing for the model to write. Pure, so tests load it directly. Everything is model output: coerced and capped here, never trusted.
 //   ["stats", [label, value, tone?, sub?], ...]            tone: ok|warn|err|info
 //   ["chart", "line|bar|pie", title, [x labels], [name, v1, v2, ...], ...]
-//   ["steps", [name, "done|active|todo"], ...]
+//   ["steps", [name, "done|active|todo", detail?], ...]
 //   ["form"|"draft", title, submit, field, ...]           field: [type, key, label, ...]; draft only fills the message box instead of sending
 //     text|number|area|date|check: [type, key, label, default?]   slider: [.., min, max, default?]   select|radio: [.., option, option, ...]
 // A fence holds one component or an array of them.
@@ -11,7 +11,7 @@ export type Field = { k: string; label: string; type: 'text' | 'number' | 'area'
 export type Spec =
   | { t: 'stats'; items: { label: string; value: string; sub: string; tone: string }[] }
   | { t: 'chart'; kind: 'line' | 'bar' | 'pie'; title: string; x: string[]; y: [string, number[]][] }
-  | { t: 'steps'; items: [string, 'done' | 'active' | 'todo'][] }
+  | { t: 'steps'; items: [string, 'done' | 'active' | 'todo', string][] }
   | { t: 'form'; title: string; fields: Field[]; submit: string; fill: boolean };
 
 const str = (v: unknown, max = 200) => typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, max) : '';
@@ -32,7 +32,7 @@ function one(raw: unknown): Spec | null {
   switch (t) {
     case 'stats': return { t, items: r.slice(0, 12).map(i => { const [label, value, a, b] = list(i, 4), tone = pick(a, ['ok', 'warn', 'err', 'info', ''], ''); return { label: str(label), value: str(value), tone, sub: str(tone ? b : a) }; }) };
     case 'chart': { const [kind, title, x, ...series] = r; return { t, kind: pick(kind, ['line', 'bar', 'pie'], 'bar'), title: str(title), x: list(x, 100).map(label => str(label, 40)), y: series.slice(0, 6).map(s => { const [name, ...values] = list(s, 101); return [str(name, 60), values.map(n => num(n))]; }) }; }
-    case 'steps': return { t, items: r.slice(0, 30).map(i => { const [name, state] = Array.isArray(i) ? i : [i]; return [str(name), pick(state, ['done', 'active', 'todo'], 'todo')]; }) };
+    case 'steps': return { t, items: r.slice(0, 30).map(i => { const [name, state, detail] = Array.isArray(i) ? i : [i]; return [str(name), pick(state, ['done', 'active', 'todo'], 'todo'), str(detail)]; }) };
     case 'form': case 'draft': { const [title, submit, ...fields] = r; return { t: 'form', title: str(title), submit: str(submit, 40) || '보내기', fill: t === 'draft', fields: fields.slice(0, 12).map(field).filter(f => f.label) }; }
     default: return null;
   }
