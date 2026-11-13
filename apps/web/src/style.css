@@ -168,7 +168,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .menu button:hover { background: var(--selected); }
 .menu button span { display: flex; flex-direction: column; }
 /* sidebar right-click menu: fixed at the pointer */
-.tab-menu { position: fixed; top: 0; min-width: 230px; }
+.tab-menu { position: fixed; top: 0; width: 230px; }
 .tab-menu button { padding: 6px 10px; font-size: 12.5px; }
 .tab-menu button:disabled { opacity: .4; cursor: default; background: transparent; }
 .tab-menu button:focus-visible { background: var(--selected); outline: none; }

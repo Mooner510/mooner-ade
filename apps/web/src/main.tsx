@@ -192,13 +192,13 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
     </Modal>}</>;
 }
 
-// Right-click menu for a sidebar tab or split terminal: every drag gesture has a plain menu item here, with its key.
+// Right-click menu for a sidebar tab or split terminal: only the everyday actions (detach, rename, close); moving and merging are drag gestures and shortcuts.
 function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tabs: WorkspaceStatus['tabs']; handle?: WorkspaceHandle; onClose(): void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, []);
   const index = tabs.findIndex(tab => tab.id === target.tabId), tab = tabs[index];
   if (!tab || !handle) return null;
-  const above = tabs[index - 1], below = tabs[index + 1], pane = tab.panes.find(item => item.id === target.paneId);
+  const pane = tab.panes.find(item => item.id === target.paneId);
   const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
     <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span>{keys && <kbd>{keys}</kbd>}</button>;
   const onKey = (event: React.KeyboardEvent) => {
@@ -210,21 +210,15 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
   };
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
     <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 340 : 260)) }}>
+      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 200 : 130)) }}>
       {pane && <>
         <small className="menu-title">{pane.label}</small>
         {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
-        {item('arrowUp', '위 탭으로 옮기기', () => handle.movePane(tab.id, pane.id, above.id, 'merge'), undefined, !above)}
-        {item('arrowDown', '아래 탭으로 옮기기', () => handle.movePane(tab.id, pane.id, below.id, 'merge'), undefined, !below)}
         {item('x', '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
         <hr />
       </>}
       <small className="menu-title">{pane ? `탭: ${tab.label}` : tab.label}</small>
       {item('edit', '이름 바꾸기', () => handle.renameTab(tab.id), 'F2')}
-      {item('arrowUp', '위로 이동', () => handle.moveTab(tab.id, above.id, false), showKeys('alt+↑'), !above)}
-      {item('arrowDown', '아래로 이동', () => handle.moveTab(tab.id, below.id, true), showKeys('alt+↓'), !below)}
-      {item('merge', '위 탭과 분할로 합치기', () => handle.mergeTabs(tab.id, above.id), undefined, !above)}
-      {item('merge', '아래 탭과 분할로 합치기', () => handle.mergeTabs(tab.id, below.id), undefined, !below)}
       {item('x', '탭 닫기', () => handle.closeTab(tab.id), pane ? undefined : 'Del')}
     </div></>;
 }
@@ -524,7 +518,7 @@ function Shell() {
                 const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <svg className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}>{TRAIL.map(([len, opacity]) => <rect key={len} pathLength={100} strokeDasharray={`${len} ${100 - len}`} strokeOpacity={opacity} style={{ '--from': len, '--to': len - 100 } as React.CSSProperties} />)}</svg>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 가운데에 놓으면 분할로 합치기\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
@@ -534,13 +528,13 @@ function Shell() {
                 // A split tab: a header that drags the whole tab, and one row per terminal that drags just that terminal.
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tab.label} · 분할 ${tab.panes.length}개\n여기를 끌면 탭 전체 이동 · 아래 터미널을 끌면 그 터미널만 이동\n우클릭: 메뉴 · 더블클릭/F2: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tab.label} · 분할 ${tab.panes.length}개\n끌어서 탭 전체 이동 · 아래 항목을 끌면 그 항목만 이동\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
-                      title={`${pane.label}\n끌어서 다른 탭으로 옮기거나 탭 사이·아래 빈칸에 놓아 새 탭으로 분리\n우클릭: 메뉴`}
+                      title={`${pane.label}\n끌어서 다른 탭으로 이동 · 탭 사이나 빈 곳에 놓으면 새 탭으로 분리\n우클릭: 메뉴`}
                       draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}

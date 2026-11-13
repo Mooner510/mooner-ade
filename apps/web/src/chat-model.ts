@@ -886,7 +886,7 @@ export const questionsAnswered = (questions: ChatQuestion[], answers: Record<str
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [
   { id: 'effortUp', label: 'Effort 올리기', keys: 'shift+arrowup' }, { id: 'effortDown', label: 'Effort 내리기', keys: 'shift+arrowdown' },
-  { id: 'modelNext', label: '다음 모델로 전환', keys: 'alt+p' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
+  { id: 'modelNext', label: '다음 모델로 전환', keys: 'shift+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'shift+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
 ] as const;
 export type ChatKeyId = typeof chatKeyDefs[number]['id'];
 export const chatKey = (overrides: Record<string, string> | undefined, id: ChatKeyId) => overrides?.[id] || chatKeyDefs.find(def => def.id === id)!.keys;
