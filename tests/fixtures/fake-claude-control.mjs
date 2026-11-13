@@ -17,6 +17,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (message.type !== 'user') return;
+  if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message }); // --replay-user-messages: the CLI acknowledges a line it takes in
   const text = message.message?.content?.find?.(part => part.type === 'text')?.text ?? '';
   if (text === 'slow') return;
   if (text === 'bgtask') { // a background subagent that outlives its turn: it ends only by stop_task (or with the child)
