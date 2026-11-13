@@ -872,7 +872,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Sidebar and header: rename → AI/agent title → first non-slash prompt since the last /clear.
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -957,7 +957,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         enqueue(message);
         if (message.event?.kind === 'divider' && message.event.reason === 'clear') setQueue([]);
         // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
-        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && typeof message.event.text === 'string') setText(current => current || message.event.text);
+        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && !message.event.resent && typeof message.event.text === 'string') setText(current => current || message.event.text);
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
@@ -1300,7 +1300,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if ((!message && !images.length) || !view.ready) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
-    const attachments = images; setText(''); setImages([]); setCompact(true); clearChatDevDraft(ctx.projectId, id);
+    const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
     if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
@@ -1317,7 +1317,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     } catch (cause) { ctx.fail(cause); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
-  const interrupt = () => void ctx.call('chat/interrupt', { id }).catch(ctx.fail);
+  const interrupt = (sendSteers = false) => void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail);
   const stopTask = (toolUseId: string) => void ctx.call('chat/stop-task', { id, toolUseId }).catch(ctx.fail);
   function resume() {
     if (resuming) return;
@@ -1434,7 +1434,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. Esc로 취소할 수 있습니다.">스티어링 · 대기 중 · Esc로 취소</small>{item.text}</div></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에 되돌리거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · 대기 중 · ↑ 되돌리기 · Esc 바로 보내기</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1495,7 +1495,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             if (event.key === 'Tab' && text.startsWith('/')) { event.preventDefault(); return; }
             if (event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
             else if (event.key === 'Enter' && text.startsWith('/')) event.preventDefault();
-            else if (event.key === 'Escape' && busy) { event.preventDefault(); if (view.steers.length && caps?.cancelSteer !== false) void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); else interrupt(); }
+            else if (event.key === 'Escape' && busy) { event.preventDefault(); interrupt(view.steers.length > 0 && caps?.cancelSteer !== false); }
+            // ↑ with nothing typed takes the last steering message back; otherwise ↑/↓ walk the sent messages (the draft is kept aside and ↓ past the newest brings it back).
+            else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+              const field = event.currentTarget, up = event.key === 'ArrowUp';
+              if (up && !text && view.steers.length && caps?.cancelSteer !== false) { event.preventDefault(); void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); return; }
+              const sent = shown.flatMap(item => item.kind === 'user' ? [item.text] : []);
+              if (field.selectionStart !== field.selectionEnd || !(up ? !text.slice(0, field.selectionStart).includes('\n') : recall && !text.slice(field.selectionEnd).includes('\n'))) return;
+              const at = up ? (recall ? recall.at - 1 : sent.length - 1) : recall ? recall.at + 1 : -1;
+              if (!sent.length || at < 0 || (!up && !recall)) return;
+              event.preventDefault();
+              const draft = recall?.draft ?? text, next = at >= sent.length ? draft : sent[at];
+              setRecall(at >= sent.length ? null : { at, draft }); setText(next);
+              requestAnimationFrame(() => field.setSelectionRange(next.length, next.length));
+            }
           }} />
         </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
@@ -1505,7 +1518,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className="chat-model" value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).catch(ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
         <ContextRing state={state} ctx={ctx} active={visible} agent={agent} chatId={id} />
-        {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={interrupt}><Icon name="stop" size={15} /></button>
+        {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={15} /></button>
           : <button type="button" className="chat-send" title="보내기 (Enter)" aria-label="보내기" disabled={!view.ready || (!text.trim() && !images.length)} onClick={() => void submit()}><Icon name="arrowUp" size={16} /></button>}
       </div>
       </div>

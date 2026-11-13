@@ -941,7 +941,7 @@ async function route(action, input, project) {
       return {};
     }
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
-    case 'chat/interrupt': await project.chats.get(input.id)?.interrupt(); return {};
+    case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
     case 'chat/stop-task': await project.chats.get(input.id)?.stopTask(String(input.toolUseId ?? '')); return {};
     case 'chat/approve': {
       const chat = project.chats.get(input.id);

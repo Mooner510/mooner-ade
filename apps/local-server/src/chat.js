@@ -586,7 +586,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
-        const uuid = randomUUID(); steers.set(uuid, { text, images: images.length, previews });
+        const uuid = randomUUID(); steers.set(uuid, { text, images: images.length, previews, data: images });
         emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews });
         try { if (protocol) { await protocol.send(text, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews }); } else await write(userLine(text, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
         return;
@@ -671,10 +671,16 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       // The CLI normally reports the end itself; if it did not, say so here so the row does not keep spinning.
       if (state.liveTasks.includes(toolUseId)) handleEvent({ kind: 'task', phase: 'end', toolUseId, status: 'stopped', report: '' });
     },
-    async interrupt() {
+    // `sendSteers` (Esc while steering messages wait): stop the work, then send those messages right away as the next turn instead of handing them back to the input box.
+    async interrupt({ sendSteers = false } = {}) {
       live();
       if (!child) return;
       if (protocol) { await protocol.interrupt(); return; }
+      const held = [];
+      if (sendSteers && state.capabilities.cancelSteer) for (const [uuid, item] of [...steers]) {
+        const response = await control({ subtype: 'cancel_async_message', message_uuid: uuid }, 3000);
+        if (response?.response?.cancelled === true && steers.delete(uuid)) { held.push(item); emit({ kind: 'steer', phase: 'cancelled', uuid, text: item.text, resent: true }); }
+      }
       clearApprovals(); dropSteers();
       const proc = child, turn = turnSeq, response = await control({ subtype: 'interrupt' }, 3000);
       // The turn closes with the `result` the CLI sends for the interrupt; closing it here let that late result end the *next* turn instead.
@@ -682,6 +688,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (!response) { if (child === proc) proc.kill('SIGTERM'); }
       else setTimeout(() => { if (child === proc && turnOpen && turnSeq === turn) proc.kill('SIGTERM'); }, 5000).unref();
       setStatus();
+      if (!held.length) return;
+      for (let i = 0; i < 100 && turnOpen; i += 1) await new Promise(resolve => setTimeout(resolve, 100)); // the interrupted turn's `result` (or the killed child) closes it
+      const text = held.map(item => item.text).join('\n\n');
+      try { await this.send(text, held.flatMap(item => item.data), { previews: held.flatMap(item => item.previews ?? []) }); }
+      catch (error) { emit({ kind: 'steer', phase: 'cancelled', uuid: '', text }); throw error; } // not sent: the text goes back into the input box
     },
     // Whether the agent is told about UI blocks is decided once, by the setting at the chat's first message, and kept: a later change would rewrite the system prompt
     // and make the whole conversation miss the prompt cache. Chats that already had a session (older ones) never get it. Cursor has no system-prompt channel.
