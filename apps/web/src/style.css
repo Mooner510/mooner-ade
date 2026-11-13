@@ -1240,6 +1240,9 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 /* One turn = the request and every row that answered it. Rows keep their DOM node from the first streamed character on; the process rows fold with a
    height transition (grid 1fr -> 0fr) when the turn ends, so nothing remounts or jumps. Spacing lives inside the rows so a folded row takes no room. */
 .chat-turn { display: flex; flex-direction: column; min-width: 0; }
+/* Turns out of view are not laid out or painted: a long chat repainted its whole history on every streamed frame. `auto` keeps each turn's last real height;
+   the clip margin keeps focus rings and card shadows at a turn's edge (paint containment clips there) and the entering rows' slide from being cut. */
+.chat-turn { content-visibility: auto; contain-intrinsic-block-size: auto 400px; overflow-clip-margin: 16px; }
 .chat-turn > * + * { margin-top: 10px; }
 .chat-turn > .chat-row { margin-top: 0; }
 .chat-row { display: grid; grid-template-rows: 1fr; min-width: 0; line-height: 1.6; overflow-wrap: break-word; transition: grid-template-rows .32s var(--ease), opacity .24s ease; }
@@ -1253,7 +1256,8 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-row.in-process[data-boxed]:not([data-folded]) > div { padding: 8px 0 0 15px; }
 .chat-row.in-process[data-boxed]:not([data-folded]).process-last > div { padding-bottom: 6px; }
 /* Tools listed straight under the header (a process that is one run of tools) sit at the same pitch as in a bundle, not a paragraph gap apart. */
-.chat-row.in-process[data-boxed]:not([data-folded]):has(> div > .chat-tool) + .chat-row.in-process[data-boxed]:not([data-folded]):has(> div > .chat-tool) > div { padding-top: 0; }
+/* data-tool (set in Turn), not :has(> div > .chat-tool): with :has the trailing `> div` put every div of the page in Chrome's :has invalidation set, so each keystroke restyled the whole thread. */
+.chat-row.in-process[data-boxed][data-tool]:not([data-folded]) + .chat-row.in-process[data-boxed][data-tool]:not([data-folded]) > div { padding-top: 0; }
 .chat-row.in-process[data-folded] { grid-template-rows: 0fr; opacity: 0; }
 .chat-row.in-process[data-folded] > div { padding: 0; }
 /* Opening a process: the box (rows, rail, border) opens first and its contents come in a beat later, sliding down a few px, so a half-open box is
@@ -1278,6 +1282,8 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-status-row { display: grid; grid-template-rows: 0fr; opacity: 0; margin-top: -14px; transition: grid-template-rows .3s var(--ease), opacity .2s ease, margin-top .3s var(--ease); }
 .chat-status-row[data-active] { grid-template-rows: 1fr; opacity: 1; margin-top: 0; }
 .chat-status-row > div { min-height: 0; overflow: hidden; }
+/* Folded away between turns: its spinner stops, or it would keep the page restyling every frame while the chat sits idle. */
+.chat-status-row:not([data-active]) .chat-spin { animation-play-state: paused; }
 .chat-working-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-msg.error { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); border: 1px solid color-mix(in srgb, var(--error) 35%, transparent); }
 .chat-msg.error .chat-recover { margin-left: 4px; padding: 4px 10px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--error) 45%, transparent); background: var(--raised); color: var(--text); font: inherit; cursor: pointer; }
@@ -1408,7 +1414,17 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 /* Rows scrolled away above fade out at the top edge instead of a shadow (there is no box to cast one in). */
 .chat-bundle-list[data-edge-top] { mask-image: linear-gradient(to bottom, transparent, #000 18px); }
 .chat-bundle.expanded .chat-bundle-list { max-height: none; overflow-y: visible; }
-/* A shadow along the top edge when earlier tools are scrolled out of view (sticky, zero layout height). */
+/* Both edges fade when more rows lie beyond them, and a small chip says how many (a click scrolls toward them). A run that fits has no toggle at all. */
+.chat-bundle-list[data-edge-top][data-edge-bottom] { mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
+.chat-bundle-list:not([data-edge-top])[data-edge-bottom] { mask-image: linear-gradient(to top, transparent, #000 18px); }
+.chat-bundle-scroll { position: relative; }
+.chat-bundle-more { position: absolute; left: 50%; z-index: 1; display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px 1px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 11px; line-height: 16px; cursor: pointer; box-shadow: 0 1px 4px rgb(0 0 0 / .15); transform: translateX(-50%); animation: fade-in .18s var(--ease-out); }
+.chat-bundle-more:hover { color: var(--fg); }
+.chat-bundle-more[data-side="top"] { top: 3px; }
+.chat-bundle-more[data-side="bottom"] { bottom: 4px; }
+.chat-bundle-head[data-inert] { cursor: default; }
+.chat-bundle-head[data-inert]:hover { background: none; }
+.chat-bundle-list { position: relative; }
 .chat-bundle-item .chat-thinking { padding: 4px 6px; min-height: 28px; }
 .chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
 .chat-diff { max-height: 420px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden auto; }

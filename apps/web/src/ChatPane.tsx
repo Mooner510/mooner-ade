@@ -11,7 +11,7 @@ import { CacheTimer } from './CacheTimer';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
-import { agentsOf, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
+import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -395,7 +395,7 @@ const CwdContext = createContext('');
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
 const DeniedContext = createContext<Readonly<Record<string, true>>>({});
-const DENIED_DEFAULT = '사용자가 거부했습니다.';
+const DENIED_DEFAULT = '사용자가 거부했습니다.', NO_DENIED: Readonly<Record<string, true>> = {};
 const AgentsContext = createContext<AgentsValue>({ agents: new Map(), colors: new Map(), opened: null, waiting: new Set(), open() {}, stop() {} });
 const AGENT_HUES = [212, 152, 36, 282, 350, 188, 96, 320];
 const agentColor = (index: number) => `hsl(${AGENT_HUES[index % AGENT_HUES.length]} 62% 62%)`;
@@ -502,7 +502,7 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
 type BundlePart = { key: string; item: AssistantItem; block: Block };
 // flat: a finished turn's short run inside its "과정" box. Opening the process already shows its rows, so the run is just its list, no own fold.
 function ToolBundle({ parts, results, settings, running, plainThinking, flat }: { parts: BundlePart[]; results: ChatView['results']; settings: Settings; running: boolean; plainThinking?: boolean; flat?: boolean }) {
-  const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false });
+  const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false, above: 0, below: 0, over: false });
   const list = useRef<HTMLDivElement>(null), follow = useRef(true), cwd = useContext(CwdContext), [root, capture] = useHeightMorph<HTMLDivElement>();
   const tools = parts.flatMap(part => part.block.type === 'tool_use' ? [part.block] : []);
   const finished = tools.filter(tool => results[tool.id]).length, errored = tools.filter(tool => results[tool.id]?.isError).length;
@@ -514,28 +514,49 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   const outcome = errored === 0 ? 'ok' : errored === tools.length ? 'failed' : 'partial';
   // Once the turn is over the bundle is one line ("도구 n개 호출 완료"); a click opens the list. While it runs the list stays, so nothing jumps between two tools.
   const folded = !running && !expanded && !flat;
-  const measure = () => { const el = list.current; if (el) setEdge(current => { const next = { top: el.scrollTop > 2, bottom: el.scrollHeight - el.scrollTop - el.clientHeight > 2 }; return current.top === next.top && current.bottom === next.bottom ? current : next; }); };
+  // Which rows are not fully in view above / below (counted for the "위/아래 n개 더" chips), and whether the list overflows at all: a run that fits
+  // has nothing more to show, so "전체 보기" is hidden for it. The rows are watched too, so a card opened inside the list re-measures.
+  const measure = () => {
+    const el = list.current;
+    if (!el) return;
+    const top = el.scrollTop, bottom = top + el.clientHeight;
+    let above = 0, below = 0;
+    for (const row of el.children as HTMLCollectionOf<HTMLElement>) { if (row.offsetTop < top - 2) above++; if (row.offsetTop + row.offsetHeight > bottom + 2) below++; }
+    const next = { top: top > 2, bottom: el.scrollHeight - bottom > 2, above, below, over: el.scrollHeight - el.clientHeight > 2 };
+    setEdge(current => (Object.keys(next) as (keyof typeof next)[]).every(key => current[key] === next[key]) ? current : next);
+  };
   useLayoutEffect(() => {
     const el = list.current;
-    if (el && follow.current && !expanded) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (follow.current && !expanded) el.scrollTop = el.scrollHeight;
     measure();
-  }, [parts.length, finished, expanded]);
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    for (const row of el.children) watch.observe(row);
+    return () => watch.disconnect();
+  }, [parts.length, finished, expanded, folded]);
+  // While it runs and everything fits, there is nothing to open: no toggle, no chevron, the head does nothing.
+  const inert = !expanded && !folded && !edge.over && !flat;
   return <div ref={root} className={`chat-bundle${expanded || flat ? ' expanded' : ''}${folded ? ' folded' : ''}${flat ? ' flat' : ''}`} data-running={Boolean(active) || undefined} data-awaiting={Boolean(waiting) || undefined} data-outcome={active ? undefined : failed ? 'error' : blocked ? 'blocked' : undefined}>
-    {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} onClick={() => { capture(); setExpanded(value => !value); }}>
+    {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} data-inert={inert || undefined} onClick={() => { if (inert) return; capture(); setExpanded(value => !value); }}>
       <span className="chat-bundle-icon" data-outcome={waiting || active ? undefined : outcome}>{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={outcome === 'ok' ? 'check' : outcome === 'partial' ? 'alert' : 'x'} size={13} />}</span>
       {waiting
         ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)} · {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : active
         ? <><strong>{toolLabel(active.name)}</strong><span className="chat-bundle-now">{toolSummary(active.name, active.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : <><strong>도구 {tools.length}개 호출 완료</strong><span className="chat-bundle-now">{[failed && `${failed}개 오류`, blocked && `${blocked}개 차단`].filter(Boolean).join(' · ')}</span></>}
-      <span className="chat-bundle-toggle">{expanded ? '접기' : folded ? '펼치기' : '전체 보기'}</span>
-      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} />
+      {!inert && <><span className="chat-bundle-toggle">{expanded ? '접기' : folded ? '펼치기' : '전체 보기'}</span>
+      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} /></>}
     </button>}
-    <Collapse open={!folded}><div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
-      onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
-      {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
-        <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
-      </div>)}
+    <Collapse open={!folded}><div className="chat-bundle-scroll">
+      <div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
+        onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
+        {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
+          <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
+        </div>)}
+      </div>
+      {!flat && !expanded && edge.above > 0 && <button type="button" className="chat-bundle-more" data-side="top" onClick={() => list.current?.scrollBy({ top: -list.current.clientHeight * .75 })}><Icon name="arrowUp" size={11} />위 {edge.above}개 더</button>}
+      {!flat && !expanded && edge.below > 0 && <button type="button" className="chat-bundle-more" data-side="bottom" onClick={() => list.current?.scrollBy({ top: list.current.clientHeight * .75 })}><Icon name="arrowDown" size={11} />아래 {edge.below}개 더</button>}
     </div></Collapse>
   </div>;
 }
@@ -616,7 +637,7 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
       </div>);
       continue;
     }
-    rows.push(<div key={part.key} className={`chat-row${group ? ' in-process' : ''}${group && part.key === flat[group.end - 1].key ? ' process-last' : ''}${part.item.sub ? ' sub' : ''}`} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
+    rows.push(<div key={part.key} className={`chat-row${group ? ' in-process' : ''}${group && part.key === flat[group.end - 1].key ? ' process-last' : ''}${part.item.sub ? ' sub' : ''}`} data-tool={(part.block.type === 'tool_use' && !(isAgentTool(part.block.name) && agentIds.has(part.block.id))) || undefined} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
       <div><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={working && !settled} plainThinking={plainThinking} enter={part.item.fresh} /></div>
     </div>);
   }
@@ -891,7 +912,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const root = scroller.current; if (!root) return;
     const edge = root.getBoundingClientRect().top + 4;
     let hit: HTMLElement | null = null;
-    for (const node of root.querySelectorAll<HTMLElement>('[data-user-key]')) { if (node.getBoundingClientRect().bottom <= edge) hit = node; else break; }
+    // From the newest up: the first one above the edge is the pin. Walking down from the top measured every older request, which also forced turns that are
+    // out of view (content-visibility) to lay out on every scroll.
+    const nodes = root.querySelectorAll<HTMLElement>('[data-user-key]');
+    for (let at = nodes.length - 1; at >= 0; at--) if (nodes[at].getBoundingClientRect().bottom <= edge) { hit = nodes[at]; break; }
     const key = hit?.dataset.userKey ?? '', text = hit?.dataset.userPreview ?? '';
     setPin(current => current?.key === key && current.text === text ? current : key && text ? { key, text } : null);
   }, []);
@@ -930,7 +954,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
   const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
-  const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctx.onSettingsChange({ ...ctx.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit, ctx]);
+  const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
     maxOption = cursorOptions.find(option => isCursorMax(option) && option.options.length >= 2), contextOption = cursorOptions.find(option => option.id === 'context'), maxContext = !maxOption && contextOption ? contextEnds(contextOption) : null,
@@ -1048,7 +1072,6 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     for (let level = 0; level <= 4; level++) { el.dataset.fit = String(level); if (el.scrollWidth <= el.clientWidth + 1) break; }
     fitSig.current = sig;
   }, [foot]);
-  useLayoutEffect(fit);
   // The composer rests as one line (+ · input · mode … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
   // One line: a few seconds after the input loses focus (not while the pointer is on it or a menu in it is open), or right after sending (focus stays).
   // Full: focusing or clicking the input, or any text or image in it. Changes slide every control from where it was (see playFlip).
@@ -1081,8 +1104,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => {
     const el = foot; if (!el) return;
     const observer = new ResizeObserver(() => { fitSig.current = ''; fit(); });
-    observer.observe(el); void document.fonts?.ready.then(() => { fitSig.current = ''; fit(); });
-    return () => observer.disconnect();
+    // Its words or controls changed (a label, a new switch): measured then, not after every render of the pane (that read forced a layout per streamed token).
+    const edits = new MutationObserver(fit);
+    observer.observe(el); edits.observe(el, { childList: true, subtree: true, characterData: true }); void document.fonts?.ready.then(() => { fitSig.current = ''; fit(); });
+    return () => { observer.disconnect(); edits.disconnect(); };
   }, [fit]);
   useEffect(() => {
     const element = thread.current, scroll = scroller.current;
@@ -1341,7 +1366,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const shown = useMemo(() => { const from = lastIndexWhere(view.items, item => item.kind === 'divider'); return from < 0 ? view.items : view.items.slice(from + 1); }, [view.items]);
   const turns = useMemo(() => turnsOf(shown), [shown]), lastTurn = turns.at(-1);
   // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
-  const agentList = useMemo(() => agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks) : [], [agent, shown, view.results, view.tasks, busy, state.liveTasks]);
+  const agentsSeen = useRef<SubAgent[]>([]);
+  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks]);
   const agentKey = agentList.map(item => item.id).join(' ');
   const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
   const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
@@ -1413,7 +1439,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {((maxOption && maxSelected(maxOption)) || (!maxOption && maxContext && contextOption?.currentValue === maxContext.on)) && <span className="tune-ico" style={{ color: '#f2566e' }}><SettingGlyph icon="local_fire_department" size={15} /></span>}</button>
     <div id={tunePanel} popover="auto" className="chat-tune-panel" role="dialog" aria-label="채팅 옵션" onToggle={event => placeAbove(event, 'right')}>{panelItems}</div>
   </span>;
-  return <ChatUiContext.Provider value={uiBlocks}><DiffLayoutContext.Provider value={diffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? {}}><AgentsContext.Provider value={agentsValue}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
+  return <ChatUiContext.Provider value={uiBlocks}><DiffLayoutContext.Provider value={diffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
       <span className="pane-title" title={cwd}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
