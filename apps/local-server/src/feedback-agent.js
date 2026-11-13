@@ -2,10 +2,12 @@
 // improvement request for MoonerADE's developer. The result is only a draft: a person reviews it before it can be submitted.
 import { spawn } from 'node:child_process';
 import { fault } from './files.js';
+import { ADE_OVERVIEW, OVERVIEW_RULE } from './ade-overview.js';
 
 export function feedbackPrompt({ images = [], title = '', body = '', note = '', context = '' }) {
   return [
     '당신은 MoonerADE(AI 에이전트용 데스크톱 개발 환경) 사용자의 피드백을 개발자에게 전달할 개선 요청서로 정리합니다.',
+    `MoonerADE 개요(이미 있는 기능과 부르는 이름을 확인하는 용도):\n${ADE_OVERVIEW}`,
     '아래 스크린샷 파일을 Read 도구로 직접 열어 보고, 화면에서 보이는 문제와 개선 방향을 구체적으로 적으세요.',
     '스크린샷에 보이는 코드·비밀값·개인 정보는 옮겨 적지 마세요. 추측은 추측이라고 밝히세요.',
     images.length ? `스크린샷(순서대로 1번부터):\n${images.map((file, index) => `${index + 1}. ${file}`).join('\n')}` : '스크린샷은 없습니다.',
@@ -13,6 +15,8 @@ export function feedbackPrompt({ images = [], title = '', body = '', note = '', 
     (title || body.trim()) && `사용자가 적은 요건(초안):\n${title ? `제목: ${title}\n` : ''}${body}`,
     context && `ADE 상태 정보:\n${context}`,
     [
+      // Last, next to the answer format: placed up beside the overview it lost to the user's own wording (a requested feature that already exists got requested again).
+      OVERVIEW_RULE,
       '결과는 다른 말 없이 JSON 한 개로만 답하세요: {"title": "...", "body": "..."}',
       '- title: 60자 이하 한국어 한 줄 요약',
       // Output length is the run's main cost (~1000 tokens took ~6s of a 9s run), so the answer is kept short on purpose.

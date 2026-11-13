@@ -131,8 +131,16 @@ async function tempQueue(t, { mode = 'anonymous', results = [] } = {}) {
     for (const timer of timers.filter(item => item.at <= clock)) { timers.splice(timers.indexOf(timer), 1); timer.fn(); }
     await settle();
   };
-  // The queue works on real files: give a run time to finish.
-  const settle = () => new Promise(resolve => setTimeout(resolve, 250));
+  // The queue works on real files: wait until nothing is being sent and the stored items stopped changing (a fixed pause is too short on a loaded machine).
+  const settle = async () => {
+    const snapshot = async () => { const items = await env.store.list(); return { busy: items.some(item => item.status === 'submitting'), text: JSON.stringify(items) + sent.length }; };
+    let before = await snapshot();
+    for (let stable = 0, attempt = 0; stable < 2 && attempt < 200; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const now = await snapshot();
+      stable = !now.busy && now.text === before.text ? stable + 1 : 0; before = now;
+    }
+  };
   const draft = async title => env.store.create({ title, body: 'b' });
   return { ...env, queue, sent, timers, advance, settle, draft, way, now: () => clock };
 }
@@ -191,6 +199,7 @@ test('the MCP tool drops a draft that the store imports as an unreviewed agent d
   assert.deepEqual(out.map(message => message.id), [1, 2, 3, 4]);
   assert.equal(out[0].result.serverInfo.name, 'ade_feedback');
   assert.equal(out[1].result.tools[0].name, 'ade_feedback_draft');
+  assert.match(out[1].result.tools[0].description, /MoonerADE 개요:[\s\S]*피드백 요청/); // the agent is told what the app already has
   assert.equal(out[2].result.isError, undefined);
   assert.equal(out[3].result.isError, true);
   const [id] = await store.importIncoming();
@@ -208,6 +217,7 @@ test('the AI draft parses JSON answers, fenced ones, and falls back to the raw t
   assert.throws(() => parseFeedbackDraft('  '), /빈 답/);
   const prompt = feedbackPrompt({ images: ['/a/img-1.png'], note: '메모', context: 'ADE 0.5' });
   assert.match(prompt, /1\. \/a\/img-1\.png/); assert.match(prompt, /사용자 메모:\n메모/); assert.match(prompt, /ADE 0\.5/);
+  assert.match(prompt, /MoonerADE 개요[\s\S]*채팅 탭[\s\S]*개요의 표기를 따르세요/); // names the features the app has, before the user's note
 });
 
 test('runFeedbackDraft runs claude -p with only Read and the prompt on stdin', async () => {
