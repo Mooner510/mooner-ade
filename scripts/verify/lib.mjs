@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 import { mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { agentDirs } from './agent-dirs.mjs';
 // HERE: this folder (the fake `claude` lives in HERE/bin). ROOT: the checkout. S: where env.json, screenshots and results go (VERIFY_OUT, default a temp folder).
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..', '..');
@@ -44,10 +45,11 @@ export async function boot({ env = {}, data, home, repoFiles = true, minimalPath
   }
   const log = join(temp, 'fake-claude.jsonl'), ctlFile = join(temp, 'ctl.json'); await writeFile(log, ''); await writeFile(ctlFile, '{}');
   // REAL_AGENTS=1: the real CLIs on PATH instead of the fake (still the temp HOME, so only an API key saved in Settings > AI 툴 can sign them in).
-  const PATH = minimalPath ? `${dirname(process.execPath)}:/usr/bin:/bin` : process.env.REAL_AGENTS ? process.env.PATH : `${join(HERE, 'bin')}${delimiter}${process.env.PATH}`;
+  const agents = process.env.AGENT_DIRS ? agentDirs(temp) : null;
+  const PATH = minimalPath ? `${dirname(process.execPath)}:/usr/bin:/bin` : process.env.REAL_AGENTS || agents ? process.env.PATH : `${join(HERE, 'bin')}${delimiter}${process.env.PATH}`;
   const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-    env: { ...process.env, HOME: home, USERPROFILE: home, PATH, FAKE_LOG: log, FAKE_CTL: ctlFile, ADE_DEV: '0', ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env } });
-  let stderr = ''; child.stderr.on('data', c => stderr += c);
+    env: { ...process.env, HOME: agents ? process.env.HOME : home, USERPROFILE: agents ? process.env.USERPROFILE ?? process.env.HOME : home, ...agents?.dirs, PATH, FAKE_LOG: log, FAKE_CTL: ctlFile, ADE_DEV: '0', ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env } });
+  let stderr = ''; child.stderr.on('data', c => { stderr += c; if (process.env.VERIFY_STDERR) process.stderr.write(c); }); // VERIFY_STDERR=1: pass the server's stderr through (debug logs)
   const line = await new Promise((resolve, reject) => { let out = ''; child.stdout.on('data', c => { out += c; if (/#token=\w+/.test(out)) resolve(out); }); child.once('exit', () => reject(new Error('server exited: ' + stderr))); setTimeout(() => reject(new Error('startup timeout')), 20000); });
   const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);
   const auth = await fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }) });
@@ -63,7 +65,7 @@ export async function boot({ env = {}, data, home, repoFiles = true, minimalPath
   const stop = async () => { if (child.exitCode === null) { const ex = new Promise(r => child.once('exit', r)); child.kill('SIGTERM'); await ex; } };
   const calls = async () => (await readFile(log, 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l));
   const setCtl = obj => writeFile(ctlFile, JSON.stringify(obj));
-  return { temp, data, home, repo, origin, token, cookie, api, raw, status, call, callStatus, projectId: project.id, stop, calls, setCtl, child, get stderr() { return stderr; }, chatDir: id => join(data, project.id, 'chat', id), feedbackDir: join(data, 'feedback') };
+  return { temp, data, home, repo, agents, origin, token, cookie, api, raw, status, call, callStatus, projectId: project.id, stop, calls, setCtl, child, get stderr() { return stderr; }, chatDir: id => join(data, project.id, 'chat', id), feedbackDir: join(data, 'feedback') };
 }
 export async function until(fn, ms = 15000, step = 100) { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await fn(); if (last) return last; } catch (e) { last = e; } await sleep(step); } throw new Error('until timeout' + (last instanceof Error ? ': ' + last.message : '')); }
 
