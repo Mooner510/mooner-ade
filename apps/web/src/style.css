@@ -808,6 +808,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-tool-name code { font-weight: 600; color: var(--fg); }
 .plugin-tool-name > span:not(.plugin-tag) { color: var(--fg); font-size: 12.5px; }
 .plugin-tag { padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 17px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.plugin-row-name .plugin-tag { margin-left: 6px; }
 .plugin-tool-desc { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
 .plugin-tool-desc.folded { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; position: relative; padding-right: 52px; }
 .plugin-tool-desc.folded .plugin-link { position: absolute; right: 0; bottom: 0; }
@@ -865,6 +866,94 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-about li + li { margin-top: 4px; }
 .plugin-about p { margin: 0; }
 .plugin-about b, .plugin-empty b, .plugin-callout b { color: var(--fg); font-weight: 600; }
+/* Setup guide ("시작하기"): every step from approval to the plugin's own setup, the one to do now open. */
+.plugin-status-line { padding: 8px 12px; border-radius: 8px; font-weight: 500; line-height: 1.45; background: color-mix(in srgb, var(--tone) 9%, transparent); }
+.plugin-status-line .icon { flex: none; align-self: flex-start; margin-top: 2px; }
+.plugin-guide { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.plugin-guide > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; background: color-mix(in srgb, var(--accent) 7%, transparent); border-bottom: 1px solid var(--border); }
+.plugin-guide h4 { margin: 0; font-size: 13.5px; }
+.plugin-guide > header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.plugin-guide > header p b { color: var(--fg); font-weight: 600; }
+.plugin-guide-progress { flex: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.plugin-progress { display: block; width: 96px; height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+.plugin-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--add); transition: width .25s; }
+.plugin-steps { margin: 0; padding: 0; list-style: none; }
+.plugin-step + .plugin-step { border-top: 1px solid var(--border); }
+.plugin-step[data-current] { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.plugin-step-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; color: var(--fg); text-align: left; background: none; border: 0; border-radius: 0; cursor: pointer; }
+.plugin-step-head:hover { background: var(--hover); }
+.plugin-step-head:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.plugin-step-head > .icon:last-child { flex: none; color: var(--faint); }
+.plugin-step-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--raised); border: 1px solid var(--border-strong); }
+.plugin-step-mark[data-status=done] { color: #fff; background: var(--add); border-color: var(--add); }
+.plugin-step-mark[data-status=error] { color: #fff; background: var(--error); border-color: var(--error); }
+.plugin-step-mark[data-status=active] { color: var(--accent); border-color: var(--accent); }
+.plugin-step-mark .plugin-spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.plugin-step[data-current] .plugin-step-mark[data-status=todo] { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+.plugin-step-mark[data-status=pending] { border-style: dashed; color: var(--faint); }
+.plugin-step-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.plugin-step[data-status=done] .plugin-step-label { color: var(--muted); font-weight: 500; }
+.plugin-step-state { flex: none; font-size: 11.5px; color: var(--faint); }
+.plugin-step[data-current] .plugin-step-state { color: var(--accent); font-weight: 600; }
+.plugin-step[data-status=error] .plugin-step-state { color: var(--error); font-weight: 600; }
+.plugin-step[data-status=done] .plugin-step-state { color: var(--add); }
+.plugin-step-body { display: flex; flex-direction: column; gap: 12px; padding: 0 14px 14px 46px; }
+.plugin-step-detail { margin: 0; color: var(--muted); line-height: 1.55; white-space: pre-line; }
+.plugin-parts { display: flex; flex-direction: column; gap: 12px; }
+.plugin-guide-done { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-guide-done > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.plugin-guide-done small { color: var(--muted); }
+.plugin-guide-done .plugin-link, .plugin-guide-progress .plugin-link { background: none; }
+.plugin-required { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-style: normal; font-size: 10.5px; font-weight: 600; color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+
+/* Lists a plugin manages item by item (paired phones, keys), each item with its own buttons. */
+.plugin-list-group { display: flex; flex-direction: column; gap: 6px; }
+.plugin-list-group h5 { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12.5px; }
+.plugin-list-empty { padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; }
+.plugin-items { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.plugin-items > li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.plugin-items > li + li { border-top: 1px solid var(--border); }
+.plugin-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-item-text > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.plugin-item-text small { color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.plugin-item-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.plugin-item-actions .plugin-button { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+
+/* Updates from the plugin's GitHub releases. */
+.plugin-update { display: flex; flex-direction: column; gap: 10px; }
+.plugin-update-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-update[data-tone=info] .plugin-update-status:has(.primary) { border-color: color-mix(in srgb, var(--info) 45%, var(--border)); background: color-mix(in srgb, var(--info) 7%, var(--surface)); }
+.plugin-update-status > .icon, .plugin-update-status > .plugin-spinner { flex: none; color: var(--tone); }
+.plugin-update-status > div:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-update-status small { color: var(--muted); overflow-wrap: anywhere; }
+.plugin-update-actions { flex: none; display: flex; gap: 6px; }
+.plugin-review { margin: 4px 0 0; padding-left: 18px; }
+.plugin-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.plugin-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; transition: border-color .12s, background .12s; }
+.plugin-mode:hover { border-color: var(--border-strong); }
+.plugin-mode[data-checked] { border-color: var(--accent); background: var(--accent-soft); }
+.plugin-mode input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+.plugin-mode:has(input:focus-visible) { outline: 1px solid var(--focus); outline-offset: 2px; }
+.plugin-mode > span { display: flex; flex-direction: column; gap: 3px; }
+.plugin-mode strong { font-size: 12.5px; }
+.plugin-mode small { color: var(--muted); line-height: 1.45; }
+.plugin-default { margin-left: 6px; font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--muted); }
+.plugin-source { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; background: none; font-size: 11.5px; }
+@media (max-width: 640px) { .plugin-modes { grid-template-columns: 1fr; } }
+
+/* GitHub account for private plugin repositories. */
+.plugin-github { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+.plugin-github .setting-group { margin: 0; }
+.plugin-github-card { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-github-status { display: flex; align-items: center; gap: 10px; }
+.plugin-github-status > .icon { flex: none; color: var(--tone); }
+.plugin-github-status > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-github-status small { color: var(--muted); }
+.plugin-github-connect { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plugin-github-connect > .plugin-button { align-self: flex-start; }
+.plugin-token-row { display: flex; gap: 8px; }
+.plugin-token-row input { flex: 1; min-width: 0; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
+.plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; background: none; }
 .shortcut-list { margin-top: 16px; }
 .shortcut-list h3 { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
 .key-edit { display: inline-flex; align-items: center; gap: 6px; }
