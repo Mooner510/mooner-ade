@@ -280,6 +280,8 @@ function Shell() {
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
       const loaded = saved.settings ? migrateSettings(saved.settings) : null;
+      // Someone who finished an older tutorial gets the new one again (migrateSettings clears `onboarded`), but not the theme and font screen.
+      if (saved.settings && saved.settings.onboarded !== false) onboardedOnce.current = true;
       // The rail state used to live only in this browser's localStorage; carry it over once.
       const wasCompact = saved.settings?.sidebarCompact === undefined && (() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } })();
       if (loaded) setSettings(wasCompact ? { ...loaded, sidebarCompact: true } : loaded);
@@ -412,7 +414,7 @@ function Shell() {
   // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
-  // A replay (book button, palette, settings) skips the theme and font screen; only a user who was never onboarded sees it.
+  // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };

@@ -140,7 +140,12 @@ export function chatDemo(emit: Emit, pane: () => HTMLElement | null, cursor: HTM
   let waiter: { action: string; resolve(params: any): void } | null = null;
   const allowed = new Set<string>();
   const stats = { costUsd: 0, turns: 0, contextTokens: 9_400, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 } };
-  const event = (value: unknown) => { if (on) emit({ type: 'chat/event', event: value }); };
+  // Approval/question cards still open: stopping the demo withdraws them, or they stay on screen with buttons nothing answers (the input hidden under them).
+  const asking = new Set<string>();
+  const event = (value: any) => {
+    if (value?.kind === 'approval') { if (value.phase === 'request') asking.add(value.requestId); else asking.delete(value.requestId); }
+    if (on) emit({ type: 'chat/event', event: value });
+  };
   const state = (next: ChatState['status']) => {
     status = next;
     if (on) emit({ type: 'chat/state', state: { ...demoChatState(), status: next, costUsd: stats.costUsd, turns: stats.turns, contextTokens: stats.contextTokens, contextWindow: 200_000, tokens: { ...stats.tokens },
@@ -328,6 +333,7 @@ export function chatDemo(emit: Emit, pane: () => HTMLElement | null, cursor: HTM
     },
     // Leaves the pane idle with the conversation so far, and takes back half-typed text.
     stop() {
+      for (const requestId of [...asking]) event({ kind: 'approval', phase: 'cancelled', requestId });
       if (status !== 'idle') { event({ kind: 'result', status: 'success', text: '', costUsd: null, durationMs: 0 }); state('idle'); }
       const box = find<HTMLTextAreaElement>('textarea[aria-label="메시지 입력"]');
       if (box && typed && box.value === typed) setValue(box, '');

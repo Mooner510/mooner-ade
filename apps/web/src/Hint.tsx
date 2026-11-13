@@ -19,7 +19,7 @@ export function Hint({ title, text, onDone, wide }: { title: string; text: React
     const watch = new ResizeObserver(aim); watch.observe(target); addEventListener('resize', aim);
     return () => { watch.disconnect(); removeEventListener('resize', aim); };
   }, []);
-  return <div ref={card} popover="manual" className={`hint${wide ? ' wide' : ''}`} role="status" aria-label={title}>
+  return <div ref={card} popover="manual" className={`hint-card${wide ? ' wide' : ''}`} role="status" aria-label={title}>
     <strong>{title}</strong>
     <p>{text}</p>
     <button type="button" className="primary" onClick={onDone}>알겠어요</button>
