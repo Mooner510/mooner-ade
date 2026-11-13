@@ -492,6 +492,8 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   const blocked = tools.filter(tool => { const result = results[tool.id]; return result?.isError && autoDenial(result.content); }).length, failed = errored - blocked;
   const held = useContext(AwaitingContext), waiting = running ? tools.find(tool => held.has(tool.id)) : undefined;
   const active = running ? waiting ?? tools.find(tool => !results[tool.id]) : undefined;
+  // Outcome of the whole bundle: all ok = check, some failed = warning, all failed = X.
+  const outcome = errored === 0 ? 'ok' : errored === tools.length ? 'failed' : 'partial';
   // Once the turn is over the bundle is one line ("도구 n개 호출 완료"); a click opens the list. While it runs the list stays, so nothing jumps between two tools.
   const folded = !running && !expanded && !flat;
   const measure = () => { const el = list.current; if (el) setEdge(current => { const next = { top: el.scrollTop > 2, bottom: el.scrollHeight - el.scrollTop - el.clientHeight > 2 }; return current.top === next.top && current.bottom === next.bottom ? current : next; }); };
@@ -502,7 +504,7 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   }, [parts.length, finished, expanded]);
   return <div ref={root} className={`chat-bundle${expanded || flat ? ' expanded' : ''}${folded ? ' folded' : ''}${flat ? ' flat' : ''}`} data-running={Boolean(active) || undefined} data-awaiting={Boolean(waiting) || undefined} data-outcome={active ? undefined : failed ? 'error' : blocked ? 'blocked' : undefined}>
     {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} onClick={() => { capture(); setExpanded(value => !value); }}>
-      <span className="chat-bundle-icon">{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={failed ? 'x' : blocked ? 'block' : 'check'} size={13} />}</span>
+      <span className="chat-bundle-icon" data-outcome={waiting || active ? undefined : outcome}>{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={outcome === 'ok' ? 'check' : outcome === 'partial' ? 'alert' : 'x'} size={13} />}</span>
       {waiting
         ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)} · {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : active
@@ -1018,7 +1020,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }, [agent, id, ctx.call]);
   // Any size change of the thread (new text, a fold, a card opening) or of the viewport (dock growing) re-follows the bottom; nothing else needs to.
   // The bottom row never wraps. When its content would overflow it steps through fit levels (CSS keyed on data-fit): 1 = permission mode, sandbox and Effort lose their labels,
-  // 2 = the extra switches move into the settings button, 3 = notes fold away and the model name may shorten, 4 = permission mode and sandbox move into the settings button. It measures the real overflow, so there is no fixed pixel threshold.
+  // 2 = the extra switches move into the settings button, 3 = notes fold away and the model name may shorten, 4 = "+" moves from the left to the right, next to the settings button (permission mode stays on the left). It measures the real overflow, so there is no fixed pixel threshold.
   const fit = useCallback(() => {
     // Not while the composer slides between layouts: moving controls count as overflow. It measures again when the slide ends.
     const el = foot; if (!el || flipping.current) return;
@@ -1374,10 +1376,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).catch(ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
   const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || option.description || (option.id === 'fast' ? 'Fast 모드' : option.name)} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || maxOption.description || 'MAX 모드'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id} title={option.description}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
   const hasMore = forcePanel || Boolean(bypassBtn) || (!empty && state.addDirs.length > 0) || (agent === 'cursor' && state.restartPending) || cursorOptions.some(option => isCursorSwitch(option) || (!isCursorEffort(option) && !(maxOption && option.id === maxOption.id))) || Boolean(maxOption || maxContext);
-  const panelItems = <><span className="panel-mode">{modeDd}{sandboxDd}</span>{bypassBtn}{optionItems}{noteItems}</>;
+  const panelItems = <>{bypassBtn}{optionItems}{noteItems}</>;
   const tuneButton = <span className={`tune-wrap${forcePanel ? ' forced' : ''}${hasMore ? ' more' : ''}`}>
     <button type="button" className="chat-tune" popoverTarget={tunePanel} aria-label="더보기" title="더보기 (샌드박스, 토글, MAX 등)">
-      <span className="tune-ico tune-mode" style={{ color: permissionModeColor(state.permissionMode) }}><SettingGlyph icon={MODE_ICONS[state.permissionMode] ?? 'tune'} size={15} /></span>
       <span className="tune-ico"><SettingGlyph icon="tune" size={15} /></span>
       {agent === 'cursor' && state.runEverything && <span className="tune-ico" style={{ color: 'var(--sandbox-full)' }}><SettingGlyph icon="lock_open" size={15} /></span>}
       {cursorOptions.filter(isCursorSwitch).filter(option => option.currentValue === 'true').map(option => <span className="tune-ico" key={option.id}><SettingGlyph icon={option.id === 'fast' ? 'bolt' : 'toggle_on'} size={15} /></span>)}
