@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { helloPtyHost, ptyHostControl } from '../../local-server/src/pty-client.js';
 import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
+import { watchRtxHdr } from './nvidia-rtx-hdr.js';
 import { setupPlugins } from './plugins.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
@@ -364,6 +365,8 @@ if (!app.requestSingleInstanceLock()) {
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       createWindow(await startServer());
       if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });
+      // Windows + NVIDIA: RTX HDR holds every frame ~49 ms unless the driver has a profile for this executable (nvidia-rtx-hdr.js).
+      void watchRtxHdr({ app, dialog, getWindow: () => mainWindow, userData: app.getPath('userData') });
       if (dev) watchServerSources();
       else {
         // Once shortly after start, then every 10 minutes for an app that stays open for days.

@@ -34,6 +34,21 @@ irm https://raw.githubusercontent.com/Mooner510/mooner-ade/master/scripts/instal
 
 `%LOCALAPPDATA%\Programs\MoonerADE`에 설치되고 시작 메뉴와 바탕 화면에 바로 가기가 생깁니다. SmartScreen 경고도 뜨지 않습니다.
 
+<details>
+<summary>NVIDIA 그래픽카드에서 화면이 뚝뚝 끊길 때 (RTX HDR)</summary>
+
+NVIDIA App의 **RTX HDR**을 켜 두면, NVIDIA 드라이버가 MoonerADE를 게임으로 보고 화면을 그릴 때마다 끼어듭니다. 그러면 애니메이션과 마우스 반응이 초당 20프레임으로 끊기고 CPU를 계속 씁니다. Chrome·Edge·Slack은 NVIDIA가 미리 넣어 둔 프로필로 RTX HDR에서 빠져 있어 같은 PC에서도 멀쩡합니다.
+
+앱은 시작할 때 이 상태를 알아채고 **해결**을 권합니다. 누르면 관리자 권한을 한 번 확인한 뒤, NVIDIA 드라이버에 MoonerADE 전용 설정(RTX HDR 끔) 하나만 추가합니다. 다른 게임과 앱의 RTX HDR은 그대로입니다. 직접 하려면 NVIDIA App › 그래픽 › 프로그램 설정에서 MoonerADE를 추가하고 RTX HDR을 끄세요.
+
+되돌리려면 관리자 PowerShell에서 아래를 실행합니다.
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\MoonerADE\resources\app\apps\desktop\src\nvidia-profile.ps1" -Exe moonerade.exe -ProfileName MoonerADE -Undo -Result "$env:TEMP\ade-nvidia.txt"
+```
+
+</details>
+
 ### 설치 후 할 일
 
 MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식 CLI를 실행합니다. 쓰려는 도구를 설치하고 한 번 로그인해 두세요.
