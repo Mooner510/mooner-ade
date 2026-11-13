@@ -245,6 +245,22 @@ test('git: status, show, branches, checkout', async t => {
   await call('git/checkout', { branch: '--orphan' }, 400);
 });
 
+test('git: a reused status still follows git commands run outside ADE (they only touch .git, which the watcher ignores)', async t => {
+  const { call, repo } = await boot(t);
+  await writeFile(join(repo, 'a.txt'), 'changed\n');
+  const end = Date.now() + 5000;
+  let status;
+  do { await new Promise(resolve => setTimeout(resolve, 200)); status = await call('git/status'); } while (status.clean && Date.now() < end);
+  assert.deepEqual(status.changes.map(change => change.status), [' M']);
+  assert.deepEqual((await call('git/status')).changes.map(change => change.status), [' M'], 'an unchanged project answers the same');
+  await git(repo, 'add', 'a.txt');
+  assert.deepEqual((await call('git/status')).changes.map(change => change.status), ['M '], 'staging is seen at once');
+  await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'change');
+  assert.equal((await call('git/status')).clean, true, 'a commit is seen at once');
+  await git(repo, 'switch', '-q', '-c', 'other');
+  assert.equal((await call('git/status')).branch, 'other', 'a branch switch is seen at once');
+});
+
 test('git: line counts follow further edits to a file that is already modified', async t => {
   const { call, repo } = await boot(t);
   await writeFile(join(repo, 'a.txt'), 'changed\n');
