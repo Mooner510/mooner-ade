@@ -62,7 +62,7 @@ export const initialTour = (): Tour => ({
 // `keys` formats a binding for the platform (showKeys); passed in so this file stays free of DOM code.
 // Copy introduces the app's features; `keys` on a step are shortcut chips (raw bindings, formatted by the coach), a task's `hint` says how.
 export const steps = (keys: (binding: string) => string): Step[] => [
-  { id: 'welcome', title: '무너에이드', body: ['**Claude Code · Codex · Cursor**를 프로젝트마다 띄우고 한곳에서 지켜보는 작업 공간이에요.'], tasks: [] },
+  { id: 'welcome', title: '무너에이드', body: ['**AI 에이전트**를 프로젝트마다 띄우고 한곳에서 지켜보는 작업 공간이에요.'], tasks: [] },
   { id: 'projects', title: '프로젝트를 한 화면에', target: '.tour .folders', keys: [['프로젝트 이동', 'mod+alt+1'], ['탭 이동', 'alt+1']],
     body: ['열어 둔 **프로젝트와 탭**이 왼쪽에 모여요.', '다른 프로젝트로 옮겨도 에이전트는 **멈추지 않아요**.'],
     tasks: [{ flag: 'projectVisit', label: 'api-server 프로젝트 열어 보기', hint: '사이드바에서 클릭', target: '.tour [data-project="api-server"] .folder-head' }, { flag: 'projectBack', label: 'my-app 으로 돌아오기', hint: `클릭 또는 ${keys('mod+alt+1')}`, target: '.tour [data-project="my-app"] .folder-head' }] },
@@ -71,7 +71,7 @@ export const steps = (keys: (binding: string) => string): Step[] => [
     body: ['{chat} 에이전트의 일을 **읽기 쉬운 대화**로 보여 줘요.', '코드 변경은 **diff**로, 명령과 결과는 **접히는 카드**로 정리돼요.', '**Interactive UI**: 차트·표·선택지가 답에 나오고, **눌러서** 바로 답해요.', '승인과 질문도 **버튼 한 번**이면 끝나요.'],
     after: '자동으로 흘러가는 대화를 둘러보고 ‘다음’을 누르세요.',
     tasks: [{ flag: 'newTab', label: '새 탭 열기', hint: `‘새 탭’ 버튼 또는 ${keys('mod+shift+t')}`, target: '.tour .app:not([hidden]) .new-tab' },
-      { flag: 'chat', label: 'Chat 모드로 에이전트 열기', hint: 'Claude·Codex·Cursor 중 아무거나', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .empty-tab .launchers button:not(:first-child)' }] },
+      { flag: 'chat', label: 'Chat 모드로 에이전트 열기', hint: '어떤 AI 에이전트든', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .empty-tab .launchers button:not(:first-child)' }] },
   { id: 'cli', title: 'CLI도 언제든', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane',
     body: ['{chat} 대화 화면과 {cli} 터미널을 **같은 대화**로 오가요.', '익숙한 **CLI 화면**이 필요할 때 바로 전환하세요.'],
     tasks: [{ flag: 'toCli', label: 'CLI로 전환해 보기', hint: 'Chat 위쪽의 터미널 버튼', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane .pane-actions [aria-label^="터미널로 전환"]' }] },
