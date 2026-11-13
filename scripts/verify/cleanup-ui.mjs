@@ -2,17 +2,18 @@
 //   node scripts/verify/cleanup-ui.mjs --evidence <dir>      copy shots/results into <dir>/evidence, then clean up
 //   node scripts/verify/cleanup-ui.mjs --discard-evidence    clean up without keeping shots/results
 //   node scripts/verify/cleanup-ui.mjs --list                leftover ade-verify-* folders in the temp dir (nothing is removed)
-// Removes: start-ui/server/Chrome processes (checked against their command line first), the session's temp (data, repo, HOME), the Chrome profile, VERIFY_OUT,
+// Removes: start-ui/server/Chrome processes (checked against their command line first), the session's temps (data, repo, HOME; temp2 = the second server's), the Chrome profile, VERIFY_OUT,
 // and, with AGENT_FRESH, the Claude keychain entry. With the kept ~/.ade-test/agents it removes only this session's transcripts (matched by the temp folder's unique name).
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'; import { tmpdir } from 'node:os'; import { basename, join, sep } from 'node:path';
-const S = process.env.VERIFY_OUT || join(tmpdir(), 'ade-verify-out'), sleep = ms => new Promise(r => setTimeout(r, ms));
+const S = process.env.VERIFY_OUT, sleep = ms => new Promise(r => setTimeout(r, ms));
 const TMP = realpathSync(tmpdir()), args = process.argv.slice(2), arg = k => { const i = args.indexOf(k); return i < 0 || args[i + 1]?.startsWith('--') ? undefined : args[i + 1]; };
 const inTmp = p => { try { const r = realpathSync(p); return r.startsWith(TMP + sep); } catch { return false; } };
 if (args.includes('--list')) {
   for (const n of readdirSync(TMP).filter(n => /^ade-verify-/.test(n))) console.log(n.padEnd(40), `${Math.round((Date.now() - statSync(join(TMP, n)).mtimeMs) / 60000)}분 전`);
   process.exit(0);
 }
+if (!S) { console.log('VERIFY_OUT가 없습니다. 정리할 세션의 VERIFY_OUT을 붙이세요(--list는 없이 실행).'); process.exit(1); }
 const file = join(S, 'env.json'); if (!existsSync(file)) { console.log(`세션 없음: ${file}`); process.exit(1); }
 const env = JSON.parse(readFileSync(file, 'utf8')), shots = existsSync(join(S, 'shots')) ? readdirSync(join(S, 'shots')) : [], results = readdirSync(S).filter(n => /^results-.*\.json$/.test(n));
 if ((shots.length || results.length) && !arg('--evidence') && !args.includes('--discard-evidence')) { console.log(`증거 ${shots.length + results.length}개가 있습니다. --evidence <dir>로 옮기거나 --discard-evidence로 버리세요.`); process.exit(1); }
@@ -41,5 +42,5 @@ if (env.agentBase && !env.agentFresh && tag.startsWith('ade-verify-')) {
   if (left.length) say(`남은 흔적 ${left.length}개, 직접 확인: ${left.slice(0, 5).join(', ')}`, '주의');
 }
 if (env.keychain?.startsWith('Claude Code-credentials-')) { try { execFileSync('security', ['delete-generic-password', '-s', env.keychain], { stdio: 'ignore' }); say(`Keychain ${env.keychain}`, '삭제'); } catch { say(`Keychain ${env.keychain}`, '없음'); } }
-rm(env.temp, 'ade-verify-'); rm(env.chromeProfile, 'ade-verify-chrome-');
+rm(env.temp, 'ade-verify-'); rm(env.temp2, 'ade-verify-'); rm(env.chromeProfile, 'ade-verify-chrome-');
 if (inTmp(S)) { rmSync(S, { recursive: true, force: true }); say(S, '삭제'); } else say(`${S} (임시 폴더 밖)`, '건너뜀');
