@@ -17,7 +17,11 @@ test('resolveAutoCompact uses modelSettings and caps at max window', () => {
   assert.equal(resolveAutoCompact({ settings: { ...settings, autoCompactEnabled: false }, model: 'claude-sonnet-5-5', maxWindow: 1_000_000 }), null);
 });
 
-test('auto mode estimates a smaller window than 1M max', () => {
+test('auto mode estimates a smaller window than 1M max', t => {
+  // A test run from inside an ADE chat inherits the window ADE handed to that chat's CLI; the case is about nothing being set.
+  const saved = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, DISABLE_AUTO_COMPACT: process.env.DISABLE_AUTO_COMPACT };
+  delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW; delete process.env.DISABLE_AUTO_COMPACT;
+  t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const resolved = resolveAutoCompact({ settings: {}, env: {}, model: 'claude-sonnet-5-5', maxWindow: 1_000_000 });
   assert.equal(resolved?.window, 350000);
   assert.equal(resolved?.auto, true);

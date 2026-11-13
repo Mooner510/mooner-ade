@@ -51,9 +51,9 @@ async function boot(t, { pty = { endpoint: '', token: '' }, data: shared, repo: 
 }
 
 // Shells start helpers and prompts for a moment, so a state is waited for rather than read once.
-async function until(read, expected, what) {
+async function until(read, expected, what, accept = () => true) {
   let last;
-  for (let attempt = 0; attempt < 60; attempt++) { last = await read(); if (last.busy === expected) return last; await wait(500); }
+  for (let attempt = 0; attempt < 60; attempt++) { last = await read(); if (last.busy === expected && accept(last)) return last; await wait(500); }
   assert.fail(`${what}: last answer ${JSON.stringify(last)}`);
 }
 
@@ -69,7 +69,8 @@ test('the server tells the updater whether a restart would cut something off', {
   await until(busy, false, 'an idle shell is not busy');
 
   ws.send(JSON.stringify({ type: 'terminal/input', projectId, id: terminal.id, data: `${runNode} -e "setTimeout(function(){},120000)"\r` }));
-  const running = await until(busy, true, 'a command running in the shell is busy');
+  // The user's own shell startup may keep a helper (zsh) under the prompt for a while; the reason that matters is the node command itself.
+  const running = await until(busy, true, 'a command running in the shell is busy', answer => answer.reasons.length === 1 && /^node/i.test(answer.reasons[0].detail ?? ''));
   assert.equal(running.reasons.length, 1);
   assert.equal(running.reasons[0].kind, 'command');
   assert.match(running.reasons[0].detail, /^node/i);
