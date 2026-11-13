@@ -220,6 +220,10 @@ test('Claude: the session cost keeps adding up when a setting change replaces th
 });
 
 test('Claude: the auto Compact window the gauge shows is handed to the CLI; a window the user set is left to the CLI', async t => {
+  // A test run from inside an ADE chat inherits the window ADE handed to that chat's CLI, which would read as one the user set.
+  const saved = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, DISABLE_AUTO_COMPACT: process.env.DISABLE_AUTO_COMPACT };
+  delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW; delete process.env.DISABLE_AUTO_COMPACT;
+  t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   for (const [settings, expected] of [[{}, '350000'], [{ autoCompactWindow: 300000 }, undefined], [{ autoCompactEnabled: false }, undefined]]) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-window-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'window');
     await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });
