@@ -38,6 +38,7 @@ export type Item = ItemBase & (
   | { kind: 'error'; message: string; recoverable?: boolean }
   | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
+  | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
 export type ChatView = {
@@ -276,7 +277,11 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (!id) return view;
       const prev = view.tasks[id] ?? {}, at = Number(event.at) || Date.now(), { kind: _k, phase, toolUseId: _t, seq: _s, at: _a, ...info } = event;
       const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
-      return { ...view, tasks: { ...view.tasks, [id]: next } };
+      const tasks = { ...view.tasks, [id]: next };
+      // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
+      const isJob = view.items.some(item => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
+      return { ...view, tasks };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
     case 'command_output': {
