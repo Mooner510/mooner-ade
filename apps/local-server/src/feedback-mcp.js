@@ -8,11 +8,13 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { MAX_BODY, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TITLE, imageInfo } from './feedback-store.js';
+import { ADE_OVERVIEW, OVERVIEW_RULE } from './ade-overview.js';
 
 export const TOOL = {
   name: 'ade_feedback_draft',
   description: 'MoonerADE(지금 이 에이전트를 실행 중인 데스크톱 개발 환경) 자체의 UI/UX 문제나 개선점을 발견했을 때만, 개발자에게 보낼 피드백 초안을 MoonerADE의 피드백 요청에 넣습니다. '
-    + '사용자가 작업 중인 프로젝트의 버그나 할 일에는 쓰지 마세요. 초안은 사람이 검토한 뒤에만 제출됩니다. 본문은 한국어 마크다운으로 문제, 기대 동작, 개선 제안을 적으세요.',
+    + '사용자가 작업 중인 프로젝트의 버그나 할 일에는 쓰지 마세요. 초안은 사람이 검토한 뒤에만 제출됩니다. 본문은 한국어 마크다운으로 문제, 기대 동작, 개선 제안을 적으세요. '
+    + `${OVERVIEW_RULE}\n\nMoonerADE 개요:\n${ADE_OVERVIEW}`,
   inputSchema: {
     type: 'object',
     properties: {
