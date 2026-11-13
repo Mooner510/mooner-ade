@@ -4,13 +4,15 @@ import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises'
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { agentDirs } from './agent-dirs.mjs';
-// HERE: this folder (the fake `claude` lives in HERE/bin). ROOT: the checkout. S: where env.json, screenshots and results go (VERIFY_OUT, default a temp folder).
+// HERE: this folder (the fake `claude` lives in HERE/bin). ROOT: the checkout. S: where env.json, screenshots and results go (VERIFY_OUT, required:
+// a fixed default let parallel sessions overwrite each other's env.json, and a shell `export` does not survive between an agent's commands).
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..', '..');
-export const S = process.env.VERIFY_OUT || join(tmpdir(), 'ade-verify-out');
+if (!process.env.VERIFY_OUT) { console.error('VERIFY_OUT가 없습니다. 예: VERIFY_OUT=$(mktemp -d -t ade-verify-out) 를 명령마다 붙이세요.'); process.exit(2); }
+export const S = process.env.VERIFY_OUT;
 mkdirSync(join(S, 'shots'), { recursive: true });
 export const WebSocket = createRequire(join(ROOT, 'apps/local-server/package.json'))('ws');
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -33,9 +35,13 @@ export async function fakeHub() {
 }
 
 // A server of this checkout in its own HOME/data dir; `claude` on PATH is the fake. Never touches the installed app.
+// Every temp folder boot() creates is removed when this process exits, unless `keep` (start-ui keeps its main one for restart-ui; cleanup-ui removes it).
+// ponytail: an 'exit' hook, so a SIGKILL or an unhandled Ctrl-C still leaves the folder; `cleanup-ui.mjs --list` shows those.
+const made = new Set(); process.on('exit', () => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
 // `temp`: reuse an earlier boot's folder (its data, home and repo, so a saved API key or chat survives a restart) instead of a new one.
-export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false, temp: reuse } = {}) {
+export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false, temp: reuse, keep = false } = {}) {
   const temp = await realpath(reuse || await mkdtemp(join(tmpdir(), 'ade-verify-')));
+  if (!reuse && !keep) made.add(temp);
   data ??= join(temp, 'data'); home ??= join(temp, 'home'); const repo = join(temp, 'repo');
   for (const d of [data, home, repo]) await mkdir(d, { recursive: true });
   const git = (...a) => execFileSync('git', ['-c', 'user.name=v', '-c', 'user.email=v@example.invalid', '-c', 'core.hooksPath=/dev/null', ...a], { cwd: repo, stdio: 'ignore' });

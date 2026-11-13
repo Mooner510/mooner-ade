@@ -3,9 +3,9 @@
 //   node scripts/verify/agents.mjs login claude|codex|cursor   interactive, run it in your own terminal (browser OAuth)
 // AGENT_FRESH=1 needs the session's folder: it is read from VERIFY_OUT's env.json (or VERIFY_TEMP).
 import { spawnSync } from 'node:child_process'; import { existsSync, readFileSync } from 'node:fs'; import { join } from 'node:path';
-import { tmpdir } from 'node:os'; import { agentDirs } from './agent-dirs.mjs';
-const S = process.env.VERIFY_OUT || join(tmpdir(), 'ade-verify-out');
-const recorded = existsSync(join(S, 'env.json')) ? JSON.parse(readFileSync(join(S, 'env.json'), 'utf8')).temp : undefined;
+import { agentDirs } from './agent-dirs.mjs';
+const S = process.env.VERIFY_OUT; // optional: only AGENT_FRESH needs a session
+const recorded = S && existsSync(join(S, 'env.json')) ? JSON.parse(readFileSync(join(S, 'env.json'), 'utf8')).temp : undefined;
 const { base, dirs } = agentDirs(process.env.VERIFY_TEMP || recorded || '/nonexistent'), env = { ...process.env, ...dirs };
 // stdout and stderr together: `codex login status` prints "Logged in" on stderr even when it succeeds.
 const run = (cmd, args) => { const r = spawnSync(cmd, args, { env, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }); return `${r.stdout ?? ''}${r.stderr ?? ''}`; };
