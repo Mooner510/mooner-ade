@@ -543,8 +543,19 @@ test('subagents: the end report wins; a background one runs while its child live
   [bg, fg] = agentsOf(view.items, view.results, view.tasks, false, []);
   assert.equal(bg.status, 'done'); assert.equal(bg.report, 'Count: 28'); assert.equal(bg.now, ''); assert.equal(bg.durationMs, 14803);
   assert.equal(fg.status, 'done'); assert.equal(fg.report, 'found it'); assert.equal(fg.prompt, 'go');
+  assert.deepEqual(view.items.filter(item => item.kind === 'agent_end').map(item => item.toolUseId), ['bg'], 'only the background one marks its end in the thread');
   view = reduce(view, { seq: 7, kind: 'task', phase: 'end', toolUseId: 'bg', status: 'failed' });
   assert.equal(agentsOf(view.items, view.results, view.tasks, false)[0].status, 'error');
+  assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 1, 'a repeated end report adds no second marker');
+});
+
+test('a background shell ends quietly: its end leaves no divider in the thread, and it is a job (not a subagent)', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'sh', name: 'Bash', input: { command: 'sleep 99', run_in_background: true } }] });
+  view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'sh', taskId: 'babc12345', description: 'sleep', background: true, at: 1000 });
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, ['sh'])[0].status, 'running');
+  view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'sh', status: 'stopped', at: 2000 });
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'stopped');
+  assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 0);
 });
 
 test('a plan splits into its ## sections; the # line is its title and fenced code is never cut', () => {

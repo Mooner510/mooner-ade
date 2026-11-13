@@ -2059,6 +2059,12 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 @keyframes chat-agent-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--agent-color, var(--agent)) 28%, transparent); } }
 .chat-agent-dot[data-status="stopped"], [data-status="stopped"] > .chat-agent-dot { opacity: .45; }
 .chat-agent-type { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--agent-color, var(--agent)) 16%, transparent); color: var(--agent-color, var(--agent)); font-size: 11px; font-weight: 600; }
+.chat-divider.agent-end { color: var(--muted); font-size: 12px; }
+.chat-divider.agent-end button { display: inline-flex; align-items: center; gap: 7px; max-width: min(88%, 640px); padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.chat-divider.agent-end button:hover { background: none; color: var(--fg); }
+.chat-divider.agent-end strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+.chat-divider.agent-end small { white-space: nowrap; color: var(--faint); font-size: 11px; }
+.chat-divider.agent-end[data-status="error"] > button > span:not(.chat-agent-type) { color: var(--error); }
 .chat-agent-state { display: inline-flex; flex: none; color: var(--muted); }
 .chat-agent-state[data-status="done"] { color: var(--add); } .chat-agent-state[data-status="error"] { color: var(--error); } .chat-agent-state[data-status="stopped"] { color: var(--faint); }
 .chat-agent-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
@@ -2092,6 +2098,17 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .chat-agents li button:hover, .chat-agents li button[aria-pressed="true"] { background: var(--hover); }
 .chat-agents li strong { min-width: 0; max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .chat-agents li small { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* ■ beside a running job's spinner: a thin red ring with a small rounded square inside (the spinner's own shape), shown only while its row is hovered or focused. */
+.chat-agent-state:has(> .stop-task), .chat-tool-state:has(> .stop-task) { align-items: center; gap: 7px; }
+.stop-task { display: inline-flex; align-items: center; justify-content: center; flex: none; box-sizing: border-box; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; color: color-mix(in srgb, var(--error) 85%, var(--fg)); border: 1.5px solid color-mix(in srgb, var(--error) 55%, transparent); opacity: 0; transition: opacity .12s, color .12s, border-color .12s, background-color .12s; }
+.stop-task::before { content: ''; width: 6px; height: 6px; border-radius: 1.5px; background: currentColor; }
+:is(.chat-agent-card, .chat-agents li button, .chat-tool-head):is(:hover, :focus-visible) .stop-task, .stop-task:hover, .stop-task:focus-visible { opacity: 1; }
+.stop-task:hover { color: var(--error); border-color: var(--error); background: color-mix(in srgb, var(--error) 16%, transparent); }
+/* The drawer header's own button stays visible: it is the one action for the open task. */
+.icon-btn.stop-task { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; opacity: 1; background: none; }
+.icon-btn.stop-task::before { content: none; }
+.icon-btn.stop-task .icon { color: color-mix(in srgb, var(--error) 85%, var(--fg)); }
+.icon-btn.stop-task:hover { background: color-mix(in srgb, var(--error) 16%, transparent); }
 
 /* Opening or closing the drawer slides it in from the edge while the thread narrows (or widens) over the same time, so nothing jumps. */
 .chat-pane { transition: padding-right .28s cubic-bezier(.4, 0, .2, 1); } .chat-pane[data-drawer="dock"] { transition: padding-right .34s var(--ease); }

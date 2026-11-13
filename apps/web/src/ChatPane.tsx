@@ -328,7 +328,7 @@ const ToolCard = memo(function ToolCard({ block, result, settings, running }: { 
       <span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">{TOOL_ICONS[block.name] ?? (mcpTool(block.name) ? 'extension' : 'build')}</span>
       <strong>{toolLabel(block.name)}</strong><span className="chat-tool-summary">{toolSummary(block.name, input, cwd)}</span>
       {job?.job && <span className="chat-tool-job" role="link" tabIndex={-1} title="오른쪽에서 이 작업을 봅니다" onClick={event => { event.stopPropagation(); agents.open(block.id); }}>{jobRunning ? '백그라운드 실행 중' : '백그라운드'}</span>}
-      <span className="chat-tool-state" aria-label={{ running: '실행 중', done: '완료', error: '오류', blocked: '자동 모드가 차단함', refused: '거부됨', pending: '대기', approval: '승인 대기' }[state]}>{state === 'approval' ? <><Icon name="alert" size={12} />승인 대기</> : state === 'refused' ? <><Icon name="block" size={12} />거부됨</> : state === 'running' ? <i className="chat-spin" /> : state === 'done' ? <Icon name="check" size={13} /> : state === 'blocked' ? <Icon name="block" size={13} /> : state === 'error' ? <Icon name="x" size={13} /> : null}</span>
+      <span className="chat-tool-state" aria-label={{ running: '실행 중', done: '완료', error: '오류', blocked: '자동 모드가 차단함', refused: '거부됨', pending: '대기', approval: '승인 대기' }[state]}>{state === 'approval' ? <><Icon name="alert" size={12} />승인 대기</> : state === 'refused' ? <><Icon name="block" size={12} />거부됨</> : state === 'running' ? <>{jobRunning && <StopTask id={block.id} />}<i className="chat-spin" /></> : state === 'done' ? <Icon name="check" size={13} /> : state === 'blocked' ? <Icon name="block" size={13} /> : state === 'error' ? <Icon name="x" size={13} /> : null}</span>
       <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
     </button>
     <Collapse open={open}><div className="chat-tool-body">
@@ -388,7 +388,7 @@ function BlockView({ block, result, settings, running, plainThinking, enter }: {
 
 // ---- subagents: one card per Agent call in the thread, a tracker above the composer, and a drawer with one subagent's whole run ----
 // waiting: subagents stopped at an approval prompt, shown as "승인 대기" instead of a spinner.
-type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>; opened: string | null; waiting: ReadonlySet<string>; open(id: string): void };
+type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>; opened: string | null; waiting: ReadonlySet<string>; open(id: string): void; stop(id: string): void };
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
@@ -396,7 +396,7 @@ const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
 const DeniedContext = createContext<Readonly<Record<string, true>>>({});
 const DENIED_DEFAULT = '사용자가 거부했습니다.';
-const AgentsContext = createContext<AgentsValue>({ agents: new Map(), colors: new Map(), opened: null, waiting: new Set(), open() {} });
+const AgentsContext = createContext<AgentsValue>({ agents: new Map(), colors: new Map(), opened: null, waiting: new Set(), open() {}, stop() {} });
 const AGENT_HUES = [212, 152, 36, 282, 350, 188, 96, 320];
 const agentColor = (index: number) => `hsl(${AGENT_HUES[index % AGENT_HUES.length]} 62% 62%)`;
 const AGENT_STATUS: Record<AgentStatus, string> = { running: '실행 중', done: '완료', error: '오류', stopped: '중단됨' };
@@ -408,9 +408,15 @@ function useTick(on: boolean) {
 const agentElapsed = (agent: SubAgent, now: number) => agent.status === 'running' ? (agent.startedAt ? Math.max(0, now - agent.startedAt) : agent.durationMs)
   : agent.durationMs ?? (agent.startedAt && agent.endedAt ? agent.endedAt - agent.startedAt : undefined);
 const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? duration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
-function AgentState({ status, waiting }: { status: AgentStatus; waiting?: boolean }) {
+// ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
+function StopTask({ id }: { id: string }) {
+  const { stop } = useContext(AgentsContext);
+  return <span className="stop-task" role="button" tabIndex={-1} title="이 작업 중단" aria-label="이 작업 중단" onClick={event => { event.stopPropagation(); stop(id); }} />;
+}
+function AgentState({ status, waiting, id }: { status: AgentStatus; waiting?: boolean; id?: string }) {
+  const stoppable = useContext(AgentsContext).agents.get(id ?? '')?.background === true;
   if (waiting && status === 'running') return <span className="chat-agent-state" data-status="approval" title="승인 카드에서 답을 기다리는 중"><Icon name="alert" size={12} />승인 대기</span>;
-  return <span className="chat-agent-state" data-status={status} role="img" aria-label={AGENT_STATUS[status]} title={AGENT_STATUS[status]}>{status === 'running' ? <i className="chat-spin" /> : <Icon name={status === 'done' ? 'check' : status === 'error' ? 'x' : 'stop'} size={13} />}</span>;
+  return <span className="chat-agent-state" data-status={status} role={id && stoppable && status === 'running' ? undefined : 'img'} aria-label={AGENT_STATUS[status]} title={AGENT_STATUS[status]}>{status === 'running' ? <>{id && stoppable && <StopTask id={id} />}<i className="chat-spin" /></> : <Icon name={status === 'done' ? 'check' : status === 'error' ? 'x' : 'stop'} size={13} />}</span>;
 }
 const dotStyle = (color?: string) => (color ? { '--agent-color': color } : undefined) as CSSProperties | undefined;
 
@@ -419,9 +425,20 @@ function AgentCard({ id, fallback }: { id: string; fallback: ReactNode }) {
   if (!agent) return <>{fallback}</>;
   return <button type="button" className="chat-agent-card" data-status={agent.status} aria-pressed={opened === id} style={dotStyle(colors.get(id))} onClick={() => open(id)} title="이 에이전트의 진행을 오른쪽에서 봅니다">
     <span className="chat-agent-line"><i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
-      {agent.background && <span className="chat-agent-tag">백그라운드</span>}{!agent.now && <small className="chat-agent-meta">{agentMeta(agent, now)}</small>}<AgentState status={agent.status} waiting={waiting.has(id)} /><Icon name="chevronRight" size={14} /></span>
+      {agent.background && <span className="chat-agent-tag">백그라운드</span>}{!agent.now && <small className="chat-agent-meta">{agentMeta(agent, now)}</small>}<AgentState id={id} status={agent.status} waiting={waiting.has(id)} /><Icon name="chevronRight" size={14} /></span>
     {agent.now && <span className="chat-agent-sub"><span className="chat-agent-now">{agent.now}</span><small>{agentMeta(agent, now)}</small></span>}
   </button>;
+}
+
+// Where a background subagent/job ended in the thread: the messages around it (its report, other agents' updates) are told apart by this line.
+function AgentEnd({ id, enter }: { id: string; enter?: boolean }) {
+  const { agents, colors, open } = useContext(AgentsContext), agent = agents.get(id);
+  if (!agent) return null;
+  const meta = agentMeta(agent, 0);
+  return <div className="chat-divider agent-end" role="separator" data-status={agent.status} data-enter={enter || undefined} style={dotStyle(colors.get(id))}>
+    <button type="button" onClick={() => open(id)} title="이 에이전트의 진행을 오른쪽에서 봅니다"><i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
+      <span>{AGENT_STATUS[agent.status]}</span>{meta && <small>{meta}</small>}<AgentState status={agent.status} /></button>
+  </div>;
 }
 
 // Above the composer while subagents run (and, once they are all over, until the next message): how many, and what each is doing now.
@@ -446,12 +463,12 @@ function AgentTracker({ list, colors, opened, waiting, onOpen, onHide }: { list:
     </div>
     <Collapse open={expanded}><ul>{list.map(agent => <li key={agent.id}><button type="button" data-status={agent.status} aria-pressed={opened === agent.id} style={dotStyle(colors.get(agent.id))} onClick={() => onOpen(agent.id)}>
       <i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
-      <span className="chat-agent-now">{agent.now}</span><small>{agentMeta(agent, now)}</small><AgentState status={agent.status} waiting={waiting.has(agent.id)} /></button></li>)}</ul></Collapse>
+      <span className="chat-agent-now">{agent.now}</span><small>{agentMeta(agent, now)}</small><AgentState id={agent.id} status={agent.status} waiting={waiting.has(agent.id)} /></button></li>)}</ul></Collapse>
   </div>;
 }
 
 // One subagent's whole run: its prompt, every step it took (the ordinary cards), and its report. It follows the end while it runs, until you scroll up.
-function AgentDrawer({ agent, closing, list, colors, results, settings, docked, onPick, onClose }: { agent: SubAgent; closing?: boolean; list: SubAgent[]; colors: Map<string, string>; results: ChatView['results']; settings: Settings; docked: boolean; onPick(id: string): void; onClose(): void }) {
+function AgentDrawer({ agent, closing, list, colors, results, settings, docked, onPick, onStop, onClose }: { agent: SubAgent; closing?: boolean; list: SubAgent[]; colors: Map<string, string>; results: ChatView['results']; settings: Settings; docked: boolean; onPick(id: string): void; onStop(id: string): void; onClose(): void }) {
   const now = useTick(agent.status === 'running'), body = useRef<HTMLDivElement>(null), follow = useRef(true), at = list.findIndex(item => item.id === agent.id);
   const parts = agent.items.flatMap(item => item.blocks.flatMap((block, index) => shownBlock(block) && !(agent.report && block.type === 'tool_use' && block.name === 'SubagentHandback') ? [{ key: `${item.key}|${block.key ?? index}`, item, block }] : []));
   // The subagent's last words usually are its report; the "결과" section below already shows them, so the same text is not repeated above it.
@@ -464,6 +481,7 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
     <header>
       <i className="chat-agent-dot" data-status={agent.status} />
       <div><strong>{agent.description || '서브에이전트'}</strong><small>{agent.type}{agent.background ? ' · 백그라운드' : ''} · {AGENT_STATUS[agent.status]}{meta && ` · ${meta}`}</small></div>
+      {agent.background && agent.status === 'running' && <IconButton icon="stop" label="이 작업 중단" className="stop-task" size={14} onClick={() => onStop(agent.id)} />}
       <IconButton icon="chevronLeft" label="이전 에이전트" size={14} disabled={at <= 0} onClick={() => onPick(list[at - 1].id)} />
       <small className="chat-agent-pos">{at + 1}/{list.length}</small>
       <IconButton icon="chevronRight" label="다음 에이전트" size={14} disabled={at < 0 || at >= list.length - 1} onClick={() => onPick(list[at + 1].id)} />
@@ -668,6 +686,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'error') return <ChatErrorAlert message={item.message} recoverable={item.recoverable} recovering={recovering} onRecover={onRecover} enter={enter} />;
   if (item.kind === 'command') return <CommandOutput text={item.text} isError={item.isError} enter={enter} />;
   if (item.kind === 'note') return <SystemLine text={item.text} tones={item.tones} rev={item.rev} enter={enter} />;
+  if (item.kind === 'agent_end') return <AgentEnd id={item.toolUseId} enter={enter} />;
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
   return null;
 });
@@ -853,7 +872,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Sidebar and header: rename → AI/agent title → first non-slash prompt since the last /clear.
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -938,7 +957,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         enqueue(message);
         if (message.event?.kind === 'divider' && message.event.reason === 'clear') setQueue([]);
         // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
-        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && typeof message.event.text === 'string') setText(current => current || message.event.text);
+        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && !message.event.resent && typeof message.event.text === 'string') setText(current => current || message.event.text);
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
@@ -1190,6 +1209,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   };
   useEffect(() => setMenuAt(0), [slash?.[1], mention?.[1]]);
 
+  // /clear ends the child: a background subagent still running in it is asked about first, and the server is told it was agreed to.
+  // false when cancelled at the background-task question.
+  async function resetChat() {
+    const force = Boolean(state.liveTasks?.length);
+    if (force && await ctx.pick('백그라운드 작업이 실행 중입니다. 새 대화를 시작하면 작업이 종료됩니다.', [{ id: 'yes', label: '새 대화 시작' }, { id: 'no', label: '취소' }]) !== 'yes') return false;
+    await ctx.call('chat/reset', { id, ...(force && { force }) });
+    return true;
+  }
   async function runLocal(name: string, argument: string): Promise<boolean> {
     if (locked && ['model', 'effort', 'permissions'].includes(name)) { note(`지금은 설정을 바꿀 수 없습니다. ${locked}`); return true; }
     switch (name) {
@@ -1200,7 +1227,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         else setStatsOpen(true);
         return true;
       case 'retry': await ctx.call('chat/retry', { id }); note('마지막 요청을 같은 세션으로 다시 보냈습니다.'); return true;
-      case 'clear': await ctx.call('chat/reset', { id }); return true;
+      case 'clear': await resetChat(); return true;
       case 'exit': ctx.onClose(id); return true;
       case 'config': ctx.onOpenSettings(); return true;
       case 'model': {
@@ -1273,7 +1300,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if ((!message && !images.length) || !view.ready) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
-    const attachments = images; setText(''); setImages([]); setCompact(true); clearChatDevDraft(ctx.projectId, id);
+    const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
     if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
@@ -1290,7 +1317,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     } catch (cause) { ctx.fail(cause); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
-  const interrupt = () => void ctx.call('chat/interrupt', { id }).catch(ctx.fail);
+  const interrupt = (sendSteers = false) => void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail);
+  const stopTask = (toolUseId: string) => void ctx.call('chat/stop-task', { id, toolUseId }).catch(ctx.fail);
   function resume() {
     if (resuming) return;
     if (busy) { ctx.fail(new Error('응답이 끝난 뒤 이전 대화를 불러올 수 있습니다.')); return; }
@@ -1331,7 +1359,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     setLeaving(last); const timer = setTimeout(() => setLeaving(null), 300); return () => clearTimeout(timer);
   }, [openedAgent]);
   const drawerAgent = openedAgent ?? leaving;
-  const agentsValue = useMemo<AgentsValue>(() => ({ agents: new Map(agentList.map(item => [item.id, item])), colors: agentColors, opened: openedAgent?.id ?? null, waiting: waitingAgents, open: (key: string) => setAgentOpen(current => current === key ? null : key) }), [agentList, agentColors, openedAgent?.id, waitingAgents]);
+  const agentsValue = useMemo<AgentsValue>(() => ({ agents: new Map(agentList.map(item => [item.id, item])), colors: agentColors, opened: openedAgent?.id ?? null, waiting: waitingAgents, open: (key: string) => setAgentOpen(current => current === key ? null : key), stop: stopTask }), [agentList, agentColors, openedAgent?.id, waitingAgents]);
   // The tracker lists this request's subagents plus any still running from before; dismissed, it stays away until the next request (or a new one starts).
   const lastTurnKey = lastTurn?.[0]?.key ?? '';
   const tracked = useMemo(() => { const own = new Set(toolIds(lastTurn ?? [])); return agentList.filter(item => item.status === 'running' || own.has(item.id)); }, [agentList, lastTurn]);
@@ -1395,7 +1423,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'claude' && view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" onClick={() => setStatsOpen(true)} />}
         {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} onClick={() => ctx.toTerminal(id, !view.state.sessionId)} />}
         {(view.state.status === 'idle' || (agent === 'claude' && view.state.sessionId)) && <i className="pane-sep" aria-hidden="true" />}
-        <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void ctx.call('chat/reset', { id }).catch(ctx.fail)} />
+        <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
         <IconButton icon="splitH" tip="header" label="좌우 분할" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" tip="header" label="상하 분할" onClick={() => onSplit(id, 'column')} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
@@ -1406,7 +1434,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. Esc로 취소할 수 있습니다.">스티어링 · 대기 중 · Esc로 취소</small>{item.text}</div></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에 되돌리거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · 대기 중 · ↑ 되돌리기 · Esc 바로 보내기</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1467,7 +1495,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             if (event.key === 'Tab' && text.startsWith('/')) { event.preventDefault(); return; }
             if (event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
             else if (event.key === 'Enter' && text.startsWith('/')) event.preventDefault();
-            else if (event.key === 'Escape' && busy) { event.preventDefault(); if (view.steers.length && caps?.cancelSteer !== false) void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); else interrupt(); }
+            else if (event.key === 'Escape' && busy) { event.preventDefault(); interrupt(view.steers.length > 0 && caps?.cancelSteer !== false); }
+            // ↑ with nothing typed takes the last steering message back; otherwise ↑/↓ walk the sent messages (the draft is kept aside and ↓ past the newest brings it back).
+            else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+              const field = event.currentTarget, up = event.key === 'ArrowUp';
+              if (up && !text && view.steers.length && caps?.cancelSteer !== false) { event.preventDefault(); void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); return; }
+              const sent = shown.flatMap(item => item.kind === 'user' ? [item.text] : []);
+              if (field.selectionStart !== field.selectionEnd || !(up ? !text.slice(0, field.selectionStart).includes('\n') : recall && !text.slice(field.selectionEnd).includes('\n'))) return;
+              const at = up ? (recall ? recall.at - 1 : sent.length - 1) : recall ? recall.at + 1 : -1;
+              if (!sent.length || at < 0 || (!up && !recall)) return;
+              event.preventDefault();
+              const draft = recall?.draft ?? text, next = at >= sent.length ? draft : sent[at];
+              setRecall(at >= sent.length ? null : { at, draft }); setText(next);
+              requestAnimationFrame(() => field.setSelectionRange(next.length, next.length));
+            }
           }} />
         </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
@@ -1477,7 +1518,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className="chat-model" value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).catch(ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
         <ContextRing state={state} ctx={ctx} active={visible} agent={agent} chatId={id} />
-        {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={interrupt}><Icon name="stop" size={15} /></button>
+        {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={15} /></button>
           : <button type="button" className="chat-send" title="보내기 (Enter)" aria-label="보내기" disabled={!view.ready || (!text.trim() && !images.length)} onClick={() => void submit()}><Icon name="arrowUp" size={16} /></button>}
       </div>
       </div>
@@ -1488,7 +1529,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     {providers.length > 1 && <div className="chat-start-slot chat-provider-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
       <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} title={item === agent ? undefined : `${PROVIDER_LABELS[item]}로 전환`} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
-    {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onClose={() => setAgentOpen(null)} />}
+    {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onStop={stopTask} onClose={() => setAgentOpen(null)} />}
   </section></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></DiffLayoutContext.Provider></ChatUiContext.Provider>;
 }
 

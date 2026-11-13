@@ -5,7 +5,7 @@ import { addPair, contribution, learnedK, sameWindow, type KSums, type Reading }
 // This chat's share of the plan's usage limits, for the status line. A turn is measured by reading the limits right before and right after it
 // (forced reads, a few hundred ms each) and pairing the change with what the turn cost; the pairs add up to k, dollars per 1%p, which turns the
 // chat's cost into %p. k is kept across chats and restarts (localStorage), per plan and window.
-const WINDOWS = { session: '5시간', weekly: '주간' } as const;
+const WINDOWS = { session: '5h', weekly: '주' } as const;
 type Key = keyof typeof WINDOWS;
 type Readings = Partial<Record<Key, Reading>>;
 const store = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') ?? fallback; } catch { return fallback; } };
@@ -28,6 +28,18 @@ export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd
     if (!enabled || !usage || store<unknown>(chatKey, null)) return;
     const readings = readingsOf(usage.windows);
     if (Object.keys(readings).length) { save(chatKey, { cost: now.current.cost, readings }); setTick(value => value + 1); }
+  }, [enabled, usage, chatKey]);
+
+  // The 5h window resets: remember the chat's cost at that moment so the 5h share restarts from 0. Weekly keeps the chat's whole cost (cumulative).
+  useEffect(() => {
+    const session = readingsOf(usage?.windows).session;
+    if (!enabled || !session) return;
+    const marker = store<{ resetsAt: number | null; cost: number } | null>(`${chatKey}:session`, null);
+    if (marker && sameWindow(marker.resetsAt, session.resetsAt)) return;
+    const first = store<{ cost: number; readings: Readings } | null>(chatKey, null);
+    // the chat's own first window (started at cost 0) counts from 0; any later window counts from the cost at the reset
+    const own = first && first.cost === 0 && !marker && sameWindow(first.readings.session?.resetsAt, session.resetsAt);
+    save(`${chatKey}:session`, { resetsAt: session.resetsAt, cost: own ? 0 : now.current.cost }); setTick(value => value + 1);
   }, [enabled, usage, chatKey]);
 
   useEffect(() => {
@@ -61,10 +73,13 @@ export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd
       const reading = after[key]; if (!reading) continue;
       if (key === 'session' && /ultra/i.test(usage.plan || '')) continue; // Ultra has no 5-hour window
       const sum = sums[`${usage.plan}|${key}`], cal = learnedK(sum);
-      const share = contribution({ before: first && first.cost === 0 ? first.readings[key] : null, after: reading, costUsd, cal });
+      const base = key === 'session' ? store<{ resetsAt: number | null; cost: number } | null>(`${chatKey}:session`, null) : null;
+      if (key === 'session' && !(base && sameWindow(base.resetsAt, reading.resetsAt))) continue; // marker not written yet
+      const cost = costUsd - (base?.cost ?? 0); if (cost <= 0) continue;
+      const share = contribution({ before: first && first.cost === 0 && (!base || base.cost === 0) ? first.readings[key] : null, after: reading, costUsd: cost, cal });
       if (share.quality === 'tiny') continue;
       if (!share.label) continue; // nothing trustworthy yet (k not learned, no starting reading): show nothing rather than a placeholder
-      parts.push(share.label.replace(/(\S+?%p)/, `$1(${WINDOWS[key]})`)); // "≈5.6%p(5시간)"
+      parts.push(share.label.replace(/(\S+?%p)/, `$1(${WINDOWS[key]})`)); // "5.6%p(5h)"
     }
     return parts.length ? parts.join(' ') : null;
     // `tick` bumps whenever the stored first reading or k changed
