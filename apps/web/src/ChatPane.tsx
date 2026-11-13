@@ -492,6 +492,8 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   const blocked = tools.filter(tool => { const result = results[tool.id]; return result?.isError && autoDenial(result.content); }).length, failed = errored - blocked;
   const held = useContext(AwaitingContext), waiting = running ? tools.find(tool => held.has(tool.id)) : undefined;
   const active = running ? waiting ?? tools.find(tool => !results[tool.id]) : undefined;
+  // Outcome of the whole bundle: all ok = check, some failed = warning, all failed = X.
+  const outcome = errored === 0 ? 'ok' : errored === tools.length ? 'failed' : 'partial';
   // Once the turn is over the bundle is one line ("도구 n개 호출 완료"); a click opens the list. While it runs the list stays, so nothing jumps between two tools.
   const folded = !running && !expanded && !flat;
   const measure = () => { const el = list.current; if (el) setEdge(current => { const next = { top: el.scrollTop > 2, bottom: el.scrollHeight - el.scrollTop - el.clientHeight > 2 }; return current.top === next.top && current.bottom === next.bottom ? current : next; }); };
@@ -502,7 +504,7 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   }, [parts.length, finished, expanded]);
   return <div ref={root} className={`chat-bundle${expanded || flat ? ' expanded' : ''}${folded ? ' folded' : ''}${flat ? ' flat' : ''}`} data-running={Boolean(active) || undefined} data-awaiting={Boolean(waiting) || undefined} data-outcome={active ? undefined : failed ? 'error' : blocked ? 'blocked' : undefined}>
     {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} onClick={() => { capture(); setExpanded(value => !value); }}>
-      <span className="chat-bundle-icon">{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={failed ? 'x' : blocked ? 'block' : 'check'} size={13} />}</span>
+      <span className="chat-bundle-icon" data-outcome={waiting || active ? undefined : outcome}>{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={outcome === 'ok' ? 'check' : outcome === 'partial' ? 'alert' : 'x'} size={13} />}</span>
       {waiting
         ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)} · {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : active
