@@ -284,7 +284,7 @@ async function openProject(requested) {
         worktreePath: path.join(directory, 'worktrees', repo.id),
         branch: `ade/repo-${repo.id}`
       }));
-      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, chats: new Map(), openingChats: 0, chatOpen: serial(), mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map() };
+      const project = { id, root, directory, lockFile, runtime, state, multiRepo: discovered.multiRepo, repositories, terminals: new Map(), openingTerminals: 0, chats: new Map(), openingChats: 0, chatOpen: serial(), mutation: serial(), persist: serial(), fsVersion: 0, gitStats: new Map(), gitStatus: new Map() };
       project.save = () => project.persist(() => writeJson(path.join(directory, 'state.json'), state));
       for (const repo of repositories) if (repo.worktreeEnabled) await repoWorktree(project, repo);
       await project.save();
@@ -400,6 +400,15 @@ function closeProject(project, { force = false, detach = false, keepChats = deta
     await project.save();
     await fs.unlink(project.lockFile).catch(error => { if (error.code !== 'ENOENT') throw error; });
   });
+}
+// What git's own writes touch: the .git folder (index, HEAD and packed-refs are replaced by renaming a lock file), index (add, reset),
+// HEAD, logs/HEAD (every commit, checkout, merge, reset) and FETCH_HEAD. null when .git is not a folder here (a linked worktree, a subfolder).
+const GIT_STAMP = ['index', 'HEAD', path.join('logs', 'HEAD'), 'FETCH_HEAD'];
+async function gitStamp(root) {
+  const dir = path.join(root, '.git'), folder = await fs.stat(dir).catch(() => null);
+  if (!folder?.isDirectory()) return null;
+  const times = await Promise.all(GIT_STAMP.map(name => fs.stat(path.join(dir, name)).then(stat => stat.mtimeMs, () => 0)));
+  return [folder.mtimeMs, ...times].join(':');
 }
 function watchProject(project) {
   return watchProjectFiles(project.root, paths => { project.fsVersion++; broadcast(project, { type: 'fs', paths }); });
@@ -783,7 +792,12 @@ async function route(action, input, project) {
     }
     case 'git/status': {
       // This runs on every refresh, so the branch comes from the status header instead of separate git calls.
-      const fsVersion = project.fsVersion;
+      // `git status` reads every file's metadata in the worktree, every few seconds per visible project. While the watcher saw no change
+      // under the project and git's own files are untouched (gitStamp), the last answer stands, for at most 15 s: the watcher skips
+      // build/output folders, which a few repositories do track.
+      const fsVersion = project.fsVersion, stamp = !repo?.worktreeEnabled && project.watcher?.watching ? await gitStamp(workspace.root) : null;
+      const last = project.gitStatus.get(workspace.root);
+      if (stamp && last?.stamp === stamp && last.fsVersion === fsVersion && Date.now() - last.at < 15_000) return last.result;
       const output = await runtime.processes.exec('git', ['status', '--porcelain=v1', '-z', '--branch']);
       if (output.exitCode !== 0) throw new Error(output.stderr);
       const entries = output.stdout.split('\0'), changes = [];
@@ -836,7 +850,9 @@ async function route(action, input, project) {
         const lines = change.status === '??' ? untracked.get(change.path) : undefined;
         if (lines !== undefined) { additions += lines; change.added = lines; change.deleted = 0; }
       }
-      return { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
+      const result = { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
+      if (stamp) project.gitStatus.set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
+      return result;
     }
     case 'git/show': {
       text(input.path, '경로'); await workspace.resolve(input.path);
@@ -1386,10 +1402,14 @@ async function pollRemoteClaude(project, id, terminal) {
   broadcastStatus(project, id, terminal);
   publishCache(project, id, terminal, cache);
 }
+// Both pollers below look again only after a terminal printed something since their last look, or after QUIET_RECHECK_MS: an agent starting,
+// working, finishing or an ssh session opening all print, and a quiet terminal (most of them, most of the time) then costs nothing.
+const QUIET_RECHECK_MS = 30_000;
+const quiet = (terminal, key) => terminal.activeAt === terminal[key]?.activeAt && Date.now() - terminal[key].at < QUIET_RECHECK_MS;
 const remoteTimer = setInterval(() => {
   for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
-    if (terminal.exited || !terminal.ssh || terminal.agent !== 'claude' || !terminal.sshCommand || terminal.remotePolling || Date.now() < (terminal.remoteRetry ?? 0)) continue;
-    terminal.remotePolling = true;
+    if (terminal.exited || !terminal.ssh || terminal.agent !== 'claude' || !terminal.sshCommand || terminal.remotePolling || Date.now() < (terminal.remoteRetry ?? 0) || quiet(terminal, 'remoteLook')) continue;
+    terminal.remotePolling = true; terminal.remoteLook = { activeAt: terminal.activeAt, at: Date.now() };
     void pollRemoteClaude(project, id, terminal).catch(() => {}).finally(() => { terminal.remotePolling = false; });
   }
 }, 4000);
@@ -1397,11 +1417,17 @@ remoteTimer.unref();
 // A terminal is "over ssh" while an ssh client runs anywhere below its shell. One process listing per tick serves every terminal.
 const processTable = createProcessTable();
 let sshPolling = false;
+let sshLook = { key: '', at: 0 };
 const sshTimer = setInterval(async () => {
   if (sshPolling || ![...projects.values()].some(project => [...project.terminals.values()].some(terminal => !terminal.exited))) return;
+  const live = [...projects.values()].flatMap(project => [...project.terminals.values()].filter(terminal => !terminal.exited && terminal.native.pid));
+  // One process listing serves every terminal, so it is skipped only while none of them opened, closed or printed (see QUIET_RECHECK_MS).
+  const key = live.map(terminal => `${terminal.native.pid}:${terminal.activeAt}`).join(',');
+  if (key === sshLook.key && Date.now() - sshLook.at < QUIET_RECHECK_MS) return;
+  sshLook = { key, at: Date.now() };
   sshPolling = true;
   try {
-    const roots = [...projects.values()].flatMap(project => [...project.terminals.values()].filter(terminal => !terminal.exited && terminal.native.pid).map(terminal => terminal.native.pid));
+    const roots = live.map(terminal => terminal.native.pid);
     const table = await processTable(roots); if (!table) return;
     const inspect = terminalProcesses(table);
     for (const project of projects.values()) for (const [id, terminal] of project.terminals) {
