@@ -214,7 +214,7 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
       {pane && <>
         <small className="menu-title">{pane.label}</small>
         {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
-        {item('x', '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
+        {item('x', pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
         <hr />
       </>}
       <small className="menu-title">{pane ? `탭: ${tab.label}` : tab.label}</small>
@@ -542,7 +542,7 @@ function Shell() {
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
-                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
+                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} title={pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기'} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>; })}
                   </ul>{dropHint}
                 </li>;

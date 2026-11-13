@@ -624,3 +624,84 @@ test('Claude: the picked model and Effort survive a reopen, and a chat keeps the
   assert.equal(session.state().model, 'opus');
   assert.equal(session.state().effort, 'high');
 });
+
+// Chats in the pty-host: a server that stops (update, dev reload, background) leaves the agent running, and the next server goes on with the
+// same turn. These run the real host; the agents are the fakes above.
+async function startPtyHost(t) {
+  const { newEndpoint } = await import('../apps/desktop/src/pty-host-files.js');
+  const { connectPtyHost, helloPtyHost } = await import('../apps/local-server/src/pty-client.js');
+  const endpoint = newEndpoint(), token = 'a'.repeat(32);
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../apps/local-server/src/pty-host.js', import.meta.url))], { env: { ...process.env, ADE_PTY_ENDPOINT: endpoint, ADE_PTY_TOKEN: token }, stdio: 'ignore' });
+  t.after(() => child.kill());
+  for (let attempt = 0; ; attempt++) {
+    try { const { socket } = await helloPtyHost({ endpoint, token, role: 'control', timeoutMs: 1000 }); socket.destroy(); break; }
+    catch (error) { if (attempt > 50) throw error; await new Promise(resolve => setTimeout(resolve, 100)); }
+  }
+  return () => connectPtyHost({ endpoint, token });
+}
+// One "server": a host connection and the chat opened through it. `restart` detaches the chat, drops the connection and opens it again on a new one.
+async function hostedChat(t, options) {
+  const connect = await startPtyHost(t), directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-hosted-'));
+  const events = [];
+  let owner = await connect(), session = await openChatSession({ directory, id: 'hosted', cwd: directory, onEvent: event => events.push(event), procHost: owner, ...options });
+  t.after(async () => { await session.close(); owner.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  return {
+    events, directory, get session() { return session; },
+    async restart() { await session.detach(); owner.close(); owner = await connect(); session = await openChatSession({ directory, id: 'hosted', cwd: directory, onEvent: event => events.push(event), procHost: owner, ...options }); return session; }
+  };
+}
+const claudeFake = { executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))] };
+
+test('Claude in the pty-host: an approval open while the server is replaced is still there, and answering it reaches the same agent', { timeout: 30_000 }, async t => {
+  const ctx = await hostedChat(t, claudeFake);
+  await ctx.session.send('ask'); await until(() => ctx.session.state().status === 'attention');
+  const pid = ctx.session.state().pending;
+  const next = await ctx.restart();
+  assert.equal(next.state().status, 'attention');
+  const [approval] = next.replay().approvals;
+  assert.equal(approval?.tool, 'AskUserQuestion', 'the card is still open');
+  assert.equal(pid, 1);
+  await next.approve(approval.requestId, { allow: true, answers: { [approval.questions[0].id]: ['A'] } });
+  await until(() => next.state().status === 'idle');
+  assert.ok(ctx.events.some(event => event.kind === 'message' && event.blocks?.some(block => /answers=/.test(block.text ?? ''))), 'the same agent got the answer');
+  assert.equal(ctx.events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 1, 'nothing was read twice');
+});
+
+test('Claude in the pty-host: a background subagent keeps running through the replacement and its hand-back turn ends the chat as usual', { timeout: 30_000 }, async t => {
+  const ctx = await hostedChat(t, claudeFake);
+  await ctx.session.send('background');
+  await until(() => ctx.events.some(event => event.kind === 'result'));
+  const next = await ctx.restart();
+  await until(() => ctx.events.filter(event => event.kind === 'result').length === 2 && next.state().status === 'idle');
+  const stored = next.replay().events;
+  assert.equal(stored.filter(event => event.kind === 'message' && event.id === 'main2').length, 1);
+  assert.equal(stored.filter(event => event.kind === 'message' && event.id === 'sub1').length, 1, 'output made while no server read it arrives once');
+});
+
+for (const agent of ['codex', 'cursor']) {
+  test(`${agent} in the pty-host: a running turn survives the replacement and can still be interrupted`, { timeout: 30_000 }, async t => {
+    const ctx = await hostedChat(t, { agent, executable: process.execPath, executableArgs: [fixture, agent] });
+    await ctx.session.send('hold'); await until(() => ctx.session.state().status === 'working');
+    const id = ctx.session.state().sessionId;
+    const next = await ctx.restart();
+    assert.equal(next.state().status, 'working');
+    assert.equal(next.state().sessionId, id);
+    await next.interrupt(); await until(() => next.state().status === 'idle');
+    assert.ok(ctx.events.some(event => event.kind === 'result' && event.status === 'interrupted'));
+    await next.send('again'); await until(() => next.state().status === 'idle');
+    assert.equal(next.replay().events.filter(event => event.kind === 'result').length, 2);
+  });
+}
+
+test('a chat whose agent is gone when the next server opens it says the turn was cut off, as a crash would', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-lost-'));
+  let session = null;
+  t.after(async () => { await session?.close(); await rm(directory, { recursive: true, force: true }); });
+  const options = { directory, id: 'lost', cwd: directory, ...claudeFake };
+  await (await openChatSession(options)).close();
+  await writeFile(path.join(chatFolder(directory, 'lost'), 'live.json'), JSON.stringify({ v: 1, procKey: 'gone', ack: 0, turnOpen: true, approvals: [] }));
+  session = await openChatSession({ ...options, procHost: { attachProc: async () => { throw new Error('pty-host request failed'); } } });
+  assert.match(session.state().error, /이어받지 못했습니다/);
+  assert.equal(session.state().status, 'idle');
+  await assert.rejects(readFile(path.join(chatFolder(directory, 'lost'), 'live.json')), /ENOENT/, 'never taken over twice');
+});

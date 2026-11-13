@@ -167,13 +167,16 @@ async function confirmInterrupt(window, report) {
   const { response } = await ask(window, {
     type: 'warning', buttons: ['중단하고 업데이트', '취소'], defaultId: 1, cancelId: 1, title: '업데이트',
     message: '아래 작업이 진행 중입니다. 중단해도 괜찮습니까?',
-    detail: [listed || '진행 중인 작업을 확인하지 못했습니다. 업데이트하면 끊길 수 있습니다.', report.keepsTerminals ? '터미널과 그 안의 작업은 중단되지 않습니다.' : ''].filter(Boolean).join('\n\n'),
+    detail: [listed || '진행 중인 작업을 확인하지 못했습니다. 업데이트하면 끊길 수 있습니다.', report.keepsChats ? '터미널과 채팅, 그 안의 작업은 중단되지 않습니다.' : report.keepsTerminals ? '터미널과 그 안의 작업은 중단되지 않습니다.' : ''].filter(Boolean).join('\n\n'),
   });
   return response === 0;
 }
 
 // A request that never answers would hold the one-check-at-a-time lock (and every later check) until undici gives up after minutes.
 const REQUEST_TIMEOUT_MS = 30_000;
+// ADE_UPDATE_URL points the release lookup at a stand-in for api.github.com (a local fake release in scripts/verify/t-update.mjs).
+// The assets it names are checked against their sha256 digest and the code signature exactly as GitHub's are.
+const UPDATE_API = (process.env.ADE_UPDATE_URL || 'https://api.github.com').replace(/\/+$/, '');
 
 // The installed bundle's shell key, written by package.mjs; null for builds that predate app-only updates.
 const installedShell = () => {
@@ -240,7 +243,7 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   const prompt = {
     type: report.busy ? 'warning' : 'info', buttons: ['종료할 때 업데이트', '지금 업데이트', '나중에'], defaultId: 2, cancelId: 2, title: '업데이트',
     message: `새 ${label} ${version}을 사용할 수 있습니다.`,
-    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
+    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsChats ? ' 터미널과 채팅, 그 안의 작업은 어느 쪽이든 계속됩니다.' : report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
   };
   const { response: choice } = await ask(window, prompt);
   if (choice === 2) { declined.add(version); return 'declined'; }
