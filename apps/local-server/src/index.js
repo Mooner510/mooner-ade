@@ -27,6 +27,7 @@ import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
+import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { UI_PROMPT } from './chat-ui-prompt.js';
@@ -296,6 +297,7 @@ async function openProject(requested) {
       // Adopt before registering: a snapshot taken in between would show live host terminals as dead and the UI would reopen/prune them.
       await adoptTerminals(project);
       projects.set(id, project);
+      await adoptChats(project);
       return project;
     } catch (error) { await fs.unlink(lockFile); throw error; }
   });
@@ -350,11 +352,36 @@ async function adoptTerminals(project) {
     try { const native = await ptyHost.attach(item.key); registerTerminal(project, item.meta.id, native, item.meta.cwd, native.initial, item.meta.startedAt); } catch { /* exited in the meantime */ }
   }
 }
+// Chat agents run in the pty-host when it can keep piped processes, so they outlive this server (an update, a dev reload, the app left in the
+// background); a host lost mid-run leaves new agents in this process, as they used to be.
+const chatProcHost = ptyHost?.procs ? {
+  spawnProc: (file, args, { cwd, env, meta }) => ptyHostLost ? spawnAgent(file, args, { cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) : ptyHost.spawnProc(file, args, { cwd, env, meta }),
+  attachProc: (key, after) => ptyHostLost ? Promise.reject(new Error('pty-host disconnected')) : ptyHost.attachProc(key, after)
+} : null;
+async function openChat(project, id, { cwd, agent, defaults }) {
+  const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
+    onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
+    prepare: chatLaunchFiles, recover: () => checkAgents(), defaults });
+  project.chats.set(id, chat);
+  return chat;
+}
+// Chats whose agent a previous server left running in the pty-host are opened right away (not when a screen shows them), so their
+// output goes on being handled and stored.
+async function adoptChats(project) {
+  if (!chatProcHost) return;
+  for (const item of await ptyHost.listProcs().catch(() => [])) {
+    const { chatId, projectId, agent } = item.meta ?? {};
+    if (projectId !== project.id || typeof chatId !== 'string' || project.chats.has(chatId) || !['claude', 'codex', 'cursor'].includes(agent)) continue;
+    await project.chatOpen(() => project.chats.has(chatId) ? null : openChat(project, chatId, { cwd: project.root, agent }))
+      .catch(error => console.warn(`채팅 ${chatId}을 이어받지 못했습니다: ${error.message}`));
+  }
+}
 // A chat is busy while it answers, waits for an approval or still runs a background subagent.
 const chatBusy = chat => { const { status, liveTasks } = chat.state(); return status === 'working' || status === 'attention' || Boolean(liveTasks?.length); };
 // Releases everything a project holds. Without `force`, live terminals make it refuse so work is not killed by accident.
 // `detach` (server shutdown) leaves pty-host terminals running for the next server instead of killing them.
-function closeProject(project, { force = false, detach = false } = {}) {
+// `keepChats` (default: with `detach`) leaves hosted chat agents running too; a plain quit ends them.
+function closeProject(project, { force = false, detach = false, keepChats = detach } = {}) {
   return opening(project.id)(async () => {
     if (projects.get(project.id) !== project) return;
     const liveTerminals = [...project.terminals.values()].filter(terminal => !terminal.exited).length;
@@ -367,7 +394,8 @@ function closeProject(project, { force = false, detach = false } = {}) {
     for (const terminal of project.terminals.values()) detach ? terminal.native.detach() : terminal.native.close();
     project.terminals.clear();
     // Chats keep their transcript and Claude session id on disk; closing only ends the child, and the next message resumes it.
-    await Promise.all([...project.chats.values()].map(chat => chat.close()));
+    // Detaching leaves a child that runs in the pty-host to the next server, with what it was doing.
+    await Promise.all([...project.chats.values()].map(chat => keepChats ? chat.detach() : chat.close()));
     project.chats.clear();
     await project.save();
     await fs.unlink(project.lockFile).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -884,11 +912,7 @@ async function route(action, input, project) {
         try {
           const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-          const agent = input.agent === undefined ? 'claude' : input.agent;
-          chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent),
-            onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
-            prepare: chatLaunchFiles, recover: () => checkAgents(), defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
-          project.chats.set(id, chat);
+          chat = await openChat(project, id, { cwd, agent: input.agent === undefined ? 'claude' : input.agent, defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
         } finally { project.openingChats--; }
       }
       if (input.agent !== undefined && chat.agent !== input.agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
@@ -1421,11 +1445,16 @@ async function busyReport() {
   // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
   const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
   // A chat turn is a child of this server, so any restart (update or dev reload) ends it; an idle chat resumes from its session id and costs nothing.
-  for (const project of projects.values()) for (const [id, chat] of project.chats) if (chatBusy(chat)) reasons.push({ project: path.basename(project.root), terminal: id.slice(0, 6), kind: 'turn', agent: chat.agent });
+  // Unless it runs in the pty-host: then it goes on through the restart like a terminal.
+  const chats = [...projects.values()].flatMap(project => [...project.chats].map(([id, chat]) => ({ project, id, chat })));
+  for (const { project, id, chat } of chats) if (chatBusy(chat)) reasons.push({ project: path.basename(project.root), terminal: id.slice(0, 6), kind: 'turn', agent: chat.agent, ...(chat.hosted && !ptyHostLost && { keeps: true }) });
   // Terminals in the pty-host keep running through an app restart; the updater then only waits for what does not.
-  const keepsTerminals = Boolean(ptyHost && !ptyHostLost);
+  const keepsTerminals = Boolean(ptyHost && !ptyHostLost), keepsChats = Boolean(chatProcHost && !ptyHostLost);
   const kept = [];
-  const report = () => ({ busy: reasons.length + kept.length > 0, keepsTerminals, reasons: [...reasons, ...kept.map(item => keepsTerminals ? { ...item, keeps: true } : item)] });
+  // `live`: what quitting would end (or leave running in the background), for the app's quit question.
+  const running = chats.filter(item => item.chat.running);
+  const liveCount = { terminals: live.length, chats: running.length, answering: running.filter(item => chatBusy(item.chat)).length };
+  const report = () => ({ busy: reasons.length + kept.length > 0, keepsTerminals, keepsChats, live: liveCount, reasons: [...reasons, ...kept.map(item => keepsTerminals ? { ...item, keeps: true } : item)] });
   if (!live.length) return report();
   const table = await processTable(live.filter(item => item.terminal.native.pid).map(item => item.terminal.native.pid)).catch(() => null);
   const inspect = table && terminalProcesses(table);
@@ -1467,13 +1496,14 @@ async function syncSessionsBeforeExit() {
   }
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
-async function shutdown() {
+// `keep: false` (the user quit the app): chats end instead of being left to the next server. Anything else (update, dev reload, background) keeps them.
+async function shutdown({ keep = true } = {}) {
   if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
   // One project failing to release must not leave the rest locked.
-  for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
+  for (const project of [...projects.values()]) await closeProject(project, { force: true, detach: true, keepChats: keep }).catch(error => console.error(`프로젝트 종료 실패 ${project.root}: ${error.message}`));
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
 // Exit explicitly: the IPC channel to the app would otherwise keep the process alive after shutdown.
@@ -1483,7 +1513,7 @@ process.on('uncaughtException', error => console.error(`처리되지 않은 오�
 process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
 process.on('message', message => {
-  if (message?.type === 'shutdown') void shutdown().finally(() => process.exit(0));
+  if (message?.type === 'shutdown') void shutdown({ keep: message.keep !== false }).finally(() => process.exit(0));
   else if (message?.type === 'busy?') {
     const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));

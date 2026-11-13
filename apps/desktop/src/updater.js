@@ -60,7 +60,8 @@ if mv "$3" "$4"; then
     mv "$4" "$3"
   fi
 fi
-/usr/bin/open "$3"
+# $7, the executable's name, starts it directly so it keeps this environment (an isolated ADE_USER_DATA_DIR run); open(1) would drop it.
+if [ -n "$7" ]; then "$3/Contents/MacOS/$7" >/dev/null 2>&1 & else /usr/bin/open "$3"; fi
 rm -rf "$5" "$6"
 `;
 
@@ -74,11 +75,17 @@ const PROGRESS_PAGE = `<!doctype html><meta charset="utf-8"><style>
 f.classList.toggle('wait',fraction==null);f.style.width=fraction==null?'':Math.round(fraction*100)+'%'}</script>`;
 
 // A small window plus the taskbar bar: the download and install take a while, and the app otherwise looks frozen.
+// macOS draws the progress inside the main window instead (preload.cjs): a separate window looked out of place, and as a child of a
+// full-screen main window it crashed AppKit's exit-full-screen transition on quit, so the update restart reported an unexpected quit.
 function progressWindow(parent) {
-  const win = new BrowserWindow({ width: 380, height: 120, parent: parent ?? undefined, resizable: false, minimizable: false, maximizable: false, closable: false, show: false, autoHideMenuBar: true, title: '업데이트', webPreferences: { sandbox: true, contextIsolation: true } });
-  win.setMenu(null);
-  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PROGRESS_PAGE)}`);
-  win.once('ready-to-show', () => win.show());
+  const main = () => parent && !parent.isDestroyed() ? parent : null;
+  const inline = process.platform === 'darwin' && main();
+  const win = inline ? null : new BrowserWindow({ width: 380, height: 120, parent: parent ?? undefined, resizable: false, minimizable: false, maximizable: false, closable: false, show: false, autoHideMenuBar: true, title: '업데이트', webPreferences: { sandbox: true, contextIsolation: true } });
+  if (win) {
+    win.setMenu(null);
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PROGRESS_PAGE)}`);
+    win.once('ready-to-show', () => win.show());
+  }
   let last = 0;
   return {
     // fraction === null shows an indeterminate bar.
@@ -86,13 +93,15 @@ function progressWindow(parent) {
       const now = Date.now();
       if (!force && now - last < 100) return;
       last = now;
-      if (!win.isDestroyed()) void win.webContents.executeJavaScript(`set(${JSON.stringify(text)}, ${fraction})`).catch(() => {});
-      const main = parent && !parent.isDestroyed() ? parent : null;
-      if (main) fraction === null ? main.setProgressBar(2, { mode: 'indeterminate' }) : main.setProgressBar(fraction);
+      if (win && !win.isDestroyed()) void win.webContents.executeJavaScript(`set(${JSON.stringify(text)}, ${fraction})`).catch(() => {});
+      const target = main();
+      if (inline && target) target.webContents.send('ade:update-progress', { text, fraction });
+      if (target) fraction === null ? target.setProgressBar(2, { mode: 'indeterminate' }) : target.setProgressBar(fraction);
     },
     close() {
-      if (parent && !parent.isDestroyed()) parent.setProgressBar(-1);
-      if (!win.isDestroyed()) win.destroy();
+      const target = main();
+      if (target) { target.setProgressBar(-1); if (inline) target.webContents.send('ade:update-progress', null); }
+      if (win && !win.isDestroyed()) win.destroy();
     }
   };
 }
@@ -158,7 +167,16 @@ async function manageStaged(window) {
   return 'updating';
 }
 
-const ask = (window, options) => window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+// ADE_UPDATE_ANSWER ('지금 업데이트|확인', button labels) answers the updater's prompts: native dialogs cannot be clicked by a test
+// driver. The prompt is still shown for a second (a sheet on the main window, as for a user) and then closed. Only for isolated test
+// runs (scripts/verify/t-update.mjs).
+const answers = process.env.ADE_UPDATE_ANSWER?.split('|') ?? [];
+const ask = async (window, options) => {
+  const auto = options.buttons?.findIndex(label => answers.includes(label)) ?? -1;
+  if (auto < 0) return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+  if (window && !window.isDestroyed()) await dialog.showMessageBox(window, { ...options, signal: AbortSignal.timeout(1000) }).catch(() => {});
+  return { response: auto, checkboxChecked: false };
+};
 const say = (window, options) => ask(window, { buttons: ['확인'], ...options });
 
 // Shown only for "지금 업데이트" when a restart would cut something off. Cancel leaves this version to be asked about again.
@@ -167,13 +185,16 @@ async function confirmInterrupt(window, report) {
   const { response } = await ask(window, {
     type: 'warning', buttons: ['중단하고 업데이트', '취소'], defaultId: 1, cancelId: 1, title: '업데이트',
     message: '아래 작업이 진행 중입니다. 중단해도 괜찮습니까?',
-    detail: [listed || '진행 중인 작업을 확인하지 못했습니다. 업데이트하면 끊길 수 있습니다.', report.keepsTerminals ? '터미널과 그 안의 작업은 중단되지 않습니다.' : ''].filter(Boolean).join('\n\n'),
+    detail: [listed || '진행 중인 작업을 확인하지 못했습니다. 업데이트하면 끊길 수 있습니다.', report.keepsChats ? '터미널과 채팅, 그 안의 작업은 중단되지 않습니다.' : report.keepsTerminals ? '터미널과 그 안의 작업은 중단되지 않습니다.' : ''].filter(Boolean).join('\n\n'),
   });
   return response === 0;
 }
 
 // A request that never answers would hold the one-check-at-a-time lock (and every later check) until undici gives up after minutes.
 const REQUEST_TIMEOUT_MS = 30_000;
+// ADE_UPDATE_URL points the release lookup at a stand-in for api.github.com (a local fake release in scripts/verify/t-update.mjs).
+// The assets it names are checked against their sha256 digest and the code signature exactly as GitHub's are.
+const UPDATE_API = (process.env.ADE_UPDATE_URL || 'https://api.github.com').replace(/\/+$/, '');
 
 // The installed bundle's shell key, written by package.mjs; null for builds that predate app-only updates.
 const installedShell = () => {
@@ -223,7 +244,7 @@ const mb = bytes => (bytes / 1048576).toFixed(1);
 async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
   // /releases/latest never returns a prerelease; the beta channel reads the list instead (one request either way).
-  const response = await fetch(`https://api.github.com/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const response = await fetch(`${UPDATE_API}/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`GitHub 응답 오류 (HTTP ${response.status})`);
   const body = await response.json();
   const picked = pickRelease(beta ? body : [body], { beta, asset });
@@ -240,7 +261,7 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   const prompt = {
     type: report.busy ? 'warning' : 'info', buttons: ['종료할 때 업데이트', '지금 업데이트', '나중에'], defaultId: 2, cancelId: 2, title: '업데이트',
     message: `새 ${label} ${version}을 사용할 수 있습니다.`,
-    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
+    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsChats ? ' 터미널과 채팅, 그 안의 작업은 어느 쪽이든 계속됩니다.' : report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
   };
   const { response: choice } = await ask(window, prompt);
   if (choice === 2) { declined.add(version); return 'declined'; }
@@ -363,7 +384,10 @@ async function stageMac({ zip, progress, kind }) {
         const script = path.join(work, 'apply.sh');
         fs.writeFileSync(script, APPLY_MAC, { mode: 0o700 });
         // Detached with no stdio, so the helper outlives the app and finishes the swap once the app's process is gone.
-        const helper = spawn('/bin/sh', [script, String(process.pid), next, target, path.join(stage, 'previous.app'), stage, work], { detached: true, stdio: 'ignore' });
+        // The pty-host address is this run's; the restarted app finds its host itself.
+        const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('ADE_PTY_')));
+        const relaunch = process.env.ADE_USER_DATA_DIR ? path.basename(process.execPath) : '';
+        const helper = spawn('/bin/sh', [script, String(process.pid), next, target, path.join(stage, 'previous.app'), stage, work, relaunch], { detached: true, stdio: 'ignore', env });
         helper.unref();
       },
     };

@@ -5,7 +5,7 @@ import { boot, fakeHub, sleep, S, WebSocket } from './lib.mjs'; import { spawn }
 // the open page within a second; no apps/web/dist, nothing to rebuild or wipe). A production bundle (`pnpm --filter @mooner/ade-web build`) is only for the packaged app.
 const dev = { ADE_DEV: '1' };
 // VERIFY_TEMP=<an earlier env.json's temp>: reopen that session's data, home and repo (saved API keys and chats) instead of a fresh one.
-const hub = await fakeHub(); const s = await boot({ env: { ADE_HUB_URL: hub.url, ...dev }, temp: process.env.VERIFY_TEMP });
+const hub = await fakeHub(); const s = await boot({ env: { ADE_HUB_URL: hub.url, ...dev }, temp: process.env.VERIFY_TEMP, keep: true });
 const second = await boot({ env: { ADE_HUB_URL: hub.url, ...dev }, repoFiles: false }); // for the no-project welcome screen: forget the auto-opened project below
 // VERIFY_CHROME=<an earlier env.json's cdp>: a server restart does not need a Chrome restart. Keep that Chrome (its window, tabs and position) and only point its
 // first tab at the new server's address; stopping this process then leaves that Chrome running. Without it a new Chrome is started and owned by this process.
@@ -19,7 +19,7 @@ if (reuse) { // navigate the existing tab (the address bar's job) instead of sta
   ws.send(JSON.stringify({ id: 1, method: 'Page.navigate', params: { url } })); await new Promise(r => ws.on('message', m => JSON.parse(m).id === 1 && r())); ws.close();
 }
 const previous = reuse ? JSON.parse(await readFile(join(S, 'env.json'), 'utf8').catch(() => '{}')) : {};
-await writeFile(join(S, 'env.json'), JSON.stringify({ origin: s.origin, token: s.token, cookie: s.cookie, projectId: s.projectId, repo: s.repo, data: s.data, temp: s.temp, hub: hub.url, cdp: reuse || `http://127.0.0.1:${port}`, startedAt: previous.startedAt ?? Date.now(), chromeProfile: profile ?? previous.chromeProfile, agentBase: s.agents?.base, agentFresh: s.agents?.fresh, keychain: s.agents?.keychain, origin2: second.origin, token2: second.token, cookie2: second.cookie, pid: process.pid, serverPids: [s.child.pid, second.child.pid], chromePid: chrome?.pid ?? previous.chromePid }));
+await writeFile(join(S, 'env.json'), JSON.stringify({ origin: s.origin, token: s.token, cookie: s.cookie, projectId: s.projectId, repo: s.repo, data: s.data, temp: s.temp, hub: hub.url, cdp: reuse || `http://127.0.0.1:${port}`, startedAt: previous.startedAt ?? Date.now(), chromeProfile: profile ?? previous.chromeProfile, agentBase: s.agents?.base, agentFresh: s.agents?.fresh, keychain: s.agents?.keychain, temp2: second.temp, origin2: second.origin, token2: second.token, cookie2: second.cookie, pid: process.pid, serverPids: [s.child.pid, second.child.pid], chromePid: chrome?.pid ?? previous.chromePid }));
 console.log('READY', s.origin, port);
 const stop = async () => { chrome?.kill(); await s.stop(); await second.stop(); await hub.close(); process.exit(0); };
 process.on('SIGTERM', stop); process.on('SIGINT', stop); setInterval(() => {}, 1 << 30);

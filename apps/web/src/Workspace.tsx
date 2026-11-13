@@ -693,9 +693,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   async function closePaneTab(tabId: string) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
-    const answering = leafList(tab.pane).filter(leaf => leaf.kind === 'chat' && working.has(leaf.id));
-    const background = leafList(tab.pane).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id));
-    if (((running.length && settingsRef.current.confirmClose) || (answering.length && settingsRef.current.confirmCloseChat) || background.length) && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개, 응답 중인 채팅 ${answering.length}개, 백그라운드 작업이 있는 채팅 ${background.length}개가 종료됩니다.`))) return;
+    const chats = leafList(tab.pane).filter(leaf => leaf.kind === 'chat');
+    // Busy: answering, waiting for an approval, or running a background subagent. Background work is asked about whatever the setting says.
+    const busy = chats.filter(leaf => working.has(leaf.id) || bgChats.current.has(leaf.id)).length, background = chats.some(leaf => bgChats.current.has(leaf.id));
+    if ((running.length && settingsRef.current.confirmClose) || (chats.length && settingsRef.current.confirmCloseChat) || background) {
+      const closing = [running.length && `실행 중인 터미널 ${running.length}개`, chats.length && `채팅 ${chats.length}개`].filter(Boolean).join('와 ');
+      const detail = [busy && `응답 중이거나 백그라운드 작업이 있는 채팅 ${busy}개는 작업이 중단됩니다.`, chats.length && '닫은 채팅은 /resume으로 다시 열 수 있습니다.'].filter(Boolean).join(' ');
+      if (!(await ask.confirm(`이 탭을 닫을까요? ${closing}가 닫힙니다.${detail ? ` ${detail}` : ''}`))) return;
+    }
     for (const leaf of leafList(tab.pane)) if (leaf.kind === 'chat') { await call('chat/close', { id: leaf.id }).catch(report); chatBus.current.delete(leaf.id); chatPrev.current.delete(leaf.id); }
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     // The final tab stays open and empty, showing the launcher.
