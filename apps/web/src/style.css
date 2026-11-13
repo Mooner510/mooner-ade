@@ -1400,7 +1400,6 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-bundle-icon[data-outcome="partial"] { color: var(--warn); }
 .chat-bundle-icon[data-outcome="failed"] { color: var(--error); }
 /* The finished summary takes the colour of its worst result, like the cards inside it (a failed tool is red, an auto-mode block is the warning colour), not the green of "done". */
-.chat-bundle[data-outcome=error] .chat-bundle-icon { color: var(--error); }
 .chat-bundle[data-outcome=blocked] .chat-bundle-icon { color: var(--warn); }
 .chat-bundle-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .chat-bundle-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
