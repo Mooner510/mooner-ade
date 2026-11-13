@@ -362,12 +362,15 @@ function useReveal(text: string, live: boolean, smooth: boolean) {
   const behind = animate && shown < text.length;
   useEffect(() => {
     if (!behind) return;
-    let frame = requestAnimationFrame(function tick() {
+    // At most ~60 steps a second: on a 120/144 Hz display every frame re-rendered the reply, and it revealed two or more times as fast.
+    let last = 0, frame = requestAnimationFrame(function tick(now) {
+      frame = requestAnimationFrame(tick);
+      if (now - last < 15) return;
+      last = now;
       setShown(count => {
         const target = goal.current; if (count >= target) return count;
         return Math.min(target, count + Math.max(streaming.current ? 1 : 3, Math.ceil((target - count) / (streaming.current ? 10 : 4))));
       });
-      frame = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(frame);
   }, [behind]);
@@ -1630,7 +1633,8 @@ function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boo
     const timer = setInterval(() => setNow(Date.now()), 500); return () => clearInterval(timer);
   }, [active]);
   const seconds = Math.max(0, Math.floor((now - turnAt) / 1000)), thinking = Math.max(0, Math.floor((now - phase.at) / 1000));
-  const deep = active && !label && thinking >= 8, red = Math.min(100, Math.max(0, (thinking - 8) * 2));
+  // The red rises in 10% steps every 5 s, not 2% every second: each change restarts the label's .6s colour transition, which repainted the row nearly nonstop.
+  const deep = active && !label && thinking >= 8, red = Math.min(100, Math.max(0, Math.floor((thinking - 8) / 5) * 10));
   return <div className="chat-status-row" data-active={active || undefined} aria-hidden={!active}>
     <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}
       title={thought ? undefined : '모델이 추론 내용은 보내지 않아, 경과 시간과 추정 토큰만 표시합니다.'}>
