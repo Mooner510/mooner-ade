@@ -1414,7 +1414,17 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 /* Rows scrolled away above fade out at the top edge instead of a shadow (there is no box to cast one in). */
 .chat-bundle-list[data-edge-top] { mask-image: linear-gradient(to bottom, transparent, #000 18px); }
 .chat-bundle.expanded .chat-bundle-list { max-height: none; overflow-y: visible; }
-/* A shadow along the top edge when earlier tools are scrolled out of view (sticky, zero layout height). */
+/* Both edges fade when more rows lie beyond them, and a small chip says how many (a click scrolls toward them). A run that fits has no toggle at all. */
+.chat-bundle-list[data-edge-top][data-edge-bottom] { mask-image: linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
+.chat-bundle-list:not([data-edge-top])[data-edge-bottom] { mask-image: linear-gradient(to top, transparent, #000 18px); }
+.chat-bundle-scroll { position: relative; }
+.chat-bundle-more { position: absolute; left: 50%; z-index: 1; display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px 1px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 11px; line-height: 16px; cursor: pointer; box-shadow: 0 1px 4px rgb(0 0 0 / .15); transform: translateX(-50%); animation: fade-in .18s var(--ease-out); }
+.chat-bundle-more:hover { color: var(--fg); }
+.chat-bundle-more[data-side="top"] { top: 3px; }
+.chat-bundle-more[data-side="bottom"] { bottom: 4px; }
+.chat-bundle-head[data-inert] { cursor: default; }
+.chat-bundle-head[data-inert]:hover { background: none; }
+.chat-bundle-list { position: relative; }
 .chat-bundle-item .chat-thinking { padding: 4px 6px; min-height: 28px; }
 .chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
 .chat-diff { max-height: 420px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden auto; }

@@ -502,7 +502,7 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
 type BundlePart = { key: string; item: AssistantItem; block: Block };
 // flat: a finished turn's short run inside its "과정" box. Opening the process already shows its rows, so the run is just its list, no own fold.
 function ToolBundle({ parts, results, settings, running, plainThinking, flat }: { parts: BundlePart[]; results: ChatView['results']; settings: Settings; running: boolean; plainThinking?: boolean; flat?: boolean }) {
-  const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false });
+  const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false, above: 0, below: 0, over: false });
   const list = useRef<HTMLDivElement>(null), follow = useRef(true), cwd = useContext(CwdContext), [root, capture] = useHeightMorph<HTMLDivElement>();
   const tools = parts.flatMap(part => part.block.type === 'tool_use' ? [part.block] : []);
   const finished = tools.filter(tool => results[tool.id]).length, errored = tools.filter(tool => results[tool.id]?.isError).length;
@@ -514,28 +514,49 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   const outcome = errored === 0 ? 'ok' : errored === tools.length ? 'failed' : 'partial';
   // Once the turn is over the bundle is one line ("도구 n개 호출 완료"); a click opens the list. While it runs the list stays, so nothing jumps between two tools.
   const folded = !running && !expanded && !flat;
-  const measure = () => { const el = list.current; if (el) setEdge(current => { const next = { top: el.scrollTop > 2, bottom: el.scrollHeight - el.scrollTop - el.clientHeight > 2 }; return current.top === next.top && current.bottom === next.bottom ? current : next; }); };
+  // Which rows are not fully in view above / below (counted for the "위/아래 n개 더" chips), and whether the list overflows at all: a run that fits
+  // has nothing more to show, so "전체 보기" is hidden for it. The rows are watched too, so a card opened inside the list re-measures.
+  const measure = () => {
+    const el = list.current;
+    if (!el) return;
+    const top = el.scrollTop, bottom = top + el.clientHeight;
+    let above = 0, below = 0;
+    for (const row of el.children as HTMLCollectionOf<HTMLElement>) { if (row.offsetTop < top - 2) above++; if (row.offsetTop + row.offsetHeight > bottom + 2) below++; }
+    const next = { top: top > 2, bottom: el.scrollHeight - bottom > 2, above, below, over: el.scrollHeight - el.clientHeight > 2 };
+    setEdge(current => (Object.keys(next) as (keyof typeof next)[]).every(key => current[key] === next[key]) ? current : next);
+  };
   useLayoutEffect(() => {
     const el = list.current;
-    if (el && follow.current && !expanded) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (follow.current && !expanded) el.scrollTop = el.scrollHeight;
     measure();
-  }, [parts.length, finished, expanded]);
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    for (const row of el.children) watch.observe(row);
+    return () => watch.disconnect();
+  }, [parts.length, finished, expanded, folded]);
+  // While it runs and everything fits, there is nothing to open: no toggle, no chevron, the head does nothing.
+  const inert = !expanded && !folded && !edge.over && !flat;
   return <div ref={root} className={`chat-bundle${expanded || flat ? ' expanded' : ''}${folded ? ' folded' : ''}${flat ? ' flat' : ''}`} data-running={Boolean(active) || undefined} data-awaiting={Boolean(waiting) || undefined} data-outcome={active ? undefined : failed ? 'error' : blocked ? 'blocked' : undefined}>
-    {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} onClick={() => { capture(); setExpanded(value => !value); }}>
+    {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} data-inert={inert || undefined} onClick={() => { if (inert) return; capture(); setExpanded(value => !value); }}>
       <span className="chat-bundle-icon" data-outcome={waiting || active ? undefined : outcome}>{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={outcome === 'ok' ? 'check' : outcome === 'partial' ? 'alert' : 'x'} size={13} />}</span>
       {waiting
         ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)} · {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : active
         ? <><strong>{toolLabel(active.name)}</strong><span className="chat-bundle-now">{toolSummary(active.name, active.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : <><strong>도구 {tools.length}개 호출 완료</strong><span className="chat-bundle-now">{[failed && `${failed}개 오류`, blocked && `${blocked}개 차단`].filter(Boolean).join(' · ')}</span></>}
-      <span className="chat-bundle-toggle">{expanded ? '접기' : folded ? '펼치기' : '전체 보기'}</span>
-      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} />
+      {!inert && <><span className="chat-bundle-toggle">{expanded ? '접기' : folded ? '펼치기' : '전체 보기'}</span>
+      <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} /></>}
     </button>}
-    <Collapse open={!folded}><div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
-      onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
-      {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
-        <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
-      </div>)}
+    <Collapse open={!folded}><div className="chat-bundle-scroll">
+      <div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
+        onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
+        {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
+          <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
+        </div>)}
+      </div>
+      {!flat && !expanded && edge.above > 0 && <button type="button" className="chat-bundle-more" data-side="top" onClick={() => list.current?.scrollBy({ top: -list.current.clientHeight * .75 })}><Icon name="arrowUp" size={11} />위 {edge.above}개 더</button>}
+      {!flat && !expanded && edge.below > 0 && <button type="button" className="chat-bundle-more" data-side="bottom" onClick={() => list.current?.scrollBy({ top: list.current.clientHeight * .75 })}><Icon name="arrowDown" size={11} />아래 {edge.below}개 더</button>}
     </div></Collapse>
   </div>;
 }
