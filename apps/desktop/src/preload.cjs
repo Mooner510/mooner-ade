@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
 // OSC 52 copies arrive while the window may be unfocused, where navigator.clipboard refuses to write.
 // Plugins: the page can only read the state and start steps; turning them on, approving one and installing a zip are native dialogs.
 const pluginCall = name => (...args) => ipcRenderer.invoke(`ade:plugins:${name}`, ...args);
-const plugins = Object.fromEntries(['state', 'setEnabled', 'setBuiltin', 'rescan', 'approve', 'revoke', 'restart', 'action', 'setMcp', 'refreshTools', 'openFolder', 'pickZip', 'installZip'].map(name => [name, pluginCall(name)]));
+const plugins = Object.fromEntries(['state', 'setEnabled', 'setBuiltin', 'rescan', 'approve', 'revoke', 'restart', 'action', 'setMcp', 'refreshTools', 'openFolder', 'pickZip', 'installZip', 'checkUpdates', 'installUpdate', 'setUpdateMode', 'connectGithub', 'disconnectGithub', 'signInGithub', 'cancelSignIn', 'probeGithub', 'openSource', 'openTokenPage'].map(name => [name, pluginCall(name)]));
 plugins.onOpen = listener => {
   const handler = () => listener();
   ipcRenderer.on('ade:plugins-open', handler);

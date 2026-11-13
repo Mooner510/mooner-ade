@@ -8,8 +8,13 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, credentialLabel, isNewer, validSource, versionText } from './plugin-updates.js';
 
 export const PLUGIN_API = 1;
+// What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell.
+export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'updates'];
+const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
+const ITEM_ID = /^[\w.-]{1,64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
 const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
@@ -84,6 +89,20 @@ export function validManifest(value) {
   if (value.feedback !== undefined) {
     if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
     if (value.feedback) manifest.feedback = true;
+  }
+  // Where updates come from: a GitHub repository's releases (plugin-updates.js).
+  if (value.source !== undefined) manifest.source = validSource(value.source, manifest.id);
+  // The steps that make the plugin work, shown as a guide before it even runs; the running plugin reports how far it got
+  // (view.setup). Shown by MoonerADE as plain text.
+  if (value.setup !== undefined) {
+    if (!Array.isArray(value.setup) || value.setup.length > 8) throw fail('setup 항목이 올바르지 않습니다.');
+    const seen = new Set();
+    manifest.setup = value.setup.map(step => {
+      if (!step || typeof step !== 'object' || !STEP_ID.test(step.id ?? '') || seen.has(step.id)) throw fail('setup 단계의 id가 올바르지 않습니다.');
+      if (!str(step.label, 60) || UNSAFE_TEXT.test(step.label)) throw fail('setup 단계의 label이 올바르지 않습니다.');
+      seen.add(step.id);
+      return { id: step.id, label: step.label, detail: typeof step.detail === 'string' ? plainText(step.detail.slice(0, 300)) : '', ...(step.optional === true && { optional: true }) };
+    });
   }
   return manifest;
 }
@@ -231,12 +250,22 @@ export function grantsFor(manifest) {
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
-const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}\n${place}\nSHA-256: ${hash}`;
+const sourceLine = manifest => manifest.source ? `\n업데이트 출처: github.com/${manifest.source.github} (릴리스)` : '';
+const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}${sourceLine(manifest)}\n${place}\nSHA-256: ${hash}`;
+// What an update asks for that the installed version did not: new grants, or updates from another repository. An update
+// that asks for more is never installed without the user seeing it, even in automatic mode.
+export function updateReview(before, after) {
+  const had = new Set(grantsFor(before)), review = grantsFor(after).filter(line => !had.has(line)).map(line => `새 권한: ${line}`);
+  if ((before.source?.github ?? null) !== (after.source?.github ?? null)) review.push(`업데이트 출처가 바뀝니다: ${before.source ? `github.com/${before.source.github}` : '없음'} → ${after.source ? `github.com/${after.source.github}` : '없음'}`);
+  return review;
+}
 
 // ---- sealed settings ------------------------------------------------------------------------------------------------
 // `mcp[id]` is what the user turned off of a plugin's MCP server: all of it (`off`) or single tools (`disabled`).
 // `builtin[id]` is the on/off choice for a plugin that ships with the app (on until the user turns it off).
-export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {} });
+// `updates[id]` is how a plugin is updated (`mode`: auto, notify or manual) and the newest version already announced.
+// `github` is the GitHub account connected in MoonerADE for private plugin repositories: { token, login, via: 'pat'|'oauth' }.
+export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null });
 export function validPluginState(value) {
   const state = emptyPluginState();
   if (!value || typeof value !== 'object' || value.version !== 1) return state;
@@ -251,6 +280,18 @@ export function validPluginState(value) {
     if (!ID.test(id) || !entry || typeof entry !== 'object') continue;
     const disabled = [...new Set(Array.isArray(entry.disabled) ? entry.disabled.filter(name => typeof name === 'string' && TOOL_NAME.test(name)) : [])].slice(0, 200);
     if (entry.off === true || disabled.length) state.mcp[id] = { off: entry.off === true, disabled };
+  }
+  const updates = value.updates && typeof value.updates === 'object' && !Array.isArray(value.updates) ? value.updates : {};
+  for (const [id, entry] of Object.entries(updates)) {
+    if (!ID.test(id) || !entry || typeof entry !== 'object') continue;
+    const next = {};
+    if (UPDATE_MODES.includes(entry.mode)) next.mode = entry.mode;
+    if (typeof entry.notified === 'string' && versionText(entry.notified)) next.notified = versionText(entry.notified);
+    if (Object.keys(next).length) state.updates[id] = next;
+  }
+  const github = value.github;
+  if (github && typeof github === 'object' && typeof github.token === 'string' && /^[\x21-\x7e]{20,255}$/.test(github.token) && typeof github.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(github.login)) {
+    state.github = { token: github.token, login: github.login, via: github.via === 'oauth' ? 'oauth' : 'pat', at: Number.isFinite(github.at) ? github.at : 0 };
   }
   return state;
 }
@@ -300,23 +341,48 @@ export function createPluginStore({ file, crypto }) {
 // ---- what a plugin may show and add ------------------------------------------------------------------------------
 const TONES = ['ok', 'warn', 'error', 'info'];
 const FIELD_TYPES = ['text', 'select', 'switch', 'number'];
+// How far a setup step got: done, todo (not started), active (in progress, e.g. waiting for a browser sign-in), error.
+export const STEP_STATUS = ['done', 'todo', 'active', 'error'];
 // The settings page draws this as plain text; nothing a plugin sends becomes markup.
 export function validView(view) {
   if (!view || typeof view !== 'object') return null;
   const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
   const list = (value, max) => Array.isArray(value) ? value.slice(0, max) : [];
+  const keys = (value, test, max = 12) => [...new Set(list(value, max).filter(key => typeof key === 'string' && test.test(key)))];
+  const button = item => ({ id: item.id, label: item.label, primary: item.primary === true, ...(item.danger === true && { danger: true }) });
+  const validButton = item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40);
   return {
     status: view.status && TONES.includes(view.status.tone) ? { tone: view.status.tone, text: text(view.status.text, 300) } : null,
-    info: list(view.info, 30).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true })),
+    // `key` lets a setup step show the row inside the step.
+    info: list(view.info, 30).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true, ...(FIELD_KEY.test(item.key ?? '') && { key: item.key }) })),
     // `type` is how the page draws the input: text (default), select (needs `options`), switch ('true' / 'false') or number. The value stays a string.
     fields: list(view.fields, 24).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => {
       const type = FIELD_TYPES.includes(item.type) ? item.type : 'text';
       const options = type === 'select' ? list(item.options, 12).filter(option => option && str(option.value, 60) && str(option.label, 60)).map(option => ({ value: option.value, label: option.label })) : [];
-      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(options.length && type === 'select' && { options }) };
+      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(item.required === true && { required: true }), ...(options.length && type === 'select' && { options }) };
     }),
-    actions: list(view.actions, 8).filter(item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40)).map(item => ({ id: item.id, label: item.label, primary: item.primary === true })),
+    actions: list(view.actions, 12).filter(validButton).map(button),
     // Only the text to encode; the settings page draws the code itself.
-    qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null
+    qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null,
+    // How far each setup step got (merged with plugin.json `setup` by id), and which fields, info rows, buttons and the QR
+    // code belong to it: those are drawn inside the step instead of in the settings below.
+    setup: list(view.setup?.steps ?? view.setup, 8).filter(step => step && STEP_ID.test(step.id ?? '') && STEP_STATUS.includes(step.status)).map(step => ({
+      id: step.id, status: step.status,
+      ...(str(step.label, 60) && !UNSAFE_TEXT.test(step.label) && { label: step.label }),
+      ...(typeof step.detail === 'string' && step.detail && { detail: plainText(step.detail.slice(0, 300)) }),
+      ...(typeof step.optional === 'boolean' && { optional: step.optional }),
+      fields: keys(step.fields, FIELD_KEY), info: keys(step.info, FIELD_KEY), actions: keys(step.actions, ACTION_ID, 4), ...(step.qr === true && { qr: true })
+    })),
+    // Things the user manages one by one (paired devices, keys, ...), each with its own buttons. A button sends `action`
+    // with `item` set to the item's id.
+    lists: list(view.lists, 4).filter(group => group && STEP_ID.test(group.id ?? '') && str(group.title, 60)).map(group => ({
+      id: group.id, title: group.title, empty: text(group.empty, 200),
+      items: list(group.items, 50).filter(item => item && ITEM_ID.test(item.id ?? '') && str(item.label, 100)).map(item => ({
+        id: item.id, label: item.label, detail: text(item.detail, 300),
+        ...(item.tag && TONES.includes(item.tag.tone) && str(item.tag.text, 20) && { tag: { text: item.tag.text, tone: item.tag.tone } }),
+        actions: list(item.actions, 4).filter(validButton).map(button)
+      }))
+    }))
   };
 }
 // A short status-bar item. Single line: it sits between MoonerADE's own items.
@@ -421,7 +487,11 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // toServer(message) hands a `plugin/workspace` message to the local server and returns false when there is none to take it.
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
 // probeMcp({ command, args, cwd, env }) resolves the raw tools/list of a plugin's MCP server (default: probeMcpTools).
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), log = console }) {
+// github: the release client (plugin-updates.js createGithub) for plugins that declared `source`; null turns updates off.
+// probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
+// clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
+// openExternal(url) opens GitHub's sign-in page in the browser.
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -445,6 +515,11 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   function snapshot() {
     return {
       available: store.available, problem: store.problem, enabled: store.state.enabled, dir,
+      // The GitHub account for private plugin repositories. Never the token itself.
+      github: {
+        available: Boolean(github), login: store.state.github?.login ?? null, via: store.state.github?.via ?? null, machine: machineVia, machineChecked, signIn: Boolean(clientId), error: githubError,
+        device: device ? { userCode: device.userCode, verifyUrl: device.verifyUrl, expiresAt: device.expiresAt } : null
+      },
       plugins: list.map(item => {
         const host = item.manifest && hosts.get(item.manifest.id);
         return {
@@ -456,7 +531,10 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
           commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
           env: host?.status === 'running' && host.terminal ? Object.keys(host.terminal.env) : [],
-          tools: item.manifest?.mcp ? toolsView(item.manifest.id, host) : null
+          tools: item.manifest?.mcp ? toolsView(item.manifest.id, host) : null,
+          // The setup guide from plugin.json (the running plugin's view.setup says how far it got).
+          setup: item.manifest?.setup ?? [],
+          update: item.manifest && !item.builtin ? updateView(item) : null
         };
       })
     };
@@ -549,7 +627,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     child.on('error', error => { host.error = error.message; });
     let storage = null;
     try { const text = (item.builtin && readStorageFile(dataDir)) || store.state.data[manifest.id]; storage = text ? JSON.parse(text) : null; } catch { storage = null; }
-    child.send({ type: 'init', apiVersion: PLUGIN_API, id: manifest.id, appVersion, dataDir, storage });
+    child.send({ type: 'init', apiVersion: PLUGIN_API, id: manifest.id, appVersion, dataDir, storage, features: [...PLUGIN_FEATURES] });
   }
   function stop(host) {
     host.stopping = true;
@@ -810,10 +888,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     discoverTools(host, true);
     return snapshot();
   }
-  async function action(id, actionId, values) {
+  // `item` is the id of a view.lists item whose button was pressed.
+  async function action(id, actionId, values, item) {
     const host = hosts.get(id);
     if (!host || host.status !== 'running' || !host.child?.connected) throw fail('플러그인이 실행 중이 아닙니다.', 'PLUGIN_STOPPED');
     if (!ACTION_ID.test(String(actionId))) throw fail('잘못된 작업입니다.');
+    if (item !== undefined && item !== null && !ITEM_ID.test(String(item))) throw fail('잘못된 항목입니다.');
     const clean = {};
     if (values && typeof values === 'object') for (const [key, value] of Object.entries(values).slice(0, 24)) if (FIELD_KEY.test(key) && typeof value === 'string') clean[key] = value.slice(0, 4096);
     const requestId = randomUUID();
@@ -821,7 +901,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const timer = setTimeout(() => { host.pending.delete(requestId); reject(fail('플러그인이 응답하지 않습니다.', 'PLUGIN_TIMEOUT')); }, ACTION_TIMEOUT_MS);
       timer.unref?.();
       host.pending.set(requestId, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
-      host.child.send({ type: 'action', id: requestId, action: String(actionId), values: clean });
+      host.child.send({ type: 'action', id: requestId, action: String(actionId), values: clean, ...(item != null && { item: String(item) }) });
     });
     return { ...snapshot(), message: typeof message === 'string' ? message.slice(0, 500) : null };
   }
@@ -840,10 +920,10 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     });
   }
   // One at a time. `picked` (chosen in the settings page) asks again even about a zip cancelled before.
-  function installZip(file, { picked = false } = {}) {
+  function installZip(file, { picked = false, update = null } = {}) {
     const zip = path.resolve(String(file));
     queued.add(zip);
-    const run = installs.then(() => install(zip, picked)).finally(() => queued.delete(zip));
+    const run = installs.then(() => install(zip, { picked, update })).finally(() => queued.delete(zip));
     installs = run.catch(() => {});
     return run;
   }
@@ -858,7 +938,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     const current = own.find(item => !item.error) ?? own[0];
     return { folders, current: folders.length ? current?.manifest?.version ?? '알 수 없음' : null };
   }
-  async function install(zip, picked) {
+  // `update` ({ id, version, auto }) is a release downloaded by the updater: the zip must be that plugin at that version.
+  // With `auto`, an update that asks for nothing new is installed without the dialog; one that does throws NEEDS_REVIEW.
+  async function install(zip, { picked = false, update = null } = {}) {
     const before = fs.lstatSync(zip, { throwIfNoEntry: false });
     if (!before) { if (picked) throw fail('zip 파일을 찾을 수 없습니다.', 'NOT_FOUND'); return snapshot(); }
     const key = zipKey(zip, before);
@@ -877,17 +959,26 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       treeHash(staging);
       const root = zipPluginRoot(staging), manifest = readManifest(root);
       checkPluginFiles(root, manifest);
+      if (update && (manifest.id !== update.id || versionText(manifest.version) !== update.version)) throw fail(`받은 플러그인(${manifest.id} ${manifest.version})이 업데이트 정보(${update.id} ${update.version})와 다릅니다. 설치하지 않았습니다.`, 'PLUGIN_ZIP');
       const hash = treeHash(root), wasOn = store.state.enabled;
       rescan();
       if (list.some(entry => entry.builtin && entry.manifest?.id === manifest.id)) throw fail(`이 id(${manifest.id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
       const { current } = replaced(manifest.id);
-      const answer = await ask({
-        type: 'warning', title: current ? '플러그인 업데이트' : '플러그인 설치',
-        message: current ? `“${manifest.name}” 플러그인을 업데이트하고 실행할까요?` : `“${manifest.name}” ${manifest.version} 플러그인을 설치하고 실행할까요?`,
-        detail: `${current ? `업데이트 (${current} → ${manifest.version})\n\n` : ''}${pluginDetail(manifest, hash, `파일: ${zip}`)}${wasOn ? '' : '\n\n플러그인 기능도 켭니다. 믿을 수 있는 곳(MoonerADE 릴리스)에서 받은 플러그인만 설치하세요.'}\n\n설치한 뒤 파일이 바뀌면 다시 승인할 때까지 실행되지 않습니다.`,
-        buttons: ['설치', '취소'], defaultId: 1, cancelId: 1
-      });
-      if (answer !== 0) { handled.add(key); return snapshot(); }
+      const installed = list.find(entry => !entry.builtin && !entry.error && entry.manifest?.id === manifest.id);
+      const review = installed ? updateReview(installed.manifest, manifest) : [];
+      // Automatic: only an approved, running-eligible plugin whose update asks for nothing new goes in without a dialog.
+      const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
+      if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
+      if (!silent) {
+        const from = update ? `github.com/${installed?.manifest.source?.github ?? manifest.source?.github ?? ''} 릴리스` : `파일: ${zip}`;
+        const answer = await ask({
+          type: 'warning', title: current ? '플러그인 업데이트' : '플러그인 설치',
+          message: current ? `“${manifest.name}” 플러그인을 업데이트하고 실행할까요?` : `“${manifest.name}” ${manifest.version} 플러그인을 설치하고 실행할까요?`,
+          detail: `${current ? `업데이트 (${current} → ${manifest.version})\n\n` : ''}${review.length ? `이 업데이트는 전에 없던 것을 요청합니다:\n${review.map(line => `• ${line}`).join('\n')}\n\n` : ''}${pluginDetail(manifest, hash, from)}${wasOn ? '' : '\n\n플러그인 기능도 켭니다. 믿을 수 있는 곳(MoonerADE 릴리스)에서 받은 플러그인만 설치하세요.'}\n\n설치한 뒤 파일이 바뀌면 다시 승인할 때까지 실행되지 않습니다.`,
+          buttons: ['설치', '취소'], defaultId: 1, cancelId: 1
+        });
+        if (answer !== 0) { handled.add(key); return snapshot(); }
+      }
       // What the user saw is what gets installed: a change to the zip or the unpacked files during the dialog voids it.
       const after = fs.lstatSync(zip, { throwIfNoEntry: false });
       if (!after || zipKey(zip, after) !== key || treeHash(root) !== hash) throw fail('확인하는 동안 플러그인 파일이 바뀌었습니다. 다시 시도하세요.');
@@ -904,7 +995,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         try { fs.rmSync(zip, { force: true }); } catch (error) { handled.add(key); log.warn(`플러그인 zip을 지우지 못했습니다: ${error.message}`); }
       }
       rescan();
-      return { ...snapshot(), message: `“${manifest.name}” ${manifest.version} 플러그인을 설치했습니다.` };
+      return { ...snapshot(), message: current ? `“${manifest.name}” 플러그인을 ${manifest.version}(으)로 업데이트했습니다.` : `“${manifest.name}” ${manifest.version} 플러그인을 설치했습니다.` };
     } catch (error) {
       handled.add(key);
       throw error;
@@ -914,7 +1005,213 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     }
   }
 
-  function close() { closing = true; for (const host of [...hosts.values()]) stop(host); }
+  // ---- updates from the plugin's GitHub releases (plugin.json `source`) --------------------------------------------
+  // id -> { status: 'checking'|'latest'|'available'|'downloading'|'installing'|'error', found, checkedAt, error, review }
+  const updates = new Map(), checking = new Map();
+  let updateTimers = [], round = null, machineVia = null, machineChecked = false, device = null, githubError = null;
+  const modeOf = id => store.state.updates?.[id]?.mode ?? DEFAULT_UPDATE_MODE;
+  function updateView(item) {
+    const id = item.manifest.id, source = item.manifest.source ?? null;
+    if (!source) return { source: null, mode: modeOf(id) };
+    const entry = updates.get(id), latest = entry?.found?.version ?? null, available = Boolean(latest && isNewer(latest, item.manifest.version));
+    const status = !entry ? 'idle' : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
+    return {
+      source: { github: source.github, asset: source.asset }, mode: modeOf(id), status, current: item.manifest.version, latest, available,
+      checkedAt: entry?.checkedAt ?? null, error: entry?.error ?? null, via: entry?.found?.via ?? null, viaLabel: credentialLabel(entry?.found?.via ?? null),
+      review: available ? entry?.review ?? [] : []
+    };
+  }
+  function sourceItem(id) {
+    if (!github) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
+    const item = list.find(entry => !entry.builtin && entry.manifest?.id === id);
+    if (!item?.manifest) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
+    if (!item.manifest.source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
+    return item;
+  }
+  // One check at a time per plugin; a check started while one runs gets the running one's answer.
+  function checkUpdate(id) {
+    const item = sourceItem(id);
+    if (checking.has(id)) return checking.get(id);
+    const entry = updates.get(id) ?? {};
+    updates.set(id, entry);
+    Object.assign(entry, { status: 'checking', error: null });
+    changed();
+    const run = github.latest(item.manifest.source, id).then(found => {
+      if (entry.found?.version !== found.version) entry.review = [];
+      Object.assign(entry, { status: 'latest', found, checkedAt: Date.now(), error: null });
+      if (found.via === 'gh' || found.via === 'git') { machineVia = found.via; machineChecked = true; }
+      return found;
+    }, error => {
+      Object.assign(entry, { status: 'error', error: String(error?.message ?? error).slice(0, 300), checkedAt: Date.now() });
+      throw error;
+    }).finally(() => { checking.delete(id); changed(); });
+    checking.set(id, run);
+    return run;
+  }
+  // Downloads the newest release, checks it against the release's checksum and installs it the way a zip is installed
+  // (the dialog, unless `auto` and the update asks for nothing new). A check within the last minute is reused.
+  async function installUpdate(id, { auto = false } = {}) {
+    const item = sourceItem(id), entry = updates.get(id);
+    const found = entry?.found && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
+    const now = updates.get(id);
+    if (!isNewer(found.version, item.manifest.version)) return { ...snapshot(), message: `“${item.manifest.name}” 플러그인은 이미 최신(${item.manifest.version})입니다.` };
+    let zip = null;
+    try {
+      now.status = 'downloading'; changed();
+      const { data } = await github.download(found);
+      fs.mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
+      zip = path.join(stagingRoot, `${randomUUID()}.update.zip`);
+      fs.writeFileSync(zip, data, { flag: 'wx', mode: 0o600 });
+      now.status = 'installing'; changed();
+      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto } });
+      now.status = 'latest';
+      return result;
+    } catch (error) {
+      if (error.code === 'NEEDS_REVIEW') { now.status = 'available'; now.review = error.review ?? []; }
+      else { now.status = 'error'; now.error = String(error?.message ?? error).slice(0, 300); }
+      throw error;
+    } finally {
+      if (zip) fs.rmSync(zip, { force: true });
+      if (['downloading', 'installing'].includes(now.status)) now.status = 'available';
+      changed();
+    }
+  }
+  // Once per version and plugin, kept across restarts.
+  function announce(id, version, body) {
+    if (store.state.updates?.[id]?.notified === version) return;
+    try { store.update(state => ({ ...state, updates: { ...state.updates, [id]: { ...state.updates?.[id], notified: version } } })); } catch { return; }
+    notify({ id, title: '플러그인 업데이트', body });
+  }
+  // The background round: every plugin with a source and not on manual. Automatic ones are installed, the rest announced.
+  async function checkAll() {
+    for (const item of [...list]) {
+      const id = item.manifest?.id;
+      if (closing) return;
+      if (!id || item.builtin || item.error || !item.manifest.source || modeOf(id) === 'manual') continue;
+      let found;
+      try { found = await checkUpdate(id); } catch (error) { log.warn(`[plugin ${id}] 업데이트를 확인하지 못했습니다: ${error.message}`); continue; }
+      const { name, version } = item.manifest;
+      if (!isNewer(found.version, version)) continue;
+      if (modeOf(id) === 'auto' && eligible(item)) {
+        try {
+          await installUpdate(id, { auto: true });
+          notify({ id, title: '플러그인 업데이트', body: `${name} 플러그인을 ${version}에서 ${found.version}(으)로 자동 업데이트했습니다.` });
+          continue;
+        } catch (error) {
+          if (error.code !== 'NEEDS_REVIEW') { log.warn(`[plugin ${id}] 자동 업데이트하지 못했습니다: ${error.message}`); continue; }
+          announce(id, found.version, `${name} ${found.version}은(는) 새 권한을 요청해 자동으로 설치하지 않았습니다. 설정 → 플러그인 → ${name}에서 확인하고 설치하세요.`);
+          continue;
+        }
+      }
+      announce(id, found.version, `${name} ${found.version} 업데이트가 있습니다(지금 ${version}). 설정 → 플러그인 → ${name}에서 설치하세요.`);
+    }
+  }
+  const runRound = () => { round ??= checkAll().catch(error => log.warn(`플러그인 업데이트 확인 실패: ${error.message}`)).finally(() => { round = null; }); return round; };
+  function startUpdates() {
+    if (!github || updateTimers.length) return;
+    const first = setTimeout(() => { void runRound(); const every = setInterval(() => void runRound(), checkEveryMs); every.unref?.(); updateTimers.push(every); }, firstCheckMs);
+    first.unref?.();
+    updateTimers.push(first);
+  }
+  // From the settings page: one plugin, or (no id) every plugin with a source, whatever its mode. Only checks.
+  async function checkUpdates(id) {
+    if (id) {
+      const item = sourceItem(id), found = await checkUpdate(id);
+      return { ...snapshot(), message: isNewer(found.version, item.manifest.version) ? `${item.manifest.name} ${found.version} 업데이트가 있습니다.` : `${item.manifest.name} 플러그인은 최신(${item.manifest.version})입니다.` };
+    }
+    const targets = list.filter(item => !item.builtin && !item.error && item.manifest?.source);
+    if (!github || !targets.length) return { ...snapshot(), message: '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
+    const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
+    const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && isNewer(results[index].value.version, item.manifest.version));
+    const failed = results.filter(result => result.status === 'rejected').length;
+    return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => item.manifest.name).join(', ')}` : '모두 최신입니다'}${failed ? ` · ${failed}개는 확인하지 못했습니다` : ''}.` };
+  }
+  // Automatic updates run new code without a dialog, so turning them on is confirmed natively; manual and notify only take away.
+  async function setUpdateMode(id, mode) {
+    if (!UPDATE_MODES.includes(mode)) throw fail('알 수 없는 업데이트 방식입니다.');
+    const item = sourceItem(id), { name, source } = item.manifest;
+    if (mode === 'auto' && modeOf(id) !== 'auto') {
+      const answer = await ask({
+        type: 'warning', title: '플러그인 자동 업데이트', message: `“${name}” 플러그인을 자동으로 업데이트할까요?`,
+        detail: `github.com/${source.github}에 새 릴리스가 나오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 릴리스의 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\n이 저장소에 릴리스를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 저장소에만 켜세요.`,
+        buttons: ['자동 업데이트 켜기', '취소'], defaultId: 1, cancelId: 1
+      });
+      if (answer !== 0) return snapshot();
+    }
+    store.update(state => ({ ...state, updates: { ...state.updates, [id]: { ...state.updates?.[id], mode } } }));
+    changed();
+    return snapshot();
+  }
 
-  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback };
+  // ---- the GitHub account for private plugin repositories -------------------------------------------------------------
+  // A token pasted on the settings page: checked with GitHub, then confirmed natively with the account it belongs to.
+  async function connectGithub(token) {
+    if (!github) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
+    const value = String(token ?? '').trim();
+    const { login } = await github.whoami(value);
+    const answer = await ask({
+      type: 'question', title: 'GitHub 연결', message: `GitHub 계정 ${login}을(를) 연결할까요?`,
+      detail: '플러그인 업데이트를 확인하고 받을 때 이 계정으로 GitHub에 접속합니다(비공개 저장소의 플러그인용).\n\n토큰은 이 PC에 암호화해 저장하고 GitHub API에만 보냅니다. 플러그인에는 주지 않습니다. 저장소 읽기 권한(Contents: Read-only)만 있는 토큰을 쓰세요.',
+      buttons: ['연결', '취소'], defaultId: 0, cancelId: 1
+    });
+    if (answer !== 0) return snapshot();
+    store.update(state => ({ ...state, github: { token: value, login, via: 'pat', at: Date.now() } }));
+    githubError = null;
+    changed();
+    return { ...snapshot(), message: `GitHub 계정 ${login}을(를) 연결했습니다.` };
+  }
+  function disconnectGithub() {
+    const login = store.state.github?.login;
+    store.update(state => ({ ...state, github: null }));
+    changed();
+    return { ...snapshot(), message: login ? `GitHub 계정 ${login}의 연결을 해제했습니다.` : null };
+  }
+  // Sign in with GitHub (device flow): the browser opens GitHub's page, the user enters the code shown here and approves.
+  async function signInGithub() {
+    if (!github || !clientId) throw fail('GitHub 로그인을 쓸 수 없습니다. 토큰으로 연결하세요.', 'SIGN_IN_UNAVAILABLE');
+    if (device && device.expiresAt > Date.now()) { openExternal(device.verifyUrl); return snapshot(); }
+    const started = await github.deviceStart(clientId), current = { ...started };
+    device = current; githubError = null;
+    openExternal(current.verifyUrl);
+    void pollDevice(current);
+    changed();
+    return { ...snapshot(), message: `브라우저에서 코드 ${current.userCode}를 입력하고 승인하세요.` };
+  }
+  async function pollDevice(current) {
+    let wait = current.interval;
+    while (device === current && !closing && Date.now() < current.expiresAt) {
+      await new Promise(resolve => { const timer = setTimeout(resolve, wait * 1000); timer.unref?.(); });
+      if (device !== current || closing) return;
+      try {
+        const answer = await github.devicePoll(clientId, current.deviceCode);
+        if (device !== current) return;
+        if (answer.token) {
+          const { login } = await github.whoami(answer.token);
+          store.update(state => ({ ...state, github: { token: answer.token, login, via: 'oauth', at: Date.now() } }));
+          device = null; changed();
+          return;
+        }
+        wait += answer.wait ?? 0;
+      } catch (error) { if (device === current) { device = null; githubError = error.message; changed(); } return; }
+    }
+    if (device === current) { device = null; githubError = 'GitHub 로그인 시간이 지났습니다. 다시 시도하세요.'; changed(); }
+  }
+  function cancelSignIn() { device = null; changed(); return snapshot(); }
+  // Which login this PC itself has for GitHub (gh / git), for the settings page. The token is not kept.
+  async function probeGithub() {
+    try { machineVia = (await probeCredential())?.via ?? null; } catch { machineVia = null; }
+    machineChecked = true;
+    changed();
+    return snapshot();
+  }
+
+  function close() {
+    closing = true; device = null;
+    for (const timer of updateTimers) { clearTimeout(timer); clearInterval(timer); }
+    updateTimers = [];
+    for (const host of [...hosts.values()]) stop(host);
+  }
+
+  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback,
+    startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, runUpdateRound: runRound };
 }

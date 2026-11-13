@@ -35,7 +35,15 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
 ### 설정 화면
 
 설정 → 플러그인은 설치된 플러그인 목록입니다. 한 줄에 이름, 상태, 제공하는 것(명령, MCP 도구 수, 작업공간)이 나오고,
-누르면 그 플러그인의 상세 화면이 열립니다(왼쪽 위 **← 플러그인**으로 돌아갑니다).
+남은 설정 단계(`설정 n단계 남음`)와 새 버전(`업데이트 vX`)도 표시됩니다. 손이 가야 하는 플러그인이 위로 옵니다. 누르면 그
+플러그인의 상세 화면이 열립니다(왼쪽 위 **← 플러그인**으로 돌아갑니다).
+
+- **시작하기**: 설치한 뒤 무엇을 해야 쓸 수 있는지 단계로 보여 줍니다. MoonerADE의 단계(승인, 실행)와 플러그인의 단계
+  (`plugin.json`의 [`setup`](#설정-단계-setup))가 한 목록이고, 지금 할 단계가 펼쳐져 그 단계에 필요한 입력칸·값·버튼이 그 안에
+  나옵니다. 플러그인이 실행되기 전에도 단계 이름과 설명은 보입니다(`실행 후 확인`). 모든 단계를 마치면 한 줄(`설정을 마쳤습니다`)로
+  접히고, 단계 안에 있던 입력칸은 아래 **설정**으로 옮겨 가 언제든 바꿀 수 있습니다.
+- **설정**: 플러그인이 실행 중에 바꿀 수 있게 보여 주는 값과 입력칸, 그리고 하나씩 관리하는 목록(페어링한 기기 등, 항목마다 버튼).
+- **업데이트**: 출처(GitHub 저장소), 새 버전과 **설치**, **지금 확인**, 업데이트 방식(자동, 알림 후 설치, 수동). 아래 [업데이트](#업데이트).
 
 - **제공하는 기능**: 터미널 명령(`terminal.bin` 폴더의 실행 파일 이름), 플러그인이 넣는 환경 변수 이름(값은 보이지 않음),
   에이전트 도구(MCP), 작업공간 권한.
@@ -46,8 +54,54 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   - 도구를 끄면 Claude Code에는 `--settings`의 `permissions.deny`(`mcp__<서버>__<도구>`)로, Codex에는
     `mcp_servers.<서버>.disabled_tools`로 전합니다. Cursor(ACP)는 도구 하나만 뺄 수 없어, 끈 도구가 있는 서버는 주지 않습니다.
   - 이 선택은 `plugins.bin`에 함께 봉인되고, 플러그인을 다시 승인하거나 업데이트해도 남습니다.
-- **설정**: 플러그인이 보내는 `view`(상태, 정보, 입력칸, 버튼).
 - **정보**: id, 버전, 폴더, SHA-256. **사용 중지**는 맨 아래에 있습니다.
+
+목록 아래 **GitHub 연결**은 비공개 저장소에서 받는 플러그인의 업데이트에 쓰는 계정입니다([업데이트](#업데이트)).
+
+## 업데이트
+
+`plugin.json`에 [`source`](#plugin-json)가 있는 플러그인은 MoonerADE가 그 GitHub 저장소의 릴리스에서 업데이트를 받습니다. 출처는
+GitHub 릴리스만 받습니다(일반 다운로드 링크는 출처로 쓸 수 없습니다). 내장 플러그인은 MoonerADE와 함께 업데이트됩니다.
+
+**방식**(플러그인마다, 상세 화면의 **업데이트**에서 고릅니다)
+
+| 방식 | 확인 | 설치 |
+|---|---|---|
+| 자동 | 시작 1분 뒤, 그 뒤 6시간마다 | 확인 창 없이 설치하고 다시 시작한 뒤 OS 알림으로 알립니다 |
+| 알림 후 설치 (기본) | 시작 1분 뒤, 그 뒤 6시간마다 | 새 버전을 한 번 알리고, **설치**를 누르면 설치 확인 창이 뜹니다 |
+| 수동 | **지금 확인**(상세 화면) 또는 목록 위 업데이트 확인 버튼을 누를 때만 | **설치**를 누르면 설치 확인 창이 뜹니다 |
+
+- **자동으로 켜는 것은 네이티브 확인 창을 거칩니다.** 그 저장소에 릴리스를 올릴 수 있는 사람이 이 PC에서 코드를 실행할 수 있게
+  되기 때문입니다. 알림·수동으로 바꾸는 것은 확인 창이 없습니다.
+- **자동이어도 묻는 업데이트가 있습니다.** 새 버전이 전에 없던 권한(`terminal`, `mcp`, `workspace`, `feedback`, 다른 `envPrefix` 등)을
+  요청하거나 업데이트 출처(`source.github`)가 바뀌면 설치하지 않고 알립니다. 상세 화면에 바뀌는 점이 나오고, **설치**를 누르면
+  확인 창에 같은 내용이 나옵니다. 승인되어 실행할 수 있는 플러그인만 자동으로 업데이트합니다.
+- 설치는 zip 설치와 같은 길을 갑니다(압축 검사, 승인 고정, 저장된 데이터 유지). 받은 zip의 `plugin.json` id와 버전이 릴리스에서
+  찾은 것과 다르면 설치하지 않습니다.
+
+**릴리스 규칙** (플러그인 배포자)
+
+1. 저장소의 릴리스(초안·프리릴리스 제외) 중 `source.asset` 이름의 파일이 있는 가장 최근 것을 씁니다. `asset`에 `{version}`을
+   넣으면(`my-plugin-{version}.zip`) 파일 이름의 버전과 맞춰 찾습니다.
+2. 버전은 이 순서로 읽습니다: 릴리스의 `versions.json`(`{"<plugin id>": "<version>"}`, 플러그인 여럿을 한 릴리스로 내는 저장소용),
+   파일 이름의 `{version}`, 릴리스 태그(`v1.2.0`, `my-plugin-v1.2.0`). 지금 버전보다 높으면(semver) 업데이트입니다.
+3. 받는 파일은 모두 체크섬을 맞춰 봅니다. 릴리스에 `SHA256SUMS`(`<sha256>  <파일 이름>` 줄)를 올리거나, GitHub이 파일에 붙이는
+   `sha256` digest가 있어야 합니다. 둘 다 있으면 둘 다 맞아야 하고, 하나도 없으면 받지 않습니다. `versions.json`도 같습니다.
+4. 파일은 32 MiB까지 받습니다.
+
+**GitHub 계정** (비공개 저장소)
+
+공개 저장소는 계정 없이 확인합니다. 비공개 저장소는 이 순서로 찾은 로그인을 씁니다.
+
+1. 설정 → 플러그인 → **GitHub 연결**에서 연결한 계정. **토큰으로 연결**에 개인 액세스 토큰을 붙여 넣으면 GitHub에 계정 이름을
+   물어 네이티브 확인 창(`GitHub 계정 <이름>을 연결할까요?`)에 보여 주고, 승인하면 `plugins.bin`에 봉인합니다. Fine-grained 토큰에서
+   플러그인 저장소만 고르고 **Contents: Read-only**만 주세요. **GitHub로 로그인**(기기 코드 방식)은 MoonerADE에 GitHub App 또는
+   OAuth App의 client id가 들어 있을 때만 나옵니다(`plugin-updates.js`의 `GITHUB_CLIENT_ID`, 개발 중에는 `ADE_GITHUB_CLIENT_ID`).
+2. 이 PC의 `gh auth token`, 없으면 `git credential fill`(github.com). 어떤 창이나 프롬프트도 띄우지 않습니다.
+3. 없으면 로그인 없이 요청합니다. 저장소를 찾지 못하면 GitHub 연결을 안내합니다.
+
+토큰은 GitHub API(`api.github.com`)에만 보냅니다. 파일 저장소로 넘겨주는 주소에는 붙이지 않고, 로그에 남기거나 화면에 보이거나
+플러그인에 주지 않습니다. 화면에는 계정 이름만 나옵니다.
 
 ## 보안 모델
 
@@ -75,6 +129,9 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   보내는 권한이고, 승인 확인 창에 "피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다."로 표시됩니다.
   선언하지 않은 플러그인의 `feedback` 메시지는 무시됩니다. 제출 요청은 실행 중이고 `available: true`를 보낸 플러그인 하나에만
   가며, 사람이 확인하고 제출한 피드백만 옵니다(AI·에이전트 초안은 사람이 연 뒤에만).
+- **업데이트도 승인의 연장입니다.** 출처는 승인한 `plugin.json`의 `source`에서만 오고(화면이 정하지 않습니다), 받은 파일은 릴리스의
+  체크섬과 맞춰 봅니다. 자동 업데이트를 켜는 것은 네이티브 확인 창을 거치고, 새 권한을 요청하거나 출처가 바뀌는 업데이트는 자동이어도
+  확인 창 없이 설치하지 않습니다. GitHub 토큰은 `plugins.bin`에 봉인되고 GitHub API에만 갑니다([업데이트](#업데이트)).
 - **확인 창 표시.** 플러그인이 요청한 확인 창은 제목이 항상 `플러그인: <이름>`이고 본문 끝에 요청한 플러그인을 적습니다.
   MoonerADE 자체의 확인 창으로 보이게 할 수 없습니다.
 - 3번 넘게 1분 안에 죽은 플러그인은 다시 시작하지 않습니다(설정에서 **다시 시작**).
@@ -92,7 +149,12 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   "terminal": { "bin": "bin", "envPrefix": "EXAMPLE_" },
   "mcp": { "name": "example_tools", "script": "bin/example.js", "args": ["mcp"], "chatOnly": false },
   "workspace": true,
-  "feedback": true
+  "feedback": true,
+  "source": { "github": "owner/repo", "asset": "example.zip" },
+  "setup": [
+    { "id": "account", "label": "계정 연결", "detail": "…" },
+    { "id": "device", "label": "기기 추가", "detail": "…", "optional": true }
+  ]
 }
 ```
 
@@ -107,6 +169,31 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
   선언하지 않은 플러그인의 `workspace` 메시지는 무시됩니다.
 - `feedback: true`는 피드백 요청에서 제출한 피드백(본문과 스크린샷 파일)을 받아 대신 보내는 권한입니다. 승인 확인 창에
   표시됩니다. 아래 [피드백](#피드백-feedback)을 보세요.
+- `source`는 업데이트를 받을 곳입니다. `github`는 `소유자/저장소`, `asset`은 릴리스의 zip 이름(없으면 `<id>.zip`, `{version}` 가능)입니다.
+  승인·설치 확인 창에 출처로 표시됩니다. 위 [업데이트](#업데이트)를 보세요.
+- `setup`은 설치한 뒤 사용자가 할 일을 순서대로 적은 단계(8개까지)입니다. 아래 [설정 단계](#설정-단계-setup)를 보세요.
+
+### 설정 단계 (`setup`)
+
+설치한 플러그인을 쓰려면 무엇이 필요한지 상세 화면의 **시작하기**에 단계로 보여 줍니다. `plugin.json`의 `setup`은 단계의 순서와
+이름(`label` 60자)과 설명(`detail` 300자)이고, 플러그인이 실행되기 전(승인 전)에도 그대로 보입니다. `optional: true`인 단계는 마치지
+않아도 설정이 끝난 것으로 봅니다. `id`는 `[a-z][a-z0-9-]{0,31}`입니다.
+
+실행 중인 플러그인은 `view.setup`으로 단계마다 어디까지 왔는지 알립니다(아래 [호스트 프로토콜](#호스트-프로토콜-apiversion-1)의 `view`).
+
+```js
+setup: [
+  { id: 'server', status: 'done', fields: ['url', 'serverKey'], actions: ['save'] },
+  { id: 'connect', status: 'error', detail: '연결하지 못했습니다: …', info: ['command'], actions: ['test'] }
+]
+```
+
+- `status`: `done`(마침), `todo`(아직), `active`(진행 중, 예: 브라우저 로그인을 기다림), `error`(확인 필요).
+- `fields`, `info`, `actions`는 그 단계 안에 그릴 입력칸(`key`), 정보(`key`가 있는 `info` 항목), 버튼(`id`)이고, `qr: true`면 QR 코드도
+  그 단계에 그립니다. 설정을 마치기 전에는 이것들이 단계 안에만 나오고, 모두 마치면 아래 **설정**에 함께 나옵니다.
+- `label`, `detail`, `optional`을 보내면 `plugin.json`의 값 대신 씁니다(`detail`로 지금 상황에 맞는 안내를 보여 줍니다).
+  `plugin.json`에 없는 `id`는 `label`이 있어야 나옵니다.
+- 지금 할 단계는 오류인 단계, 없으면 마치지 않은 첫 필수 단계입니다. 그 단계가 펼쳐집니다.
 
 ## 호스트 프로토콜 (apiVersion 1)
 
@@ -117,8 +204,8 @@ MoonerADE → 플러그인
 
 | 메시지 | 뜻 |
 |---|---|
-| `{type:'init', apiVersion, id, appVersion, dataDir, storage}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값 |
-| `{type:'action', id, action, values}` | 설정 화면에서 버튼을 눌렀습니다. `values`는 입력칸 값 |
+| `{type:'init', apiVersion, id, appVersion, dataDir, storage, features}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값. `features`는 이 MoonerADE가 아는 추가 기능(`view.setup`, `view.lists`, `updates`)이고, 없으면 그 전 MoonerADE입니다 |
+| `{type:'action', id, action, values, item?}` | 설정 화면에서 버튼을 눌렀습니다. `values`는 입력칸 값, `item`은 목록(`view.lists`) 항목의 버튼일 때 그 항목의 `id` |
 | `{type:'confirm-result', id, ok}` | 확인 창 결과 |
 | `{type:'workspace', ...}` | 작업공간 세션의 응답과 출력(아래 [작업공간](#작업공간-workspace)) |
 | `{type:'feedback/submit', ...}` | 피드백 제출 요청(아래 [피드백](#피드백-feedback)) |
@@ -129,7 +216,7 @@ MoonerADE → 플러그인
 | 메시지 | 뜻 |
 |---|---|
 | `{type:'ready'}` | 준비 끝. 이때부터 터미널 추가가 적용됩니다 |
-| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{label,value,mono,copy}], fields:[{key,label,type,value,placeholder,hint,options}], actions:[{id,label,primary}], qr:{label,value}}`. `qr`의 `value`(1000자 이하)는 MoonerADE가 QR 코드로 그립니다. `type`은 `text`(기본), `select`(`options:[{value,label}]` 필요), `switch`, `number`이고 값은 늘 문자열입니다(스위치는 `'true'`/`'false'`). 입력칸은 24개까지입니다 |
+| `{type:'view', view}` | 설정 화면 내용: `{status:{tone,text}, info:[{key?,label,value,mono,copy}], fields:[{key,label,type,value,placeholder,hint,required?,options}], actions:[{id,label,primary,danger?}], qr:{label,value}, setup:[…], lists:[…]}`. `qr`의 `value`(1000자 이하)는 MoonerADE가 QR 코드로 그립니다. `type`은 `text`(기본), `select`(`options:[{value,label}]` 필요), `switch`, `number`이고 값은 늘 문자열입니다(스위치는 `'true'`/`'false'`). 입력칸은 24개, 버튼은 12개까지입니다. `required`는 입력칸에 `필수`를, `danger`는 버튼을 위험 표시로 그립니다. `info`의 `key`는 설정 단계가 그 줄을 가리킬 때 씁니다. `setup`은 [설정 단계](#설정-단계-setup), `lists`는 아래 |
 | `{type:'notify', title, body}` | OS 알림. 제목은 `플러그인: <이름>`이고, `title`(100자)과 `body`(300자)가 본문입니다. 플러그인마다 1분에 10개까지 보여 주고 나머지는 버립니다. 누르면 설정 → 플러그인이 열립니다 |
 | `{type:'badge', badge}` / `{type:'badge', badge:null}` | 상태바 표시 `{text, tone}`(24자, 한 줄) / 지움. 실행 중인 동안 항상 보이고(숨길 수 없음), 누르면 설정 → 플러그인이 열립니다. 플러그인이 멈추면 사라집니다 |
 | `{type:'storage', value}` | 봉인해 저장할 값(JSON 64 KiB 이하). 다음 `init`의 `storage`로 돌아옵니다 |
@@ -139,6 +226,17 @@ MoonerADE → 플러그인
 | `{type:'log', level, message}` | MoonerADE 로그에 남깁니다 |
 | `{type:'workspace', ...}` | 작업공간 세션 요청(아래 [작업공간](#작업공간-workspace)) |
 | `{type:'feedback', ...}` / `{type:'feedback/result', ...}` | 피드백 제출 가능 여부와 제출 결과(아래 [피드백](#피드백-feedback)) |
+
+`view.lists`는 사용자가 하나씩 관리하는 것(페어링한 기기, 등록한 키 등)입니다. 번호를 입력칸에 적게 하는 대신 항목마다 버튼을 둡니다.
+
+```js
+lists: [{ id: 'phones', title: '페어링한 폰', empty: '아직 없습니다.', items: [
+  { id: 'phone-1', label: 'Galaxy', detail: '제어 권한 · 마지막 접속 …', tag: { text: '접속 중', tone: 'warn' },
+    actions: [{ id: 'scope-view', label: '보기만으로' }, { id: 'remove-device', label: '해제', danger: true }] }
+] }]
+```
+
+목록은 4개, 항목은 50개, 항목의 버튼은 4개까지입니다. 항목 `id`는 `[\w.-]{1,64}`이고, 버튼을 누르면 `action`에 `item`으로 옵니다.
 
 ### 작업공간 (`workspace`)
 
