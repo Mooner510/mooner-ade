@@ -72,10 +72,10 @@ function renderNode(node: Node, key: string, live: boolean) {
     case 'hr': return <hr key={key} />;
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul';
-      return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={node.ordered ? item.num : undefined} className={item.depth ? 'nested' : ''}>
+      return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={item.num} style={{ listStyleType: item.num === undefined ? 'disc' : 'decimal' }} className={item.depth ? 'nested' : ''}>
         {inline(item.text)}{item.blocks?.map((block, b) => renderNode(block, `${key}-${i}-${b}`, live))}</li>)}</Tag>;
     }
-    case 'table': return <div className="md-table" key={key}><table><thead><tr>{node.head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
+    case 'table': return <div className={`md-table${node.head.length >= 5 ? ' wide' : ''}`} key={key}><table><thead><tr>{node.head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
       <tbody>{node.rows.map((row, r) => <tr key={r}>{node.head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table></div>;
     default: return <p key={key}>{lines(node.text)}</p>;
   }

@@ -514,7 +514,7 @@ export const maxSelected = (option: { currentValue: string; options: { value: st
 export const effortStyle: Record<string, { color: string; icon?: string; bars?: number }> = {
   none: { color: '#8b93a0', icon: 'remove' }, minimal: { color: '#7fb8a4', bars: 1 },
   low: { color: '#5ec9a0', bars: 1 }, medium: { color: '#6fa8f0', bars: 2 },
-  high: { color: '#b58cf0', bars: 4 }, xhigh: { color: '#f0a04b', icon: 'bolt' },
+  high: { color: '#b58cf0', bars: 3 }, xhigh: { color: '#f0a04b', bars: 4 },
   max: { color: '#f2566e', icon: 'local_fire_department' }, ultra: { color: '#f2566e', icon: 'local_fire_department' }
 };
 export const effortLabels: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', minimal: '최소', none: '없음', ultra: '최상' };
@@ -886,7 +886,7 @@ export const questionsAnswered = (questions: ChatQuestion[], answers: Record<str
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [
   { id: 'effortUp', label: 'Effort 올리기', keys: 'shift+arrowup' }, { id: 'effortDown', label: 'Effort 내리기', keys: 'shift+arrowdown' },
-  { id: 'modelNext', label: '다음 모델로 전환', keys: 'alt+p' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
+  { id: 'modelNext', label: '다음 모델로 전환', keys: 'shift+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'shift+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
 ] as const;
 export type ChatKeyId = typeof chatKeyDefs[number]['id'];
 export const chatKey = (overrides: Record<string, string> | undefined, id: ChatKeyId) => overrides?.[id] || chatKeyDefs.find(def => def.id === id)!.keys;

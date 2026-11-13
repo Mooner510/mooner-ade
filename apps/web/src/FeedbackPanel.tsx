@@ -92,7 +92,7 @@ function FeedbackList({ items, available, queue, now, loaded, error, fail, wide,
     <AvailabilityNote available={available} />
     <div className="review-list feedback-list">
       {error && <p className="feedback-note warn" role="alert">{error}</p>}
-      {loaded && !items.length && !error && <div className="review-empty"><Icon name="feedback" size={22} /><strong>피드백이 없습니다</strong><p>'새 피드백'에 불편한 점이나 바라는 점만 적으면 됩니다. 제목은 안 써도 되고, 원하면 AI가 정리해 줍니다.</p></div>}
+      {loaded && !items.length && !error && <div className="review-empty"><Icon name="feedback" size={22} /><strong>피드백이 없습니다</strong><p>'새 피드백'에 불편한 점이나 바라는 점을 적어 보내 주세요.</p></div>}
       {items.map(item => {
         const unseen = needsReview(item), thumb = item.images[0];
         return <button type="button" key={item.id} className={`feedback-row${unseen ? ' unseen' : ''}`} onClick={() => openFeedback(item.id)}>
@@ -191,9 +191,9 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWi
   const submit = () => run('submit', async () => {
     await flush();
     const how = available?.mode === 'anonymous'
-      ? '로그인하지 않은 상태(익명)로 보냅니다. 이 기기에서 5분에 1건씩 순서대로 자동 전송되고, 앱을 껐다 켜도 이어서 보냅니다.'
+      ? '로그인 없이(익명) 보냅니다. 이 기기에서 5분에 1건씩 자동 전송되며 앱을 다시 켜도 이어집니다.'
       : `${available?.account ? `${available.account} 계정으로` : '로그인한 계정으로'} 개발자의 비공개 GitHub 저장소에 이슈로 올립니다.`;
-    if (!(await ask.confirm(`피드백을 제출할까요? ${how} 스크린샷에 코드나 비밀 정보가 보일 수 있으니 확인하세요.`))) return;
+    if (!(await ask.confirm(`피드백을 제출할까요? ${how} 스크린샷에 코드나 비밀 정보가 없는지 확인하세요.`))) return;
     const sent = await feedbackCall('feedback/submit', { id });
     toast('schedule_send', sent.status === 'submitted' ? '제출했습니다' : '전송 대기열에 넣었습니다');
   });
@@ -244,7 +244,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWi
         <span className="spacer" />
       </div>
       {tab === 'edit' && editable
-        ? <textarea className="feedback-body" aria-label="피드백 내용 (마크다운)" autoFocus={!body} placeholder={drafting ? 'AI가 초안을 쓰는 중입니다…' : '불편했던 점, 바라는 동작 등 요건만 편하게 적어 주세요.\n제목은 안 적어도 됩니다. 이미지는 붙여넣기·끌어다 놓기로 넣을 수 있습니다.\n\n짧게 적고 \'AI로 정리\'를 누르면 문제·기대 동작·제안으로 정리해 줍니다. (⌘/Ctrl+Enter)'} value={body} readOnly={drafting} onChange={event => edit({ body: event.target.value })}
+        ? <textarea className="feedback-body" aria-label="피드백 내용 (마크다운)" autoFocus={!body} placeholder={drafting ? 'AI가 초안을 쓰는 중입니다…' : '불편했던 점이나 바라는 동작을 적어 주세요.\n짧게 적고 \'AI로 정리\'(⌘/Ctrl+Enter)를 누르면 문제·기대 동작·제안으로 정리해 줍니다.'} value={body} readOnly={drafting} onChange={event => edit({ body: event.target.value })}
           onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && canDraft) { event.preventDefault(); draft(); } }} />
         : <div className="feedback-preview">{body.trim() ? <Markdown text={body} /> : <p className="hint">내용이 없습니다.</p>}</div>}
       <input className="feedback-title" aria-label="피드백 제목 (선택)" placeholder="제목 (선택 · 비우면 내용 첫 줄로 자동 지정)" maxLength={MAX_TITLE} value={title} readOnly={!editable || drafting} onChange={event => edit({ title: event.target.value })} />
@@ -260,7 +260,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, wide, toggleWi
           {editable && <IconButton icon="plus" label="이미지 파일 추가" onClick={() => file.current?.click()} disabled={item.images.length >= MAX_IMAGES || busy === 'image'} />}
           <input ref={file} type="file" accept="image/*" multiple hidden onChange={event => { addFiles([...(event.target.files ?? [])]); event.target.value = ''; }} />
         </div>
-        {!item.images.length ? <p className="hint">{editable ? '캡쳐하거나 이미지를 붙여넣기(⌘/Ctrl+V)·끌어다 놓기로 추가하세요. 패널 어디에서든 됩니다.' : '이미지 없음'}</p>
+        {!item.images.length ? <p className="hint">{editable ? '캡쳐하거나 붙여넣기(⌘/Ctrl+V)·끌어다 놓기로 추가합니다.' : '이미지 없음'}</p>
           : <ol className="feedback-strip">{item.images.map((image, index) => <li key={image.name}>
             <button type="button" className="feedback-strip-image" title={editable ? '눌러서 표시하기' : image.name} disabled={!editable} onClick={() => setAnnotating(image.name)}>
               <img src={feedbackFileUrl(item, image.name)} alt={`이미지 ${index + 1}`} loading="lazy" />{image.annotated && <span className="feedback-annotated">표시됨</span>}
