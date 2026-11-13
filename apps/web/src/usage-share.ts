@@ -28,10 +28,10 @@ export function contribution({ before, after, costUsd, cal }: { before?: Reading
     out.observed = d; bound = [Math.max(0, d - 1), d + 1]; // the true change lies strictly between d-1 and d+1
   }
   // whole-percent readings: a 0 change only means "under 1%p"
-  if (est === null) { if (bound) { out.label = out.observed! >= 1 ? `≈${out.observed}%p` : '<1%p'; out.quality = 'delta'; } return out; }
-  if (!bound) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'estimate'; return out; }
+  if (est === null) { if (bound) { out.label = out.observed! >= 1 ? `${out.observed}%p` : '<1%p'; out.quality = 'delta'; } return out; }
+  if (!bound) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `${shown(est)}%p`; out.quality = 'estimate'; return out; }
   const [lo, hi] = bound;
-  if (est >= lo - 1e-9 && est <= hi + 1e-9) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `≈${shown(est)}%p`; out.quality = 'consistent'; return out; }
-  out.label = `≈${shown(Math.min(Math.max(est, lo), hi))}%p`; out.quality = 'clamped';
+  if (est >= lo - 1e-9 && est <= hi + 1e-9) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `${shown(est)}%p`; out.quality = 'consistent'; return out; }
+  out.label = `${shown(Math.min(Math.max(est, lo), hi))}%p`; out.quality = 'clamped';
   return out;
 }
