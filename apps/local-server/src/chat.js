@@ -113,7 +113,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const prev = JSON.stringify(state.autoCompact), ready = JSON.stringify(next);
     if (prev !== ready) { state.autoCompact = next; publish(); }
     // The running child was started with another window (the model turned out different): the next message resumes the session with the right one.
-    if (child && handedWindow(next) !== launchedWindow) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+    if (child && handedWindow(next) !== launchedWindow) { restartWhenQuiet(); }
   };
   void refreshAutoCompact();
   // The prompt cache's clock, read from the session's transcript (the same reading the terminal's cache timer uses): `state.cache` = the last main-thread
@@ -147,7 +147,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   if (agent === 'claude' && state.sessionId) void refreshCache(); // a reopened chat shows the cache clock it had
   // Claude: the message streaming right now per subagent ('' = main thread). Text deltas name no message; they belong to the latest start of their own stream.
   const streamIds = new Map(), toolInputSize = new Map();
-  const approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images, previews } sent into a running turn, not yet taken in by it
+  const taskIds = new Map(), approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images, previews } sent into a running turn, not yet taken in by it
   let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0;
   const stopCursorStorePoll = () => { if (cursorStorePoll) { clearInterval(cursorStorePoll); cursorStorePoll = null; } };
   const noteCursorAcpUsage = event => {
@@ -218,7 +218,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; publish();
     // An idle child holds a few hundred MB; the conversation resumes from its session id, so it can go.
     clearTimeout(idleTimer);
-    if (child && !turnOpen && !approvals.size) { const proc = child; idleTimer = setTimeout(() => { if (child === proc && !turnOpen) proc.kill('SIGTERM'); }, IDLE_MS); idleTimer.unref(); }
+    // Background subagents live in the child: it is kept while any of them runs (a silent leak of `liveTasks` ends with the child's exit or the chat's close).
+    if (child && quiet()) { const proc = child; idleTimer = setTimeout(() => { if (child === proc && quiet()) proc.kill('SIGTERM'); }, IDLE_MS); idleTimer.unref(); }
   };
   // The view of the world the status line shows, derived from events so that a replayed transcript gives the same numbers.
   function fold(event, replay = false) {
@@ -348,7 +349,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
         if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
-        if (!turnOpen && restartAfterTurn) restart();
+        if (quiet() && restartAfterTurn) restart();
       }
   }
   // Background sub-agents keep running after a turn's `result`, and their hand-back starts a new turn on its own (no user line, no steer). Their output is
@@ -360,7 +361,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (reopened) { clearTimeout(activityTimer); activityTimer = setTimeout(() => { if (reopened && turnOpen && !approvals.size) { reopened = false; turnOpen = steers.size > 0; setStatus(); } }, quietMs); activityTimer.unref(); }
   }
   // A subagent counts as running only while the child that started it lives: after a crash or an ADE restart nothing reports its end.
-  const trackTask = event => { const live = new Set(state.liveTasks); if (event.phase === 'start') live.add(event.toolUseId); else live.delete(event.toolUseId); state.liveTasks = [...live]; };
+  const trackTask = event => { const live = new Set(state.liveTasks); if (event.phase === 'start') { live.add(event.toolUseId); if (event.taskId) taskIds.set(event.toolUseId, event.taskId); } else { live.delete(event.toolUseId); taskIds.delete(event.toolUseId); } state.liveTasks = [...live];
+    // The last background task ended without a turn of its own: the pending restart or the idle countdown can go on now.
+    if (event.phase !== 'start' && !live.size) { if (restartAfterTurn && quiet()) restart(); else setStatus(); }
+  };
   const reportStorage = error => { state.error = `채팅 저장 실패: ${error.message}`; publish(); };
 
   // total_cost_usd restarts at 0 in every process, so what a replaced child had cost is carried by costBase. The child's own close handler does not run
@@ -368,10 +372,17 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   let prePlanMode = meta.prePlanMode ?? 'default'; // kept in meta so a plan approved after reopening goes back to the mode before it
   const carryCost = () => { if (typeof state.costUsd === 'number') meta.costBase = state.costUsd; };
 
+  // Nothing in the child would be cut off: no turn, no approval, no background subagent.
+  const quiet = () => !turnOpen && !approvals.size && state.liveTasks.length === 0;
+  // A launch flag changed: replace the child now when quiet, else once the turn and its background tasks are over.
+  function restartWhenQuiet() { if (quiet()) restart(); else { restartAfterTurn = true; state.restartPending = true; } }
+  // Ends the child on purpose (restart, handoff, close). child is nulled first, so its close handler returns early: the subagents/tasks it took with it are
+  // dropped here, or `quiet()` stays false (no idle kill, stale task UI).
+  function dropChild() { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); state.liveTasks = []; taskIds.clear(); proc.kill('SIGTERM'); return proc; }
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
   function restart() {
     restartAfterTurn = false; state.restartPending = false;
-    if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM'); }
+    if (child) dropChild();
     setStatus();
   }
   // One start at a time: warm-up, a setting change and a send may arrive together, and none may use the child before it is initialized.
@@ -444,7 +455,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     setStatus();
   }
   function attach(proc) {
-    child = proc; state.liveTasks = []; // a replaced child took its subagents with it
+    child = proc; state.liveTasks = []; taskIds.clear(); // a replaced child took its subagents with it
     let buffer = '', stderr = '';
     const decoder = new StringDecoder('utf8');
     proc.stdout.on('data', chunk => {
@@ -543,7 +554,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
     // right away when idle, or once the running turn ends. The next message starts a child with the new key.
-    relaunch() { if (child) { if (turnOpen || approvals.size) { restartAfterTurn = true; state.restartPending = true; } else restart(); } },
+    relaunch() { if (child) { restartWhenQuiet(); } },
     replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: { ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() },
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
@@ -628,6 +639,17 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       emit({ kind: 'approval', phase: 'answer', requestId, tool: pending.tool, allow: answer.allow === true });
       setStatus();
     },
+    // Ends one background task (shell, Monitor, subagent) on its own, without interrupting the turn. toolUseId is the Agent/Bash/Monitor call that started it.
+    async stopTask(toolUseId) {
+      live();
+      const taskId = taskIds.get(toolUseId);
+      if (!child || !taskId) throw fault('CHAT_TASK', '이 작업을 찾을 수 없습니다. 이미 끝났을 수 있습니다.', 404);
+      const response = await control({ subtype: 'stop_task', task_id: taskId });
+      if (response?.subtype === 'error') throw fault('CHAT_TASK', `작업을 중단하지 못했습니다: ${response.error}`, 409);
+      if (!response) throw fault('CHAT_TASK', '작업을 중단하지 못했습니다. 응답이 없습니다.', 504);
+      // The CLI normally reports the end itself; if it did not, say so here so the row does not keep spinning.
+      if (state.liveTasks.includes(toolUseId)) handleEvent({ kind: 'task', phase: 'end', toolUseId, status: 'stopped', report: '' });
+    },
     async interrupt() {
       live();
       if (!child) return;
@@ -672,7 +694,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (runEverything !== undefined) { meta.runEverything = state.runEverything = runEverything; protocol?.setRunEverything?.(runEverything); }
           if (sandbox !== undefined) {
             meta.sandbox = state.sandbox = sandbox ?? null;
-            if (child) { if (turnOpen || approvals.size) { restartAfterTurn = true; state.restartPending = true; } else restart(); }
+            if (child) { restartWhenQuiet(); }
           }
           await saveMeta(); publish(); return;
         }
@@ -701,7 +723,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         const permissionOnly = agent === 'codex' && [model, effort, worktree, addDirs].every(value => value === undefined) && [permissionMode, sandbox, network].some(value => value !== undefined);
         if (agent === 'codex' && [permissionMode, sandbox, network].some(value => value !== undefined)) await protocol?.setPermissions({ permissionMode, sandbox, network });
         if (model !== undefined) { const chosen = caps.catalog.find(item => item.id === model) ?? (model === null ? caps.catalog[0] : undefined); caps.efforts = chosen?.efforts ?? []; caps.images = chosen?.images !== false; meta.effort = undefined; state.effort = null; }
-        if (child && !permissionOnly) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+        if (child && !permissionOnly) { restartWhenQuiet(); }
         await saveMeta(); publish(); return;
       }
       if (permissionMode !== undefined) {
@@ -720,7 +742,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           // "Default model": the running CLI has no way to go back to its default, so it is restarted without --model (same session). Until the next
           // answer's init event reports the real model, none is shown as chosen.
           state.model = null;
-          if (child) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+          if (child) { restartWhenQuiet(); }
         } else {
           state.model = model;
           if (child) await control({ subtype: 'set_model', model });
@@ -729,7 +751,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (effort !== undefined) {
         if (effort !== null && !EFFORTS.includes(effort)) throw fault('INVALID_INPUT', '잘못된 Effort입니다.');
         meta.effort = effort ?? undefined; state.effort = effort;
-        if (child) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+        if (child) { restartWhenQuiet(); }
       }
       if (worktree !== undefined) {
         // Only a conversation that has not started yet can move into a worktree.
@@ -740,7 +762,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (!Array.isArray(addDirs) || addDirs.length > 8 || !addDirs.every(item => typeof item === 'string' && path.isAbsolute(item) && item.length <= 1024)) throw fault('INVALID_INPUT', '잘못된 폴더 목록입니다.');
         for (const dir of addDirs) if (!(await fs.stat(dir).then(info => info.isDirectory(), () => false))) throw fault('INVALID_INPUT', `폴더를 찾을 수 없습니다: ${dir}`);
         meta.addDirs = state.addDirs = [...new Set(addDirs)];
-        if (child) { if (turnOpen || approvals.size) restartAfterTurn = true; else restart(); }
+        if (child) { restartWhenQuiet(); }
       }
       if (model !== undefined) void refreshAutoCompact(state.model);
       await saveMeta(); publish();
@@ -765,13 +787,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       emit({ kind: 'rewind', uuid }); await saveMeta(); setStatus();
     },
     // Chat -> terminal: only while nothing runs. The child is ended (and waited for), so the session has a single writer again when the terminal resumes it.
-    async handoff() {
+    async handoff({ force = false } = {}) {
       live();
       if (turnOpen || approvals.size || steers.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 전환할 수 있습니다.', 409);
+      if (state.liveTasks.length && !force) throw fault('CHAT_BACKGROUND', '백그라운드 작업이 실행 중입니다. 전환하면 종료됩니다.', 409);
       if (!meta.sessionId) throw fault('INVALID_INPUT', '아직 시작하지 않은 대화입니다. 새 터미널을 여세요.', 409);
       if (meta.resumeAt) throw fault('INVALID_INPUT', '되돌린 직후에는 전환할 수 없습니다. 메시지를 한 번 보낸 뒤 전환하세요.', 409);
       if (child) {
-        const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM');
+        const proc = dropChild();
         await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 3000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
         if (proc.exitCode === null && !proc.signalCode) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
       }
@@ -792,10 +815,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       return true;
     },
     // /clear: forget the Claude-side session and start a fresh one; the old transcript stays as history above a divider.
-    async reset() {
+    async reset({ force = false } = {}) {
       live();
       if (configuring) throw fault('CHAT_BUSY', '모델 설정을 적용 중입니다.', 409);
       if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 새 대화를 시작할 수 있습니다.', 409);
+      if (state.liveTasks.length && !force) throw fault('CHAT_BACKGROUND', '백그라운드 작업이 실행 중입니다. 새 대화를 시작하면 종료됩니다.', 409);
       if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
@@ -805,7 +829,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
       closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
-      if (child) { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); proc.kill('SIGTERM'); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
+      if (child) { const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent

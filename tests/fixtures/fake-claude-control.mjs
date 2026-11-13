@@ -11,9 +11,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     setTimeout(() => result({ is_error: true, terminal_reason: 'aborted_streaming', result: '' }), 150);
     return;
   }
+  if (message.type === 'control_request' && message.request?.subtype === 'stop_task') { // the CLI reports the stopped task itself, after its control reply
+    send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
+    send({ type: 'system', subtype: 'task_notification', tool_use_id: 'toolu_bg', task_id: message.request.task_id, status: 'stopped', session_id: 'control-session' });
+    return;
+  }
   if (message.type !== 'user') return;
   const text = message.message?.content?.find?.(part => part.type === 'text')?.text ?? '';
   if (text === 'slow') return;
+  if (text === 'bgtask') { // a background subagent that outlives its turn: it ends only by stop_task (or with the child)
+    send({ type: 'system', subtype: 'task_started', tool_use_id: 'toolu_bg', task_id: 'task-bg', description: 'long', subagent_type: 'general-purpose', is_backgrounded: true, session_id: 'control-session' });
+  }
   if (text === 'approve') {
     send({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' } });
     setTimeout(() => process.exit(1), 150);

@@ -189,7 +189,7 @@ test('the interactive-UI instructions are passed as an appended system prompt fi
 test('subagent task events normalize by their Agent call id (fields as recorded from claude 2.1.322)', () => {
   const base = { type: 'system', task_id: 'a1', run_id: 'r', tool_use_id: 'toolu_A', subagent_type: 'Explore', session_id: 's', uuid: 'u' };
   assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_started', description: 'count files', is_backgrounded: true, task_type: 'local_agent', prompt: 'p' }),
-    [{ kind: 'task', phase: 'start', toolUseId: 'toolu_A', description: 'count files', agentType: 'Explore', background: true }]);
+    [{ kind: 'task', phase: 'start', toolUseId: 'toolu_A', taskId: 'a1', description: 'count files', agentType: 'Explore', background: true }]); // taskId: what stop_task names
   assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_progress', description: 'Running List files', usage: { total_tokens: 18509, tool_uses: 2, duration_ms: 9905 }, last_tool_name: 'Bash' }),
     [{ kind: 'task', phase: 'progress', toolUseId: 'toolu_A', activity: 'Running List files', lastTool: 'Bash', tokens: 18509, toolUses: 2, durationMs: 9905 }]);
   assert.deepEqual(normalizeClaude({ ...base, subtype: 'task_notification', status: 'completed', summary: 'see hand-back', handback_report: { text: 'Count: 28' }, usage: { total_tokens: 21194, tool_uses: 3, duration_ms: 14803 } }),
