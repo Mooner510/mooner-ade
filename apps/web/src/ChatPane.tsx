@@ -564,15 +564,18 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
 // Up to this many tools, a finished run is listed straight inside its "과정" box; a longer one folds to one "도구 n개 호출 완료" line.
 const FLAT_RUN_MAX = 6;
 const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type === 'text' || block.type === 'thinking') && Boolean(block.text.trim()));
-const turnsOf = (items: Item[]) => {
+const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  for (const item of items) {
+  const isLocal = (entry?: Item) => (entry?.kind === 'note' || entry?.kind === 'info') && entry.local === true;
+  // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
+  // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
+  const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
+  items.forEach((item, at) => {
     // What ADE itself says (a changed setting, /cost) is its own group, so the copy / branch / rewind icons stay with the answer they belong to.
-    const isLocal = (entry?: Item) => (entry?.kind === 'note' || entry?.kind === 'info') && entry.local === true;
-    if (current.length && (item.kind === 'user' || item.kind === 'divider' || (isLocal(item) && !isLocal(current.at(-1))))) { turns.push(current); current = []; }
+    if (current.length && (item.kind === 'user' || item.kind === 'divider' || (isLocal(item) && !isLocal(current.at(-1)) && !(current.some(entry => entry.kind === 'user' || entry.kind === 'assistant') && insideRunning(at))))) { turns.push(current); current = []; }
     current.push(item);
-  }
+  });
   if (current.length) turns.push(current);
   return turns;
 };
@@ -1009,7 +1012,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     return () => { alive = false; };
   }, [agent, leaf.cwd, slashKey, view.ready]);
 
-  useEffect(() => { if (focused && visible) box.current?.focus(); }, [focused, visible]);
+  // The pane handing focus to the input is not the user choosing it: the composer stays folded until they click, type or tab into it.
+  const autoFocus = useRef(false);
+  useEffect(() => { if (focused && visible) { autoFocus.current = true; box.current?.focus(); autoFocus.current = false; } }, [focused, visible]);
   // Cursor's process starts in about six seconds; starting it while the tab is in use means the first setting change or message does not wait for it.
   useEffect(() => { if (agent === 'cursor' && view.ready && focused && visible) void ctxRef.current.call('chat/warm', { id }).catch(() => {}); }, [agent, id, view.ready, focused, visible]);
   const [recovering, setRecovering] = useState(false);
@@ -1280,10 +1285,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       }
       case 'autocompact': {
         if (agent !== 'claude') { note('Auto Compact 창은 Claude 채팅에서만 바꿀 수 있습니다.'); return true; }
-        if (!argument) { const gauge = contextGauge(state); note(gauge.autoCompact ? `Auto Compact 창: ${compact(gauge.basis)} 토큰 (최대 ${compact(gauge.max)}). 바꾸려면 /autocompact auto 또는 /autocompact 350k` : 'Auto Compact 창이 최대 컨텍스트와 같거나 꺼져 있습니다. 창을 줄이려면 /autocompact auto 또는 /autocompact 350k'); return true; }
+        if (!argument) { const gauge = contextGauge(state); note(gauge.autoCompact ? `Auto Compact 창: ${compact(gauge.basis)} 토큰 (최대 ${compact(gauge.max)}). 변경: /autocompact auto 또는 350k` : 'Auto Compact 창을 쓰지 않습니다. 줄이려면 /autocompact auto 또는 350k'); return true; }
         const result = await ctx.call<{ autoCompact: { window: number; auto: boolean } | null }>('chat/autocompact', { id, value: argument });
         if (result?.autoCompact) changed({ compact: { value: `${compact(result.autoCompact.window)} 토큰${result.autoCompact.auto ? ' (auto)' : ''}`, color: 'var(--term-magenta)', icon: 'compress' } });
-        else note('설정을 저장했습니다. 이 모델의 최대 컨텍스트와 같아 별도의 창은 쓰지 않습니다.');
+        else note('저장했습니다. 최대 컨텍스트와 같아 별도 창은 쓰지 않습니다.');
         return true;
       }
       case 'rename': {
@@ -1370,7 +1375,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const askingAgents = useMemo(() => approvalAgents(view.items, view.approvals), [view.items, view.approvals]);
   const waitingAgents = useMemo(() => new Set(askingAgents.values()), [askingAgents]);
   const shown = useMemo(() => { const from = lastIndexWhere(view.items, item => item.kind === 'divider'); return from < 0 ? view.items : view.items.slice(from + 1); }, [view.items]);
-  const turns = useMemo(() => turnsOf(shown), [shown]), lastTurn = turns.at(-1);
+  const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
   // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
   const agentsSeen = useRef<SubAgent[]>([]);
   const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks]);
@@ -1397,7 +1402,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const tracked = useMemo(() => { const own = new Set(toolIds(lastTurn ?? [])); return agentList.filter(item => item.status === 'running' || own.has(item.id)); }, [agentList, lastTurn]);
   const showTracker = tracked.length > 0 && (runningAgents > 0 || trackerHidden !== lastTurnKey);
   const [paneWidth, setPaneWidth] = useState(0), paneRef = useRef<HTMLElement>(null);
-  useEffect(() => { const el = paneRef.current; if (!el || typeof ResizeObserver !== 'function') return; const observer = new ResizeObserver(([entry]) => setPaneWidth(Math.round(entry.contentRect.width))); observer.observe(el); return () => observer.disconnect(); }, []);
+  useEffect(() => { const el = paneRef.current; if (!el || typeof ResizeObserver !== 'function') return; const observer = new ResizeObserver(([entry]) => setPaneWidth(Math.round(entry.borderBoxSize[0].inlineSize))); observer.observe(el); return () => observer.disconnect(); }, []);
+  // Border box, not contentRect: the docked drawer's padding-right shrinks the content box, which would flip it back to "over" and loop.
   // Wide enough: the drawer sits beside the thread; narrower, it covers the thread's right side.
   const drawerDocked = paneWidth >= 760, drawerWidth = drawerDocked ? Math.round(Math.min(460, paneWidth * 0.42)) : Math.min(440, Math.max(0, paneWidth - 24));
   // What the running turn is doing right now, for the status row under it ('' = thinking).
@@ -1431,8 +1437,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const forcePanel = otherCursorOptions.length >= 2;
   const modeDd = <Dropdown locked={locked} label="권한 모드" className="chat-mode" value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabels[mode] ?? mode, icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).catch(ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
-  const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || 'Bypass (Cursor의 Run Everything): 허용 목록에 없는 명령도 묻지 않고 실행합니다'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
-  const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status" title="샌드박스는 Cursor를 다시 시작해야 적용됩니다. 진행 중인 응답이 끝나면 적용됩니다.">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
+  const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || 'Bypass(Run Everything): 허용 목록에 없는 명령도 묻지 않고 실행'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
+  const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status" title="샌드박스 변경은 진행 중인 응답이 끝난 뒤 Cursor를 다시 시작하며 적용됩니다.">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
   const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).catch(ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
   const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || option.description || (option.id === 'fast' ? 'Fast 모드' : option.name)} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || maxOption.description || 'MAX 모드'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id} title={option.description}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
   const hasMore = forcePanel || Boolean(bypassBtn) || (!empty && state.addDirs.length > 0) || (agent === 'cursor' && state.restartPending) || cursorOptions.some(option => isCursorSwitch(option) || (!isCursorEffort(option) && !(maxOption && option.id === maxOption.id))) || Boolean(maxOption || maxContext);
@@ -1500,8 +1506,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></Modal>}
         <div className="chat-input-row">
-        <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기(스티어링) · Tab: 끝난 뒤 보내기(follow-up)` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
-          onFocus={() => setCompact(false)} onBlur={compactLater} onPointerDown={() => setCompact(false)}
+        <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+          onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
           onKeyDown={event => {
@@ -1625,8 +1631,8 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
     <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         <circle cx="14" cy="14" r={radius} className="track" />
-        {shown && compacting && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
-        {shown && <circle cx="14" cy="14" r={radius} className="fill" style={{ stroke: ink }} strokeDasharray={`${Math.max(1.5, length * Math.min(100, percent) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
+        {shown && compacting && gauge.used > 0 && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
+        {shown && percent > 0 && <circle cx="14" cy="14" r={radius} className="fill" style={{ stroke: ink }} strokeDasharray={`${Math.max(1.5, length * Math.min(100, percent) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
         {shown && <text x="14" y="14" textAnchor="middle" dominantBaseline="central" fill={ink}>{percent}</text>}</svg></button>
     <div id={panel} popover="auto" className="usage-detail chat-usage" role="dialog" aria-label="컨텍스트와 사용 한도" onToggle={event => placeAbove(event, 'right')}>
       <header><strong>컨텍스트</strong>{compacting && <span className="auto-compact-badge">Auto Compact</span>}</header>
@@ -1635,7 +1641,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
         {shown && <progress className={settings.usageColors ? 'graded' : ''} style={settings.usageColors ? usageHueStyle(percent) : undefined} value={Math.min(100, percent)} max={100} aria-label={compacting ? 'Auto Compact 창 사용률' : '컨텍스트 사용률'} />}
       </div>
       {compacting && <p className="usage-note auto-compact-detail">
-        {compact(gauge.basis)} 창 기준 · 최대 {compact(gauge.max)}{gauge.autoEstimated ? ' · ADE가 정한 auto 창(Claude에 전달)' : ''} · 창에 가까워지면 다음 요청 전에 자동 요약{percent > 100 ? ' · 창을 넘었습니다' : ''}
+        {percent > 100 ? '창을 넘었습니다. ' : ''}창 {compact(gauge.basis)}{gauge.autoEstimated ? '(자동 설정)' : ''}, 최대 {compact(gauge.max)}. 가득 차기 전에 자동으로 요약합니다.
       </p>}
       <header className="chat-usage-title"><strong>사용 한도</strong>{usage?.plan && <span className="plan">{usage.plan}</span>}
         <button type="button" className="icon-btn" title="새로고침" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>

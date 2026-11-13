@@ -25,19 +25,18 @@ export const CacheTimer = memo(function CacheTimer({ cache, working, warn = 20 }
   const write = cache.ttl >= 3600 ? 2 : 1.25, read = cacheReadShare(cache.model), ratio = Math.round(write / read), tokens = formatTokens(cache.tokens);
   const done = cache.compacted, title = (state === 'compacted' && done ? [
     `Claude Code가 ${clockTime(done.at)}에 대화를 compact했습니다 (${done.trigger === 'manual' ? '수동' : '자동'})${done.before && done.after ? ` · ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}`,
-    '이전 대화의 캐시는 더 쓰지 않습니다. 다음 요청은 긴 대화 대신 요약본만 캐시에 기록하므로 비용이 작습니다.'
+    '요약된 대화로 이어가므로 다음 요청 비용이 작습니다.'
   ] : state === 'cold' ? [
-    `Claude Code 프롬프트 캐시가 식었습니다 · ${clockTime(expires)} 만료 (${ttl} 유지)`,
-    `다음 요청은 대화 ${tokens} 토큰을 캐시에 다시 기록합니다. 입력 단가의 ${write}배로, 캐시가 살아 있을 때보다 약 ${ratio}배의 비용·사용량이 듭니다.`,
-    '이전 맥락이 필요 없다면 /clear로 새 대화를 시작하는 편이 저렴합니다.'
+    `프롬프트 캐시가 식었습니다 · ${clockTime(expires)} 만료 (${ttl} 유지)`,
+    `다음 요청은 대화 ${tokens} 토큰을 다시 기록해 평소보다 약 ${ratio}배의 비용·사용량이 듭니다.`,
+    '이전 맥락이 필요 없다면 /clear로 새 대화를 시작하세요.'
   ] : state === 'using' ? [
-    `Claude Code 프롬프트 캐시 사용중 · 작업 중에는 요청마다 캐시를 읽고 ${ttl} 유지 시간을 다시 시작합니다.`,
+    `프롬프트 캐시 사용 중 · 요청마다 ${ttl} 유지 시간이 다시 시작됩니다.`,
     `마지막 응답 ${clockTime(cache.at)} · 대화 ${tokens} 토큰`
   ] : [
-    `Claude Code 프롬프트 캐시 · ${ttl} 유지${state === 'warm' ? compacts ? ' · 곧 자동 compact' : ' · 곧 식음' : ''}`,
-    compacts ? `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}경 자동 compact(idle compaction)` : `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}에 식음`,
-    `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다 (입력 단가의 ${read}배).`,
-    compacts ? '그 전에 보내지 않으면 대화를 요약한 뒤 식으며, 다음 요청은 요약본만 기록해 비용이 작습니다.' : `식은 뒤에 보내면 다시 기록하느라 약 ${ratio}배의 비용·사용량이 듭니다.`
+    `프롬프트 캐시 · ${ttl} 유지${state === 'warm' ? compacts ? ' · 곧 자동 compact' : ' · 곧 식음' : ''}`,
+    `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}${compacts ? '경 자동 compact' : '에 식음'}`,
+    compacts ? `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다. 그 전에 보내지 않으면 요약됩니다.` : `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다. 식은 뒤에는 약 ${ratio}배의 비용·사용량이 듭니다.`
   ]).join('\n');
   return <span className={`cache-timer ${state}`} title={title} aria-label={title} style={{ '--left': working ? 1 : left / total } as CSSProperties}>
     {(state === 'hot' || state === 'using') && <Icon name="flame" size={12} />}

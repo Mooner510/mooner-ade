@@ -87,7 +87,7 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
     <section><h3>{hasCost ? '턴별 비용' : '턴별 출력 토큰'} <small>최근 {perTurn.length}턴</small></h3>
       <Bars label={hasCost ? '턴별 비용' : '턴별 출력 토큰'} values={perTurn.map(turnValue)}
         readout={index => { const turn = perTurn[index]; return `#${turn.index} · ${hasCost ? money(turn.costUsd) : `출력 ${compact(turn.output)}`} · 요청 ${turn.requests}${turn.ms ? ` · ${duration(turn.ms)}` : ''}${turn.at ? ` · ${clock(turn.at)}` : ''}`; }} />
-      {hasCost && <p className="stats-note">턴별 비용은 모델별 실제 비용을 토큰 가중치(출력 5배, 캐시 읽기 0.1배, 캐시 쓰기 1.25·2배)로 요청에 나눈 추정치입니다.</p>}
+      {hasCost && <p className="stats-note">턴별 비용은 실제 비용을 요청별 토큰 사용량으로 나눈 추정치입니다.</p>}
     </section>
 
     <div className="stats-cols">

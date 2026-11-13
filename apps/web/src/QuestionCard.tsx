@@ -63,7 +63,7 @@ export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAns
       {/* Several questions: "다음" (to the next one still unanswered) until every one is answered, then that same button becomes "답변 보내기". */}
       {tabs && !ready ? <button type="button" className="primary" onClick={() => go(nextOpen)}>다음</button>
         : <button type="button" className="primary" disabled={!ready} onClick={submit}>답변 보내기</button>}
-      <button type="button" onClick={() => onAnswer(false, false)} title={tabs ? `질문 ${questions.length}개 모두 답하지 않고 넘어갑니다. 에이전트는 스스로 판단해 이어갑니다.` : '답하지 않고 넘어갑니다. 에이전트는 스스로 판단해 이어갑니다.'}>{tabs ? '모두 건너뛰기' : '건너뛰기'}</button>
+      <button type="button" onClick={() => onAnswer(false, false)} title={tabs ? `질문 ${questions.length}개를 모두 건너뜁니다. 에이전트가 스스로 판단합니다.` : '건너뜁니다. 에이전트가 스스로 판단합니다.'}>{tabs ? '모두 건너뛰기' : '건너뛰기'}</button>
       <span className="chat-q-hint">{ready ? 'Ctrl/⌘+Enter로 보내기' : `${done}/${questions.length}개 답변함`}</span>
     </footer>
   </div>;

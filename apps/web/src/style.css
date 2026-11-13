@@ -1237,7 +1237,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-bubble.command { border-color: color-mix(in srgb, var(--agent) 32%, var(--border)); background: color-mix(in srgb, var(--agent) 5%, var(--raised)); }
 .chat-bubble.command .chat-command-name { font-family: var(--mono); font-weight: 600; color: var(--agent); }
 .chat-bubble { max-width: 85%; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: var(--raised); border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-.chat-bubble:has(> .md) { white-space: normal; overflow-wrap: break-word; }
+.chat-bubble:has(> .md) { white-space: normal; overflow-wrap: anywhere; }
 .chat-bubble > .md { gap: 4px; font-size: inherit; min-width: 0; max-width: 100%; }
 .chat-images { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--muted); }
 .chat-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 6px; }
@@ -1275,7 +1275,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-row.in-process[data-folded] { transition: grid-template-rows .3s var(--ease) .07s, opacity .2s ease .1s; }
 .chat-row.in-process[data-folded] > div > * { opacity: 0; transform: translateY(-8px); transition: opacity .1s ease, transform .2s ease; }
 .chat-row.sub > div > * { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--border); }
-.chat-row .md-table th, .chat-row .md-table td { overflow-wrap: break-word; word-break: break-word; }
+.chat-row .md-table th, .chat-row .md-table td { overflow-wrap: break-word; }
 .chat-msg-actions { display: flex; gap: 2px; margin: 4px 0 0 -6px; color: var(--muted); }
 .chat-turn > .chat-msg-actions { margin-top: 4px; }
 /* What a slash command printed, under its command. */
@@ -1571,8 +1571,11 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md blockquote { padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
 .md-table { display: block; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }
-.md-table table { border-collapse: collapse; width: max-content; min-width: 100%; table-layout: auto; font-size: 12.5px; line-height: 1.45; }
-.md-table th, .md-table td { padding: 8px 12px; border: 0; border-right: 1px solid color-mix(in srgb, var(--fg) 10%, var(--border)); border-bottom: 1px solid color-mix(in srgb, var(--fg) 16%, var(--border)); text-align: left; vertical-align: top; overflow-wrap: break-word; word-break: break-word; min-width: 5.5rem; }
+.md-table table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 12.5px; line-height: 1.45; }
+.md-table th, .md-table td { padding: 8px 12px; border: 0; border-right: 1px solid color-mix(in srgb, var(--fg) 10%, var(--border)); border-bottom: 1px solid color-mix(in srgb, var(--fg) 16%, var(--border)); text-align: left; vertical-align: top; overflow-wrap: break-word; min-width: 5.5rem; }
+.md-table.wide table { width: max-content; min-width: 100%; }
+.md-table.wide th, .md-table.wide td { max-width: 22rem; }
+.md-table td a, .md-table td code { overflow-wrap: anywhere; } /* 긴 URL·경로만 강제로 자른다. 일반 단어는 통째로 둬 열이 많으면 가로 스크롤 */
 .md-table tr:last-child th, .md-table tr:last-child td { border-bottom: 0; }
 .md-table th:last-child, .md-table td:last-child { border-right: 0; }
 .md-table th { font-weight: 600; background: color-mix(in srgb, var(--fg) 4%, var(--raised)); border-bottom-color: color-mix(in srgb, var(--fg) 26%, var(--border)); white-space: nowrap; }
@@ -2301,10 +2304,10 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .welcome-feedback-button { position: fixed; top: 8px; right: 12px; z-index: 21; -webkit-app-region: no-drag; app-region: no-drag; }
 .welcome > .welcome-feedback { position: fixed; z-index: 20; top: 48px; bottom: 6px; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .welcome > .welcome-feedback.wide { width: calc(100% - 12px); }
-/* Tab-header icon buttons (IconButton tip="header"): a tooltip in the app's own style, instead of the slow native title. */
+/* Tab-header icon buttons (IconButton tip="header"): a tooltip in the app's own style, instead of the slow native title; it shows at once (no hover delay). */
 .icon-btn { position: relative; }
 .icon-btn[data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: max-content; max-width: 260px; padding: 4px 8px; word-break: keep-all; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; font-weight: 400; line-height: 1.4; text-align: left; white-space: normal; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .12s, transform .12s; }
-.icon-btn[data-tip]:is(:hover, :focus-visible)::after { opacity: 1; transform: none; transition-delay: .3s; }
+.icon-btn[data-tip]:is(:hover, :focus-visible)::after { opacity: 1; transform: none; transition-delay: 0s; }
 /* Usage popover: never scroll sideways; long notes and reset times wrap inside the 280px box. */
 .usage-detail { box-sizing: border-box; overflow-x: hidden; }
 .usage-detail > *, .usage-detail .usage-row > * { min-width: 0; max-width: 100%; }
