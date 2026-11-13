@@ -7,6 +7,7 @@ const later = () => new Promise(resolve => setTimeout(resolve, 200));
 readline.createInterface({ input: process.stdin }).on('line', async line => {
   let message; try { message = JSON.parse(line); } catch { return; }
   if (message.type !== 'user') return;
+  if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message }); // --replay-user-messages: the CLI acknowledges a line it takes in
   send({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 80 }); await later();
   send({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm-live', usage: { input_tokens: 120, output_tokens: 0 } } } }); await later();
   send({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 35 } } }); await later();

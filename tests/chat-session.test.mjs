@@ -296,6 +296,31 @@ test('Claude: a running background subagent blocks /clear and handoff unless for
   await running(); await session.reset({ force: true }); assert.deepEqual(session.state().liveTasks, []);
 });
 
+test('Claude: an empty result that answered nothing resends the message once instead of leaving the chat silent', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-swallow-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'swallow', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('swallow');
+  await until(() => events.some(event => event.kind === 'message'));
+  await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'user').length, 1); // the resend is not a second user bubble
+  assert.equal(events.filter(event => event.kind === 'message').length, 1);
+});
+
+test('Claude: a turn that ends with its own text but without the echo of our message resends it once', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-swallowtext-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'swallowtext', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('hello'); await until(() => session.state().status === 'idle'); // an echo has been seen: a missing one now means something
+  await session.send('swallowtext');
+  await until(() => events.filter(event => event.kind === 'message').length >= 3 && session.state().status === 'idle');
+  const said = events.filter(event => event.kind === 'message').map(event => event.blocks.map(block => block.text ?? '').join(''));
+  assert.deepEqual(said, ['ok', 'old task notice', 'ok']);
+  assert.equal(events.filter(event => event.kind === 'user').length, 2);
+});
+
 test('Claude: a question is answered through the tool input; skipping it is not the generic refusal', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-ask-'));
   const events = [];

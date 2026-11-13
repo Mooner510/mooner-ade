@@ -21,6 +21,8 @@ import { UI_PROMPT } from './chat-ui-prompt.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
+// Set once any Claude child echoed one of our plain messages back by its uuid (--replay-user-messages): from then on a turn that ended without the echo is known not to have taken the message in.
+let echoesSeen = false;
 const BACKGROUND_QUIET_MS = 3 * 60_000;
 export const chatFolder = (directory, id) => {
   if (typeof id !== 'string' || !ID.test(id)) throw fault('INVALID_INPUT', '잘못된 채팅 ID입니다.');
@@ -291,6 +293,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   }
   function handleRaw(raw) {
     if (raw?.type === 'user' && raw.isReplay === true) {
+      if (inflight && raw.uuid === inflight.uuid) { inflight.acked = true; echoesSeen = true; }
       const steer = steers.get(raw.uuid);
       if (steer) { steers.delete(raw.uuid); emit({ kind: 'steer', phase: 'applied', uuid: raw.uuid, text: steer.text, images: steer.images, previews: steer.previews }); return; }
       // Any other echo is our own message coming back; only what a local slash command printed in it is new.
@@ -303,6 +306,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     for (const event of normalizeClaude(raw)) handleEvent(event);
   }
   function handleEvent(event) {
+      eventCount += 1;
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (event.kind === 'approval') {
         // A Write request says whether it creates the file or replaces one, so its card can read "새 파일" or "덮어쓰기".
@@ -350,7 +354,21 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
         if (quiet() && restartAfterTurn) restart();
+        // ponytail: one automatic resend, text/images of the last message only; a command that prints nothing is not resent (starts with `/`).
+        // A message the CLI took in is echoed back by its uuid before the turn runs. Claude can accept a line yet drop it when its own startup turn (the notice for background
+        // tasks a resumed session left behind) ends first: a result without the echo, and nothing produced, is not an answer to it. Until an echo was ever seen the empty
+        // result is the only evidence. Not at once: a line the CLI only queued behind its own turn starts to run (events arrive) within moments, and sending it again would answer it twice.
+        if (agent === 'claude' && inflight && !inflight.acked && !inflight.retried && event.status === 'success' && !inflight.text.startsWith('/') && child
+          && (echoesSeen || (!inflight.produced && !event.text))) {
+          const sent = inflight, seen = eventCount;
+          setTimeout(() => {
+            if (inflight !== sent || sent.acked || eventCount !== seen || turnOpen || !child || closed) return;
+            sent.retried = true; sent.uuid = randomUUID(); turnOpen = true; reopened = false; turnSeq += 1; setStatus();
+            void write(userLine(sent.text, sent.images, sent.uuid)).catch(() => { turnOpen = false; setStatus(); });
+          }, 1500).unref();
+        }
       }
+      else if (inflight && ['message', 'command_output', 'compact', 'approval'].includes(event.kind)) inflight.produced = true;
   }
   // Background sub-agents keep running after a turn's `result`, and their hand-back starts a new turn on its own (no user line, no steer). Their output is
   // activity: without this the chat showed "idle" (no stop button, no working indicator) while messages kept arriving. The next `result` closes it again;
@@ -387,6 +405,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   }
   // One start at a time: warm-up, a setting change and a send may arrive together, and none may use the child before it is initialized.
   let starting = null;
+  // The message of the turn in flight and whether anything came back for it. A freshly resumed Claude child first runs its own turn (e.g. the notice for background tasks the
+  // old child left behind) and can end it with an empty `result` while our line is lost: that is no answer, so the message is sent once more.
+  let inflight = null, eventCount = 0;
   function start() { if (starting) return starting; if (child) return Promise.resolve(); return starting = startNow().finally(() => { starting = null; }); }
   async function startNow() {
     if (closed) throw fault('NOT_FOUND', '닫힌 채팅입니다.', 404);
@@ -573,7 +594,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
       // The message is shown right away; starting the process (slow on the first turn) must not delay it.
-      emit({ kind: 'user', text, images: images.length, previews });
+      emit({ kind: 'user', text, images: images.length, previews }); inflight = { text, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
       try {
         if (agent === 'claude' && !meta.artifact && (artifact || wantsArtifact(text))) await enableArtifact();
         await start(); await saveMeta();
@@ -607,7 +628,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           return;
         }
         if (protocol) await protocol.send(text, images);
-        else await write(userLine(text, images));
+        else await write(userLine(text, images, inflight.uuid));
       }
       catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
       setStatus();
