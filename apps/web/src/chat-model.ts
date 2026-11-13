@@ -514,7 +514,7 @@ export const maxSelected = (option: { currentValue: string; options: { value: st
 export const effortStyle: Record<string, { color: string; icon?: string; bars?: number }> = {
   none: { color: '#8b93a0', icon: 'remove' }, minimal: { color: '#7fb8a4', bars: 1 },
   low: { color: '#5ec9a0', bars: 1 }, medium: { color: '#6fa8f0', bars: 2 },
-  high: { color: '#b58cf0', bars: 4 }, xhigh: { color: '#f0a04b', icon: 'bolt' },
+  high: { color: '#b58cf0', bars: 3 }, xhigh: { color: '#f0a04b', bars: 4 },
   max: { color: '#f2566e', icon: 'local_fire_department' }, ultra: { color: '#f2566e', icon: 'local_fire_department' }
 };
 export const effortLabels: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대', minimal: '최소', none: '없음', ultra: '최상' };

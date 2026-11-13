@@ -282,7 +282,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         {states.includes('attention') ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : states.includes('done') && <i className="attn-dot" aria-label="확인 필요" />}
         <span className="folder-actions">
           <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); if (!selected) choose(); dispatch({ type: 'newTab' }); }}><Icon name="plus" size={14} /></button>
-          <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); note('연습용 프로젝트는 닫을 수 없어요. 실제 앱에서는 이 버튼이나 가운데 클릭으로 닫습니다.'); }}><Icon name="x" size={14} /></button>
+          <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); note('연습용 프로젝트는 닫을 수 없어요. 실제로는 이 버튼으로 닫습니다.'); }}><Icon name="x" size={14} /></button>
         </span>
       </div>
       {open && <ul className="folder-tabs" role="group" data-dragging={drag && selected ? '' : undefined}>
@@ -308,7 +308,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
               event.preventDefault(); event.stopPropagation();
               if (drag && drag !== tabItem.id) {
                 const value = dropMode(event, drag, tabItem.id), from = item.tabs.findIndex(t => t.id === drag), shift = from < tabIndex ? tabIndex - 1 : tabIndex;
-                if (value === 'merge') { if (closable(tour, drag)) dispatch({ type: 'merge', id: drag, into: tabItem.id }); else note('처음부터 있던 탭은 튜토리얼에 필요해서 합칠 수 없어요. 새로 만든 탭으로 해 보세요.'); }
+                if (value === 'merge') { if (closable(tour, drag)) dispatch({ type: 'merge', id: drag, into: tabItem.id }); else note('기본 탭은 합칠 수 없어요. 새로 만든 탭으로 해 보세요.'); }
                 else dispatch({ type: 'move', id: drag, to: value === 'after' ? shift + 1 : shift });
               }
               setDrag(''); setDropAt(null);
@@ -317,7 +317,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">분할로 합치기</span>;
           if (leaves.length < 2) return <li key={tabItem.id} data-tab={tabItem.id} role="none" className={`${drag === tabItem.id ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
             <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={agent} data-agent-state={state}
-              title={`${tabItem.label}\n끌어서 순서 변경 · 다른 탭 가운데에 놓으면 분할로 합치기`} onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
+              title={`${tabItem.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할`} onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
               <span className="folder-tab-mark" aria-hidden="true"><Icon name={agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{tabItem.label}</span>
               {cache}{alertOf(state)}{close}
             </div>{dropHint}</li>;

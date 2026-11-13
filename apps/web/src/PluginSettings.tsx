@@ -215,7 +215,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
     {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
 
-    <Row query={query} title="플러그인 사용" hint={`${state.enabled ? '승인한 플러그인만 실행됩니다.' : '꺼져 있으면 설치한 플러그인은 실행되지 않습니다. 켤 때 확인 창이 뜹니다.'} MoonerADE에 들어 있는 내장 플러그인은 이 스위치와 상관없이 각자 켜고 끕니다.`}>
+    <Row query={query} title="플러그인 사용" hint={`${state.enabled ? '승인한 플러그인만 실행됩니다.' : '꺼져 있으면 설치한 플러그인이 실행되지 않습니다.'} 내장 플러그인은 각자 켜고 끕니다.`}>
       <input type="checkbox" role="switch" aria-label="플러그인 사용" checked={state.enabled} disabled={working} onChange={event => { const on = event.target.checked; run('global:enable', () => bridge.setEnabled(on)); }} />
     </Row>
 
@@ -241,9 +241,9 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     {!filtering && <details className="plugin-about">
       <summary><Icon name="chevronRight" size={14} />설치 방법과 보안 안내</summary>
       <ul>
-        <li>zip을 플러그인 폴더에 넣어도 확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인이면 업데이트되고, 저장된 데이터는 남습니다.</li>
+        <li>확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인은 업데이트되고 저장된 데이터는 남습니다.</li>
         <li>압축을 푼 폴더(안에 <span className="mono">plugin.json</span>이 있는 폴더)를 직접 넣었다면 플러그인을 열어 <b>승인하고 실행</b>을 누르세요.</li>
-        <li>승인은 그때의 파일 내용에 고정됩니다. 파일이 바뀌면 다시 승인할 때까지 실행되지 않습니다.</li>
+        <li>승인은 그때의 파일 내용에 묶입니다. 파일이 바뀌면 다시 승인해야 실행됩니다.</li>
         <li>확인 창의 SHA-256을 배포처의 <span className="mono">SHA256SUMS</span>와 맞춰 보면 받은 파일이 그대로인지 알 수 있습니다.</li>
       </ul>
       <p>플러그인 폴더 <span className="mono">{state.dir}</span></p>
@@ -319,7 +319,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     {callout}
     {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
 
-    {plugin.state !== 'invalid' && <Section title="제공하는 기능" hint="이 플러그인이 MoonerADE에 더하는 것입니다. 승인할 때 확인 창에 나온 권한과 같습니다.">
+    {plugin.state !== 'invalid' && <Section title="제공하는 기능" hint="이 플러그인이 더하는 기능과 권한입니다.">
       <Provides plugin={plugin} busy={busy} run={run} bridge={bridge} />
     </Section>}
 
@@ -330,7 +330,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <p className="plugin-muted">플러그인이 실행 중일 때 설정이 여기에 나옵니다.</p>
     </Section>}
 
-    {plugin.builtin && id && <Section title="사용" hint="MoonerADE에 들어 있는 플러그인이라 승인 없이 실행됩니다. 끄면 플러그인을 멈추고 에이전트에 주던 도구를 거둡니다. 설정은 그대로 남습니다.">
+    {plugin.builtin && id && <Section title="사용" hint="내장 플러그인이라 승인 없이 실행됩니다. 끄면 멈추고 에이전트에 주던 도구도 빠집니다. 설정은 남습니다.">
       <label className="plugin-switch-row">
         <span>{plugin.name} 사용</span>
         <input type="checkbox" role="switch" aria-label={`${plugin.name} 사용`} checked={plugin.builtinEnabled !== false} disabled={Boolean(busy)}
@@ -342,7 +342,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <PluginFacts plugin={plugin} />
     </Section>
 
-    {id && !plugin.builtin && !['new', 'invalid'].includes(plugin.state) && <Section title="사용 중지" hint="플러그인을 멈추고 승인을 거둡니다. 다시 쓰려면 승인해야 하고, 플러그인이 저장한 키와 설정은 남습니다.">
+    {id && !plugin.builtin && !['new', 'invalid'].includes(plugin.state) && <Section title="사용 중지" hint="플러그인을 멈추고 승인을 취소합니다. 저장된 키와 설정은 남고, 다시 쓰려면 승인해야 합니다.">
       <div>{button('revoke', '사용 중지', () => bridge.revoke(id), { icon: 'stop', className: 'danger' })}</div>
     </Section>}
   </>;
@@ -370,14 +370,14 @@ function Provides({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
     <span className="plugin-cap-icon"><Icon name="layers" size={16} /></span>
     <div className="plugin-cap-text">
       <strong>프로젝트·터미널 사용</strong>
-      <p>{plugin.builtin ? '열려 있는 채팅의 목록을 읽고 채팅에 메시지를 보냅니다.' : 'MoonerADE 화면과 같은 방식으로 이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다. 원격 접속 같은 기능이 이 권한을 씁니다.'}</p>
+      <p>{plugin.builtin ? '열려 있는 채팅의 목록을 읽고 채팅에 메시지를 보냅니다.' : '이 PC의 프로젝트와 터미널을 열고 조작합니다. 원격 접속 같은 기능에 쓰입니다.'}</p>
     </div>
   </div>);
   blocks.push(<div key="process" className="plugin-cap">
     <span className="plugin-cap-icon"><Icon name="cpu" size={16} /></span>
     <div className="plugin-cap-text">
       <strong>별도 프로세스</strong>
-      <p>{plugin.builtin ? '플러그인이 자기 프로세스로 실행됩니다.' : '승인하면 플러그인이 자기 프로세스로 실행되며 이 컴퓨터에서 MoonerADE와 같은 권한을 갖습니다.'}{plugin.badge ? ' 실행 중에는 상태바에 표시가 나옵니다.' : ''}</p>
+      <p>{plugin.builtin ? '플러그인이 자기 프로세스로 실행됩니다.' : '승인하면 플러그인이 자기 프로세스로 실행됩니다.'}{plugin.badge ? ' 실행 중에는 상태바에 표시가 나옵니다.' : ''}</p>
     </div>
   </div>);
   return <div className="plugin-caps">{blocks}</div>;
