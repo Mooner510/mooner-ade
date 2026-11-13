@@ -2,7 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useId, useLayo
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type Settings } from './Editor';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
-import { Icon, IconButton, SettingGlyph } from './Icon';
+import { Icon, type IconName, IconButton, SettingGlyph } from './Icon';
 import { QuestionCard, QuestionList } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
@@ -444,16 +444,32 @@ function AgentEnd({ id, enter }: { id: string; enter?: boolean }) {
 }
 
 // Above the composer while subagents run (and, once they are all over, until the next message): how many, and what each is doing now.
-function AgentTracker({ list, colors, opened, waiting, onOpen, onHide }: { list: SubAgent[]; colors: Map<string, string>; opened: string | null; waiting: ReadonlySet<string>; onOpen(id: string): void; onHide(): void }) {
-  const [expanded, setExpanded] = useState(true);
+// A finished entry nobody has opened for this long fades out of the tracker.
+const TRACKER_IDLE_MS = 60_000, TRACKER_FADE_MS = 500;
+const agentKindIcon = (agent: SubAgent): IconName => agent.type === 'Monitor' ? 'chart' : agent.job ? 'terminal' : 'bot';
+function AgentTracker({ list: all, colors, opened, waiting, onOpen, onHide }: { list: SubAgent[]; colors: Map<string, string>; opened: string | null; waiting: ReadonlySet<string>; onOpen(id: string): void; onHide(): void }) {
+  const [expanded, setExpanded] = useState(true), [fading, setFading] = useState<ReadonlySet<string>>(new Set()), [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  const idleSince = useRef(new Map<string, number>()), list = all.filter(agent => !gone.has(agent.id));
   const count = (status: AgentStatus) => list.filter(agent => agent.status === status).length, running = count('running');
   const asking = list.filter(agent => agent.status === 'running' && waiting.has(agent.id)).length;
-  const now = useTick(running > 0);
+  const now = useTick(list.length > 0);
+  useEffect(() => {
+    const at = Date.now();
+    for (const agent of all) {
+      if (agent.status === 'running' || agent.id === opened) { idleSince.current.delete(agent.id); continue; }
+      const since = idleSince.current.get(agent.id) ?? (idleSince.current.set(agent.id, at), at);
+      if (at - since < TRACKER_IDLE_MS || fading.has(agent.id) || gone.has(agent.id)) continue;
+      if (calm()) { setGone(prev => new Set(prev).add(agent.id)); continue; }
+      setFading(prev => new Set(prev).add(agent.id));
+      setTimeout(() => setGone(prev => new Set(prev).add(agent.id)), TRACKER_FADE_MS);
+    }
+  }, [now, all, opened, fading, gone]);
+  if (!list.length) return null;
   const done = count('done'), tally = running || done !== list.length
     ? [asking && `승인 대기 ${asking}`, running - asking && `실행 중 ${running - asking}`, done && `완료 ${done}`, count('error') && `오류 ${count('error')}`, count('stopped') && `중단 ${count('stopped')}`].filter(Boolean).join(' · ')
     : '모두 완료';
   // One row: [state] 서브에이전트 N개 · tally ... [dots when folded] [fold] [close]. Fold and close are separate, same-size buttons on the right edge.
-  return <div className="chat-agents" data-running={running > 0 || undefined} role="region" aria-label="서브에이전트">
+  return <div className="chat-agents" data-running={running > 0 || undefined} data-fading={list.every(agent => fading.has(agent.id)) || undefined} role="region" aria-label="서브에이전트">
     <div className="chat-agents-head">
       <button type="button" className="chat-agents-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={expanded ? '목록 접기' : '목록 펼치기'}>
         {running && asking === running ? <span className="chat-agents-done" data-outcome="approval"><Icon name="alert" size={13} /></span> : running ? <i className="chat-spin" /> : <span className="chat-agents-done" data-outcome={count('error') ? 'error' : done !== list.length ? 'stopped' : undefined}><Icon name={count('error') ? 'x' : done !== list.length ? 'stop' : 'check'} size={13} /></span>}
@@ -463,8 +479,8 @@ function AgentTracker({ list, colors, opened, waiting, onOpen, onHide }: { list:
       </button>
       {!running && <IconButton icon="x" label="서브에이전트 목록 닫기" size={13} onClick={onHide} />}
     </div>
-    <Collapse open={expanded}><ul>{list.map(agent => <li key={agent.id}><button type="button" data-status={agent.status} aria-pressed={opened === agent.id} style={dotStyle(colors.get(agent.id))} onClick={() => onOpen(agent.id)}>
-      <i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
+    <Collapse open={expanded}><ul>{list.map(agent => <li key={agent.id} data-fading={fading.has(agent.id) || undefined}><button type="button" data-status={agent.status} aria-pressed={opened === agent.id} style={dotStyle(colors.get(agent.id))} onClick={() => onOpen(agent.id)}>
+      <i className="chat-agent-dot" /><span className="chat-agent-kind" title={agent.type} role="img" aria-label={agent.type}><Icon name={agentKindIcon(agent)} size={14} /></span><strong>{agent.description || '서브에이전트'}</strong>
       <span className="chat-agent-now">{agent.now}</span><small>{agentMeta(agent, now)}</small><AgentState id={agent.id} status={agent.status} waiting={waiting.has(agent.id)} /></button></li>)}</ul></Collapse>
   </div>;
 }
