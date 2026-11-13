@@ -1,6 +1,6 @@
 # Full E2E 체크리스트
 
-다음 Full E2E의 기준표입니다. 환경 구성은 [E2E_HANDOFF](E2E_HANDOFF.md) 4절, 항목별 절차는 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)를 따릅니다.
+다음 Full E2E의 기준표입니다. 환경 구성은 [E2E_HANDOFF](E2E_HANDOFF.md) 4절, 테스트 규칙은 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md), 보류 중인 절차는 [docs/tests/](tests/)를 따릅니다.
 
 - 결과 표기: ✅ 통과 · ❌ 실패(수정 여부 병기) · 📖 코드 읽기로 판정(실행 생략) · ⏭ 이번에 안 함 · ⬜ 미실행
 - **번들 없음:** 서버는 `ADE_DEV=1`(Vite 개발 서버)로 `apps/web/src`를 직접 서빙하므로 웹 소스를 고쳐도 빌드하지 않습니다. 열린 페이지에 HMR로 바로 반영되고, 서버 코드를 고쳤을 때는 `scripts/verify/restart-ui.mjs`로 서버만 재시작합니다(Chrome은 그대로, 탭만 새 주소로 이동). 세션 운영 규칙 전체는 [E2E_HANDOFF](E2E_HANDOFF.md) 4.1절. 예전 문서의 `pnpm --filter @mooner/ade-web build` + `Page.reload(ignoreCache)` 절차는 더 쓰지 않습니다.
@@ -51,7 +51,7 @@
 ### 코드 읽기로 판정하거나 생략 (실행 안 함)
 | 항목 | 상태 |
 |---|---|
-| 헤더 버튼 노출 규칙(W1)·사용량 칩 "—"/`≈N%p`(U1)·busy 중 `/x`+Tab·Codex/Cursor 전환 후 화면·온보딩 화면(W3) | ⏭ 시간 단축으로 제외. 다음 Full E2E에서 확인 |
+| 헤더 버튼 노출 규칙(W1)·사용량 칩 "—"/`N%p`(U1)·busy 중 `/x`+Tab·Codex/Cursor 전환 후 화면·온보딩 화면(W3) | ⏭ 시간 단축으로 제외. 다음 Full E2E에서 확인 |
 | 오류 토스트의 네트워크 문구(UI) | 📖 단위 테스트가 문구 보장 |
 | 이전에 통과한 UI 피드백·채팅 항목(서브에이전트·도구 카드·`ui` 블록·`@` 메뉴 등) | 📖 회귀 확인 생략 |
 
@@ -61,5 +61,5 @@
 - 가짜 claude는 `--model`이 없으면 칩에 `-p`가 표시됨(하네스 부작용).
 
 ## 이번에 하지 않은 영역 (다음 Full E2E 입력)
-- [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md) A~J(실제 AI), K(Electron·실제 Hub·실제 zsh): ⬜ 전부 미실행.
+- [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md) A~J(실제 AI), K(Electron·실제 Hub·실제 zsh): ⬜ 전부 미실행.
 - `pnpm e2e` 첫 단언 실패(master에서도 동일): ⬜ 원인 미조사.
