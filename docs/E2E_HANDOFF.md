@@ -2,7 +2,7 @@
 
 기준일: 2026-11-12(Full E2E 1차 완료 후 갱신). 이 문서만 읽고 Full E2E를 이어서 진행할 수 있도록 현재 상태, 환경 구성, 확인할 항목, 알려진 문제, 규칙을 모았습니다.
 항목별 결과표는 [E2E_CHECKLIST](E2E_CHECKLIST.md)입니다.
-결과 기록은 [VERIFICATION](VERIFICATION.md), 항목별 절차는 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI 에이전트가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)에 있습니다.
+결과 기록은 [VERIFICATION](VERIFICATION.md), 테스트 규칙은 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI 에이전트가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md), 보류 중인 절차는 [docs/tests/](tests/)에 있습니다.
 
 ## 1. 현재 상태
 
@@ -11,7 +11,7 @@
   - 이전부터 있던 것: Provider 전환(`archiveAs`·연타 잠금) — `apps/local-server/src/chat.js`, `index.js`, `apps/web/src/ChatPane.tsx`, `Workspace.tsx`.
   - 문서: `CHAT_MODE_FEATURES.md`, `ENVIRONMENT_VARIABLES.md`, `README.md`, `docs/*`(백그라운드 에이전트가 낡은 내용 정리).
   - 2026-11-12 검증에서 찾아 고친 결함(아래 3절): `chat-model.ts`, `main.tsx`, `Workspace.tsx`, `feedback-store.ts`, `FeedbackCapture.tsx`, `errors.ts`, `ChatPane.tsx`, `QuickInput.tsx`, `style.css`, `tests/errors.test.mjs`, 루트 `a.txt` 삭제.
-  - 새 파일: `docs/AI_AGENT_TEST_CHECKLIST.md`, 이 문서, `scripts/verify/`(검증 하네스).
+  - 새 파일: `docs/tests/261113_1021_실제AI체크리스트/GUIDE.md`, 이 문서, `scripts/verify/`(검증 하네스).
 - 1차 Full E2E(2026-11-12)에서 아래 3절 수정을 실행으로 확인했고, 새로 찾은 결함 2건(후속 큐 이미지 썸네일 `ChatPane.tsx`·`style.css`, `ade-ui` 스크롤바 `UiFrame.tsx`)을 고쳤습니다. 타입 검사 통과. 가짜 `claude`에는 `adeui` 응답이 추가됐습니다(`scripts/verify/bin/claude`). 커밋은 아직 없습니다.
 - **웹 번들 없음:** 검증 세션(`start-ui.mjs`)과 `pnpm e2e`의 서버는 `ADE_DEV=1`로 떠서 `apps/web/src`를 Vite 개발 서버로 직접 서빙합니다. 빌드도, `apps/web/dist`도 필요 없습니다. 웹 소스를 고치면 열린 페이지에 HMR로 약 0.1초 안에 반영되므로 새로고침도 필요 없습니다(서버 코드 `apps/local-server`를 고쳤을 때만 세션을 다시 띄웁니다). `pnpm --filter @mooner/ade-web build`는 패키징·`pnpm start`용 프로덕션 번들일 뿐 검증에는 쓰지 않습니다. 개발 서버의 HMR 소켓(`/?token=…`, 프로토콜 `vite-hmr`)은 서버의 `upgrade` 핸들러가 같은 출처·로그인 확인 뒤 Vite에 넘깁니다.
 
@@ -38,7 +38,7 @@
 | 6 | 모델 변경 경고 문구 공백 | `ChatPane.tsx` | 대화 중 모델 변경 | ✅ |
 | 7 | 긴 선택형 대화상자 제목이 잘리던 문제(줄바꿈 본문으로 표시) | `apps/web/src/QuickInput.tsx`, `style.css` | 모델 변경 경고창, 외부 링크 확인창, "그래도 보내기" 창 | ✅ 경고창·외부 링크·`/model`. "그래도 보내기"는 ⬜ |
 
-항목별 기대 결과는 [TESTING_GUIDE](TESTING_GUIDE.md)의 "머지 전 검증에서 찾아 고친 결함" 표에 있습니다.
+항목별 기대 결과와 결과는 [VERIFICATION](VERIFICATION.md)의 "발견한 결함·확인 필요 사항"과 [E2E_CHECKLIST](E2E_CHECKLIST.md)에 있습니다(옛 표는 git `bb5fa1d`의 `docs/TESTING_GUIDE.md`).
 
 ## 4. 환경 구성
 
@@ -65,14 +65,15 @@ VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/start-ui.mjs      # 계속 �
 | 서버 코드(`apps/local-server`)를 고침 | `VERIFY_OUT=<경로> node scripts/verify/restart-ui.mjs` — 서버와 가짜 Hub만 다시 뜨고, **같은 Chrome의 첫 탭이 새 주소(포트·토큰이 바뀜)로 이동**합니다. 저장된 데이터(채팅·키·저장소)는 그대로입니다 | Chrome을 끄고 다시 켜기 |
 | 서버만 다시 띄우고 싶음(수동) | `VERIFY_OUT=<경로> VERIFY_TEMP=<env.json의 temp> VERIFY_CHROME=<env.json의 cdp> node scripts/verify/start-ui.mjs`. 이 프로세스를 끌 때 Chrome은 남습니다 | |
 | 실제 CLI(API 키)로 확인 | `REAL_AGENTS=1`을 붙여 `start-ui.mjs`/`restart-ui.mjs`를 실행하면 가짜 `claude` 대신 PATH의 실제 CLI를 씁니다. HOME이 임시라 설정 › AI 툴 › 채팅 인증에 저장한 API 키로만 로그인됩니다 | 내 로그인으로 실제 모델 호출 |
+| 실제 CLI(구독 로그인)로 확인 | `AGENT_DIRS=1`을 붙입니다(`REAL_AGENTS` 포함). HOME은 실제 값이고 CLI 설정 폴더만 `~/.ade-test/agents`로 격리됩니다. 먼저 `node scripts/verify/agents.mjs status`/`login`. 상세: [TESTING_GUIDE](TESTING_GUIDE.md) 2절 | 내 `~/.claude`·`~/.codex`를 그대로 쓰기 |
 | 사용자가 Chrome을 직접 닫았거나 `cdp`가 응답하지 않음 | 그때만 `start-ui.mjs`를 `VERIFY_CHROME` 없이 새로 띄웁니다(`VERIFY_TEMP`를 주면 데이터는 유지) | |
 | 이미 떠 있는 세션이 있음(내 것이든 다른 세션 것이든) | 그걸 재활용합니다. 확인은 `node.exe` 명령줄의 `verify/start-ui.mjs`와, 서버 포트의 소유 프로세스에서 부모를 따라가는 것으로 합니다 | 확인 없이 새로 띄우기 |
 | 병렬로 따로 검증해야 함 | `VERIFY_OUT`을 달리해 각자 `start-ui.mjs`를 띄웁니다 | 같은 `VERIFY_OUT` 공유·덮어쓰기 |
-| 세션 종료 | **내가 띄운 `start-ui`의 PID(`env.json`의 `pid`) 하나만** 끕니다. 서버·가짜 Hub는 같이 내려가고 Chrome은 `chromePid`를 따로 닫습니다 | 이름(`node`, `chrome`)으로 일괄 종료 — 다른 에이전트의 세션까지 꺼집니다 |
+| 세션 종료 | `VERIFY_OUT=<경로> node scripts/verify/cleanup-ui.mjs --evidence <기록 폴더>`. `env.json`에 기록된 PID(명령줄 확인 후)·임시 폴더·Chrome 프로필·`VERIFY_OUT`만 지웁니다. 규칙: [TESTING_GUIDE](TESTING_GUIDE.md) 6절 | 이름(`node`, `chrome`)으로 일괄 종료 — 다른 에이전트의 세션까지 꺼집니다 |
 
 - 서버를 재시작한다는 이유로 Chrome을 끌 필요는 없습니다. 주소가 바뀌었을 뿐이므로 주소만 다시 입력하면 되고, `restart-ui.mjs`가 그 일을 CDP `Page.navigate`로 대신합니다.
 - `restart-ui.mjs`는 그 `VERIFY_OUT`의 `env.json`에 적힌 PID만 `SIGKILL`로 끕니다(종료 핸들러가 Chrome을 같이 닫지 않도록). Chrome이 이미 없으면 새 세션을 띄우라는 오류로 멈춥니다.
-- `VERIFY_OUT`(`env.json`·`shots`)은 지우거나 덮어쓰지 않습니다. 새 세션이 같은 경로를 덮으면 기존 세션을 가리키던 `env.json`이 사라집니다.
+- 정리 전까지 `VERIFY_OUT`(`env.json`·`shots`)을 지우거나 덮어쓰지 않습니다. 새 세션이 같은 경로를 덮으면 기존 세션을 가리키던 `env.json`이 사라집니다. 정리는 증거를 옮긴 뒤 `cleanup-ui.mjs`가 합니다.
 - Windows에서 `detached`로 띄운 프로세스 아래서 콘솔 앱(서버 `node`)을 띄우면 서버마다 새 콘솔 창이 뜹니다. 그래서 `start-ui`의 Chrome, `restart-ui`가 띄우는 `start-ui`, `boot()`의 서버는 모두 `windowsHide: true`로 띄웁니다. 새로 spawn을 추가할 때도 같게 합니다.
 - Windows에서 `node -e` 문자열 안의 `/tmp`는 `C:\tmp`로 풀립니다. 스크립트에서는 절대 경로나 `VERIFY_OUT` 환경변수를 씁니다.
 
@@ -108,8 +109,7 @@ ONLY=F4 node scripts/verify/t-feedback.mjs                            # id가 F4
 
 ```js
 import { connect, env } from './scripts/verify/cdp.mjs';
-const c = await connect(p => p.url.includes('127.0.0.1'));
-await c.send('Page.bringToFront');                    // 반드시. 가려진(hidden) 페이지에서는 getDisplayMedia가 InvalidStateError
+const c = await connect(p => p.url.includes('127.0.0.1'));  // 창을 앞으로 가져오지 않는다. 피드백 캡쳐만 connect(…, { focus: true }) 후 Page.bringToFront
 await c.clickSel('button', '새 피드백');               // 보이는 요소의 텍스트/aria-label 일치 → 가운데 클릭
 await c.click(...await c.centre('textarea')); await c.type('본문');
 await c.key('Enter', 'Enter');                         // key(키, 코드, modifiers) — Alt=1 Ctrl=2 Meta=4 Shift=8
@@ -134,7 +134,7 @@ console.log(await c.ev(`return document.body.innerText`));
 ### 5.1 아직 못 본 UI 항목
 1차에서 **끝낸 것**: 이미지 첨부(C3, 대기열 썸네일 수정 포함), QuestionCard(W5), 계획 카드 4동작과 이전 모드 복귀, `ade-ui` iframe(C5/C7, 스크롤바 수정 포함).
 - **헤더 버튼 노출 규칙(W1):** Review·오류·Chat 전환 버튼이 언제 보이고 숨는지. (툴팁 문구는 확인함)
-- **사용량(U1):** 상태바 칩이 값이 없을 때 "—"로 보이는 게 의도인지, `≈N%p`/`<1%p`가 값이 있을 때만 나오는지.
+- **사용량(U1):** 상태바 칩이 값이 없을 때 "—"로 보이는 게 의도인지, `N%p`/`<1%p`가 값이 있을 때만 나오는지.
 - **Setup/온보딩(W3):** 글꼴 "시스템 기본" 외 정리된 화면 전체.
 - **계획 카드:** 대기 중인 계획을 두고 탭을 닫았다 다시 열어 승인(응답 대기 중 닫기는 중단 확인창이 떠서 이 경로를 못 만들었음. 이전 대화 불러오기로 시도).
 - **busy 중 `/x`+Tab:** 후속 큐로 가는 동작이 커밋 메시지("Tab 포커스 이동 방지")와 맞는지 판단.
@@ -151,7 +151,7 @@ console.log(await c.ev(`return document.body.innerText`));
 2절의 UI 피드백·UI 채팅 항목 전체.
 
 ### 5.4 이 환경으로는 못 하는 것
-[AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)의 A~J(실제 AI 에이전트), K(Electron·실제 Hub·실제 zsh). 이번 범위에 넣지 않았습니다.
+[AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md)의 A~J(실제 AI 에이전트), K(Electron·실제 Hub·실제 zsh). 이번 범위에 넣지 않았습니다.
 
 ## 6. 알려진 문제 (수정하지 않음)
 
