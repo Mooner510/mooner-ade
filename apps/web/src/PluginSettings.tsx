@@ -420,7 +420,7 @@ function McpTools({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
       <div className="plugin-cap-head">
         <div>
           <strong>에이전트 도구 (MCP)</strong>
-          <p>{plugin.mcpChatOnly ? <>ADE 채팅의 Claude Code·Codex·Cursor 에이전트에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다(터미널에는 주지 않습니다).</> : <>ADE 터미널과 채팅에서 실행한 Claude Code·Codex에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다.</>} 바꾼 설정은 새로 시작하는 에이전트부터 적용됩니다.</p>
+          <p>{plugin.mcpChatOnly ? <>ADE 채팅의 AI 에이전트에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다(터미널에는 주지 않습니다).</> : <>ADE 터미널과 채팅에서 실행한 Claude Code·Codex에 MCP 서버 <code>{plugin.mcp}</code>를 줍니다.</>} 바꾼 설정은 새로 시작하는 에이전트부터 적용됩니다.</p>
         </div>
         <div className="plugin-cap-controls">
           {running && tools?.offered && <IconButton icon="refresh" label="도구 목록 다시 불러오기" disabled={working || tools.status === 'loading'} onClick={() => run(`${plugin.folder}:tools`, () => bridge.refreshTools(id))} />}

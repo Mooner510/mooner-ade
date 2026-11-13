@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { launchersFor } from '../apps/web/src/launchers.ts';
-import { chatModeTipDue } from '../apps/web/src/tips.ts';
+import { chatModeTipDue, nextHint } from '../apps/web/src/tips.ts';
 import { validateAppState } from '../apps/local-server/src/ui-state.js';
 
 const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
-const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
-const { defaultSettings, migrateSettings, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings, TOUR_VERSION } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
+const { defaultSettings, migrateSettings, TOUR_VERSION, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const app = settings => ({ openProjects: [], activeProjectId: '', settings });
 
 test('each mode has one launcher per provider and keeps the shell', () => {
@@ -21,15 +21,23 @@ test('each mode has one launcher per provider and keeps the shell', () => {
   }
 });
 
-test('new users choose a mode without an upgrade tip; old users retain CLI on their first upgrade', () => {
+test('new users start in Chat and are invited until they open it; old users retain CLI on their first upgrade', () => {
   assert.equal(defaultSettings.defaultMode, 'chat');
-  assert.equal(defaultSettings.chatTipPending, false);
+  assert.equal(defaultSettings.chatTipPending, true, 'a new user who picks CLI has still never seen Chat');
   const old = migrateSettings({ theme: 'light' });
   assert.equal(old.defaultMode, 'cli');
   assert.equal(old.chatTipPending, true);
   assert.equal(old.theme, 'light');
   assert.equal(migrateSettings({ onboarded: false }).chatTipPending, false);
   assert.deepEqual(migrateSettings(old), old);
+});
+
+test('a newer tutorial is due once more for everyone who finished an older one, then stays done', () => {
+  assert.equal(migrateSettings({ onboarded: true, defaultMode: 'chat' }).onboarded, false, 'finished before tourVersion existed');
+  assert.equal(migrateSettings({ onboarded: true, tourVersion: TOUR_VERSION - 1 }).onboarded, false);
+  const finished = { ...migrateSettings({ onboarded: true }), onboarded: true, tourVersion: TOUR_VERSION };
+  assert.deepEqual(migrateSettings(JSON.parse(JSON.stringify(finished))), finished, 'finishing it is kept');
+  assert.equal(migrateSettings({ onboarded: true }).chatTipPending, true, 'still an old user for the Chat invitation');
 });
 
 test('the upgrade tip is limited to CLI providers, and dismissal survives saves and later migrations', () => {
@@ -41,11 +49,25 @@ test('the upgrade tip is limited to CLI providers, and dismissal survives saves 
     assert.equal(chatModeTipDue(old, 'editor', agent), false);
   }
   assert.equal(chatModeTipDue(old, 'terminal', undefined), false);
-  assert.equal(chatModeTipDue({ ...old, defaultMode: 'chat' }, 'terminal', 'claude'), false);
+  assert.equal(chatModeTipDue({ ...old, defaultMode: 'chat' }, 'terminal', 'claude'), true, 'a Chat default does not mean Chat was tried');
   assert.equal(chatModeTipDue({ ...old, tips: false }, 'terminal', 'claude'), false);
   const dismissed = validateAppState(app({ ...old, chatTipPending: false })).settings;
   assert.equal(chatModeTipDue(migrateSettings(JSON.parse(JSON.stringify(dismissed))), 'terminal', 'claude'), false);
-  assert.equal(chatModeTipDue(defaultSettings, 'terminal', 'claude'), false);
+  assert.equal(chatModeTipDue(defaultSettings, 'terminal', 'claude'), true);
+});
+
+test('button hints: one at a time, in order, never during the tour, and remembered once acknowledged', () => {
+  const settings = { ...defaultSettings, onboarded: true };
+  assert.equal(nextHint(settings, [['tocli', true], ['stats', true]]), 'tocli');
+  assert.equal(nextHint(settings, [['tocli', false], ['stats', 'sid']]), 'stats', 'any truthy condition counts');
+  assert.equal(nextHint({ ...settings, hintsSeen: ['tocli'] }, [['tocli', true], ['stats', true]]), 'stats');
+  assert.equal(nextHint({ ...settings, hintsSeen: ['tocli', 'stats'] }, [['tocli', true], ['stats', true]]), undefined);
+  assert.equal(nextHint({ ...settings, onboarded: false }, [['tocli', true]]), undefined, 'not over the tour');
+  assert.equal(nextHint({ ...settings, tips: false }, [['tocli', true]]), undefined);
+  assert.deepEqual(validateAppState(app({ hintsSeen: ['tocli', 'stats', 'tochat'] })).settings.hintsSeen, ['tocli', 'stats', 'tochat']);
+  const keys = ['keymodel', 'keyeffort', 'keymode', 'keystash']; // the composer's shortcut pointers (ChatPane)
+  assert.deepEqual(validateAppState(app({ hintsSeen: keys })).settings.hintsSeen, keys);
+  for (const hintsSeen of ['tocli', [1], ['<script>']]) assert.throws(() => validateAppState(app({ hintsSeen })), { code: 'INVALID_INPUT' });
 });
 
 test('mode and upgrade eligibility are validated at the persistence boundary', () => {

@@ -13,9 +13,11 @@ export type Settings = {
   cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; interactiveUi: boolean; artifactAlways: boolean; usageRefresh: number;
   // Chat composer shortcut overrides (id -> combo, see chat-model chatKeyDefs); a missing id uses its default.
   chatKeys: Record<string, string>; appKeys: Record<string, string>;
+  // chatTipPending: Chat was never opened and its card was not dismissed (new users too: they may pick CLI and never see Chat).
   defaultMode: AgentMode; chatTipPending: boolean;
   // tips: hint cards in a pane corner (long context, shortcuts for what was just done with the mouse); contextTipK = context size in thousands of tokens that triggers the /clear tip.
-  tips: boolean; contextTipK: number;
+  // hintsSeen: one-time pointers at easy-to-miss buttons (tips.ts nextHint) the user already acknowledged.
+  tips: boolean; contextTipK: number; hintsSeen: string[];
   // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
   tmuxGuide: 'auto' | 'always' | 'off'; tmuxPrefix: string;
   // Customization. accentColor '' keeps the theme's own accent. The rest map onto xterm / Monaco options of the same meaning.
@@ -24,7 +26,8 @@ export type Settings = {
   diffLayout: 'auto' | 'inline' | 'split'; diffIgnoreWhitespace: boolean; diffFoldUnchanged: boolean; diffContextLines: number;
   clock12h: boolean; clockSeconds: boolean; systemRefresh: number; reviewWidth: number;
   // First-run tutorial finished or skipped. Saved settings from before it existed count as done: those users are not new.
-  onboarded: boolean;
+  // `tourVersion`: the tutorial last finished; one below TOUR_VERSION means it is due again, once, and cannot be skipped.
+  onboarded: boolean; tourVersion: number;
   // Chat tab status line (Claude Code's own statusLine, drawn by ADE): which items, their order and side, and a separator.
   chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
@@ -62,11 +65,15 @@ export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'ch
 }
 // Green at 0% through yellow to red at 100%, like Claude Code's statusline; the theme picks the lightness.
 export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, Math.min(100, percent)) / 100));
+// Raise when the tutorial changes enough that users who finished it should go through it again.
+export const TOUR_VERSION = 2;
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
   if (saved.onboarded === undefined) next.onboarded = true;
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
+  // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
+  if (next.tourVersion < TOUR_VERSION) next.onboarded = false;
   if (saved.statusItems && !saved.statusLeft) next.statusItems = [...saved.statusItems.filter(id => !addedWithLayout.includes(id)), ...addedWithLayout];
   // Chat status line: model, mode and context moved into the composer's footer, so an untouched old default (ignoring ids that no longer exist) follows the new one.
   const known = (list?: string[]) => JSON.stringify((list ?? []).filter(id => chatStatusItemIds.includes(id)));
@@ -87,12 +94,12 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: false, tips: true, contextTipK: 400,
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
   diffLayout: 'auto', diffIgnoreWhitespace: false, diffFoldUnchanged: true, diffContextLines: 3,
-  clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false,
+  clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false, tourVersion: 0,
   chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'cli', chatDefaultEffort: 'auto',

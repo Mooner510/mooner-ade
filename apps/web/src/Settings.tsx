@@ -531,7 +531,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="시계에 초 표시" hint="켜면 1초마다 갱신합니다." preview="clockSec">{toggle('clockSeconds')}</Row>
           </Group>
           <Group title="동작">
-            <Row title="새 탭 기본 모드" hint="새 탭 메뉴와 런처에서 Claude Code·Codex·Cursor를 채팅으로 열지 터미널(CLI)로 열지 정합니다." preview={false}>
+            <Row title="새 탭 기본 모드" hint="새 탭 메뉴와 런처에서 AI 에이전트를 채팅으로 열지 터미널(CLI)로 열지 정합니다." preview={false}>
               <Dropdown label="새 탭 기본 모드" value={settings.defaultMode} options={[{ value: 'chat', label: '채팅' }, { value: 'cli', label: '터미널 (CLI)' }]} onChange={value => set('defaultMode', value as Settings['defaultMode'])} /></Row>
             <Row title="실행 중인 터미널 닫기 확인" hint="실행 중인 터미널이나 그 터미널이 있는 탭을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmClose')}</Row>
             <Row title="채팅 닫기 확인" hint="응답 중인 채팅이나 그 채팅이 있는 탭을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseChat')}</Row>
@@ -587,7 +587,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           {(searching || aiTab === 'common') && <Group title={searching ? '공용' : undefined}>
             <h4 className="setting-group">알림</h4>
             <p className="setting-note">모든 에이전트에 공통입니다. 에이전트마다 끄려면 해당 탭의 ‘알림’을 사용하세요.</p>
-            <Row title="에이전트 작업 완료" hint="터미널의 Claude Code·Codex·Cursor CLI가 5초 넘게 출력을 멈추면(완료 또는 입력 대기) 알립니다.">{toggle('notifyDone')}</Row>
+            <Row title="에이전트 작업 완료" hint="터미널의 AI 에이전트가 5초 넘게 출력을 멈추면(완료 또는 입력 대기) 알립니다.">{toggle('notifyDone')}</Row>
             <Row title="승인·입력 요청" hint="CLI가 벨(BEL)로 승인·입력을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
             <Row title="보고 있는 터미널도 알림" hint="끄면 지금 보고 있는 터미널은 알리지 않습니다.">{toggle('notifyLooking')}</Row>
             <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
