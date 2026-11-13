@@ -96,8 +96,7 @@ function view() {
   return {
     status: { tone: 'ok', text: `실행 중 · 전달 ${stats.delivered}건 · 대기 ${stats.queued}건 · 실패 ${stats.failed}건 · 거부 ${stats.rejected}건` },
     info: [
-      { label: '사용법', value: '채팅의 에이전트에게 "Codex 채팅에 이 내용을 전달해"처럼 말하면, 에이전트가 list_peers로 채팅을 찾고 send_message로 보냅니다. 받는 채팅에는 바로 전달되며, 받는 쪽은 자기 권한 모드와 보낸 채팅에서 사용자가 마지막으로 입력한 말을 근거로 수행 여부를 판단합니다(자동·Bypass 모드는 스스로 진행, 그 외는 자기 사용자에게 먼저 묻습니다).' },
-      { label: '적용 시점', value: '규칙 설정은 바로 적용됩니다. 에이전트 도구(MCP)는 새로 시작하는 에이전트부터 받습니다. 이미 응답 중인 채팅은 쉬었다가 다음 메시지부터 받습니다.' },
+      { label: '사용법', value: '채팅의 에이전트에게 "Codex 채팅에 이 내용을 전달해"처럼 말하세요. 받는 쪽은 자기 권한 모드에 따라 바로 하거나 사용자에게 먼저 묻습니다.' },
       ...(recent.length ? recent : [{ label: '최근 메시지', value: '아직 없습니다.' }])
     ],
     fields: fieldsFor(settings),
