@@ -1,4 +1,5 @@
 // Talks to pty-host.js. `factory.spawn` mirrors node-pty's API (but resolves asynchronously), so LocalTerminal can use it unchanged.
+import { EventEmitter } from 'node:events';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { ptyProtocolSupported } from './pty-protocol.js';
@@ -63,12 +64,40 @@ export async function ptyHostControl({ endpoint, token }, request, { timeoutMs =
 
 export async function connectPtyHost({ endpoint, token }) {
   const { socket, hello, rest } = await helloPtyHost({ endpoint, token, role: 'owner' });
-  const replies = new Map(), sessions = new Map();
+  const replies = new Map(), sessions = new Map(), procs = new Map();
   const write = value => { if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`); };
-  const request = value => new Promise((resolve, reject) => {
+  // `sync` sees the answer in the same tick it arrives, before any event the host sent after it.
+  const request = (value, sync) => new Promise((resolve, reject) => {
     if (socket.destroyed) return reject(new Error('pty-host disconnected'));
-    const req = randomUUID(); replies.set(req, { resolve, reject }); write({ ...value, req });
+    const req = randomUUID(); replies.set(req, { resolve, reject, sync }); write({ ...value, req });
   });
+
+  // A piped process in the host, shaped like the ChildProcess chat.js drives: stdin.write, stdout/stderr 'data', 'spawn'/'error'/'close', kill().
+  // stdout comes as whole lines; they are held until something listens (as a real pipe would) and `lastLine` is the number of the last one handed on.
+  const procSession = key => {
+    const proc = Object.assign(new EventEmitter(), { key, pid: undefined, exitCode: null, signalCode: null, lastLine: 0, acked: 0, stdout: new EventEmitter(), stderr: new EventEmitter() });
+    let held = [], ended = null, closed = false;
+    const finish = () => { if (closed || held.length || !ended) return; closed = true; procs.delete(key); proc.exitCode = ended.code; proc.signalCode = ended.signal; proc.emit('exit', ended.code, ended.signal); proc.emit('close', ended.code, ended.signal); };
+    const flush = () => { while (held.length && proc.stdout.listenerCount('data')) { const [n, line] = held.shift(); proc.lastLine = n; proc.stdout.emit('data', `${line}\n`); } finish(); };
+    proc.stdout.on('newListener', name => { if (name === 'data') queueMicrotask(flush); });
+    proc.line = (n, line) => { held.push([n, line]); flush(); };
+    proc.end = (code, signal) => { ended ??= { code, signal }; flush(); };
+    proc.stdin = Object.assign(new EventEmitter(), {
+      write(data, callback) {
+        if (socket.destroyed || closed) { const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }); queueMicrotask(() => { callback?.(error); proc.stdin.emit('error', error); }); return false; }
+        write({ op: 'stdin', key, data: String(data) }); if (callback) queueMicrotask(() => callback()); return true;
+      },
+      end() {}
+    });
+    proc.kill = (signal = 'SIGTERM') => { if (!closed) write({ op: 'killProc', key, signal }); return true; };
+    // Leaves it running in the host for the next server, which goes on after `lastLine`.
+    proc.detach = () => { procs.delete(key); write({ op: 'detachProc', key, ack: proc.lastLine }); };
+    procs.set(key, proc);
+    return proc;
+  };
+  // The host keeps lines until they are acknowledged; once a second is enough to keep its memory down.
+  const ackTimer = setInterval(() => { for (const proc of procs.values()) if (proc.lastLine > proc.acked) { proc.acked = proc.lastLine; write({ op: 'ack', key: proc.key, n: proc.lastLine }); } }, 1000);
+  ackTimer.unref();
 
   // A session is the node-pty look-alike for one remote terminal. Output that arrives before anyone listens is held back.
   const session = (key, pid) => {
@@ -98,7 +127,10 @@ export async function connectPtyHost({ endpoint, token }) {
     pending += chunk;
     for (let newline = pending.indexOf('\n'); newline >= 0; newline = pending.indexOf('\n')) {
       const message = JSON.parse(pending.slice(0, newline)); pending = pending.slice(newline + 1);
-      if (message.re) { const waiting = replies.get(message.re); replies.delete(message.re); if (message.ok === false) waiting?.reject(new Error(message.error || 'pty-host request failed')); else waiting?.resolve(message); }
+      if (message.re) { const waiting = replies.get(message.re); replies.delete(message.re); waiting?.sync?.(message); if (message.ok === false) waiting?.reject(Object.assign(new Error(message.error || 'pty-host request failed'), message.code && { code: message.code })); else waiting?.resolve(message); }
+      else if (message.ev === 'line') procs.get(message.key)?.line(message.n, message.line);
+      else if (message.ev === 'stderr') procs.get(message.key)?.stderr.emit('data', Buffer.from(String(message.data)));
+      else if (message.ev === 'procExit') procs.get(message.key)?.end(message.code, message.signal);
       else if (message.ev === 'data') sessions.get(message.key)?.emit(message.data);
       else if (message.ev === 'exit') { const item = sessions.get(message.key); sessions.delete(message.key); item?.finish({ exitCode: message.exitCode, signal: message.signal }); }
     }
@@ -111,6 +143,8 @@ export async function connectPtyHost({ endpoint, token }) {
     replies.clear();
     for (const item of [...sessions.values()]) item.finish({ exitCode: -1, lost: true });
     sessions.clear();
+    clearInterval(ackTimer);
+    for (const proc of [...procs.values()]) proc.end(null, 'SIGHUP');
   });
   socket.on('error', () => {});
   socket.resume();
@@ -126,6 +160,30 @@ export async function connectPtyHost({ endpoint, token }) {
         return created;
       }
     },
+    // Whether this host keeps piped processes (an older one, handed over by an update, does not).
+    procs: Array.isArray(hello.features) && hello.features.includes('proc'),
+    // Returns at once, like child_process.spawn; 'spawn' or 'error' follows.
+    spawnProc(file, args, { cwd, env, meta } = {}) {
+      const key = randomUUID(), proc = procSession(key);
+      request({ op: 'spawnProc', key, file, args, options: { cwd, env }, meta }, answer => { if (answer.ok !== false) { proc.pid = answer.pid; queueMicrotask(() => proc.emit('spawn')); } })
+        .catch(error => { procs.delete(key); proc.emit('error', error); }); // refused (ENOENT keeps its code) or the host is gone
+      return proc;
+    },
+    // Takes over a process a previous server left running, from the line after `after`. `missing`: lines before those are gone (it cannot be followed on).
+    async attachProc(key, after = 0) {
+      const proc = procSession(key);
+      try {
+        await request({ op: 'attachProc', key, after }, answer => {
+          if (answer.ok === false) return;
+          proc.pid = answer.pid; proc.missing = answer.missing === true; proc.lastLine = proc.acked = after;
+          for (const [n, line] of answer.lines ?? []) proc.line(n, line);
+          if (answer.stderr) proc.stderrTail = answer.stderr;
+          if (answer.exit) proc.end(answer.exit.code, answer.exit.signal);
+        });
+        return proc;
+      } catch (error) { procs.delete(key); throw error; }
+    },
+    async listProcs() { return (await request({ op: 'list' })).procs ?? []; },
     async list() { return (await request({ op: 'list' })).items; },
     async attach(key) {
       const created = session(key, undefined);
