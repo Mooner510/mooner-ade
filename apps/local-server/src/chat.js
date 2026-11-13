@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
-import { spawnAgent } from './agent-spawn.js';
+import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
@@ -51,11 +51,16 @@ export function withUtf8Ctype(env, platform = process.platform) {
   return env;
 }
 
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, quietMs = BACKGROUND_QUIET_MS }) {
+// `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
+// next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, quietMs = BACKGROUND_QUIET_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  const metaFile = path.join(root, 'meta.json'), logFile = path.join(root, 'events.jsonl');
+  const metaFile = path.join(root, 'meta.json'), logFile = path.join(root, 'events.jsonl'), liveFile = path.join(root, 'live.json');
+  // Read once: whatever happens next, it must not be taken over twice.
+  const handed = await fs.readFile(liveFile, 'utf8').then(JSON.parse, () => null);
+  if (handed) await fs.rm(liveFile, { force: true });
   const saved = await fs.readFile(metaFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   // Claude: meta holds only what the user picked in this chat. Unset model/effort/permissionMode mean "whatever a plain `claude` would use" (settings.json), so no flag is passed.
   const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: agent === 'claude' ? undefined : 'default', sandbox: null, network: false, runEverything: false, costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
@@ -442,6 +447,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       // unreachable (measured with claude 2.1.322: init 1.1s without the flag, 29.7s with it). The bus connects in ~1s; a late server just joins later.
       // ponytail: a user's own server slower than this misses the first turn's tool list; set CLAUDE_CODE_MCP_STARTUP_WAIT_MS in the environment ADE starts with to wait longer.
       if (agent === 'claude') launchEnv.CLAUDE_CODE_MCP_STARTUP_WAIT_MS ??= '3000';
+      if (procHost) { const resolved = resolveAgentCommand(executable, args, { env: launchEnv }); return procHost.spawnProc(resolved.file, resolved.args, { cwd, env: launchEnv, meta: { chatId: id, projectId, agent } }); }
       return spawnProcess(executable, args, { cwd, env: launchEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     };
     let proc = run();
@@ -530,8 +536,49 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   }
 
   await saveMeta(); setStatus();
+  if (handed) await takeOver(handed);
+  // The agent a stopped server left running in the pty-host: attached again with the turn, approvals and background tasks it had.
+  async function takeOver(saved) {
+    let proc = null;
+    try { if (saved.v === 1 && procHost && typeof saved.procKey === 'string') proc = await procHost.attachProc(saved.procKey, saved.ack); } catch { /* gone meanwhile */ }
+    if (proc?.missing) { proc.kill('SIGTERM'); proc = null; }
+    if (!proc) {
+      if (saved.turnOpen || saved.approvals?.length) { state.error = '이전 서버에서 응답을 이어받지 못했습니다. 세션 복구를 시도하거나 다시 보내세요.'; emit({ kind: 'error', message: state.error, recoverable: canRetryTurn() }); publish(); }
+      return;
+    }
+    if (agent !== 'claude') { protocol = createChatProtocol(agent, { write, emit: handleEvent }); protocol.restore(saved.protocol ?? {}); }
+    attach(proc);
+    turnOpen = saved.turnOpen === true; reopened = saved.reopened === true; turnSeq = saved.turnSeq ?? 0; inflight = saved.inflight ?? null;
+    restartAfterTurn = state.restartPending = saved.restartAfterTurn === true; launchedWindow = saved.launchedWindow ?? null; lastCommandOutput = saved.lastCommandOutput ?? null;
+    for (const event of saved.approvals ?? []) approvals.set(event.requestId, event);
+    for (const [uuid, item] of saved.steers ?? []) steers.set(uuid, item);
+    for (const [toolUseId, taskId] of saved.taskIds ?? []) taskIds.set(toolUseId, taskId);
+    state.liveTasks = saved.liveTasks ?? [];
+    if (reopened) noteBackgroundActivity({ kind: 'message' });
+    if (agent === 'cursor') startCursorStorePoll();
+    setStatus();
+  }
   return {
     id, agent, get cwd() { return cwd; },
+    // Server shutdown: an agent running in the pty-host stays, and live.json tells the next server how far this one read and what was open.
+    // Everything is taken in the same tick as the last line handled, so nothing is read twice or lost. Without the host it is a plain close.
+    async detach() {
+      if (closed) return;
+      const proc = child;
+      if (!proc?.detach || !proc.pid) return this.close();
+      const saved = { v: 1, procKey: proc.key, ack: proc.lastLine, turnOpen, reopened, turnSeq, inflight, restartAfterTurn, launchedWindow, lastCommandOutput,
+        approvals: [...approvals.values()], steers: [...steers], taskIds: [...taskIds], liveTasks: state.liveTasks, protocol: protocol?.snapshot() };
+      proc.detach();
+      closed = true; child = null; protocol = null; carryCost();
+      clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); stopCursorStorePoll();
+      await writing.catch(() => {});
+      await saveMeta().catch(() => {});
+      await fs.writeFile(liveFile, JSON.stringify(saved), { mode: 0o600 });
+    },
+    // Whether an agent process is running for this chat right now (the app's quit question counts them).
+    get running() { return Boolean(child); },
+    // Whether that process would outlive this server (it runs in the pty-host).
+    get hosted() { return Boolean(child?.detach); },
     // /rename: the chat's own title (wins over the AI/agent titles until /clear); stored as a custom-title event like the CLI's.
     rename(title) {
       const text = cleanChatTitle(title).slice(0, 60);
