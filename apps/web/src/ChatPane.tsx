@@ -25,7 +25,7 @@ export type ChatCtx = {
   subscribe(id: string, handler: (message: any) => void): () => void;
   settings: Settings; root: string; projectId: string;
   onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(): void;
-  pick(title: string, items: { id: string; label: string }[]): Promise<string | null>; fail(cause: unknown): void;
+  pick(title: string, items: { id: string; label: string; detail?: string }[]): Promise<string | null>; fail(cause: unknown): void;
   // Branch: opens a copy of chat `id` up to one assistant message as a new tab.
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
   // Continue this conversation in a terminal (`claude --resume`); the server refuses unless the chat is idle.
@@ -1024,18 +1024,24 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     void ctxRef.current.call('chat/retry', { id }).catch(ctxRef.current.fail).finally(() => { recoveringRef.current = false; setRecovering(false); });
   }, [id]);
   // Prompt caches are per model: switching mid-conversation re-reads the whole context uncached on the next turn.
-  // Asked only when there is something to re-read (messages since the last /clear). Resolves false when the user cancels
+  // Asked only when there is something to re-read (user/assistant messages or a compact summary since the last /clear; notes and command output are not context). Resolves false when the user cancels
   // or picks "compact first": then /compact runs on the current model and the effect below switches once it finished.
   const compactThenSwitch = useRef<{ model: string; compacts: number; started: boolean } | null>(null);
   const compactCount = view.items.filter(item => item.kind === 'compact').length;
   async function setChat(input: any, confirmed = false) {
-    if (!confirmed && input.model && input.model !== resolvedModelValue && input.model !== selectedModel && shown.length > 0) {
+    if (!confirmed && input.model && input.model !== resolvedModelValue && input.model !== selectedModel && shown.some(item => item.kind === 'user' || item.kind === 'assistant' || item.kind === 'compact')) {
       const canCompact = available.some(item => item.name === 'compact');
-      const choice = await ctx.pick('대화 중에 모델을 바꾸면 프롬프트 캐시가 모두 만료됩니다. 다음 메시지에서 지금까지의 컨텍스트 전체를 캐시 없이 다시 읽어 사용량이 늘 수 있습니다. (/clear 직후에는 해당 없음)'
-        + (canCompact ? '\n먼저 압축하면 요약된 짧은 컨텍스트만 새 모델로 다시 읽습니다.' : ''),
-        [{ id: 'yes', label: '모델 변경' }, ...(canCompact ? [{ id: 'compact', label: '압축(/compact)하고 전환' }] : []), { id: 'no', label: '취소' }]);
+      const choice = await ctx.pick('모델을 바꾸면 프롬프트 캐시가 만료돼요\n다음 메시지에서 대화 전체를 다시 읽어 사용량이 늘 수 있어요.',
+        [{ id: 'yes', label: '모델 변경' }, ...(canCompact ? [{ id: 'compact', label: '압축하고 전환', detail: '요약본만 다시 읽음' }] : []), { id: 'clear', label: '새 대화로 전환', detail: '이전 대화 비움' }, { id: 'no', label: '취소' }]);
+      if (choice === 'clear') {
+        if (busy || queue.length || queueSending) { note('응답이 끝난 뒤 다시 시도하세요.'); return false; }
+        if (!await resetChat()) return false;
+        await setChat(input, true);
+        note(`대화를 비우고 모델을 ${displayModel(input.model, agent)}(으)로 바꿨습니다.`);
+        return false;
+      }
       if (choice === 'compact') {
-        if (busy || queue.length || queueSending) { note('응답이 끝난 뒤 다시 시도하세요. 압축은 진행 중인 응답이 없을 때만 시작할 수 있습니다.'); return false; }
+        if (busy || queue.length || queueSending) { note('응답이 끝난 뒤 다시 시도하세요.'); return false; }
         compactThenSwitch.current = { model: input.model, compacts: compactCount, started: false };
         await transmit('/compact', []);
         return false;
