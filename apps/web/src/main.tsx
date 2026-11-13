@@ -2,7 +2,7 @@ import { showAppKey } from './shortcuts';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
-import { agentNames, defaultSettings, migrateSettings, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
@@ -415,8 +415,8 @@ function Shell() {
   // A replay (book button, palette, settings) skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
-  const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
-  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
+  const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
+  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} required={settings.tourVersion < TOUR_VERSION} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>

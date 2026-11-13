@@ -1,6 +1,7 @@
-// First-run tutorial: a practice copy of the app (two projects, tabs, split panes, a scripted Claude) that the user drives with the real
-// gestures and keys. Each step lists flags that must be earned before "다음" unlocks. Pure state, no DOM or React, so node tests can
-// load it; Tutorial.tsx draws it with the app's own markup. Pane layouts use the real tree helpers from api.ts.
+// First-run tutorial: a practice copy of the app (two projects, tabs, split panes, Chat panes, a scripted agent CLI) that the user drives with the
+// real gestures and keys. It covers only what is particular to ADE; typing a request is not taught. Each step lists flags that must be earned
+// before "다음" unlocks. Pure state, no DOM or React, so node tests can load it; Tutorial.tsx draws it with the app's own markup and components.
+// Pane layouts use the real tree helpers from api.ts.
 import { beside, findLeaf, leafList, mapLeaf, remove, split, type Leaf, type Pane } from './api';
 
 export type Agent = 'claude' | 'codex' | 'cursor';
@@ -19,12 +20,15 @@ export type Action =
   | { type: 'tab'; id: string } | { type: 'cycle'; step: number } | { type: 'jump'; index: number } | { type: 'move'; id: string; to: number } | { type: 'merge'; id: string; into: string }
   | { type: 'closeTab'; id: string } | { type: 'closePane'; id: string }
   // launch target: a "새 탭" page's tab id, a launcher leaf id, or '' for a new tab (▾ menu, command palette)
-  | { type: 'newTab' } | { type: 'launch'; target: string; agent: Agent | '' }
+  // chat: open the agent as a Chat pane (the real ChatPane on a stand-in server) instead of its CLI; toCli turns that chat into the agent's terminal.
+  | { type: 'newTab' } | { type: 'launch'; target: string; agent: Agent | ''; chat?: boolean } | { type: 'toCli'; id: string }
   | { type: 'split'; dir: 'row' | 'column' } | { type: 'pick'; id: string } | { type: 'focusBy'; step: number } | { type: 'zoom' } | { type: 'layout'; tab: string; pane: Pane }
   | { type: 'submit'; leaf: string; text: string } | { type: 'queue'; text: string } | { type: 'unqueue'; index: number } | { type: 'workDone' } | { type: 'ask' }
   | { type: 'diff' } | { type: 'palette'; open: boolean } | { type: 'command' } | { type: 'settings'; open: boolean };
 export type Task = { flag: string; label: string; hint?: string; target?: string };
-export type Step = { id: string; title: string; body: string; tasks: Task[]; target?: string; keys?: [string, string][] };
+// `body`: a few short lines, not a paragraph. **word** is emphasised; {alert} {done} {diff} {chat} {cli} draw the app's own markers (Tutorial.tsx Rich).
+// `after`: the line under the tasks once they are done (default: press 다음).
+export type Step = { id: string; title: string; body: string[]; tasks: Task[]; target?: string; keys?: [string, string][]; after?: string };
 
 const c = { dim: '\x1b[2m', bold: '\x1b[1m', red: '\x1b[31m', green: '\x1b[32m', cyan: '\x1b[36m', orange: '\x1b[38;5;173m', yellow: '\x1b[33m', off: '\x1b[0m' };
 export const shellPrompt = `${c.cyan}~/my-app${c.off} ${c.green}$${c.off} `;
@@ -58,41 +62,32 @@ export const initialTour = (): Tour => ({
 // `keys` formats a binding for the platform (showKeys); passed in so this file stays free of DOM code.
 // Copy introduces the app's features; `keys` on a step are shortcut chips (raw bindings, formatted by the coach), a task's `hint` says how.
 export const steps = (keys: (binding: string) => string): Step[] => [
-  { id: 'welcome', title: '무너에이드', body: '터미널과 AI 코딩 에이전트를 위한 작업 공간이에요. Claude Code, Codex, Cursor CLI를 프로젝트별로 나란히 띄우고, 누가 일을 끝냈는지, 무엇을 기다리는지 한눈에 보세요.', tasks: [] },
-  { id: 'projects', title: '프로젝트를 한 화면에', target: '.tour .folders', keys: [['번호로 이동', 'mod+alt+1'], ['다음 · 이전', 'mod+alt+]']],
-    body: '열어 둔 프로젝트가 왼쪽에 모여요. 다른 프로젝트로 옮겨 가도 터미널과 에이전트는 멈추지 않고 계속 일해요.',
-    tasks: [{ flag: 'projectVisit', label: 'api-server 프로젝트 열어 보기', hint: '사이드바에서 클릭', target: '.tour [data-project="api-server"] .folder-head' }, { flag: 'projectBack', label: 'my-app 으로 돌아오기', hint: `클릭 또는 ${keys('mod+alt+1')}` }] },
-  { id: 'tabs', title: '탭마다 하나의 작업', target: '.tour .folder.active .folder-tabs', keys: [['번호로 이동', 'alt+1'], ['다음 · 이전 탭', 'alt+]']],
-    body: '프로젝트 아래 항목이 탭이에요. 개발 서버, 빌드, 에이전트를 탭으로 나눠 두고 오가며 일하세요.',
-    tasks: [{ flag: 'tabServer', label: 'server 탭 열기', hint: '클릭', target: '.tour [data-tab="server"]' }, { flag: 'jump', label: '첫 번째 탭으로 가기', hint: `클릭 또는 ${keys('alt+1')}` }, { flag: 'cycle', label: '바로 옆 탭으로 가기', hint: `클릭 또는 ${keys('alt+]')} / ${keys('alt+[')}` }] },
-  { id: 'newTab', title: 'AI 에이전트를 탭 하나로', target: '.tour .app:not([hidden]) .split-button', keys: [['새 탭', 'mod+shift+t']],
-    body: '새 탭을 열면 터미널, Claude Code, Codex, Cursor CLI 중 무엇을 띄울지 골라요. ‘새 탭’ 옆 ▾ 메뉴로 바로 실행할 수도 있어요.',
-    tasks: [{ flag: 'newTab', label: '새 탭 열기', hint: `‘새 탭’ 버튼 또는 ${keys('mod+shift+t')}` }, { flag: 'claude', label: 'AI 에이전트 실행하기', hint: 'Claude Code, Codex, Cursor CLI 중 아무거나', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .launchers' }] },
-  { id: 'followUp', title: '일하는 동안 다음 요청 예약', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .terminal-pane[data-agent]',
-    body: '에이전트가 작업 중일 때 다음 요청을 보내면 Follow-up으로 예약돼요. 지금 작업이 끝나는 즉시 이어서 전달돼요. Claude Code에서는 위쪽 🔥 타이머로 프롬프트 캐시가 살아 있는 시간도 보여요.',
-    tasks: [{ flag: 'ask', label: '에이전트에게 요청 보내기', hint: '아무 말이나 입력하고 Enter, 그냥 Enter만 눌러도 돼요' }, { flag: 'queue', label: '작업 중에 다음 요청 예약하기', hint: '아무 말이나 입력하고 Tab 또는 Enter, 비워 둬도 돼요' }] },
+  { id: 'welcome', title: '무너에이드', body: ['**Claude Code · Codex · Cursor**를 프로젝트마다 띄우고 한곳에서 지켜보는 작업 공간이에요.'], tasks: [] },
+  { id: 'projects', title: '프로젝트를 한 화면에', target: '.tour .folders', keys: [['프로젝트 이동', 'mod+alt+1'], ['탭 이동', 'alt+1']],
+    body: ['열어 둔 **프로젝트와 탭**이 왼쪽에 모여요.', '다른 프로젝트로 옮겨도 에이전트는 **멈추지 않아요**.'],
+    tasks: [{ flag: 'projectVisit', label: 'api-server 프로젝트 열어 보기', hint: '사이드바에서 클릭', target: '.tour [data-project="api-server"] .folder-head' }, { flag: 'projectBack', label: 'my-app 으로 돌아오기', hint: `클릭 또는 ${keys('mod+alt+1')}`, target: '.tour [data-project="my-app"] .folder-head' }] },
+  // Once a chat is open it plays scripted conversations by itself (chat-demo.ts): the step is watching what Chat mode looks like at work.
+  { id: 'chat', title: 'Chat 모드, ADE만의 강점', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane', keys: [['새 탭', 'mod+shift+t']],
+    body: ['{chat} 에이전트의 일을 **읽기 쉬운 대화**로 보여 줘요.', '코드 변경은 **diff**로, 명령과 결과는 **접히는 카드**로 정리돼요.', '**Interactive UI**: 차트·표·선택지가 답에 나오고, **눌러서** 바로 답해요.', '승인과 질문도 **버튼 한 번**이면 끝나요.'],
+    after: '자동으로 흘러가는 대화를 둘러보고 ‘다음’을 누르세요.',
+    tasks: [{ flag: 'newTab', label: '새 탭 열기', hint: `‘새 탭’ 버튼 또는 ${keys('mod+shift+t')}`, target: '.tour .app:not([hidden]) .new-tab' },
+      { flag: 'chat', label: 'Chat 모드로 에이전트 열기', hint: 'Claude·Codex·Cursor 중 아무거나', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .empty-tab .launchers button:not(:first-child)' }] },
+  { id: 'cli', title: 'CLI도 언제든', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane',
+    body: ['{chat} 대화 화면과 {cli} 터미널을 **같은 대화**로 오가요.', '익숙한 **CLI 화면**이 필요할 때 바로 전환하세요.'],
+    tasks: [{ flag: 'toCli', label: 'CLI로 전환해 보기', hint: 'Chat 위쪽의 터미널 버튼', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane .pane-actions [aria-label^="터미널로 전환"]' }] },
   { id: 'alert', title: '부르면 바로 알 수 있어요', target: '.tour .folder.active .folder-tabs',
-    body: '다른 일을 하는 사이 에이전트가 승인을 기다리면 사이드바에 ⚠, 작업을 마치면 ● 가 떠요. 소리와 OS 알림도 함께 오고, 알림을 누르면 그 터미널로 바로 이동해요.',
-    tasks: [{ flag: 'away', label: '다른 탭으로 가서 기다리기', hint: 'web 탭 클릭', target: '.tour [data-tab="web"]' }, { flag: 'back', label: '⚠ 가 뜬 에이전트 탭으로 돌아가기', target: '.tour .folder-tabs [data-agent-state="attention"]' }, { flag: 'answer', label: '요청 승인하기', hint: 'Enter, 아무거나 입력해도 돼요', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .terminal-pane[data-agent]' }] },
+    body: ['에이전트가 **승인을 기다리면** 사이드바에 {alert}', '**작업을 마치면** {done}', '소리·OS 알림도 오고, 누르면 **그 자리로 이동**해요.'],
+    tasks: [{ flag: 'away', label: '다른 탭으로 가서 기다리기', hint: 'web 탭 클릭', target: '.tour [data-tab="web"]' }, { flag: 'back', label: '{alert} 가 뜬 에이전트 탭으로 돌아가기', target: '.tour .folder-tabs [data-agent-state="attention"]' }, { flag: 'answer', label: '요청 승인하기', hint: 'Enter, 아무거나 입력해도 돼요', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .terminal-pane[data-agent]' }] },
   { id: 'diff', title: '바뀐 코드를 바로 확인', target: '.tour .app:not([hidden]) .tabbar [aria-label="변경사항 Diff 패널"]', keys: [['Diff 패널', 'mod+shift+g']],
-    body: '에이전트가 고친 파일은 상단 Diff 버튼과 상태바에 +/− 줄 수로 표시돼요. 패널을 열면 파일별 변경 내용을 바로 비교할 수 있어요.',
-    tasks: [{ flag: 'diffOpen', label: 'Diff 패널 열기', hint: `상단 Diff 버튼 또는 ${keys('mod+shift+g')}` }, { flag: 'diffClose', label: '다시 닫기', target: '.tour .app:not([hidden]) .right-panel' }] },
-  { id: 'split', title: '한 탭에 여러 터미널', target: '.tour .app:not([hidden]) .tab-page:not([hidden])', keys: [['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d']],
-    body: '터미널을 좌우·상하로 나눠 서버 로그와 에이전트를 한 화면에 두세요. 새로 생긴 칸에서 무엇을 띄울지 고르면 돼요.',
-    tasks: [{ flag: 'splitRow', label: '좌우로 나누기', hint: `터미널 안에서 ${keys('ctrl+d')} 또는 칸 위쪽 버튼` }, { flag: 'fill', label: '새 칸에 터미널 띄우기', target: '.tour .app:not([hidden]) .launcher-pane' }, { flag: 'splitColumn', label: '상하로 나누기', hint: `${keys('ctrl+shift+d')} 또는 칸 위쪽 버튼` }] },
-  { id: 'pane', title: '칸 사이를 오가고 크게 보기', target: '.tour .app:not([hidden]) .tab-page:not([hidden])', keys: [['칸 이동', 'alt+shift+→'], ['최대화', 'mod+shift+enter']],
-    body: '나눈 칸 사이를 키보드로 오가고, 필요할 땐 한 칸만 화면 가득 키워요. 경계선은 끌어서 크기를 바꾸고, 클릭하면 똑같이 나눠져요.',
-    tasks: [{ flag: 'focus', label: '다른 칸으로 이동', hint: '클릭 또는 단축키' }, { flag: 'zoom', label: '한 칸 최대화', hint: '칸 위쪽 버튼 또는 단축키' }] },
-  { id: 'reorder', title: '탭을 끌어서 정리', target: '.tour .folder.active .folder-tabs', keys: [['탭 위 · 아래로', 'alt+shift+[']],
-    body: '탭은 끌어서 순서를 바꾸고, 다른 탭 가운데에 놓으면 분할로 합쳐져요. 우클릭 메뉴와 단축키로도 할 수 있어요.',
-    tasks: [{ flag: 'reorder', label: '탭 하나를 다른 자리로 옮기기', hint: '아무 탭이나 끌어서 놓기 또는 단축키', target: '.tour [data-tab="build"]' }] },
+    body: ['고친 줄 수가 **Diff 버튼**에 {diff} 로 보여요.', '패널을 열면 **파일별 변경**을 바로 비교해요.'],
+    tasks: [{ flag: 'diffOpen', label: 'Diff 패널 열기', hint: `상단 Diff 버튼 또는 ${keys('mod+shift+g')}` }, { flag: 'diffClose', label: '다시 닫기', hint: '같은 버튼을 한 번 더' }] },
+  { id: 'split', title: '한 탭에 여러 칸', target: '.tour .app:not([hidden]) .tab-page:not([hidden])', keys: [['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'], ['한 칸 최대화', 'mod+shift+enter']],
+    body: ['칸을 나눠 **서버 로그와 에이전트**를 한 화면에 두세요.', '새 칸에서도 **Chat이나 CLI**를 골라 띄워요.'],
+    tasks: [{ flag: 'splitRow', label: '좌우로 나누기', hint: `터미널 안에서 ${keys('ctrl+d')} 또는 칸 위쪽 버튼`, target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .focused .pane-actions [aria-label="좌우 분할"]' }, { flag: 'fill', label: '새 칸에 아무거나 띄우기', target: '.tour .app:not([hidden]) .launcher-pane .launchers button' }] },
   { id: 'palette', title: '모든 기능은 명령 팔레트에', target: '.tour .app:not([hidden]) .palette-button', keys: [['명령 팔레트', 'mod+shift+p']],
-    body: '단축키가 기억나지 않아도 괜찮아요. 명령 팔레트에서 이름으로 찾아 바로 실행하고, 옆에 적힌 단축키도 함께 익혀 보세요.',
-    tasks: [{ flag: 'palette', label: '명령 팔레트 열기', hint: '상단 검색 칸 또는 단축키' }, { flag: 'command', label: '아무 명령이나 실행하기', hint: '예: ‘codex’ 검색 후 Enter' }] },
-  { id: 'settings', title: '내 방식대로 맞추기', target: '.tour .app:not([hidden]) .statusbar', keys: [['설정', 'mod+,']],
-    body: '상태바에는 브랜치, 변경 파일, Claude·Codex 사용량이 보여요. 테마와 글꼴, 알림 소리, 상태바 항목까지 설정에서 원하는 대로 바꿀 수 있어요.',
-    tasks: [{ flag: 'settingsOpen', label: '설정 열기', hint: '⚙ 버튼 또는 단축키' }, { flag: 'settingsClose', label: '둘러본 뒤 닫기', hint: 'Esc' }] },
-  { id: 'finish', title: '준비가 끝났어요', body: '이제 내 프로젝트를 열고 시작해 보세요. 이 둘러보기는 사이드바 아래 책 버튼이나 명령 팔레트에서 언제든 다시 볼 수 있어요.', tasks: [] }
+    body: ['모든 기능을 **이름으로 찾아** 바로 실행해요.', '옆에 적힌 **단축키**도 함께 익혀 보세요.'],
+    tasks: [{ flag: 'palette', label: '명령 팔레트 열기', hint: '상단 검색 칸 또는 단축키' }] },
+  { id: 'finish', title: '준비가 끝났어요', body: ['이제 **내 프로젝트**를 열고 시작해 보세요.', '처음 쓰는 버튼은 그때 **한 번씩** 짧게 알려 드려요.', '둘러보기는 사이드바 아래 **책 버튼**으로 다시 볼 수 있어요.'], tasks: [] }
 ];
 
 // Typing loosely is fine: a request or follow-up can be left empty (an example is sent), any answer approves, and a command typed with the Korean
@@ -116,7 +111,8 @@ export const claudeTab = (tour: Tour) => tour.claude ? tour.projects.flatMap(p =
 // Goals count however and whenever they were reached (click, key, menu or palette, even before their step), so nobody has to redo
 // something they already tried. The task labels name the keys as a hint.
 export function reduce(tour: Tour, action: Action, now = 0): Tour {
-  const earn = (next: Tour, flag: string, when: unknown = true) => when && !next.done.includes(flag) ? { ...next, done: [...next.done, flag] } : next;
+  // No condition = earned. A condition that evaluates to undefined (no agent yet) is not earned: a `when = true` default turned it into true.
+  const earn = (next: Tour, flag: string, ...when: unknown[]) => (!when.length || when[0]) && !next.done.includes(flag) ? { ...next, done: [...next.done, flag] } : next;
   const p = project(tour), at = p.tabs.findIndex(item => item.id === p.active), current = p.tabs[at];
   const setProject = (next: Tour, change: Partial<TourProject>, id = next.current) => ({ ...next, projects: next.projects.map(item => item.id === id ? { ...item, ...change } : item) });
   const setTabs = (next: Tour, tabs: TourTab[]) => setProject(next, { tabs });
@@ -170,18 +166,27 @@ export function reduce(tour: Tour, action: Action, now = 0): Tour {
     }
     case 'newTab': { const id = `t${tour.seq + 1}`; return earn({ ...setProject(tour, { tabs: [...p.tabs, tab(id, '새 탭')], active: id }), seq: tour.seq + 1, focus: '', zoom: '' }, 'newTab'); }
     case 'launch': {
-      if (!action.target) { const opened = reduce(tour, { type: 'newTab' }, now); return reduce(opened, { type: 'launch', target: activeTab(opened).id, agent: action.agent }, now); }
-      const id = `l${tour.seq + 1}`, label = action.agent ? agentLabels[action.agent] : 'my-app';
+      if (!action.target) { const opened = reduce(tour, { type: 'newTab' }, now); return reduce(opened, { type: 'launch', target: activeTab(opened).id, agent: action.agent, chat: action.chat }, now); }
+      const id = `l${tour.seq + 1}`, label = action.agent ? agentLabels[action.agent] : 'my-app', chat = Boolean(action.chat && action.agent);
       const page = p.tabs.find(item => item.id === action.target && !item.pane);
       const owner = page ?? p.tabs.find(item => findLeaf(item.pane, action.target)?.kind === 'launcher');
       if (!owner) return tour;
-      const leaf: Leaf = { id, kind: 'terminal', ...(action.agent && { agent: action.agent }) };
+      const leaf: Leaf = { id, kind: chat ? 'chat' : 'terminal', ...(action.agent && { agent: action.agent }) };
       const pane = page ? leaf : mapLeaf(owner.pane!, action.target, () => leaf);
       let next: Tour = { ...setTabs(tour, p.tabs.map(item => item.id === owner.id ? { ...item, pane, label: page ? label : item.label } : item)), seq: tour.seq + 1, focus: id,
-        labels: { ...tour.labels, [id]: label }, lines: { ...tour.lines, [id]: action.agent ? banner[action.agent] : [] } };
+        labels: { ...tour.labels, [id]: label }, lines: { ...tour.lines, [id]: action.agent && !chat ? banner[action.agent] : [] } };
       if (action.agent) next = { ...next, agents: { ...next.agents, [id]: action.agent } };
-      if (action.agent && !tour.claude) next = { ...next, claude: { leaf: id, state: 'idle', queue: [], asked: false, at: now } };
-      return earn(earn(next, 'claude', action.agent), 'fill', !page);
+      // The scripted agent (questions, follow-ups) is the first agent CLI; a chat becomes one only once switched to CLI.
+      if (action.agent && !chat && !tour.claude) next = { ...next, claude: { leaf: id, state: 'idle', queue: [], asked: false, at: now } };
+      return earn(earn(earn(next, 'claude', action.agent && !chat), 'chat', chat), 'fill', !page);
+    }
+    // As the chat header's terminal button does: the same pane continues as the agent's CLI.
+    case 'toCli': {
+      const owner = p.tabs.find(item => findLeaf(item.pane, action.id)?.kind === 'chat'), agent = tour.agents[action.id];
+      if (!owner || !agent) return tour;
+      const next: Tour = { ...setTabs(tour, p.tabs.map(item => item === owner ? { ...item, pane: mapLeaf(item.pane!, action.id, leaf => ({ ...leaf, kind: 'terminal' })) } : item)), focus: action.id, zoom: '',
+        lines: { ...tour.lines, [action.id]: banner[agent] }, claude: tour.claude ?? { leaf: action.id, state: 'idle', queue: [], asked: false, at: now } };
+      return earn(next, 'toCli');
     }
     case 'split': {
       if (!current.pane || !findLeaf(current.pane, tour.focus)) return tour;
