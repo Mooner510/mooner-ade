@@ -1579,14 +1579,17 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .ui-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 11px; color: var(--muted); }
 .ui-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 .ui-pie { display: flex; align-items: center; gap: 16px; } .ui-pie svg { width: 140px; flex: none; } .ui-pie .ui-legend { flex-direction: column; margin: 0; }
-/* Steps: a timeline. Badges match the question card's tabs (done: green check, current: filled accent, later: a faint number); a line joins them. */
+/* Steps: a timeline. Badges match the question card's tabs (done: green check, current: filled accent, later: a faint number); a line joins them. Names stay in the text colour whatever the state, so a plan of todo steps still reads. */
 .md .ui-steps, .ui-steps { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
-.ui-steps li { position: relative; display: flex; align-items: center; gap: 10px; min-height: 34px; margin: 0; color: var(--muted); font-size: 13px; }
-.ui-steps li + li::before { content: ''; position: absolute; left: 9.5px; bottom: calc(50% + 13px); height: calc(100% - 26px); width: 1.5px; border-radius: 1px; background: var(--border-strong); }
-.ui-steps li[data-state=done] + li::before { background: color-mix(in srgb, var(--add) 45%, var(--border)); }
-.ui-step-mark { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted); }
-.ui-steps li[data-state=done] { color: var(--fg); } .ui-steps [data-state=done] .ui-step-mark { background: color-mix(in srgb, var(--add) 22%, transparent); color: var(--add); }
-.ui-steps li[data-state=active] { color: var(--fg); font-weight: 600; } .ui-steps [data-state=active] .ui-step-mark { background: var(--accent); color: var(--accent-fg); }
+.ui-steps li { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; margin: 0; color: var(--fg); font-size: 13px; }
+/* The joining line hangs from each badge down to the next one (3px clear of both), so it stays right when a step has a detail line. */
+.ui-steps li:not(:last-child)::after { content: ''; position: absolute; left: 9.5px; top: 30px; bottom: -4px; width: 1.5px; border-radius: 1px; background: var(--border-strong); }
+.ui-steps li[data-state=done]:not(:last-child)::after { background: color-mix(in srgb, var(--add) 45%, var(--border)); }
+.ui-step-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 20px; } .ui-step-name { font-weight: 500; }
+.ui-step-detail { color: color-mix(in srgb, var(--fg) 72%, transparent); font-weight: 400; font-size: 12.5px; line-height: 1.5; }
+.ui-step-mark { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10.5px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted); }
+.ui-steps [data-state=done] .ui-step-mark { background: color-mix(in srgb, var(--add) 22%, transparent); color: var(--add); }
+.ui-steps li[data-state=active] .ui-step-name { font-weight: 600; } .ui-steps [data-state=active] .ui-step-mark { background: var(--accent); color: var(--accent-fg); }
 .ui-form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .ui-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); width: 100%; }
 /* Checkboxes and radios: the app's own marks (same shapes as the question card), the native input hidden but still focusable. Several checkboxes in a row read as one list. */
