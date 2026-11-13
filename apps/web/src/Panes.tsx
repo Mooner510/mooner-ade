@@ -14,7 +14,8 @@ import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
 import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
 import { playSound } from './sound';
-import { contextTip, queueTip, splitTip } from './tips';
+import { contextTip, nextHint, queueTip, splitTip } from './tips';
+import { Hint } from './Hint';
 import { useShells, shellLabel } from './shells';
 import { LauncherModes } from './LauncherMenu';
 import { launchersFor, type AgentMode } from './launchers';
@@ -95,10 +96,10 @@ export { launchers } from './launchers';
 export const CHAT_COMMAND = 'ade:chat:claude';
 export const chatAgent = (command: string): Agent | undefined => ({ 'ade:chat:claude': 'claude', 'ade:chat:codex': 'codex', 'ade:chat:cursor': 'cursor' } as Record<string, Agent>)[command];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
-export function Launchers({ title, onLaunch, autoFocus, hidden = [], mode, shell, onModeChange }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[] }) {
+export function Launchers({ title, onLaunch, autoFocus, hidden = [], mode, shell, onModeChange, nudge }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[]; nudge?: boolean }) {
   const hide = useHiddenAgents(hidden), shells = useShells(), greeting = useMemo(() => pickGreeting(), []);
   return <div className="empty-tab" data-mode={mode}>
-    <div className="launcher-heading"><LauncherModes mode={mode} onChange={onModeChange} /><h2>{greeting}</h2></div>
+    <div className="launcher-heading"><LauncherModes mode={mode} onChange={onModeChange} nudge={nudge} /><h2>{greeting}</h2></div>
     <div className="launchers">{launchersFor(mode, shellLabel(shells, shell)).filter(item => !hide.includes(item.id)).map((item, index) =>
       <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}>
         <span className="launcher-icon"><Icon name={item.icon} size={24} /></span><span className="launcher-copy"><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</span>
@@ -106,13 +107,13 @@ export function Launchers({ title, onLaunch, autoFocus, hidden = [], mode, shell
       </button>)}</div>
   </div>;
 }
-function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, shell, onModeChange }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void }) {
+function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, shell, onModeChange, nudge }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; id: string; focused: boolean; hidden: string[]; onFocus(id: string): void; onClose(id: string): void; onLaunch(id: string, command: string): void; nudge: boolean }) {
   return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} data-feedback-region="새 창 pane" onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
       <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
-    <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} onLaunch={command => onLaunch(id, command)} />
+    <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} nudge={nudge} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
 
@@ -135,7 +136,7 @@ export const xtermOptions = (settings: Settings) => ({
 });
 const fontStack = (settings: Settings) => terminalFontStack(settings.terminalFont);
 
-function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, onSize, settings }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'onSize'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, onSize, settings, chat }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'onSize' | 'chat'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
@@ -611,16 +612,20 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
   const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = agent === 'claude' && !isSsh && attention[id] !== 'attention' && !workingSet.has(id); // hidden, not dimmed, while the switch cannot work
+  // Points at the Chat switch once; held back while the "try Chat" card (chatTipPending) is up so only one thing asks for attention.
+  const hint = focused && visible && canChat && !settings.chatTipPending ? nextHint(settings, [['tochat', true]]) : undefined;
+  const hintSeen = () => { if (!settings.hintsSeen.includes('tochat')) chat.onSettingsChange({ ...settings, hintsSeen: [...settings.hintsSeen, 'tochat'] }); };
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-feedback-region="터미널 pane" data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
-        {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" onClick={() => { setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
+        {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
         <IconButton icon="splitH" tip="header" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} /><IconButton icon="splitV" tip="header" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
+    {hint && <Hint title="언제든 Chat으로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 Chat 화면에서 그대로 이어가요. 코드 변경과 도구 실행을 한눈에 볼 수 있어요." onDone={hintSeen} />}
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
     {otherSize && !exited && <div className="pane-size-note" role="status">
       <span>다른 기기 크기로 표시 중 · 입력하면 이 창 크기로 돌아옵니다</span>
@@ -705,7 +710,7 @@ function Tree(props: Props) {
   if (isLeaf(pane)) return pane.kind === 'editor'
     ? <EditorGroup leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} ctx={props.editor} onFocus={props.onFocus} onZoom={props.onZoom} />
     : pane.kind === 'chat' ? <ChatPane leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} visible={props.visible} ctx={props.chat} onFocus={props.onFocus} onZoom={props.onZoom} onSplit={props.onSplit} />
-    : pane.kind === 'launcher' ? <LauncherPane onModeChange={props.onModeChange} shell={props.editor.settings.terminalShell} mode={props.editor.settings.defaultMode} hidden={props.editor.settings.agentsOff} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
+    : pane.kind === 'launcher' ? <LauncherPane onModeChange={props.onModeChange} shell={props.editor.settings.terminalShell} mode={props.editor.settings.defaultMode} hidden={props.editor.settings.agentsOff} nudge={props.editor.settings.chatTipPending} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
     : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
   return <Splitter equalOnClick direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
     {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}

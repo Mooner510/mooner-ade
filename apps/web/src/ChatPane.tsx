@@ -8,6 +8,8 @@ import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { CacheTimer } from './CacheTimer';
+import { Hint } from './Hint';
+import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
@@ -1066,6 +1068,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     }
   }
   const [statsOpen, setStatsOpen] = useState(false), [modelsOpen, setModelsOpen] = useState(false), [resuming, setResuming] = useState(false), [resumeOpen, setResumeOpen] = useState(false);
+  // Opening any chat counts as having tried Chat: the "try Chat" card in CLI terminals stops.
+  useEffect(() => { if (ctxRef.current.settings.chatTipPending) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, chatTipPending: false }); }, []);
+  // One-time pointers at the header buttons: the CLI switch whenever the chat is idle, the stats once a request was answered here.
+  // Before those, the composer's keys, each right after the user did by mouse what the key does (`picked`, set once the change went through):
+  // gone again when a message is sent, and never shown once the key itself was used.
+  const [answered, setAnswered] = useState(false), [picked, setPicked] = useState('');
+  useEffect(() => { if (busy) setAnswered(true); }, [busy]);
+  const hint = focused && visible && view.ready ? nextHint(ctx.settings, [...['keymodel', 'keyeffort', 'keymode', 'keystash'].map(name => [name, picked === name] as [string, boolean]), ['tocli', view.state.status === 'idle'], ['stats', answered && agent === 'claude' && view.state.sessionId && view.state.status === 'idle']]) : undefined;
+  const pickedBy = (name: string) => (done: unknown) => { if (done !== false) setPicked(name); };
+  const hintSeen = (name: string) => { if (!ctx.settings.hintsSeen.includes(name)) ctx.onSettingsChange({ ...ctx.settings, hintsSeen: [...ctx.settings.hintsSeen, name] }); };
   useEffect(() => { let alive = true;
     // The model list is a file read; the alias answers can take a CLI start. Show the list first so the picker is not stuck on the stand-ins meanwhile.
     if (agent === 'claude') void ctx.call('chat/model-catalog', { agent }).then((result: any) => { if (alive && result?.catalog?.length) setAgentModels(previous => previous.catalog.length ? previous : { ...previous, catalog: result.catalog }); }, () => {});
@@ -1336,7 +1348,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if ((!message && !images.length) || !view.ready) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
-    const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); clearChatDevDraft(ctx.projectId, id);
+    const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
     if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
@@ -1435,11 +1447,11 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const otherCursorOptions = agent === 'cursor' ? cursorOptions.filter(option => !isCursorEffort(option)) : [];
   // Cursor models can come with many options: from two on (besides model and Effort) they all live behind one settings button.
   const forcePanel = otherCursorOptions.length >= 2;
-  const modeDd = <Dropdown locked={locked} label="권한 모드" className="chat-mode" value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabels[mode] ?? mode, icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).catch(ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
+  const modeDd = <Dropdown locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabels[mode] ?? mode, icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
   const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || 'Bypass(Run Everything): 허용 목록에 없는 명령도 묻지 않고 실행'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
   const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status" title="샌드박스 변경은 진행 중인 응답이 끝난 뒤 Cursor를 다시 시작하며 적용됩니다.">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
-  const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).catch(ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
+  const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}${hint === 'keyeffort' ? ' hint-anchor' : ''}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).then(pickedBy('keyeffort'), ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
   const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || option.description || (option.id === 'fast' ? 'Fast 모드' : option.name)} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || maxOption.description || 'MAX 모드'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id} title={option.description}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
   const hasMore = forcePanel || Boolean(bypassBtn) || (!empty && state.addDirs.length > 0) || (agent === 'cursor' && state.restartPending) || cursorOptions.some(option => isCursorSwitch(option) || (!isCursorEffort(option) && !(maxOption && option.id === maxOption.id))) || Boolean(maxOption || maxContext);
   const panelItems = <>{bypassBtn}{optionItems}{noteItems}</>;
@@ -1458,8 +1470,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
-        {agent === 'claude' && view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" onClick={() => setStatsOpen(true)} />}
-        {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} onClick={() => ctx.toTerminal(id, !view.state.sessionId)} />}
+        {agent === 'claude' && view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" className={hint === 'stats' ? 'hint-anchor' : ''} onClick={() => { hintSeen('stats'); setStatsOpen(true); }} />}
+        {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} className={hint === 'tocli' ? 'hint-anchor' : ''} onClick={() => { hintSeen('tocli'); ctx.toTerminal(id, !view.state.sessionId); }} />}
         {(view.state.status === 'idle' || (agent === 'claude' && view.state.sessionId)) && <i className="pane-sep" aria-hidden="true" />}
         <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
         <IconButton icon="splitH" tip="header" label="좌우 분할" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" tip="header" label="상하 분할" onClick={() => onSplit(id, 'column')} />
@@ -1476,6 +1488,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
+    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>·<kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelPrev'))}</kbd>로 다음·이전 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
+    {hint === 'keyeffort' && <Hint title="Effort도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortUp'))}</kbd>로 올리고 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortDown'))}</kbd>로 내려요.</>} onDone={() => hintSeen('keyeffort')} />}
+    {hint === 'keymode' && <Hint title="권한 모드도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo('shift+tab')}</kbd>을 누를 때마다 다음 모드로 넘어가요.</>} onDone={() => hintSeen('keymode')} />}
+    {hint === 'keystash' && <Hint wide title="쓰던 입력은 보관해 둘 수 있어요" text={<>지우는 대신 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 보관하고, 다른 요청을 보낸 뒤 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 다시 꺼내요.</>} onDone={() => hintSeen('keystash')} />}
+    {hint === 'tocli' && <Hint title="언제든 CLI로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 터미널(CLI)에서 그대로 이어가요. 익숙한 CLI 화면이 필요할 때 써 보세요." onDone={() => hintSeen('tocli')} />}
+    {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰·비용·도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
     {statsOpen && <ChatStatsModal id={id} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
     {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
     {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void setChat({ id, model: value }).catch(ctx.fail); }} />}
@@ -1491,7 +1509,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
       <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
-      <div ref={composer} className="chat-composer" hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-feedback-region="채팅 입력창" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
+      <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-feedback-region="채팅 입력창" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void attach([...event.dataTransfer.files]); }}>
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); complete(item.name); }}>
             <span className="chat-command-head"><b>/{item.name}</b>{item.hint && <code className="chat-command-hint">{item.hint}</code>}</span>
@@ -1508,16 +1526,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <div className="chat-input-row">
         <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
-          onChange={event => { setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
+          onChange={event => { if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
           onKeyDown={event => {
             if (event.nativeEvent.isComposing) return;
             const modSend = ctx.settings.chatSendKey === 'mod-enter';
             const combo = comboOf(event.nativeEvent), keyOf = (id: Parameters<typeof chatKey>[1]) => combo === chatKey(ctx.settings.chatKeys, id);
-            if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void setChat({ id, effort }).catch(ctx.fail); return; }
-            if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void setChat({ id, model: next }).catch(ctx.fail); return; }
-            if (keyOf('stash')) { event.preventDefault(); if (text.trim()) { setStash(text); setText(''); } else if (stash) { setText(stash); setStash(''); } return; }
-            if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
+            if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; hintSeen('keyeffort'); const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void setChat({ id, effort }).catch(ctx.fail); return; }
+            if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); hintSeen('keymodel'); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void setChat({ id, model: next }).catch(ctx.fail); return; }
+            if (keyOf('stash')) { event.preventDefault(); hintSeen('keystash'); if (text.trim()) { setStash(text); setText(''); } else if (stash) { setText(stash); setStash(''); } return; }
+            if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); hintSeen('keymode'); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
             if (matches.length) {
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length); return; }
               if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) { event.preventDefault(); complete(matches[menuAt].name); return; }
@@ -1553,7 +1571,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <label className="chat-attach" title="이미지 첨부 (붙여넣기·끌어놓기도 가능)"><Icon name="plus" size={16} /><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} /></label>
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
         <span className="drag-space" />
-        {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className="chat-model" value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).catch(ctx.fail); }} />}
+        {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className={`chat-model${hint === 'keymodel' ? ' hint-anchor' : ''}`} value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).then(pickedBy('keymodel'), ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
         <ContextRing state={state} ctx={ctx} active={visible} agent={agent} chatId={id} />
         {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={15} /></button>

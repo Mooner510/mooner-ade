@@ -5,10 +5,12 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { findLeaf, isLeaf, leafList, type Leaf, type Pane } from './api';
 import { usageHue, type Settings } from './Editor';
 import { Icon, IconButton } from './Icon';
-import { pickGreeting } from './chat-model';
+import { ChatPane, type ChatCtx } from './ChatPane';
+import { chatDemo, demoChatState, demoModels } from './chat-demo';
+import { LauncherMenu } from './LauncherMenu';
 import { useShells, shellLabel } from './shells';
-import { launchersFor } from './launchers';
-import { CacheTimer, Splitter, launchers, terminalTheme, xtermOptions } from './Panes';
+import { launchersFor, type AgentMode } from './launchers';
+import { CacheTimer, Launchers, Splitter, chatAgent, terminalTheme, xtermOptions } from './Panes';
 import { QuickInput, type QuickRequest } from './QuickInput';
 import { ReviewPanel } from './Review';
 import { SettingsModal } from './Settings';
@@ -21,31 +23,52 @@ import { appKey, appKeyDefs, showAppKey } from './shortcuts';
 import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPrompt, stepDone, steps, type Action, type Agent, type Tour, type TourProject, type TourTab } from './onboarding-steps';
 
 // First-run tutorial: a full-screen practice copy of the app, drawn with the app's own markup and styles (sidebar, tab bar, panes,
-// status bar) and the real command palette, review panel, settings window and xterm. A coach card points at what to do next.
-// Nothing here talks to the server; finishing fades it away onto the real screen underneath.
+// status bar) and the real launchers, chat pane, command palette, review panel, settings window and xterm. A coach card points at what to do next.
+// Nothing here changes anything on the server (the chat pane runs on tourChatCall); finishing fades it away onto the real screen underneath.
 
-// `setup`: start with the theme and font screen (first run); a replay goes straight to the tour. `onDone` runs as the tour starts to fade.
-type Props = { settings: Settings; onSettings(next: Settings): void; setup: boolean; onDone(): void };
+// `setup`: start with the theme and font screen (first run); a replay goes straight to the tour. `required`: this tutorial was never finished,
+// so it has no "건너뛰기" (a replay has). `onDone` runs as the tour starts to fade.
+type Props = { settings: Settings; onSettings(next: Settings): void; setup: boolean; required: boolean; onDone(): void };
 
 const agentOf = (command: string): Agent | '' => command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : command === 'cursor-agent' ? 'cursor' : '';
 const before = "import express from 'express';\n\nconst app = express();\nconst port = 3000;\n\napp.get('/health', (_req, res) => res.send('ok'));\n\napp.listen(port, () => console.log(`listening on :${port}`));\n";
 const after = before.replace('const port = 3000;', 'const port = Number(process.env.PORT ?? 3000);');
 const summary: [string, string][] = [
-  ['새 터미널 탭', 'mod+shift+t'], ['다음/이전 탭', 'alt+]'], ['탭 번호로 이동', 'alt+1'], ['탭 위/아래로 이동', 'alt+shift+['], ['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'],
-  ['Pane 이동', 'alt+shift+→'], ['Pane 최대화', 'mod+shift+enter'], ['변경사항(Diff) 패널', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1'], ['설정', 'mod+,']
+  ['새 탭', 'mod+shift+t'], ['탭 번호로 이동', 'alt+1'], ['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'],
+  ['Pane 최대화', 'mod+shift+enter'], ['변경사항(Diff) 패널', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1']
 ];
 const features: [Parameters<typeof Icon>[0]['name'], string, string][] = [
-  ['folder', '프로젝트별 작업 공간', '프로젝트마다 터미널과 에이전트가 따로, 멈추지 않고 돌아가요'],
+  ['chat', 'Chat과 CLI를 자유롭게', '같은 대화를 대화 화면과 터미널로 오가요'],
+  ['folder', '프로젝트별 작업 공간', '프로젝트마다 에이전트가 멈추지 않고 돌아가요'],
   ['bell', '놓치지 않는 알림', '작업을 마치거나 승인을 기다리면 바로 알려 줘요'],
-  ['splitH', '자유로운 분할', '한 탭에 터미널과 에이전트를 원하는 만큼'],
   ['diff', '변경사항 한눈에', '에이전트가 고친 코드를 그 자리에서 비교해요']
 ];
-// The palette lists the real command names and keys.
-const paletteItems: { id: string; label: string; keys?: string; action?: Action }[] = [
+// Coach text: **word** is emphasised and {token}s draw the app's own markers in their real colours, so a line reads at a glance.
+function Rich({ text }: { text: string }) {
+  return <>{text.split(/(\*\*[^*]+\*\*|\{\w+\})/).map((part, index) => part.startsWith('**') ? <b key={index}>{part.slice(2, -2)}</b>
+    : part === '{alert}' ? <span key={index} className="question-alert" role="img" aria-label="⚠ 응답 필요"><Icon name="alert" size={13} /></span>
+    : part === '{done}' ? <i key={index} className="attn-dot" role="img" aria-label="● 확인 필요" />
+    : part === '{diff}' ? <span key={index} className="diffstat"><ins>+3</ins><del>−1</del></span>
+    : part === '{chat}' || part === '{cli}' ? <span key={index} className={`tour-tag ${part.slice(1, -1)}`}><Icon name={part === '{chat}' ? 'chat' : 'terminal'} size={12} />{part === '{chat}' ? 'Chat' : 'CLI'}</span>
+    : part)}</>;
+}
+// The pointer that shows where to click (drawn three times: the cursor and two fading copies that trail it).
+const cursor = <svg viewBox="0 0 24 24"><path d="M4 2.5v16.8l4.4-4.2 2.8 6.4 2.8-1.2-2.8-6.3h6.2z" fill="#fff" stroke="#111" strokeWidth="1.3" strokeLinejoin="round" /></svg>;
+// A launcher command as a tour action: `ade:chat:<agent>` opens a chat pane, anything else that agent's CLI (or a shell).
+const launchOf = (target: string, command: string): Action => { const chat = chatAgent(command); return { type: 'launch', target, agent: chat ?? agentOf(command), chat: Boolean(chat) }; };
+// The chat pane's server in the tour: an empty conversation that sends nothing (typing a request is not part of the tour). While the Chat
+// showcase plays, chat-demo.ts answers the pane instead.
+function tourChatCall(action: string): any {
+  if (action === 'chat/open') return { events: [], seq: 0, state: demoChatState(), approvals: [] };
+  if (action === 'chat/models') return demoModels;
+  if (action === 'chat/commands') return [];
+  if (action === 'chat/send') throw new Error('둘러보기에서는 메시지를 보내지 않아요. 위쪽 터미널 버튼으로 CLI 전환을 해 보세요.');
+  return {};
+}
+// The palette lists the real command names and keys; the launch rows follow the selected mode, as in the app.
+const paletteItems = (mode: AgentMode): { id: string; label: string; keys?: string; action?: Action }[] => [
   { id: 'newTab', label: '새 탭', keys: 'mod+shift+t', action: { type: 'newTab' } },
-  { id: 'newClaude', label: '새 탭에서 Claude Code 실행', action: { type: 'launch', target: '', agent: 'claude' } },
-  { id: 'newCodex', label: '새 탭에서 Codex 실행', action: { type: 'launch', target: '', agent: 'codex' } },
-  { id: 'newCursor', label: '새 탭에서 Cursor CLI 실행', action: { type: 'launch', target: '', agent: 'cursor' } },
+  ...launchersFor(mode).map(item => ({ id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, action: launchOf('', item.command) })),
   { id: 'nextTab', label: '다음 탭', keys: 'alt+]', action: { type: 'cycle', step: 1 } },
   { id: 'prevTab', label: '이전 탭', keys: 'alt+[', action: { type: 'cycle', step: -1 } },
   { id: 'splitRight', label: '오른쪽으로 분할', action: { type: 'split', dir: 'row' } },
@@ -103,13 +126,8 @@ function TourTerminal({ lines, prompt, settings, focused, focusKey, onSubmit, on
   return <div ref={host} className="xterm-host" />;
 }
 
-function LaunchPicker({ title, autoFocus, onLaunch, shell }: { shell: string; title?: string; autoFocus?: boolean; onLaunch(agent: Agent | ''): void }) {
-  const shells = useShells(), greeting = useMemo(() => pickGreeting(), []);
-  return <div className="empty-tab"><div className="launcher-heading"><span className="launcher-mode"><Icon name="terminal" size={13} />CLI 연습</span><h2>{greeting}</h2></div><div className="launchers">{launchersFor('cli', shellLabel(shells, shell)).map((item, index) =>
-    <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(agentOf(item.command))}><span className="launcher-icon"><Icon name={item.icon} size={24} /></span><span className="launcher-copy"><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</span><span className="launcher-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></span></button>)}</div></div>;
-}
-
-type Ctx = { tour: Tour; settings: Settings; focusKey: number; dispatch(action: Action): void; note(text: string): void; submit(leaf: string, text: string): void; tab(leaf: string, text: string): boolean; prompt(leaf: string): string };
+type Ctx = { tour: Tour; settings: Settings; focusKey: number; dispatch(action: Action): void; note(text: string): void; submit(leaf: string, text: string): void; tab(leaf: string, text: string): boolean; prompt(leaf: string): string;
+  mode: AgentMode; setMode(mode: AgentMode): void; chat: ChatCtx; visible(leaf: string): boolean };
 const refuse = ' 둘러보기에 필요해서 지금은 닫을 수 없어요.';
 function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
   const { tour, settings, dispatch } = ctx, id = leaf.id, focused = tour.focus === id, zoomed = tour.zoom === id;
@@ -119,8 +137,9 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
       <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={close} /></span></div>
-    <LaunchPicker shell={settings.terminalShell} autoFocus={focused} onLaunch={agent => dispatch({ type: 'launch', target: id, agent })} />
+    <Launchers mode={ctx.mode} onModeChange={ctx.setMode} shell={settings.terminalShell} autoFocus={focused} onLaunch={command => dispatch(launchOf(id, command))} />
   </section>;
+  if (leaf.kind === 'chat') return <ChatPane leaf={leaf} focused={focused} zoomed={zoomed} visible={ctx.visible(id)} ctx={ctx.chat} onFocus={pick} onZoom={() => dispatch({ type: 'zoom' })} onSplit={(_, dir) => dispatch({ type: 'split', dir })} />;
   const agent = tour.agents[id], claude = tour.claude?.leaf === id ? tour.claude : null;
   const state = claude ? ({ working: 'working', asking: 'attention', done: 'done', idle: 'idle' } as const)[claude.state] : agent ? 'idle' : undefined;
   return <section className={`terminal-pane ${focused ? 'focused' : ''}`} data-agent={agent} data-agent-state={state} onMouseDownCapture={pick}>
@@ -147,14 +166,14 @@ function Tree({ pane, ctx, onLayout }: { pane: Pane; ctx: Ctx; onLayout(next: Pa
   </Splitter>;
 }
 
-export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
+export function Tutorial({ settings, onSettings, setup, required, onDone }: Props) {
   const configuredKey = (keys: string) => {
     const def = appKeyDefs.find(def => def.keys === keys);
     return def ? appKey(settings.appKeys, def.id)! : keys;
   };
   const showKeys = (keys: string) => showDefaultKeys(configuredKey(keys));
   const list = useMemo(() => steps(showKeys), [settings.appKeys]);
-  const [phase, setPhase] = useState<'setup' | 'tour'>(setup ? 'setup' : 'tour');
+  const [phase, setPhase] = useState<'setup' | 'tour'>(setup ? 'setup' : 'tour'), [mode, setMode] = useState<AgentMode>('chat'), shells = useShells();
   const [tour, setTour] = useState<Tour>(initialTour), [at, setAt] = useState(0), [feedback, setFeedback] = useState(''), [focusKey, setFocusKey] = useState(0);
   const [menu, setMenu] = useState(false), [folded, setFolded] = useState<Set<string>>(new Set()), [leaving, setLeaving] = useState(false), [paletteKey, setPaletteKey] = useState(0);
   const [drag, setDrag] = useState(''), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
@@ -178,17 +197,15 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     }
     // As in the app: plain Ctrl+key inside a terminal belongs to the shell.
     if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !appKeyDefs.some(def => settings.appKeys?.[def.id] && matches(settings.appKeys[def.id], event))) return;
-    const index = p.tabs.findIndex(item => item.id === p.active), panes = leafList(shown.pane).length;
+    const panes = leafList(shown.pane).length;
     const focusBy = (step: number) => () => panes > 1 ? dispatch({ type: 'focusBy', step }) : note('분할된 칸이 하나뿐이라 옮겨 갈 곳이 없습니다.');
     const newTab = () => dispatch({ type: 'newTab' });
     const palette = () => { if (!tour.palette) setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: !tour.palette }); };
     const bindings: [string, () => void][] = [
-      ['mod+shift+t', newTab], ['alt+t', newTab],
-      ['alt+]', () => dispatch({ type: 'cycle', step: 1 })], ['alt+[', () => dispatch({ type: 'cycle', step: -1 })], ['mod+shift+]', () => dispatch({ type: 'cycle', step: 1 })], ['mod+shift+[', () => dispatch({ type: 'cycle', step: -1 })],
+      ['mod+shift+t', newTab],
+      ['alt+]', () => dispatch({ type: 'cycle', step: 1 })], ['alt+[', () => dispatch({ type: 'cycle', step: -1 })], ['alt+arrowdown', () => dispatch({ type: 'cycle', step: 1 })], ['alt+arrowup', () => dispatch({ type: 'cycle', step: -1 })],
       ...Array.from({ length: 9 }, (_, i): [string, () => void] => [`alt+${i + 1}`, () => dispatch({ type: 'jump', index: i })]),
-      ['alt+shift+[', () => dispatch({ type: 'move', id: p.active, to: index - 1 })], ['alt+shift+]', () => dispatch({ type: 'move', id: p.active, to: index + 1 })],
-      ['alt+shift+arrowright', focusBy(1)], ['alt+shift+arrowdown', focusBy(1)], ['alt+shift+arrowleft', focusBy(-1)], ['alt+shift+arrowup', focusBy(-1)],
-      ['mod+shift+arrowright', focusBy(1)], ['mod+shift+arrowdown', focusBy(1)], ['mod+shift+arrowleft', focusBy(-1)], ['mod+shift+arrowup', focusBy(-1)],
+      ['alt+shift+arrowright', focusBy(1)], ['alt+shift+arrowleft', focusBy(-1)],
       ['mod+shift+enter', () => dispatch({ type: 'zoom' })], ['mod+shift+g', () => dispatch({ type: 'diff' })],
       ['mod+shift+p', palette], ['f1', palette], ['mod+,', () => dispatch({ type: 'settings', open: true })],
       ...Array.from({ length: 9 }, (_, i): [string, () => void] => [`mod+alt+${i + 1}`, () => dispatch({ type: 'projectJump', index: i })]),
@@ -206,12 +223,12 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     return () => removeEventListener('keydown', handler, true);
   }, []);
 
-  // ---- the scripted Claude: works until the follow-up lesson has queued something, asks a question once you look away ----
-  const holdForQueue = step.id === 'followUp' && !tour.done.includes('queue'), away = tour.done.includes('away');
+  // ---- the scripted agent: finishes a typed request after a moment, asks a question once you look away ----
+  const away = tour.done.includes('away');
   useEffect(() => {
-    if (claude?.state !== 'working' || holdForQueue) return;
+    if (claude?.state !== 'working') return;
     const timer = setTimeout(() => dispatch({ type: 'workDone' }), 2600); return () => clearTimeout(timer);
-  }, [claude?.state, claude?.at, holdForQueue]);
+  }, [claude?.state, claude?.at]);
   useEffect(() => {
     if (!away || !claude || claude.asked || claude.state === 'working') return;
     const timer = setTimeout(() => dispatch({ type: 'ask' }), 1500); return () => clearTimeout(timer);
@@ -225,7 +242,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
 
   // ---- coach: a new step starts in the focused terminal; a finished one hands focus to "다음" ----
   const next = useRef<HTMLButtonElement>(null), coach = useRef<HTMLElement>(null);
-  useEffect(() => { setFeedback(''); setMenu(false); if (step.tasks.length && !done) setFocusKey(key => key + 1); else next.current?.focus(); }, [at, phase]);
+  // A palette left open by its lesson (opening it is enough) closes on the next step.
+  useEffect(() => { setFeedback(''); setMenu(false); dispatch({ type: 'palette', open: false }); if (step.tasks.length && !done) setFocusKey(key => key + 1); else next.current?.focus(); }, [at, phase]);
   useEffect(() => { if (done && step.tasks.length) next.current?.focus(); }, [done]);
   // The settings window is a modal <dialog> in the top layer; lift the card there too, after it, so the tip stays readable on top.
   useEffect(() => { if (tour.settings) coach.current?.showPopover?.(); }, [tour.settings]);
@@ -240,7 +258,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     };
     measure(); const timer = setInterval(measure, 200); return () => clearInterval(timer);
   }, [target]);
-  // Beside the target when there is room, otherwise in the bottom-right corner over it.
+  // Beside the target when there is room, otherwise in the bottom-right corner over it. The pointer comes in from the card's side (at most 180px away).
+  const pointer = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const card = coach.current; if (!card) return;
     if (!rect) { card.style.left = card.style.top = ''; return; }
@@ -248,9 +267,14 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     const y = (value: number) => Math.max(m, Math.min(H - h - m, value)), x = (value: number) => Math.max(m, Math.min(W - w - m, value));
     // Beside the target the card sits low, clear of the terminal output that fills panes from the top.
     const side = y(Math.max(rect.y, H - h - 48));
-    const spot = rect.x + rect.w + m + w <= W - m ? [rect.x + rect.w + m, side] : rect.x - m - w >= m ? [rect.x - m - w, side]
-      : rect.y + rect.h + m + h <= H - m ? [x(rect.x), rect.y + rect.h + m] : rect.y - m - h >= m ? [x(rect.x), rect.y - m - h] : [W - w - m - 8, H - h - 42];
+    // A pane header button: the bottom-right corner, clear of the pane's content (a chat's centred composer, a terminal's output).
+    // A whole pane (the Chat showcase): over the sidebar at the left, next to the conversation rather than on it.
+    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, y(rect.y + 40)]
+      : rect.x + rect.w + m + w <= W - m ? [rect.x + rect.w + m, side] : rect.x - m - w >= m ? [rect.x - m - w, side]
+      : rect.y + rect.h + m + h <= H - m ? [x(rect.x), rect.y + rect.h + m] : rect.y - m - h >= m ? [x(rect.x), rect.y - m - h] : corner;
     card.style.left = `${spot[0]}px`; card.style.top = `${spot[1]}px`;
+    const to = [rect.x + rect.w / 2, rect.y + rect.h / 2], away = [spot[0] + w / 2 - to[0], spot[1] + h / 2 - to[1]], length = Math.hypot(...away) || 1, reach = Math.min(length, 180) / length;
+    for (const [name, value] of [['--to-x', to[0]], ['--to-y', to[1]], ['--from-x', to[0] + away[0] * reach], ['--from-y', to[1] + away[1] * reach]] as const) pointer.current?.style.setProperty(name, `${Math.round(value)}px`);
   });
 
   // ---- terminals ----
@@ -263,7 +287,30 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     dispatch(claude.state === 'working' ? { type: 'queue', text } : { type: 'submit', leaf, text }); return true;
   };
   const prompt = (leaf: string) => tour.agents[leaf] ? agentPrompt(tour.agents[leaf]) : p.id === 'my-app' ? shellPrompt : shellPrompt.replace('~/my-app', '~/projects/api-server');
-  const ctx: Ctx = { tour, settings, focusKey, dispatch, note, submit, tab, prompt };
+  const tourRef = useRef(tour); tourRef.current = tour;
+  // Stable while settings stay put: the chat pane refetches its models whenever `call` changes.
+  const listeners = useRef(new Map<string, (message: any) => void>()), demo = useRef<ReturnType<typeof chatDemo> | null>(null);
+  const chat = useMemo<ChatCtx>(() => ({
+    call: async (action, params) => demo.current?.call(action, params) ?? tourChatCall(action),
+    subscribe: (id, handler) => { listeners.current.set(id, handler); return () => { if (listeners.current.get(id) === handler) listeners.current.delete(id); }; },
+    // Interactive UI on (the showcase draws it) and no one-time hints over the tour; neither is saved as the user's choice.
+    settings: { ...settings, interactiveUi: true, tips: false }, root: '~/projects/my-app', projectId: 'tour', onState() {}, onTitle() {},
+    onClose: id => closable(tourRef.current, id) ? dispatch({ type: 'closePane', id }) : note(`이 채팅은${refuse}`), onOpenSettings: () => dispatch({ type: 'settings', open: true }),
+    pick: async () => null, fail: cause => note(cause instanceof Error ? cause.message : String(cause)), branchChat: async () => {}, resumeChat: async () => {}, importCliChat: async () => {},
+    toTerminal: id => dispatch({ type: 'toCli', id }), switchAgent: async () => { note('둘러보기에서는 연 에이전트를 그대로 써요.'); return false; },
+    // A practice chat is not the user trying Chat: the app's "try Chat" card stays. Its terminal button does count as seeing that one-time hint (the lesson taught it).
+    onSettingsChange: next => onSettings({ ...next, chatTipPending: settings.chatTipPending, interactiveUi: settings.interactiveUi, tips: settings.tips })
+  }), [settings, onSettings]);
+  // The Chat showcase: while its step is on screen, the chat in the shown tab plays scripted conversations; leaving the step leaves it idle.
+  const demoLeaf = phase === 'tour' && !leaving && step.id === 'chat' ? leafList(shown.pane).find(leaf => leaf.kind === 'chat')?.id : undefined, demoCursor = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!demoLeaf || !demoCursor.current) return;
+    const run = chatDemo(message => listeners.current.get(demoLeaf)?.(message), () => document.querySelector('.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane'), demoCursor.current);
+    demo.current = run;
+    return () => { run.stop(); if (demo.current === run) demo.current = null; };
+  }, [demoLeaf]);
+  const visible = (leaf: string) => Boolean(findLeaf(shown.pane, leaf));
+  const ctx: Ctx = { tour, settings, focusKey, dispatch, note, submit, tab, prompt, mode, setMode, chat, visible };
 
   // ---- sidebar (same markup as the app's) ----
   const leafState = (id: string) => claude?.leaf !== id ? undefined : claude.state === 'asking' ? 'attention' : claude.state === 'done' ? 'done' : claude.state === 'working' ? 'working' : undefined;
@@ -343,10 +390,11 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
   // ---- one workspace per project, as in the app ----
   const git = useMemo<GitState>(() => tour.changes ? { branch: 'main', changes: [{ path: 'src/server.ts', status: ' M', added: 1, deleted: 1 }], additions: 1, deletions: 1 } : { branch: 'main', changes: [], additions: 0, deletions: 0 }, [tour.changes]);
   const loadDiff = useCallback(async () => ({ original: before, modified: tour.changes ? after : before }), [tour.changes]);
-  const request = useMemo<QuickRequest>(() => ({
-    kind: 'pick', title: '명령 팔레트', items: paletteItems.map(item => ({ id: item.id, label: item.label, keys: item.keys && showKeys(item.keys) })),
-    resolve: id => { const item = paletteItems.find(entry => entry.id === id); if (item?.action) dispatch(item.action); else if (item) note('지금 보고 계신 것이 둘러보기예요.'); if (item) dispatch({ type: 'command' }); }
-  }), [paletteKey]);
+  const request = useMemo<QuickRequest>(() => {
+    const items = paletteItems(mode);
+    return { kind: 'pick', title: '명령 팔레트', items: items.map(item => ({ id: item.id, label: item.label, keys: item.keys && showKeys(item.keys) })),
+      resolve: id => { const item = items.find(entry => entry.id === id); if (item?.action) dispatch(item.action); else if (item) note('지금 보고 계신 것이 둘러보기예요.'); if (item) dispatch({ type: 'command' }); } };
+  }, [paletteKey]);
   const usage = (provider: 'claude' | 'codex', session: number, week: number) => <button className="stat usage" title={`${provider === 'claude' ? 'Claude' : 'Codex'} 사용량 (예시)\n클릭: 새로고침`}>
     <Icon name={provider} size={13} />
     {([['5h', session], ['주', week]] as const).map(([key, percent]) => <span key={key} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>)}
@@ -357,22 +405,25 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       <header className="tabbar">
         <div className="split-button">
           <button className="bar-button new-tab" title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => dispatch({ type: 'newTab' })}><Icon name="plus" /><span>새 탭</span></button>
-          <button className="bar-button caret" title="Claude Code · Codex · Cursor CLI로 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
-          {menu && on && <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={() => setMenu(false)} />
-            <div className="menu" role="menu">{launchers.map(entry => <button role="menuitem" key={entry.id} onClick={() => { setMenu(false); dispatch({ type: 'launch', target: '', agent: agentOf(entry.command) }); }}><Icon name={entry.icon} size={16} /><span><strong>{entry.label}</strong>{entry.detail && <small>{entry.detail}</small>}</span></button>)}</div></>}
+          <button className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
+          {menu && on && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={() => setMenu(false)} />
+            <LauncherMenu mode={mode} items={launchersFor(mode, shellLabel(shells, settings.terminalShell))} onModeChange={setMode} onClose={() => setMenu(false)} onLaunch={command => { setMenu(false); dispatch(launchOf('', command)); }} /></>}
         </div>
         <span className="drag-space" />
         <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
-        <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
-          <Icon name="diff" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
-        <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={() => dispatch({ type: 'settings', open: true })} />
+        <div className="bar-tools" role="group" aria-label="패널과 설정">
+          <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
+            <Icon name="diff" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
+          <button className="bar-button" title="피드백 요청" aria-label="피드백 요청" onClick={() => note('실제 앱에서는 여기서 화면을 캡처해 무너에이드 개발자에게 의견을 보낼 수 있어요.')}><Icon name="feedback" /></button>
+          <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={() => dispatch({ type: 'settings', open: true })} />
+        </div>
       </header>
       <div className="workbench">
         <div className="tab-stack">{item.tabs.map(tabItem => {
           const zoomed = on && tabItem.id === item.active && tour.zoom ? findLeaf(tabItem.pane, tour.zoom) : undefined;
           return <div key={tabItem.id} className="tab-page" hidden={tabItem.id !== item.active}>
             {tabItem.pane ? <Tree pane={zoomed ?? tabItem.pane} ctx={ctx} onLayout={next => { if (!zoomed) dispatch({ type: 'layout', tab: tabItem.id, pane: next }); }} />
-              : <LaunchPicker shell={settings.terminalShell} title="새 탭" autoFocus={on && tabItem.id === item.active} onLaunch={agent => dispatch({ type: 'launch', target: tabItem.id, agent })} />}
+              : <Launchers mode={mode} onModeChange={setMode} shell={settings.terminalShell} title="새 탭" autoFocus={on && tabItem.id === item.active} onLaunch={command => dispatch(launchOf(tabItem.id, command))} />}
           </div>;
         })}</div>
         {on && tour.diff && <aside className="right-panel" aria-label="오른쪽 패널" style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
@@ -418,28 +469,27 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     {phase === 'setup' && !leaving && <><div className="tour-dim" /><Setup settings={settings} onSettings={onSettings} onNext={() => setPhase('tour')} /></>}
     {phase === 'tour' && hero && !leaving && <div className="tour-dim" />}
     {phase === 'tour' && rect && !leaving && <div className="tour-ring" style={{ left: rect.x - 4, top: rect.y - 4, width: rect.w + 8, height: rect.h + 8 }} />}
+    {phase === 'tour' && rect && !leaving && !done && !hero && <div key={target} ref={pointer} className="tour-pointer" aria-hidden="true"><span className="trail far">{cursor}</span><span className="trail">{cursor}</span>{cursor}<i /></div>}
+    {demoLeaf && <div ref={demoCursor} className="demo-cursor" aria-hidden="true"><span className="trail far">{cursor}</span><span className="trail">{cursor}</span>{cursor}<i /></div>}
     {/* Feature steps share one card that glides to the next target; only its contents re-enter. */}
     {phase === 'tour' && !leaving && <section key={hero ? at : 'steps'} ref={coach} popover={tour.settings ? 'manual' : undefined} className={`tour-coach ${hero ? 'hero' : ''} ${rect && !hero ? '' : 'center'}`} role="dialog" aria-labelledby="tour-title" aria-describedby="tour-body">
-      {hero ? <Logo size={56} /> : <div className="tour-progress">
-        <small>기능 {lesson + 1} / {lessons.length}</small>
-        <span aria-hidden="true">{lessons.map((item, index) => <i key={item.id} className={index < lesson || (index === lesson && done) ? 'done' : index === lesson ? 'now' : ''} />)}</span>
-      </div>}
       <Fragment key={at}>
-      <h2 id="tour-title">{step.title}</h2>
-      <p id="tour-body">{step.body}</p>
-      {at === 0 && <ul className="tour-features">{features.map(([icon, title, text]) => <li key={title}><span><Icon name={icon} size={18} /></span><div><strong>{title}</strong><small>{text}</small></div></li>)}</ul>}
+      {hero ? <div className="tour-hero-head"><Logo size={36} /><h2 id="tour-title">{step.title}</h2></div>
+        : <div className="tour-head"><h2 id="tour-title">{step.title}</h2><small aria-label={`${lessons.length}개 중 ${lesson + 1}번째`}>{lesson + 1} / {lessons.length}</small></div>}
+      <ul id="tour-body" className="tour-body">{step.body.map(line => <li key={line}><Rich text={line} /></li>)}</ul>
+      {at === 0 && <ul className="tour-features">{features.map(([icon, title, text]) => <li key={title}><span><Icon name={icon} size={16} /></span><div><strong>{title}</strong><small>{text}</small></div></li>)}</ul>}
       {step.keys && <div className="tour-keys">{step.keys.map(([label, keys]) => <span key={label}><kbd>{showKeys(keys)}</kbd>{label}</span>)}</div>}
       {step.tasks.length > 0 && <ul className="tour-tasks" aria-label="해 볼 것">{step.tasks.map((task, index) => { const ok = tour.done.includes(task.flag);
-        return <li key={task.flag} className={ok ? 'ok' : task === now ? 'now' : ''} style={{ '--i': index } as CSSProperties}><span className="tour-check">{ok && <Icon name="check" size={13} />}</span><span><strong>{task.label}</strong>{task.hint && <small>{task.hint}</small>}</span></li>; })}</ul>}
+        return <li key={task.flag} className={ok ? 'ok' : task === now ? 'now' : ''} style={{ '--i': index } as CSSProperties}><span className="tour-check">{ok && <Icon name="check" size={11} />}</span><span><strong><Rich text={task.label} /></strong>{task.hint && <small>{task.hint}</small>}</span></li>; })}</ul>}
       {last && <div className="shortcut-list tour-summary">{summary.map(([label, keys], index) => <div key={label} style={{ '--i': index } as CSSProperties}><span>{label}</span><kbd>{showKeys(keys)}</kbd></div>)}</div>}
       </Fragment>
-      {!hero && <p className="tour-feedback" role="status" aria-live="polite"><span key={done ? 'done' : feedback}>{done ? '좋아요! 다음으로 넘어가 볼까요?' : feedback}</span></p>}
+      {!hero && <p className={`tour-feedback ${done ? 'ok' : ''}`} role="status" aria-live="polite">{done ? step.after ?? '다 했어요. ‘다음’을 누르세요.' : feedback}</p>}
       <footer>
-        {!last && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
+        {!last && !required && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
         <span className="spacer" />
         {at > 1 && <button type="button" onClick={() => setAt(at - 1)}>이전</button>}
-        <button ref={next} type="button" className={`primary ${done && !hero ? 'ready' : ''}`} disabled={!done} title={done ? '' : '해 볼 것을 모두 마치면 넘어갈 수 있어요'} onClick={() => last ? leave() : setAt(at + 1)}>
-          {last ? '무너에이드 시작하기' : at === 0 ? '둘러보기 시작' : '다음'}<Icon name="arrowRight" size={16} /></button>
+        <button ref={next} type="button" className="primary" disabled={!done} title={done ? '' : '해 볼 것을 모두 마치면 넘어갈 수 있어요'} onClick={() => last ? leave() : setAt(at + 1)}>
+          {last ? '시작하기' : at === 0 ? '둘러보기 시작' : '다음'}<Icon name="arrowRight" size={14} /></button>
       </footer>
     </section>}
     {tour.settings && <SettingsModal settings={settings} onChange={onSettings} onClose={() => dispatch({ type: 'settings', open: false })} />}

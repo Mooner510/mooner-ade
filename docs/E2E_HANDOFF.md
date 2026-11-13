@@ -53,7 +53,7 @@ VERIFY_OUT=/tmp/ade-verify-out node scripts/verify/start-ui.mjs      # 계속 �
 - 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`의 서버, 가짜 Hub(`ADE_HUB_URL`), 별도 프로필의 보이는 Chrome(`--remote-debugging-port=0`)을 띄우고 `VERIFY_OUT/env.json`에 `origin`·`token`·`cookie`·`projectId`·`repo`·`data`·`temp`·`hub`·`cdp`·`pid`·`serverPids`(두 서버의 PID)·`chromePid`를 적습니다.
 - Chrome 경로는 macOS 기본값이며 `CHROME=<경로>`로 바꿉니다. 검증은 Chrome 157로 했습니다.
 - Chrome은 **이 탭만 공유**하도록(`--auto-accept-this-tab-capture`) 뜹니다. `--auto-select-desktop-capture-source=Entire screen`을 붙이면 캡쳐가 화면 크기로 나와 결과가 어긋나 보이니 쓰지 마세요.
-- 첫 화면은 프로젝트 선택 화면입니다(최근 프로젝트에 `repo`). `repo`를 눌러 워크스페이스를 엽니다. 온보딩이 뜨면 "다음: 기능 둘러보기" → "건너뛰기".
+- 첫 화면은 프로젝트 선택 화면입니다(최근 프로젝트에 `repo`). `repo`를 눌러 워크스페이스를 엽니다. 새 데이터의 첫 실행에는 화면 설정과 튜토리얼이 뜨고, 첫 1회는 건너뛸 수 없어 끝까지 진행해야 합니다(마지막 "시작하기").
 - 두 번째 서버(`origin2`)는 저장소 파일 없이 하나 더 뜨지만 이번 검증에서는 쓰지 않았습니다.
 - Chrome은 `start-ui`와 **분리**(`detached`)되어 뜹니다. Windows에서는 자식 프로세스가 부모와 같은 Job에 묶여 부모가 끝나면 같이 죽기 때문에, 분리하지 않으면 서버를 재시작할 때 Chrome도 닫힙니다.
 

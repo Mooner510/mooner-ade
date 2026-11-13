@@ -931,7 +931,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} chat={chatCtx} zoom={tab.id === activeTab ? zoom : ''} />
-      : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} onLaunch={command => run(() => launch(command, 'split'))} />}
+      : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} nudge={settings.chatTipPending} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar" data-feedback-region="상단 바">
@@ -939,7 +939,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
         <button className="bar-button new-tab" title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
         <button ref={launcherButton} className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
-          <LauncherMenu mode={settings.defaultMode} items={launchers} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
+          <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
@@ -959,15 +959,17 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title={`검토할 피드백 초안 ${reviewCount}개 · 피드백 요청 열기`} aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
-    {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="새 Chat 모드 안내">
-      <img src="/chat-mode-preview.png" alt="Chat 모드에서 요청과 응답, 코드 변경 내용을 대화로 보는 화면" width="480" height="300" />
-      <div className="chat-mode-tip-body"><strong>새로운 Chat 모드를 만나보세요</strong><p>CLI 대신 대화 화면에서 요청하고 코드 변경을 확인해 보세요. 같은 Provider로 새 대화를 시작합니다.</p>
-        <button className="primary" onClick={() => run(async () => {
-          await launch(`ade:chat:${agentOf(focus)}`, 'tab');
-          setSettings(previous => ({ ...previous, defaultMode: 'chat', chatTipPending: false }));
-        })}>Chat 모드 사용하기<Icon name="arrowRight" size={14} /></button>
+    {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
+    {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="Chat 모드 안내">
+      <img src="/chat-mode-preview.png" alt="Chat 모드에서 도구 실행, 코드 변경 diff, 결과 요약이 대화로 정리된 화면" width="960" height="632" />
+      <div className="chat-mode-tip-body">
+        <strong>{{ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[agentOf(focus) ?? 'claude']}를 Chat으로 써 보세요</strong>
+        <p>요청과 코드 변경을 대화 화면에서 한눈에 봐요. CLI로는 언제든 돌아올 수 있어요.</p>
+        <div className="chat-mode-tip-actions">
+          <button className="primary" onClick={() => run(() => launch(`ade:chat:${agentOf(focus)}`, 'tab'))}>Chat으로 열기<Icon name="arrowRight" size={14} /></button>
+          <button onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))}>괜찮아요</button>
+        </div>
       </div>
-      <IconButton icon="x" label="Chat 모드 안내 다시 보지 않기" onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))} />
     </aside>}
     {active && feedback.capture && <FeedbackCapture mode={feedback.capture} fallbackZoom={settings.uiZoom / 100} onCancel={endCapture} onError={cause => { endCapture(); report(cause); }}
       onCaptured={async bytes => {

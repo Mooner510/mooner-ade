@@ -2,7 +2,7 @@ import { showAppKey } from './shortcuts';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
-import { agentNames, defaultSettings, migrateSettings, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
@@ -280,6 +280,8 @@ function Shell() {
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
       const loaded = saved.settings ? migrateSettings(saved.settings) : null;
+      // Someone who finished an older tutorial gets the new one again (migrateSettings clears `onboarded`), but not the theme and font screen.
+      if (saved.settings && saved.settings.onboarded !== false) onboardedOnce.current = true;
       // The rail state used to live only in this browser's localStorage; carry it over once.
       const wasCompact = saved.settings?.sidebarCompact === undefined && (() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } })();
       if (loaded) setSettings(wasCompact ? { ...loaded, sidebarCompact: true } : loaded);
@@ -412,11 +414,11 @@ function Shell() {
   // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
-  // A replay (book button, palette, settings) skips the theme and font screen; only a user who was never onboarded sees it.
+  // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
-  const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true })), 450); };
-  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
+  const finishTour = () => { setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
+  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} required={settings.tourVersion < TOUR_VERSION} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
