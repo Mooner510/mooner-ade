@@ -24,20 +24,26 @@ if (!stream) {
 } else {
   log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog });
   const sid = 'fake-session-' + process.pid;
-  const init = { type: 'system', subtype: 'init', session_id: sid, model: argv[argv.indexOf('--model') + 1] ?? 'fake-model', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
+  const init = { type: 'system', subtype: 'init', session_id: sid, model: (argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null) ?? 'Model 1.0', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
   send(init);
   const result = (text = 'ok', extra = {}) => send({ type: 'result', is_error: false, result: text, session_id: sid, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5 }, ...extra });
   const say = (text, id = 'm' + Date.now() + Math.random()) => send({ type: 'assistant', message: { id, content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 5 } } });
   const asst = (content, parent) => send({ type: 'assistant', ...(parent && { parent_tool_use_id: parent }), message: { id: 'm' + Date.now() + Math.random(), content, usage: { input_tokens: 10, output_tokens: 5 } } });
   const toolResult = (id, content, is_error = false) => send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(is_error && { is_error: true }) }] } });
   const task = (subtype, id, more = {}) => send({ type: 'system', subtype, session_id: sid, tool_use_id: id, ...more });
+  let slowRun = null; const heldSteers = new Map(); // `slow` turn in flight (ctl.json {"slowms":N}, default 4 s) and steering lines queued behind it: uuid -> line
+  const bgTasks = new Map(); // task_id -> { toolUseId, timer }: `bgtask` jobs still running
   readline.createInterface({ input: process.stdin }).on('line', async line => {
     let m; try { m = JSON.parse(line); } catch { return; }
     if (m.type === 'control_request') {
       const sub = m.request?.subtype; log({ kind: 'control', sub, request: m.request });
       if (sub === 'set_permission_mode') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { permissionMode: m.request.mode } } });
+      else if (sub === 'cancel_async_message') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { cancelled: heldSteers.delete(m.request.message_uuid) } } });
+      else if (sub === 'interrupt') { send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); if (slowRun) { slowRun.abort(); setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } }
       else if (sub === 'apply_flag_settings') send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } });
       else send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+      // stop_task: the CLI reports the stopped task itself, after its control reply
+      if (sub === 'stop_task' && bgTasks.has(m.request.task_id)) { const t = bgTasks.get(m.request.task_id); clearTimeout(t.timer); bgTasks.delete(m.request.task_id); task('task_notification', t.toolUseId, { status: 'stopped' }); }
       return;
     }
     if (m.type === 'control_response') {
@@ -47,6 +53,7 @@ if (!stream) {
     if (m.type !== 'user') return;
     const parts = m.message?.content ?? [], text = parts.find?.(p => p.type === 'text')?.text ?? '';
     log({ kind: 'user', text, images: parts.filter?.(p => p.type === 'image').length ?? 0, uuid: m.uuid });
+    if (m.uuid && slowRun) { heldSteers.set(m.uuid, { parts, text }); return; } // the running turn has not taken a steering line in yet
     if (m.uuid) send({ type: 'user', uuid: m.uuid, isReplay: true, message: { role: 'user', content: parts } });
     const wait = ms => new Promise(r => setTimeout(r, ms));
     if (text === '/compact') {
@@ -55,7 +62,20 @@ if (!stream) {
       send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
-    if (text.includes('slow')) { await wait(4000); say('slow done'); result('slow done'); return; }
+    if (/\btables\b/.test(text)) { // markdown table samples: long prose cells, many columns, code/CJK, narrow, alignment
+      const long = '이 문장은 일부러 아주 길게 써서 셀 안에서 자동 개행이 되는지 확인하기 위한 것입니다. 표가 좌우로 넓어지면 읽기 힘들기 때문에 컨테이너 폭에 맞춰 줄바꿈되어야 합니다.';
+      say(['### 1. 긴 문장 셀', '', '| 항목 | 설명 | 비고 |', '|---|---|---|', `| 개행 | ${long} | 통과 |`, `| 영문 | ${'This is a very long English sentence that should wrap inside the cell instead of stretching the table sideways. '.repeat(2)} | ok |`, '',
+        '### 2. 열이 많은 표', '', '| id | name | email | role | team | region | status | created | updated | plan |', '|---|---|---|---|---|---|---|---|---|---|', '| 1 | Alice Kim | alice@example.com | admin | platform | seoul | active | 2026-01-02 | 2026-11-01 | enterprise |', '| 2 | Bob Lee | bob@example.com | member | growth | busan | invited | 2026-02-03 | 2026-10-20 | pro |', '',
+        '### 3. 코드·긴 토큰·정렬', '', '| 파일 | 경로 | 크기 |', '|:---|:---|---:|', '| `ChatPane.tsx` | `apps/web/src/components/chat/messages/very/deep/ChatPane.tsx` | 12 KB |', '| URL | https://example.com/' + 'a'.repeat(90) + ' | 3 KB |', '',
+        '### 4. 열 많고 문장 긴 표', '', '| 구분 | 현상 | 원인 | 영향 | 조치 | 담당 |', '|---|---|---|---|---|---|', `| A | ${long} | ${long} | ${long} | ${long} | 김 |`, '', '### 5. 좁은 2열', '', '| 키 | 값 |', '|---|---|', '| a | 1 |', '| b | 2 |'].join('\n')); result(); return;
+    }
+    if (text.includes('slow')) {
+      const aborted = await new Promise(resolve => { slowRun = { abort: () => resolve(true) }; setTimeout(() => resolve(false), ctl().slowms ?? 4000); });
+      slowRun = null; if (aborted) return; // the interrupt handler ended the turn
+      say('slow done'); result('slow done');
+      for (const [uuid, held] of heldSteers) { heldSteers.delete(uuid); send({ type: 'user', uuid, isReplay: true, message: { role: 'user', content: held.parts } }); say('steer ok: ' + held.text); result(); }
+      return;
+    }
     if (/\bask\b/.test(text)) { send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
     if (text.includes('plan')) { say('계획을 세웠습니다.'); send({ type: 'control_request', request_id: 'plan-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', tool_use_id: 'toolu_plan', input: { plan: '# 계획\n\n요약 한 줄\n\n## 1단계 준비\n- a\n- b\n\n## 2단계 구현\n- c\n\n## 3단계 검증\n- d' } } }); return; }
     if (text.includes('tasks')) {
@@ -67,6 +87,24 @@ if (!stream) {
       toolResult('toolu_a1', 'A 결과 보고'); say('A는 끝났고 B는 백그라운드입니다.'); result('waiting');
       await wait(3500); task('task_notification', 'toolu_a2', { status: 'completed', handback_report: { text: 'B 결과 보고' } });
       return;
+    }
+    if (text.includes('bgtask')) {
+      // A background subagent and a background shell that outlive the turn (ctl.json {"bgms":N}, default 10 min), each with the task_id stop_task names.
+      const ms = ctl().bgms ?? 600000, n = Date.now();
+      asst([{ type: 'tool_use', id: 'toolu_bg' + n, name: 'Agent', input: { description: '오래 걸리는 조사', prompt: '천천히 조사', run_in_background: true } },
+        { type: 'tool_use', id: 'toolu_sh' + n, name: 'Bash', input: { command: 'ping -c 600 127.0.0.1', description: '핑 대기', run_in_background: true } }]);
+      for (const [id, kind] of [['toolu_bg' + n, 'agent'], ['toolu_sh' + n, 'shell']]) {
+        const taskId = `task-${kind}-${n}`;
+        task('task_started', id, { task_id: taskId, description: kind === 'agent' ? '오래 걸리는 조사' : '핑 대기', subagent_type: kind === 'agent' ? 'general-purpose' : '', is_backgrounded: true });
+        bgTasks.set(taskId, { toolUseId: id, timer: setTimeout(() => { bgTasks.delete(taskId); task('task_notification', id, { status: 'completed', handback_report: { text: kind + ' 끝' } }); }, ms) });
+      }
+      toolResult('toolu_bg' + n, 'Async agent launched'); toolResult('toolu_sh' + n, 'Command running in background');
+      say('백그라운드 작업 2개를 시작했습니다.'); result('started'); return;
+    }
+    if (text.includes('manytools')) {
+      // 8 Reads one after another (a bundle that overflows while it runs; ctl.json {"mtms":N} spaces them), then a long answer.
+      for (let i = 1; i <= 8; i++) { const id = `toolu_mt${i}_${Date.now()}`; asst([{ type: 'tool_use', id, name: 'Read', input: { file_path: `src/file${i}.ts` } }]); await wait(ctl().mtms ?? 400); toolResult(id, `line ${i}\n`.repeat(12)); }
+      say('## 결과\n\n' + Array.from({ length: 12 }, (_, i) => `${i + 1}. 긴 설명 문단 ${'가나다라 '.repeat(20)}`).join('\n')); result(); return;
     }
     if (text.includes('adeui')) { say('UI입니다.\n\n```ade-ui\n' + "<div><h3>테스트 UI</h3><button id=\"b-send\" class=\"primary\" onclick=\"ade.send('UI에서 보낸 메시지')\">보내기</button> <button id=\"b-pre\" onclick=\"ade.prefill('UI가 채운 문장')\">입력창에 채우기</button> <button id=\"b-net\" onclick=\"fetch('https://example.com/x').then(()=>r.textContent='NET OK').catch(e=>r.textContent='NET BLOCKED')\">외부 요청</button> <button id=\"b-grow\" onclick=\"more.style.height='200px'\">키우기</button><p id=\"r\">대기</p><div id=\"more\"></div></div>" + '\n```\n'); result(); return; }
     if (text.includes('uiblock')) { say('결과입니다.\n\n```ui\n["stats",["가동률","99%","ok","30일"],["지연","24ms"]]\n```\n\n```ui\n["form","계획","보내기",["slider","seats","좌석",2,1],["radio","c","결제","월","년"]]\n```\n\n```ui\n{깨진 json\n```\n'); result(); return; }

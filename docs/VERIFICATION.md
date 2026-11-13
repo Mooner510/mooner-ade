@@ -28,7 +28,7 @@ E2E는 모델을 호출하지 않으며 Electron 셸 대신 headless Chrome으�
 - 장시간 사용, 모든 파일 감시 자원 제한 환경
 - Git 전체 이력 비밀정보 검사, `pnpm package` 결과물의 서명·배포
 
-절차는 [TESTING_GUIDE](TESTING_GUIDE.md)를 따릅니다.
+규칙은 [TESTING_GUIDE](TESTING_GUIDE.md), 보류 중인 절차는 [docs/tests/](tests/)를 따릅니다.
 
 
 ## 2026-11-10 Codex·Cursor 채팅 확장
@@ -36,11 +36,11 @@ E2E는 모델을 호출하지 않으며 Electron 셸 대신 headless Chrome으�
 - 별도 데이터 폴더에서 codex-cli 0.167.0과 Cursor 2026.10.19-6bbf2c4의 실제 모델 조회·응답·도구 승인·파일 작성·세션 재개를 확인했습니다. Codex Branch/Rewind는 첫 턴 이후의 맥락이 제외됨을 실제 응답으로 확인했습니다.
 - 브라우저에서 세 채팅 런처와 Codex·Cursor의 전송·응답·상태 표시를 확인했습니다. Cursor의 승인 대기·중단과 지원하지 않는 분기·복원 버튼도 확인했습니다.
 - 타입 검사와 채팅 관련 35개 검사 통과. 전체 Node 검사: 253개 중 248개 통과, 2개 건너뜀, 3개 실패. 실패는 변경 전에도 동일했던 dropdown 마크업·zsh 시작 환경·업데이터 프로세스 이름 검사입니다. 전체 검사 통과나 릴리스 준비 완료로 보지 않습니다.
-- 실제 이미지 해석·모든 모델/권한 조합·Electron/Windows·실시간 스티어링·터미널 전환 화면은 미검증입니다. 정확한 지원 범위와 절차는 TESTING_GUIDE의 Codex·Cursor 채팅 항목을 따릅니다.
+- 실제 이미지 해석·모든 모델/권한 조합·Electron/Windows·실시간 스티어링·터미널 전환 화면은 미검증입니다. 남은 확인 항목은 [실제 AI 회귀 가이드](tests/261113_1415_회귀_실제AI_격리CLI/GUIDE.md)에 있습니다.
 
 ## 2026-11-12 feat/ui-frame 머지 전 검증
 
-범위: master 대비 10개 커밋·68개 파일과 미커밋 Provider 전환 변경. **실제 AI 에이전트가 필요한 항목은 제외**했고, 그 목록은 [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)에 남겼습니다(전부 미실행).
+범위: master 대비 10개 커밋·68개 파일과 미커밋 Provider 전환 변경. **실제 AI 에이전트가 필요한 항목은 제외**했고, 그 목록은 [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md)에 남겼습니다(전부 미실행).
 
 환경: 사용자 앱과 분리된 격리 서버(임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`), 가짜 `claude`(stream-json·one-shot), 가짜 Hub(`ADE_HUB_URL`), 보이는 Chrome(CDP). 실제 모델 호출·실제 Hub 전송·Electron 실행은 없습니다. 하네스는 [`scripts/verify/`](../scripts/verify/)에 있습니다(사용법과 이어서 진행할 항목은 [E2E_HANDOFF](E2E_HANDOFF.md)). 하네스를 이 폴더로 옮긴 뒤에는 문법 검사만 했고 다시 실행하지는 않았습니다.
 
@@ -72,7 +72,7 @@ E2E는 모델을 호출하지 않으며 Electron 셸 대신 headless Chrome으�
 6. 루트의 빈 `a.txt`가 커밋 361e78a에 포함되어 있음.
 
 ### 아직 확인하지 못한 것
-- 실제 AI 에이전트가 필요한 항목 전체: [AI_AGENT_TEST_CHECKLIST](AI_AGENT_TEST_CHECKLIST.md)의 A~J.
+- 실제 AI 에이전트가 필요한 항목 전체: [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md)의 A~J.
 - Electron 전용: `ade:capture` IPC(배율 80%·150%, 메인 창 외 프레임 거부), `feedback/submit` 메인 중계, 실제 Hub·GitHub 이슈 생성, 실제 zsh 셸 히스토리(커밋 9d6f979), Windows PSReadLine.
 - `ade-ui` iframe: 가짜 CLI에 `adeui` 응답을 추가해 Full E2E에서 렌더·`ade.send`·`ade.prefill`·CSP 차단을 확인했습니다(아래 섹션). iframe 안 CSP 위반 콘솔 로그는 못 봤습니다.
 - `pnpm e2e`는 위 이유로 완주하지 못했습니다.
