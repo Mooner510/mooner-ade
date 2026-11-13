@@ -7,8 +7,9 @@ test('known components parse, unknown or broken JSON do not', () => {
   assert.equal(parseUi('["nope"]'), null);
   assert.equal(parseUi('{"t":"steps"}'), null);
   assert.equal(parseUi('[1,"x",null]'), null);
-  assert.deepEqual(parseUi('["steps",["Build","done"],["Ship","weird"],"Plain"]'), [{ t: 'steps', items: [['Build', 'done'], ['Ship', 'todo'], ['Plain', 'todo']] }]);
+  assert.deepEqual(parseUi('["steps",["Build","done"],["Ship","weird"],"Plain"]'), [{ t: 'steps', items: [['Build', 'done', ''], ['Ship', 'todo', ''], ['Plain', 'todo', '']] }]);
   assert.equal(parseUi('[["stats"],["bad"],["steps"]]').length, 2);
+  assert.deepEqual(parseUi('["steps",["Plan","active","Pick the sort keys"]]')[0].items, [['Plan', 'active', 'Pick the sort keys']]);
 });
 
 test('stats take tone and sub in either order of presence', () => {
