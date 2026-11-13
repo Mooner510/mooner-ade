@@ -16,6 +16,20 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (message.type !== 'user') return;
+  // A resumed child whose first turn (an old-task notice) ends empty while the user's line is lost; the resend is answered normally.
+  if (message.message?.content?.some(part => part.text === 'swallow') && !globalThis.swallowed) {
+    globalThis.swallowed = true;
+    send({ type: 'result', is_error: false, result: '', session_id: 'fake-session', total_cost_usd: 0, duration_ms: 1, num_turns: 1 });
+    return;
+  }
+  // The same, but the startup turn answers with text of its own (a resumed child that reports the old tasks): only the missing echo shows the line was lost.
+  if (message.message?.content?.some(part => part.text === 'swallowtext') && !globalThis.swallowedText) {
+    globalThis.swallowedText = true;
+    send({ type: 'assistant', message: { id: 'notice-' + Date.now(), content: [{ type: 'text', text: 'old task notice' }], usage: { input_tokens: 1, output_tokens: 1 } } });
+    send({ type: 'result', is_error: false, result: 'old task notice', session_id: 'fake-session', total_cost_usd: 0, duration_ms: 1, num_turns: 1 });
+    return;
+  }
+  if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message }); // --replay-user-messages: the CLI acknowledges a line it takes in
   if (message.message?.content?.some(part => part.text === 'ask')) {
     send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } });
     return;

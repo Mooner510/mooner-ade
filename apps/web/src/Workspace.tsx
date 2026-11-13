@@ -167,7 +167,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
   refs.focus.current = focus; refs.project.current = project;
   // Chat panes listen here for their own `chat/event` / `chat/state` messages; `chatPrev` remembers each chat's last status to tell "finished" from "started".
-  const chatBus = useRef(new Map<string, (message: any) => void>()), chatPrev = useRef(new Map<string, ChatState['status']>());
+  const chatBus = useRef(new Map<string, (message: any) => void>()), chatPrev = useRef(new Map<string, ChatState['status']>()), bgChats = useRef(new Set<string>());
   const bus = useRef<TerminalBus>({ buffers: new Map(), listeners: new Map(), sizes: new Map(), sizeListeners: new Map() });
   const call = useCallback(<T = any,>(action: string, input: object = {}) => api<T>(action, { projectId: refs.project.current?.id, ...(refs.project.current?.multiRepo && /^git\//.test(action) ? { repositoryId: refs.repository.current } : {}), ...input }), []);
   const report = useCallback((cause: unknown) => pushError(root, errorText(cause)), [root]);
@@ -319,11 +319,16 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     selectPane: (tabId, paneId) => { selectTab(tabId); setFocusLeaf(paneId); }, closeTab: id => run(() => closePaneTab(id)), newTab: () => run(() => newTab()), renameTab: id => run(() => renamePaneTab(id)), launcher: () => run(() => pickLauncher('tab')),
     async requestClose() {
       const projectId = refs.project.current?.id; if (!projectId) return true;
+      // Background subagents are asked about whatever the setting says; the terminals' own question below still follows the setting.
+      const background = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id)).length;
+      if (background && !(await ask.confirm(`백그라운드 작업이 있는 채팅 ${background}개가 있습니다. 프로젝트를 닫으면 작업이 종료됩니다. 닫을까요?`))) return false;
       try { await api('project/close', { projectId }); }
       catch (cause) {
         if (!(cause instanceof ApiError)) throw cause;
         if (cause.code === 'PROJECT_BUSY') {
-          if (settingsRef.current.confirmCloseProject && !(await ask.confirm(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
+          // Skipped only when the background question covered every reason: no live terminal, no chat answering right now.
+          const asked = background > 0 && !working.size && !refs.project.current?.terminals.some(terminal => !terminal.exited);
+          if (!asked && settingsRef.current.confirmCloseProject && !(await ask.confirm(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
           await api('project/close', { projectId, force: true });
         } else if (cause.code !== 'NOT_FOUND') throw cause;
       }
@@ -573,9 +578,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   async function chatToTerminalNow(id: string, fresh: boolean) {
     const leafNow = findLeaf(treeOf(id), id), chosen: Agent = leafNow?.kind === 'chat' ? leafNow.agent ?? 'claude' : 'claude';
+    const background = !fresh && bgChats.current.has(id);
+    if (background && !(await ask.confirm('백그라운드 작업이 실행 중입니다. 터미널로 전환하면 작업이 종료됩니다. 전환할까요?'))) return;
     const info = fresh
       ? { agent: chosen, restoreId: '', cwd: leafNow?.kind === 'chat' ? leafNow.cwd ?? '' : '', configDir: undefined as string | undefined }
-      : await call<{ agent: Agent; restoreId: string; cwd: string; configDir?: string }>('chat/to-terminal', { id });
+      : await call<{ agent: Agent; restoreId: string; cwd: string; configDir?: string }>('chat/to-terminal', { id, ...(background && { force: true }) });
     const result = await call<{ id: string; command?: string }>('terminal/open', { ...(info.cwd ? { path: info.cwd } : {}), agent: info.agent, args: agentArgs(settings, info.agent), ...(info.restoreId ? { restoreId: info.restoreId } : {}), ...(info.configDir && { configDir: info.configDir }) });
     refs.pending.current.set(result.id, result.command || (info.agent === 'cursor' ? 'cursor-agent' : info.agent)); setLaunched(previous => ({ ...previous, [result.id]: info.agent }));
     const tree = treeOf(id);
@@ -659,7 +666,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   // Closing a chat ends its child process and keeps the transcript for /resume.
   async function closeChat(id: string) {
-    if (working.has(id) && settingsRef.current.confirmCloseChat && !(await ask.confirm('응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.'))) return;
+    // A background subagent is asked about whatever the setting says: closing ends it silently otherwise.
+    const question = bgChats.current.has(id) ? '백그라운드 작업이 실행 중인 채팅을 닫을까요? 작업이 종료됩니다.' : working.has(id) && settingsRef.current.confirmCloseChat ? '응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.' : '';
+    if (question && !(await ask.confirm(question))) return;
     await call('chat/close', { id }).catch(report);
     chatBus.current.delete(id); chatPrev.current.delete(id);
     removeTerminalPane(id);
@@ -667,6 +676,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // Status of a chat for the sidebar: working while it answers, attention while it waits for an approval, done (once) when it finishes.
   function onChatState(id: string, state: ChatState) {
     const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
+    if (state.liveTasks?.length) bgChats.current.add(id); else bgChats.current.delete(id);
     paneProps.onAgentWorking(id, state.status === 'working' || state.status === 'attention');
     if (state.status === 'attention' && before !== 'attention') paneProps.onAgentEvent(id, 'attention');
     else if (before === 'attention' && state.status !== 'attention') clearAttention(id);
@@ -684,7 +694,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     const answering = leafList(tab.pane).filter(leaf => leaf.kind === 'chat' && working.has(leaf.id));
-    if (((running.length && settingsRef.current.confirmClose) || (answering.length && settingsRef.current.confirmCloseChat)) && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개, 응답 중인 채팅 ${answering.length}개가 종료됩니다.`))) return;
+    const background = leafList(tab.pane).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id));
+    if (((running.length && settingsRef.current.confirmClose) || (answering.length && settingsRef.current.confirmCloseChat) || background.length) && !(await ask.confirm(`이 탭을 닫을까요? 실행 중인 터미널 ${running.length}개, 응답 중인 채팅 ${answering.length}개, 백그라운드 작업이 있는 채팅 ${background.length}개가 종료됩니다.`))) return;
     for (const leaf of leafList(tab.pane)) if (leaf.kind === 'chat') { await call('chat/close', { id: leaf.id }).catch(report); chatBus.current.delete(leaf.id); chatPrev.current.delete(leaf.id); }
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
     // The final tab stays open and empty, showing the launcher.
