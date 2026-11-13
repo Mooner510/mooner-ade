@@ -1488,7 +1488,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
-    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>를 누를 때마다 다음 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
+    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>·<kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelPrev'))}</kbd>로 다음·이전 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
     {hint === 'keyeffort' && <Hint title="Effort도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortUp'))}</kbd>로 올리고 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortDown'))}</kbd>로 내려요.</>} onDone={() => hintSeen('keyeffort')} />}
     {hint === 'keymode' && <Hint title="권한 모드도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo('shift+tab')}</kbd>을 누를 때마다 다음 모드로 넘어가요.</>} onDone={() => hintSeen('keymode')} />}
     {hint === 'keystash' && <Hint wide title="쓰던 입력은 보관해 둘 수 있어요" text={<>지우는 대신 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 보관하고, 다른 요청을 보낸 뒤 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 다시 꺼내요.</>} onDone={() => hintSeen('keystash')} />}

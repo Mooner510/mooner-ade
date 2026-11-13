@@ -197,17 +197,15 @@ export function Tutorial({ settings, onSettings, setup, required, onDone }: Prop
     }
     // As in the app: plain Ctrl+key inside a terminal belongs to the shell.
     if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !appKeyDefs.some(def => settings.appKeys?.[def.id] && matches(settings.appKeys[def.id], event))) return;
-    const index = p.tabs.findIndex(item => item.id === p.active), panes = leafList(shown.pane).length;
+    const panes = leafList(shown.pane).length;
     const focusBy = (step: number) => () => panes > 1 ? dispatch({ type: 'focusBy', step }) : note('분할된 칸이 하나뿐이라 옮겨 갈 곳이 없습니다.');
     const newTab = () => dispatch({ type: 'newTab' });
     const palette = () => { if (!tour.palette) setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: !tour.palette }); };
     const bindings: [string, () => void][] = [
-      ['mod+shift+t', newTab], ['alt+t', newTab],
-      ['alt+]', () => dispatch({ type: 'cycle', step: 1 })], ['alt+[', () => dispatch({ type: 'cycle', step: -1 })], ['mod+shift+]', () => dispatch({ type: 'cycle', step: 1 })], ['mod+shift+[', () => dispatch({ type: 'cycle', step: -1 })],
+      ['mod+shift+t', newTab],
+      ['alt+]', () => dispatch({ type: 'cycle', step: 1 })], ['alt+[', () => dispatch({ type: 'cycle', step: -1 })], ['alt+arrowdown', () => dispatch({ type: 'cycle', step: 1 })], ['alt+arrowup', () => dispatch({ type: 'cycle', step: -1 })],
       ...Array.from({ length: 9 }, (_, i): [string, () => void] => [`alt+${i + 1}`, () => dispatch({ type: 'jump', index: i })]),
-      ['alt+shift+[', () => dispatch({ type: 'move', id: p.active, to: index - 1 })], ['alt+shift+]', () => dispatch({ type: 'move', id: p.active, to: index + 1 })],
-      ['alt+shift+arrowright', focusBy(1)], ['alt+shift+arrowdown', focusBy(1)], ['alt+shift+arrowleft', focusBy(-1)], ['alt+shift+arrowup', focusBy(-1)],
-      ['mod+shift+arrowright', focusBy(1)], ['mod+shift+arrowdown', focusBy(1)], ['mod+shift+arrowleft', focusBy(-1)], ['mod+shift+arrowup', focusBy(-1)],
+      ['alt+shift+arrowright', focusBy(1)], ['alt+shift+arrowleft', focusBy(-1)],
       ['mod+shift+enter', () => dispatch({ type: 'zoom' })], ['mod+shift+g', () => dispatch({ type: 'diff' })],
       ['mod+shift+p', palette], ['f1', palette], ['mod+,', () => dispatch({ type: 'settings', open: true })],
       ...Array.from({ length: 9 }, (_, i): [string, () => void] => [`mod+alt+${i + 1}`, () => dispatch({ type: 'projectJump', index: i })]),
