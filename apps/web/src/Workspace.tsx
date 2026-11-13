@@ -796,7 +796,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', run: () => newTab() },
-    { id: 'newTab2', label: '새 탭', hidden: true, run: () => newTab() },
     ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
       { id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, run: () => launch(item.command, 'tab') },
       { id: `split${item.id}`, label: `오른쪽 pane에서 ${item.label} 실행`, run: () => launch(item.command, 'split') }
@@ -820,12 +819,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
     { id: 'focusNext', label: '다음 pane으로 이동', run: () => moveFocus(1) },
     { id: 'focusPrev', label: '이전 pane으로 이동', run: () => moveFocus(-1) },
-    { id: 'focusNext2', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusPrev2', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModright', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModleft', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModdown', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModup', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
     { id: 'review', label: '변경사항(Diff) 패널 전환', run: toggleReview },
     { id: 'feedback', label: '피드백 요청', run: toggleFeedback },
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', run: startCapture },
