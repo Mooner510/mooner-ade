@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents } from '../apps/web/src/chat-model.ts';
+import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents, keepAgents } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
@@ -556,6 +556,20 @@ test('a background shell ends quietly: its end leaves no divider in the thread, 
   view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'sh', status: 'stopped', at: 2000 });
   assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'stopped');
   assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 0);
+});
+
+test('agent list and pending maps keep their identity while nothing about them changed (pane contexts read by every tool card)', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'a', name: 'Agent', input: { description: 'scan' } }] });
+  const first = agentsOf(view.items, view.results, view.tasks, true);
+  assert.equal(keepAgents(first, agentsOf(view.items, view.results, view.tasks, true)), first, 'rebuilt but equal: the old list');
+  const empty = keepAgents([], []); assert.equal(keepAgents(empty, []), empty);
+  view = reduce(view, { kind: 'delta', phase: 'text', messageId: 'other', text: 'unrelated text' });
+  assert.equal(keepAgents(first, agentsOf(view.items, view.results, view.tasks, true)), first, 'text elsewhere streamed: still the old list');
+  view = reduce(view, { seq: 2, kind: 'message', id: 's', parentToolUseId: 'a', blocks: [{ type: 'tool_use', id: 'g', name: 'Grep', input: {} }] });
+  assert.notEqual(keepAgents(first, agentsOf(view.items, view.results, view.tasks, true)), first, 'the subagent took a step');
+  assert.notEqual(keepAgents(first, agentsOf(view.items, view.results, view.tasks, false)), first, 'its status changed');
+  assert.equal(awaitingTools(view.items, [], view.results), awaitingTools([], [], {}), 'nothing pending: one shared empty set');
+  assert.equal(approvalAgents(view.items, []), approvalAgents([], []));
 });
 
 test('a plan splits into its ## sections; the # line is its title and fenced code is never cut', () => {
