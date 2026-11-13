@@ -282,6 +282,20 @@ test('Claude: sub-agent output after a turn result keeps the chat working until 
   assert.ok(statuses.includes('working'));
 });
 
+test('Claude: a running background subagent blocks /clear and handoff unless forced; stop_task ends it, and a forced end leaves no stale task', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-bg-'));
+  const session = await openChatSession({ directory, id: 'bgtask', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: () => {} });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const running = async () => { await session.send('bgtask'); await until(() => session.state().status === 'idle' && session.state().liveTasks.length === 1); };
+  await running();
+  await assert.rejects(session.reset(), /백그라운드 작업이 실행 중/);
+  await assert.rejects(session.handoff(), /백그라운드 작업이 실행 중/);
+  await session.stopTask('toolu_bg'); await until(() => session.state().liveTasks.length === 0);
+  // The killed child's close handler skips a child already dropped: without clearing there, the task stayed "running" (no idle kill, chip kept spinning).
+  await running(); await session.handoff({ force: true }); assert.deepEqual(session.state().liveTasks, []);
+  await running(); await session.reset({ force: true }); assert.deepEqual(session.state().liveTasks, []);
+});
+
 test('Claude: a question is answered through the tool input; skipping it is not the generic refusal', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-ask-'));
   const events = [];
