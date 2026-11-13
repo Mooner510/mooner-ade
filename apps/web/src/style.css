@@ -1397,8 +1397,9 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-bundle-head { border-radius: 6px; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 28px; padding: 3px 6px; text-align: left; color: var(--fg); font-size: 12.5px; }
 .chat-bundle-icon { display: inline-flex; flex: none; width: 16px; justify-content: center; color: var(--add); }
 .chat-bundle[data-running] .chat-bundle-icon { color: var(--agent); }
+.chat-bundle-icon[data-outcome="partial"] { color: var(--warn); }
+.chat-bundle-icon[data-outcome="failed"] { color: var(--error); }
 /* The finished summary takes the colour of its worst result, like the cards inside it (a failed tool is red, an auto-mode block is the warning colour), not the green of "done". */
-.chat-bundle[data-outcome=error] .chat-bundle-icon { color: var(--error); }
 .chat-bundle[data-outcome=blocked] .chat-bundle-icon { color: var(--warn); }
 .chat-bundle-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .chat-bundle-count { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -1961,13 +1962,13 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-foot .drag-space { flex: 1 1 0; min-width: 8px; }
 .chat-foot .fit-inline, .chat-foot .fit-note, .chat-foot .fit-mode { display: contents; }
 .chat-foot .tune-wrap { display: none; }
-.chat-foot .tune-wrap.forced, .chat-foot[data-fit="4"] .tune-wrap, .chat-foot[data-fit="2"] .tune-wrap.more, .chat-foot[data-fit="3"] .tune-wrap.more { display: contents; }
-.chat-foot .tune-mode, .chat-tune-panel .panel-mode { display: none; }
-.chat-foot[data-fit="4"] .tune-mode { display: inline-grid; }
-.chat-foot[data-fit="4"] .chat-tune-panel .panel-mode { display: contents; }
+.chat-foot .tune-wrap.forced, .chat-foot[data-fit="2"] .tune-wrap.more, .chat-foot[data-fit="3"] .tune-wrap.more, .chat-foot[data-fit="4"] .tune-wrap.more { display: contents; }
+/* Narrowest: the mode stays on the left; "+" moves over to the right, next to the settings button. */
+.chat-foot[data-fit="4"] > .chat-attach { order: 1; }
+.chat-foot[data-fit="4"] > .chat-ring, .chat-foot[data-fit="4"] > .chat-send, .chat-foot[data-fit="4"] .chat-tune { order: 2; }
 .chat-foot:not([data-fit="0"]) .fit-mode .chat-mode summary .dd-label, .chat-foot:not([data-fit="0"]) > .effort-wrap summary .dd-label { font-size: 0; gap: 0; }
 .chat-foot:not([data-fit="0"]) .fit-mode .chat-mode summary, .chat-foot:not([data-fit="0"]) > .effort-wrap summary { padding: 4px 6px; }
-.chat-foot[data-fit="2"] .fit-inline, .chat-foot[data-fit="3"] .fit-inline, .chat-foot[data-fit="4"] .fit-inline, .chat-foot[data-fit="3"] .fit-note, .chat-foot[data-fit="4"] .fit-note, .chat-foot[data-fit="4"] .fit-mode { display: none; }
+.chat-foot[data-fit="2"] .fit-inline, .chat-foot[data-fit="3"] .fit-inline, .chat-foot[data-fit="4"] .fit-inline, .chat-foot[data-fit="3"] .fit-note, .chat-foot[data-fit="4"] .fit-note { display: none; }
 .chat-foot[data-fit="3"] > .chat-model, .chat-foot[data-fit="4"] > .chat-model { flex: 0 1 auto; min-width: 72px; overflow: hidden; }
 .chat-foot[data-fit="3"] > .chat-model summary, .chat-foot[data-fit="4"] > .chat-model summary, .chat-foot[data-fit="3"] > .chat-model .dd-label, .chat-foot[data-fit="4"] > .chat-model .dd-label { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .chat-dock { grid-template-columns: minmax(0, 1fr); }
