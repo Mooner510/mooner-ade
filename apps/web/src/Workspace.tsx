@@ -429,9 +429,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     try {
           if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); }
           else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
-          // A stream of file events (an agent at work) refreshes Git at most twice a second.
+          // A stream of file events (an agent at work) refreshes Git at most twice a second; a hidden window catches up when it shows (visibilitychange).
           else if (message.type === 'fs') {
-            if (refs.active.current && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
+            if (refs.active.current && !document.hidden && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
           }
           else if (message.type === 'terminal' || message.type === 'terminal/replay') {
             const previous = bus.current.buffers.get(message.id);
