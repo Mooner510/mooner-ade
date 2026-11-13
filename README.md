@@ -45,7 +45,7 @@ MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식
 | [Codex](https://github.com/openai/codex) | 선택 | `codex login` |
 | [Cursor Agent](https://cursor.com/docs/cli/overview) | 선택 | `cursor-agent login` |
 
-그다음 앱에서 **프로젝트 열기**로 작업 폴더를 고르면 끝입니다. 새 탭 메뉴에서 세 에이전트의 터미널 또는 채팅을 선택할 수 있습니다. 채팅은 공식 CLI의 로그인과 세션을 사용하며, CLI가 지원하지 않는 기능은 제한 이유를 표시합니다. 자세한 범위는 [채팅 검증 안내](docs/TESTING_GUIDE.md#codexcursor-agent-채팅-2026-11-10)를 참고하세요.
+그다음 앱에서 **프로젝트 열기**로 작업 폴더를 고르면 끝입니다. 새 탭 메뉴에서 세 에이전트의 터미널 또는 채팅을 선택할 수 있습니다. 채팅은 공식 CLI의 로그인과 세션을 사용하며, CLI가 지원하지 않는 기능은 제한 이유를 표시합니다. 자세한 범위는 [채팅 검증 안내](docs/VERIFICATION.md#2026-11-10-codexcursor-채팅-확장)를 참고하세요.
 
 <details>
 <summary>삭제하기</summary>
@@ -198,7 +198,7 @@ pnpm audit        # lockfile 의존성 보안 검사
 ## 문서
 
 - [로컬 실행·단축키·데이터 복구](docs/LOCAL_IDE.md)
-- [검증 결과와 확인 범위](docs/VERIFICATION.md) · [테스트 실행 안내](docs/TESTING_GUIDE.md) · [Full E2E 인수인계](docs/E2E_HANDOFF.md) · [실제 AI 에이전트가 필요한 테스트](docs/AI_AGENT_TEST_CHECKLIST.md)
+- [검증 결과와 확인 범위](docs/VERIFICATION.md) · [테스트 실행 안내](docs/TESTING_GUIDE.md) · [Full E2E 인수인계](docs/E2E_HANDOFF.md) · [실제 AI 에이전트가 필요한 테스트](docs/tests/261113_1021_실제AI체크리스트/GUIDE.md)
 - [아키텍처](docs/ARCHITECTURE.md) · [채팅 기능 정리](CHAT_MODE_FEATURES.md)
 - [플러그인](docs/PLUGINS.md) · [에이전트 버스](docs/AGENT_BUS.md)
 - [환경 변수](ENVIRONMENT_VARIABLES.md) · [보안 경계](docs/SECURITY_REVIEW.md)

@@ -4,8 +4,8 @@
 나머지(단위·HTTP·fake CLI·브라우저)는 별도로 끝냈거나 진행 중이며 `docs/VERIFICATION.md`에 결과를 남깁니다. 이 문서의 항목은 **아직 하나도 실행하지 않았습니다.**
 
 ## 공통 사전조건
-- 격리 서버·가짜 Hub·보이는 Chrome은 `node scripts/verify/start-ui.mjs`로 띄울 수 있다(사용법: [E2E_HANDOFF](E2E_HANDOFF.md) 4절). 실제 `claude`를 쓰려면 PATH 앞에 있는 `scripts/verify/bin/claude`(가짜)가 가리지 않게 `PATH`를 바꿔 직접 서버를 띄운다. 이 세션은 웹 빌드 없이 Vite 개발 서버(`ADE_DEV=1`, HMR)로 돌고, 이미 떠 있는 세션이 있으면 새로 띄우지 않고 재활용한다. 서버 코드를 고쳤을 때는 Chrome을 끄지 말고 `scripts/verify/restart-ui.mjs`로 서버만 재시작한다(E2E_HANDOFF 4.1절 운영 규칙).
-- Chrome은 "Entire screen" 자동 선택 플래그 없이(이 탭만 공유) 띄우고 `Page.bringToFront`로 앞에 둔다. 가려진 창에서는 캡쳐가 실패한다.
+- 격리 서버·가짜 Hub·보이는 Chrome은 `node scripts/verify/start-ui.mjs`로 띄울 수 있다(사용법: [E2E_HANDOFF](../../E2E_HANDOFF.md) 4절). 실제 `claude`를 쓰려면 PATH 앞에 있는 `scripts/verify/bin/claude`(가짜)가 가리지 않게 `PATH`를 바꿔 직접 서버를 띄운다. 이 세션은 웹 빌드 없이 Vite 개발 서버(`ADE_DEV=1`, HMR)로 돌고, 이미 떠 있는 세션이 있으면 새로 띄우지 않고 재활용한다. 서버 코드를 고쳤을 때는 Chrome을 끄지 말고 `scripts/verify/restart-ui.mjs`로 서버만 재시작한다(E2E_HANDOFF 4.1절 운영 규칙).
+- Chrome은 "Entire screen" 자동 선택 플래그 없이(이 탭만 공유) 띄운다. 창을 앞으로 가져오지 않는다. 피드백 화면 캡쳐 항목만 `connect(…, { focus: true })`로 `Page.bringToFront`한다(가려진 창에서는 캡쳐가 실패한다).
 - 사용자의 실제 MoonerADE 앱을 건드리지 않는다: `apps/local-server/src/index.js`를 `ADE_DATA_DIR=<임시>`, `ADE_DEV=1`, `ADE_PORT=0`, `ADE_PTY_ENDPOINT=`, throwaway git 저장소로 띄운다. Electron 개발 앱은 띄우지 않는다.
 - 보이는 Chrome(`--remote-debugging-port`, 별도 `--user-data-dir`)으로 구동한다.
 - **모델은 `claude-haiku-5-5`, Effort는 low**로 명시한다(채팅 모델 드롭다운 기본값은 CLI 기본 모델이라 sonnet이 돌 수 있음). `claude` 래퍼로 `--effort low`를 붙이고, `ps` 인자와 저장된 이벤트의 `model`로 확인한다.
