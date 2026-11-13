@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createPluginManager, createPluginStore, probeMcpTools } from './plugin-core.js';
+import { createGithub, githubClientId, machineToken } from './plugin-updates.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
@@ -69,9 +70,23 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   // The plugin's MCP server is listed with what an agent in an ADE terminal would run it with: the terminal's Node and the
   // plugin's terminal variables on top of the user's environment.
   const probeMcp = ({ command, args, cwd, env }) => probeMcpTools({ command, args, cwd, env: { ...hostEnv(), ...env, ADE_PLUGIN_NODE: terminalNode }, clientVersion: version });
+  // Plugin updates from GitHub releases. The account connected in MoonerADE comes first, then this PC's gh / git login, then
+  // none (public repositories). ADE_PLUGIN_UPDATE_TEST_API points it at a fake GitHub on this machine for the tests; then
+  // this PC's own login is never used.
+  const testApi = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(process.env.ADE_PLUGIN_UPDATE_TEST_API ?? '') ? process.env.ADE_PLUGIN_UPDATE_TEST_API : null;
+  const github = createGithub({
+    ...(testApi && { api: testApi, web: testApi }),
+    credential: async () => store.state.github ? { token: store.state.github.token, via: 'ade' } : testApi ? null : machineToken()
+  });
+  // Only GitHub's own pages are opened from here.
+  const openExternal = url => { if (/^https:\/\/github\.com\//.test(url)) void shell.openExternal(url); };
+  const firstCheckMs = Number(process.env.ADE_PLUGIN_UPDATE_TEST_FIRST_MS);
   const manager = createPluginManager({
     dir, builtinDir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
-    onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp
+    onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp,
+    github, clientId: githubClientId(), openExternal,
+    probeCredential: async () => { const found = testApi ? null : await machineToken(); return found && { via: found.via }; },
+    ...(testApi && firstCheckMs > 0 && { firstCheckMs })
   });
 
   const installPickedZip = file => manager.installZip(String(file), { picked: true });
@@ -83,11 +98,27 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     approve: folder => manager.approve(String(folder)),
     revoke: (id, options) => manager.revoke(String(id), { forget: options?.forget === true }),
     restart: id => manager.restart(String(id)),
-    action: (id, action, values) => manager.action(String(id), String(action), values),
+    action: (id, action, values, item) => manager.action(String(id), String(action), values, typeof item === 'string' ? item : undefined),
     setMcp: (id, change) => manager.setMcp(String(id), { ...(typeof change?.tool === 'string' && { tool: change.tool }), enabled: change?.enabled === true }),
     refreshTools: id => manager.refreshTools(String(id)),
     openFolder: async () => { const failure = await shell.openPath(dir); if (failure) throw new Error(failure); return manager.snapshot(); },
     installZip: installPickedZip,
+    checkUpdates: id => manager.checkUpdates(typeof id === 'string' ? id : undefined),
+    installUpdate: id => manager.installUpdate(String(id)),
+    setUpdateMode: (id, mode) => manager.setUpdateMode(String(id), String(mode)),
+    connectGithub: token => manager.connectGithub(typeof token === 'string' ? token : ''),
+    disconnectGithub: () => manager.disconnectGithub(),
+    signInGithub: () => manager.signInGithub(),
+    cancelSignIn: () => manager.cancelSignIn(),
+    probeGithub: () => manager.probeGithub(),
+    // The plugin's releases page on GitHub (from its approved plugin.json, never from the page).
+    openSource: async id => {
+      const repo = manager.snapshot().plugins.find(plugin => plugin.id === String(id))?.update?.source?.github;
+      if (repo) openExternal(`https://github.com/${repo}/releases`);
+      return manager.snapshot();
+    },
+    // Where a personal access token is made (read-only access to chosen repositories).
+    openTokenPage: async () => { openExternal('https://github.com/settings/personal-access-tokens/new'); return manager.snapshot(); },
     pickZip: async () => {
       const window = getWindow(), options = { title: '플러그인 zip 선택', properties: ['openFile'], filters: [{ name: '플러그인 zip', extensions: ['zip'] }] };
       const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
@@ -116,6 +147,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   if (store.problem === 'unreadable') error = '저장된 플러그인 설정을 열 수 없어 플러그인을 껐습니다. 다시 켜고 승인하세요.';
   try { manager.rescan(); } catch (failure) { error = failure.message; }
   installDropped();
+  manager.startUpdates();
   // Files dropped in, updated or edited show up (and an edited plugin stops) without a restart.
   let timer = null;
   try {
