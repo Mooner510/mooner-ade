@@ -11,6 +11,9 @@
 | `ADE_DEV_TOKEN` | 없음 | `ADE_DEV=1`일 때만 유효한 64자리 16진수. 접속 토큰과 세션 쿠키를 고정해, 서버가 재시작돼도 주소와 로그인이 유지된다. 설정하지 않으면 매번 새 토큰이 발급된다. 서버가 환경에서 지워 터미널에 전달되지 않는다. |
 | `CHROME_PATH` | OS의 일반 설치 경로 탐색 | E2E용 Chrome/Chromium 실행 파일 |
 | `ADE_TEST_CDP` | 없음 | 이미 실행 중인 격리 Chrome의 CDP HTTP 주소. 사이드바 드래그 테스트 전용 |
+| `ADE_USER_DATA_DIR` | `~/Library/Application Support/@mooner/ade-desktop` (Windows `%APPDATA%\@mooner\ade-desktop`) | Electron 프로필(단일 실행 잠금·PTY 호스트·플러그인·Chromium 데이터). 패키징 앱 사본을 셸에서 격리 실행할 때 씀. macOS는 업데이트 재시작에도 유지되고, Windows는 재시작하면 기본 프로필로 돌아감 |
+| `ADE_UPDATE_URL` | `https://api.github.com` | 업데이트가 릴리스를 조회하는 API 주소. 테스트용 가짜 릴리스(`scripts/verify/t-update.mjs`). 파일 해시·서명 검사는 그대로 |
+| `ADE_UPDATE_ANSWER` | 없음 | 업데이트 질문 창에 자동으로 누를 버튼 이름(`\|`로 구분, 예 `지금 업데이트\|확인`). 격리 테스트 전용 |
 | `ADE_PLUGINS_DIR` | `<userData>/plugins` | 플러그인 폴더. 개발·테스트용 [플러그인](docs/PLUGINS.md) |
 | `ADE_BUILTIN_PLUGINS_DIR` | `apps/desktop/builtin-plugins` | 앱에 들어 있는 [내장 플러그인](docs/PLUGINS.md#내장-플러그인) 폴더. 테스트용 |
 | `ADE_PTY_ENDPOINT` / `ADE_PTY_TOKEN` | 없음 | 앱이 서버·PTY 호스트에 넘기는 호스트 연결·인증. 직접 설정하지 않음. 비워서 서버를 실행하면 터미널이 서버 프로세스 안에서 열림(테스트) |
