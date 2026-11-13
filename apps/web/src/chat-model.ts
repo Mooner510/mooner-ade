@@ -642,6 +642,14 @@ export function agentsOf(items: Item[], results: ChatView['results'], tasks: Cha
   return agents;
 }
 
+// `previous` itself when `next` says the same (same agents, same fields, same child items): agentsOf rebuilds the list on every streamed token,
+// and the pane's agent context (read by every tool card) should only change when an agent did.
+export function keepAgents(previous: SubAgent[], next: SubAgent[]): SubAgent[] {
+  const same = (a: SubAgent, b: SubAgent) => Object.keys(a).length === Object.keys(b).length
+    && (Object.keys(a) as (keyof SubAgent)[]).every(key => a[key] === b[key] || (key === 'items' && a.items.length === b.items.length && a.items.every((item, at) => item === b.items[at])));
+  return previous.length === next.length && next.every((agent, at) => same(previous[at], agent)) ? previous : next;
+}
+
 // ---- a plan (ExitPlanMode) cut into its `##` sections, so a long one can be skimmed ----
 // The leading `# ` line is the plan's title. Text before the first `##` is a section with no title. Fenced code is never split.
 export type PlanSection = { title: string; body: string; items: number };
@@ -800,9 +808,12 @@ export function lineChanges(from: string, to: string) {
 
 // Tools held at an approval prompt: they have not run yet, so their rows say "승인 대기" instead of spinning. Claude names the tool call in
 // the request; an agent that does not is matched to the newest unanswered call of the same tool.
+// With nothing pending both return one shared empty value: they feed contexts that every tool card reads, and a fresh empty Set per streamed
+// token would re-render every card in the history.
+const NO_IDS: ReadonlySet<string> = new Set(), NO_AGENTS: ReadonlyMap<string, string> = new Map();
 export function awaitingTools(items: readonly Item[], approvals: readonly Approval[], results: Readonly<Record<string, unknown>>): ReadonlySet<string> {
+  if (!approvals.length) return NO_IDS;
   const ids = new Set<string>();
-  if (!approvals.length) return ids;
   const open = items.flatMap(item => item.kind === 'assistant' ? item.blocks.flatMap(block => block.type === 'tool_use' && !results[block.id] ? [block] : []) : []);
   for (const approval of approvals) {
     if (approval.toolUseId) { ids.add(approval.toolUseId); continue; }
@@ -815,8 +826,8 @@ export function awaitingTools(items: readonly Item[], approvals: readonly Approv
 // Which subagent asked for each pending approval (requestId -> the subagent's Agent tool call id): the approved tool call sits in one of that
 // subagent's messages. Approvals from the main conversation are not in the map.
 export function approvalAgents(items: readonly Item[], approvals: readonly Approval[]): ReadonlyMap<string, string> {
+  if (!approvals.some(approval => approval.toolUseId)) return NO_AGENTS;
   const out = new Map<string, string>();
-  if (!approvals.some(approval => approval.toolUseId)) return out;
   const owner = new Map<string, string>();
   for (const item of items) if (item.kind === 'assistant' && item.parent) for (const block of item.blocks) if (block.type === 'tool_use') owner.set(block.id, item.parent);
   for (const approval of approvals) { const agent = approval.toolUseId ? owner.get(approval.toolUseId) : undefined; if (agent) out.set(approval.requestId, agent); }
