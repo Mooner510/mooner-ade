@@ -86,6 +86,83 @@ test('a control link sets the linger time without taking the terminals, and the 
   assert.match(host.log(), /다시 연결되지 않음/);
 });
 
+// A chat agent stand-in: answers each stdin line with a JSON line and prints a tick line every 100 ms.
+const echo = ['-e', "let n=0;setInterval(()=>console.log(JSON.stringify({tick:n++})),100);process.stdin.setEncoding('utf8');let b='';process.stdin.on('data',c=>{b+=c;let i;while((i=b.indexOf('\\n'))>=0){const l=b.slice(0,i);b=b.slice(i+1);console.log(JSON.stringify({echo:l}));if(l==='bye')process.exit(3)}})"];
+function collect(proc) {
+  const seen = []; let buffer = '';
+  proc.stdout.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\n')) >= 0) { seen.push(JSON.parse(buffer.slice(0, i))); buffer = buffer.slice(i + 1); } });
+  return seen;
+}
+const until = async (check, ms = 5000) => { for (const end = Date.now() + ms; Date.now() < end && !check();) await wait(50); assert.ok(check()); };
+
+test('a piped process outlives its server and the next one reads on from the exact line the last one stopped at', { timeout: 60_000 }, async t => {
+  const host = startHost(t, { env: { ADE_PTY_LINGER_MS: '20000' } });
+  await host.ready;
+  const first = await connectPtyHost(host);
+  assert.equal(first.procs, true);
+  const proc = first.spawnProc(process.execPath, echo, { cwd: os.tmpdir(), env: process.env, meta: { chatId: 'c1', projectId: 'p' } });
+  await new Promise((resolve, reject) => { proc.once('spawn', resolve); proc.once('error', reject); });
+  const seen = collect(proc);
+  proc.stdin.write('hello\n');
+  await until(() => seen.some(item => item.echo === 'hello') && seen.filter(item => 'tick' in item).length >= 3);
+  const stopped = proc.lastLine;
+  proc.detach(); first.close();
+  await wait(600); // ticks go on with nobody reading
+
+  const second = await connectPtyHost(host);
+  assert.equal(second.hello.procs, 1);
+  const [item] = await second.listProcs();
+  assert.deepEqual(item.meta, { chatId: 'c1', projectId: 'p' });
+  const again = await second.attachProc(item.key, stopped);
+  assert.equal(again.missing, false);
+  const more = collect(again);
+  again.stdin.write('bye\n');
+  const closed = new Promise(resolve => again.once('close', (code, signal) => resolve({ code, signal })));
+  assert.deepEqual(await closed, { code: 3, signal: null });
+  const ticks = [...seen, ...more].filter(entry => 'tick' in entry).map(entry => entry.tick);
+  assert.deepEqual(ticks, ticks.map((_, index) => index), 'every tick exactly once, none lost while nobody read');
+  assert.ok(more.some(entry => entry.echo === 'bye'), 'stdin reaches it after the takeover');
+  assert.ok(more.length >= 5, 'what it printed meanwhile was kept');
+  await assert.rejects(second.attachProc('nope'), /failed/);
+  second.close();
+});
+
+test('lines the previous server acknowledged are gone, and a takeover from before them says so', { timeout: 60_000 }, async t => {
+  const host = startHost(t, { env: { ADE_PTY_LINGER_MS: '20000' } });
+  await host.ready;
+  const owner = await connectPtyHost(host);
+  const proc = owner.spawnProc(process.execPath, echo, { cwd: os.tmpdir(), env: process.env, meta: {} });
+  const seen = collect(proc);
+  await until(() => seen.length >= 3);
+  proc.detach(); owner.close();
+  const next = await connectPtyHost(host);
+  const [item] = await next.listProcs();
+  const again = await next.attachProc(item.key, 0);
+  assert.equal(again.missing, true);
+  again.kill();
+  await new Promise(resolve => again.once('close', resolve));
+  next.close();
+});
+
+test('a spawn that fails reports the error, and linger 0 keeps processes until an owner comes back', { timeout: 60_000 }, async t => {
+  const host = startHost(t, { env: { ADE_PTY_LINGER_MS: '500' } });
+  await host.ready;
+  const owner = await connectPtyHost(host);
+  const bad = owner.spawnProc(path.join(os.tmpdir(), 'no-such-agent-binary'), [], { cwd: os.tmpdir(), env: process.env });
+  const error = await new Promise(resolve => { bad.once('error', resolve); bad.once('spawn', () => resolve(null)); });
+  assert.equal(error?.code, 'ENOENT');
+  const proc = owner.spawnProc(process.execPath, echo, { cwd: os.tmpdir(), env: process.env, meta: {} });
+  await new Promise(resolve => proc.once('spawn', resolve));
+  assert.equal((await ptyHostControl(host, { op: 'linger', ms: 0 })).ok, true);
+  proc.detach(); owner.close();
+  assert.equal(await exitsWithin(host, 1500), false, 'no time limit');
+  assert.equal(processAlive(proc.pid), true);
+  assert.equal((await ptyHostControl(host, { op: 'shutdown' })).ok, true);
+  assert.equal(await exitsWithin(host, 5000), true);
+  for (let attempt = 0; attempt < 30 && processAlive(proc.pid); attempt++) await wait(100);
+  assert.equal(processAlive(proc.pid), false, 'shutdown ends it');
+});
+
 test('shutdown ends the terminals at once, and a host without terminals or owner exits', { timeout: 60_000 }, async t => {
   const host = startHost(t);
   await host.ready;

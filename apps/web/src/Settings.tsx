@@ -534,7 +534,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="새 탭 기본 모드" hint="새 탭 메뉴와 런처에서 AI 에이전트를 채팅으로 열지 터미널(CLI)로 열지 정합니다." preview={false}>
               <Dropdown label="새 탭 기본 모드" value={settings.defaultMode} options={[{ value: 'chat', label: '채팅' }, { value: 'cli', label: '터미널 (CLI)' }]} onChange={value => set('defaultMode', value as Settings['defaultMode'])} /></Row>
             <Row title="실행 중인 터미널 닫기 확인" hint="실행 중인 터미널이나 그 터미널이 있는 탭을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmClose')}</Row>
-            <Row title="채팅 닫기 확인" hint="응답 중인 채팅이나 그 채팅이 있는 탭을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseChat')}</Row>
+            <Row title="채팅 닫기 확인" hint="채팅이 있는 탭을 닫기 전과 응답 중인 채팅을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseChat')}</Row>
             <Row title="프로젝트 닫기 확인" hint="실행 중인 터미널·채팅이 있는 프로젝트를 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseProject')}</Row>
           </Group>
         </SectionFrame>}

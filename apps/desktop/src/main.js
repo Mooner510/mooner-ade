@@ -11,8 +11,9 @@ import { setupPlugins } from './plugins.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
-// Keep the existing profile when changing the displayed product name.
-app.setPath('userData', path.join(app.getPath('appData'), '@mooner/ade-desktop'));
+// Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
+// (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
+app.setPath('userData', process.env.ADE_USER_DATA_DIR || path.join(app.getPath('appData'), '@mooner/ade-desktop'));
 // Chromium ends the whole app ("GPU process isn't usable. Goodbye.") once the GPU process has crashed a few times, which many busy
 // terminal panes can cause. Without the limit it just starts the GPU process again and the window recovers.
 app.commandLine.appendSwitch('disable-gpu-process-crash-limit');
@@ -45,7 +46,8 @@ const nodeBinary = process.env.ADE_NODE || (packaged ? bundledNode : 'node');
 const ptyRoot = path.join(app.getPath('userData'), 'pty-host');
 // How long the host keeps terminals for the app that an update is restarting.
 const UPDATE_LINGER_MS = 5 * 60_000;
-let ptyHostInfo = null, keepTerminalsOnQuit = false, ptyNotice = '';
+// keepTerminalsOnQuit: an update restart or the user's "leave running in the background"; `leftInBackground` is the latter, kept with no time limit.
+let ptyHostInfo = null, keepTerminalsOnQuit = false, leftInBackground = false, ptyNotice = '';
 
 async function ensurePtyHost() {
   const known = readRendezvous(ptyRoot);
@@ -55,7 +57,7 @@ async function ensurePtyHost() {
       socket.destroy();
       if (hello.pid === known.pid) {
         console.log(`실행 중인 pty-host에 연결합니다 (pid ${hello.pid}, 터미널 ${hello.terminals}개)`);
-        return usePtyHost(known);
+        return usePtyHost({ ...known, features: Array.isArray(hello.features) ? hello.features : [] });
       }
     } catch (error) {
       // Not ended here: it may be an older host whose terminals someone still wants. It ends them itself once nobody takes them over.
@@ -91,7 +93,7 @@ async function ensurePtyHost() {
     catch (error) { if (Date.now() > deadline) { try { child.kill(); } catch { /* gone */ } throw new Error(`pty-host가 응답하지 않습니다: ${error.message}`); } }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  const info = { protocol: PTY_PROTOCOL, endpoint, token, pid: child.pid, key: files.key };
+  const info = { protocol: PTY_PROTOCOL, endpoint, token, pid: child.pid, key: files.key, features: ['proc', 'linger-forever'] };
   writeRendezvous(ptyRoot, info);
   return usePtyHost(info);
 }
@@ -103,11 +105,14 @@ function usePtyHost(info) {
   // Copies of earlier versions no running host uses any more.
   if (packaged && !dev) sweepHostCopies(ptyRoot, info.key ? [info.key] : []);
 }
-// Before the server goes: an update restart asks the host to keep the terminals for the next app; a normal quit ends them.
+// Before the server goes: an update restart asks the host to keep the terminals for the next app (the background choice: until it comes back);
+// a normal quit ends them.
 async function releasePtyHost() {
   const info = ptyHostInfo;
   if (!info) return;
-  const request = keepTerminalsOnQuit ? { op: 'linger', ms: UPDATE_LINGER_MS } : { op: 'shutdown', reason: '앱 종료' };
+  // An older host (handed over by an update) has no "forever": it keeps them for its longest time, 30 minutes.
+  const forever = info.features?.includes('linger-forever') ? 0 : 30 * 60_000;
+  const request = keepTerminalsOnQuit ? { op: 'linger', ms: leftInBackground ? forever : UPDATE_LINGER_MS } : { op: 'shutdown', reason: '앱 종료' };
   const result = await ptyHostControl(info, request).catch(error => ({ ok: false, error: error.message }));
   if (!result.ok) console.warn(`pty-host에 ${request.op}를 알리지 못했습니다: ${result.error ?? '응답 없음'}`);
   if (!keepTerminalsOnQuit) clearRendezvous(ptyRoot, info.pid);
@@ -146,8 +151,9 @@ function startServer() {
   });
 }
 
-// Graceful stop lets the server save state and release the project lock; SIGKILL after 5 s.
-function stopServer() {
+// Graceful stop lets the server save state and release the project lock; SIGKILL after 5 s. `keep: false` (a plain quit) ends the chat
+// agents instead of leaving them in the pty-host for the next server.
+function stopServer({ keep = true } = {}) {
   if (!server) return Promise.resolve();
   const child = server;
   return new Promise(resolve => {
@@ -155,7 +161,7 @@ function stopServer() {
     // and a new server started earlier fails to open those projects. SIGTERM would only re-enter its running shutdown.
     const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
     child.once('exit', () => { clearTimeout(timer); resolve(); });
-    if (child.connected) child.send({ type: 'shutdown' }, error => { if (error) child.kill(); }); else child.kill();
+    if (child.connected) child.send({ type: 'shutdown', keep }, error => { if (error) child.kill(); }); else child.kill();
   });
 }
 
@@ -284,6 +290,8 @@ function createWindow(url) {
     if (origin && !window.isDestroyed()) void load(window, `${origin}/`);
   });
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
+  // The window's X quits through before-quit, so its question (end, background, cancel) comes while the window is still there to go back to.
+  window.on('close', event => { if (!quitting) { event.preventDefault(); app.quit(); } });
   void load(window, url);
 }
 
@@ -384,18 +392,27 @@ if (!app.requestSingleInstanceLock()) {
   const quitNow = () => {
     quitting = true;
     // Linger is set before the server lets go of the terminals; shutdown after it has saved the sessions it reads from them.
-    const steps = keepTerminalsOnQuit ? [releasePtyHost, stopServer] : [stopServer, releasePtyHost];
+    const steps = keepTerminalsOnQuit ? [releasePtyHost, () => stopServer()] : [() => stopServer({ keep: false }), releasePtyHost];
     void steps.reduce((chain, step) => chain.then(step).catch(error => console.warn(error.message)), Promise.resolve()).finally(() => app.quit());
   };
-  // Terminals survive a quit in the pty-host; a chat turn is a child of the server and ends with it, so quitting in the middle of one asks first.
-  // An immediate update restart already set keepTerminalsOnQuit, so it skips this. A server that does not answer is not a reason to hold the quit.
+  // Quitting with terminals or chat agents running asks whether to end them or leave them running in the pty-host (the background), where the
+  // next start takes them over. An immediate update restart already set keepTerminalsOnQuit, so it skips this. A server that does not answer
+  // is not a reason to hold the quit.
   async function confirmQuit() {
     if (keepTerminalsOnQuit) return true;
-    const report = await serverBusy().catch(() => null), turns = report?.reasons.filter(reason => reason.kind === 'turn' && !reason.keeps && reason.agent) ?? [];
-    if (!turns.length) return true;
+    const report = await serverBusy().catch(() => null), live = report?.live;
+    if (!live?.terminals && !live?.chats) return true;
+    const canKeep = Boolean(ptyHostInfo && report.keepsTerminals), chatsStop = live.chats > 0 && !report.keepsChats;
+    const open = [live.terminals && `터미널 ${live.terminals}개`, live.chats && `채팅 ${live.chats}개${live.answering ? `(응답 중 ${live.answering}개)` : ''}`].filter(Boolean).join('와 ');
+    const detail = [`${open}가 열려 있습니다.`,
+      [canKeep && `백그라운드로 남기기: 창을 닫아도 터미널과 채팅은 계속 실행되고, 다음에 앱을 열면 그대로 이어집니다.${ptyHostInfo.features?.includes('linger-forever') ? '' : ' (이번에는 30분 동안만 남습니다.)'}${chatsStop ? ' (이번에는 채팅 응답이 중단됩니다. 앱을 한 번 다시 시작하면 채팅도 남길 수 있습니다.)' : ''}`,
+        '종료: 터미널과 채팅을 모두 끝냅니다. 대화는 저장되어 나중에 다시 열 수 있습니다.'].filter(Boolean).join('\n')].join('\n\n');
+    const buttons = canKeep ? ['백그라운드로 남기기', '종료', '취소'] : ['종료', '취소'];
     const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-    const { response } = await dialog.showMessageBox(...(window ? [window] : []), { type: 'question', buttons: ['종료', '취소'], defaultId: 1, cancelId: 1, message: `진행 중인 채팅 응답이 ${turns.length}개 있습니다.`, detail: '지금 종료하면 응답이 중단됩니다. 대화는 저장되며, 중단된 마지막 요청은 다시 열어 ‘세션 복구’로 이어서 보낼 수 있습니다.' });
-    return response === 0;
+    const { response } = await dialog.showMessageBox(...(window ? [window] : []), { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, title: '무너에이드', message: '무너에이드를 종료할까요?', detail });
+    if (buttons[response] === '취소') return false;
+    if (buttons[response] === '백그라운드로 남기기') { keepTerminalsOnQuit = true; leftInBackground = true; }
+    return true;
   }
   app.on('before-quit', event => {
     if (quitting) return;
@@ -405,7 +422,8 @@ if (!app.requestSingleInstanceLock()) {
     void confirmQuit().catch(() => true).then(async go => {
       asking = false;
       if (!go) return;
-      try { if (await applyStagedUpdate()) keepTerminalsOnQuit = true; }
+      // Left in the background, the app must not come back on its own: a downloaded update waits for a plain quit.
+      try { if (!leftInBackground && await applyStagedUpdate()) keepTerminalsOnQuit = true; }
       catch (error) { dialog.showErrorBox('업데이트', `설치를 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`); return; }
       quitNow();
     });

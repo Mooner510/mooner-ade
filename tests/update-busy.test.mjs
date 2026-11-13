@@ -59,7 +59,7 @@ async function until(read, expected, what, accept = () => true) {
 
 test('the server tells the updater whether a restart would cut something off', { timeout: 120_000 }, async t => {
   const { origin, cookie, api, busy, projectId } = await boot(t);
-  assert.deepEqual(await busy(), { type: 'busy', id: 1, busy: false, keepsTerminals: false, reasons: [] }, 'no terminals, nothing to cut off');
+  assert.deepEqual(await busy(), { type: 'busy', id: 1, busy: false, keepsTerminals: false, keepsChats: false, live: { terminals: 0, chats: 0, answering: 0 }, reasons: [] }, 'no terminals, nothing to cut off');
 
   const terminal = await api('terminal/open', { projectId });
   const ws = new WebSocket(`${origin.replace('http', 'ws')}/ws`, { headers: { Origin: origin, Cookie: cookie } });
