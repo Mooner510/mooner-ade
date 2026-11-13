@@ -53,10 +53,12 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
 
 // Starting powershell.exe and loading CIM costs ~0.6 s of CPU, too much to repeat every few seconds, so Windows keeps one
 // shell running and asks it again. Given root PIDs, the table may hold only those and the processes below them.
-// It is restarted on the next call after it dies or hangs; null means "no reading".
+// It is restarted on a call after it dies or hangs, but not within RESTART_MS of that: a shell that keeps failing (blocked by policy, a hung
+// WMI) would otherwise cost a new powershell.exe and an Add-Type compile every few seconds. null means "no reading".
+const RESTART_MS = 30_000;
 function windowsTable({ timeoutMs }) {
-  let child = null, output = '', waiting = null, queue = Promise.resolve();
-  const stop = () => { child?.kill(); child = null; };
+  let child = null, output = '', waiting = null, queue = Promise.resolve(), failedAt = -Infinity;
+  const stop = () => { if (child) failedAt = Date.now(); child?.kill(); child = null; };
   const start = () => {
     const shell = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(LOOP, 'utf16le').toString('base64')], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     child = shell; output = '';
@@ -70,12 +72,13 @@ function windowsTable({ timeoutMs }) {
       const table = output.slice(0, end); output = output.slice(end + END.length);
       waiting?.(parseProcessTable(table));
     });
-    const gone = () => { if (child !== shell) return; child = null; waiting?.(null); };
+    const gone = () => { if (child !== shell) return; child = null; failedAt = Date.now(); waiting?.(null); };
     shell.once('error', gone); shell.once('exit', gone);
     shell.stdin.on('error', () => {});
     shell.unref(); shell.stdout.unref?.(); shell.stdin.unref?.();
   };
   const ask = roots => new Promise(resolve => {
+    if (!child && Date.now() - failedAt < RESTART_MS) return resolve(null);
     if (!child) start();
     const timer = setTimeout(() => { stop(); finish(null); }, timeoutMs);
     const finish = value => { clearTimeout(timer); waiting = null; resolve(value); };

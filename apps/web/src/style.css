@@ -997,18 +997,19 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .folder-tab.active, .group-pane.focused { background: var(--surface); }
 .folder-tab.active[data-agent-state="working"], .group-pane.focused[data-agent-state="working"] { background-color: color-mix(in srgb, var(--agent) 14%, transparent); }
 .folder-tab.active .folder-tab-label, .group-pane.focused .folder-tab-label { font-weight: 600; }
-/* The active-tab pulse animates opacity only (compositor-run) and stops after a few cycles. The working comet below repaints
-   its small ring every frame for as long as the agent runs, so it is the one deliberately endless animation here.
+/* The active-tab pulse animates opacity only (compositor-run) and stops after a few cycles. The working comet below runs
+   for as long as the agent works, so it is not a CSS animation at all (see its note).
    z-index -1 keeps the overlays under the text. */
 .folder-tab.active, .group-pane.focused, .folder-tab[data-agent-state="working"], .group-pane[data-agent-state="working"] { isolation: isolate; }
 .folder-tab.active::before, .group-pane.focused::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; }
 .folder-tab.active::before, .group-pane.focused::before { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 75%); box-shadow: inset 3px 0 0 var(--accent); animation: tab-highlight 2.8s ease-in-out 3; }
 /* Working: a comet with a curved, fading tail runs around the outline (an SVG rect, see `trail` in main.tsx). pathLength=100
    makes every length a percentage of the perimeter, so the speed is the same on the long and the short sides. Twenty dashes of
-   growing length share one head to fake the fade. Each row gets its own lap time and phase (--lap/--phase, set in main.tsx) so they never move in lockstep. */
+   growing length share one head to fake the fade. Each row gets its own lap time and phase (data-lap/data-phase, set in main.tsx) so they never move in lockstep.
+   It runs for as long as the agent works (often hours), so it moves on a 24 fps clock (--f, `orbit` in main.tsx), not a CSS animation:
+   at 120-144 Hz a smooth comet kept the window restyling and drawing nonstop, the GPU (and NVIDIA's per-app RTX HDR) working as if for a game. */
 .agent-trail { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; overflow: visible; pointer-events: none; fill: none; stroke: var(--agent); stroke-width: 2; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--agent) 80%, transparent)); }
-.agent-trail rect { x: 1px; y: 1px; width: calc(100% - 2px); height: calc(100% - 2px); rx: 5px; animation: agent-orbit var(--lap, 3.8s) cubic-bezier(.42, .12, .58, .88 ) var(--phase, 0s) infinite; }
-@keyframes agent-orbit { from { stroke-dashoffset: var(--from); } to { stroke-dashoffset: var(--to); } }
+.agent-trail rect { x: 1px; y: 1px; width: calc(100% - 2px); height: calc(100% - 2px); rx: 5px; stroke-dashoffset: calc(var(--from) - 100 * var(--f, 0)); }
 /* Selected + working: same flush bar + gradient as a plain selected row, just in the agent color so it merges with the ring. */
 .folder-tab.active[data-agent-state="working"]::before, .group-pane.focused[data-agent-state="working"]::before { background: linear-gradient(90deg, color-mix(in srgb, var(--agent) 24%, transparent), transparent 75%); box-shadow: inset 3px 0 0 var(--agent); }
 @keyframes tab-highlight { 0%, 100% { opacity: 1; } 50% { opacity: .72; } }
@@ -1650,7 +1651,10 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-send { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: 4px; padding: 0; border-radius: 50%; background: var(--agent); color: var(--bg); }
 .chat-send:hover:not(:disabled) { filter: brightness(1.12); }
 .chat-send:disabled { background: var(--hover); color: var(--muted); opacity: .7; cursor: default; }
-.chat-send.stop { background: var(--raised); color: var(--fg); border: 1px solid var(--border-strong); }
+.chat-send.stop { position: relative; isolation: isolate; background: transparent; color: var(--fg); }
+/* The circle behind the icon breathes, not the button: the button turns into "stop" while its own colour transitions run, and Chromium then keeps
+   a transform animation on that element off the compositor for good (restyling the document every frame for the whole turn). */
+.chat-send.stop::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A wide screenshot keeps its 56px height but never grows past the composer: the thumbnail is cropped (object-fit) instead of overflowing. */
 .chat-attachments > span { position: relative; display: inline-block; min-width: 0; max-width: 100%; }
@@ -1953,6 +1957,9 @@ button.chat-chip:hover { background: var(--hover); }
 .chat-effort.effort-max summary .dd-label .icon { color: #f2566e; animation: effort-flame .7s ease-in-out infinite alternate; transform-origin: 50% 90%; }
 @keyframes effort-text { to { background-position: 200% 0; } }
 @keyframes effort-flame { from { transform: scale(1); } to { transform: scale(1.12); } }
+/* Both play only while the control is pointed at or open. Left running, they kept the window drawing every frame (GPU and CPU busy) for as long as a chat with that Effort was on screen. */
+.effort-wrap:not(:hover, :focus-within) .effort-sparks { display: none; }
+.effort-wrap:not(:hover, :focus-within) .chat-effort.effort-max summary :is(.dd-label, .dd-label .icon) { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .effort-sparks { display: none; } .chat-effort.effort-max summary .dd-label, .chat-effort.effort-max summary .dd-label .icon { animation: none; } }
 
 /* ---- Chat motion: springy, never abrupt. --spring overshoots a little (the "chewy" settle); --ease is the calm one for fades. ---- */
@@ -1978,10 +1985,15 @@ button.chat-chip:hover { background: var(--hover); }
 .chat-send:active:not(:disabled), .chat-attach:active, button.chat-chip:active, .chat-foot .dropdown summary:active, .chat-ring:active, .chat-msg-actions .icon-btn:active { transform: scale(.88); transition-duration: .08s; }
 .chat-send:not(:disabled) .icon { transition: transform .3s var(--spring); }
 .chat-send:hover:not(:disabled) .icon { transform: translateY(-1.5px); }
-.chat-send.stop:not(:disabled) { animation: chat-breathe 1.6s ease-in-out infinite; }
+.chat-send.stop:not(:disabled)::before { animation: chat-breathe 1.6s ease-in-out infinite; }
 .chat-chip { transition: transform .3s var(--spring), background .15s; }
 button.chat-chip:hover { transform: translateY(-1px); }
 .chat-spin { transition: border-color .4s; }
+/* With the window in the background (another app or a game in front) the endless loops pause until it is focused again (data-blurred, main.tsx;
+   the working comets stop there too). Each running loop keeps the window drawing frames; entrance animations are not listed, they end on their own. */
+:root[data-blurred] :is(.chat-spin, .look-bundle-head i, .plugin-spinner, .usage-detail .icon, .feedback-spinner, .feedback-progress-bar, .look-caret, .effort-wrap *),
+:root[data-blurred] .chat-send.stop::before, :root[data-blurred] .chat-agent-dot::after { animation-play-state: paused !important; }
+:root[data-blurred] .chat-working { transition: none; }
 /* Option lists open from their anchor with a little overshoot; rows nudge toward the cursor. */
 .chat-mode > div, .chat-model > div, .chat-effort > div { animation: chat-pop-up .28s var(--spring) both; transform-origin: 50% 100%; }
 .chat-mode > div[data-placement=below], .chat-model > div[data-placement=below], .chat-effort > div[data-placement=below] { animation-name: chat-pop-down; transform-origin: 50% 0%; }
@@ -1998,7 +2010,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 @keyframes chat-jump-in { 0% { opacity: 0; transform: translate(-50%, 10px) scale(.6); } 100% { opacity: 1; transform: translateX(-50%); } }
 @keyframes chat-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) {
-  .chat-thread [data-enter], .chat-working, .chat-tool, .chat-tool-body, .chat-approval, .chat-question, .chat-queue li, .chat-commands, .chat-jump, .chat-empty-mark, .chat-empty h2, .chat-composer, .chat-send, .chat-mode > div, .chat-model > div, .chat-effort > div { animation: none !important; }
+  .chat-thread [data-enter], .chat-working, .chat-tool, .chat-tool-body, .chat-approval, .chat-question, .chat-queue li, .chat-commands, .chat-jump, .chat-empty-mark, .chat-empty h2, .chat-composer, .chat-send, .chat-send::before, .chat-mode > div, .chat-model > div, .chat-effort > div { animation: none !important; }
   .chat-composer:focus-within, .chat-send:hover:not(:disabled), button.chat-chip:hover { transform: none; }
 }
 
@@ -2230,8 +2242,10 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 
 /* Subagents: a card per Agent call, the tracker above the composer, and the drawer with one subagent's run. --agent-color is that subagent's own colour. */
 .chat-agent-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--agent-color, var(--agent)); }
-.chat-agent-dot[data-status="running"], [data-status="running"] .chat-agent-dot { animation: chat-agent-pulse 1.4s ease-in-out infinite; }
-@keyframes chat-agent-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--agent-color, var(--agent)) 28%, transparent); } }
+/* The running pulse is a ring under the dot that scales and fades on the compositor: a box-shadow pulse restyled the whole document every display frame. */
+.chat-agent-dot[data-status="running"], [data-status="running"] .chat-agent-dot { position: relative; }
+.chat-agent-dot[data-status="running"]::after, [data-status="running"] .chat-agent-dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--agent-color, var(--agent)) 28%, transparent); pointer-events: none; animation: chat-agent-pulse 1.4s ease-in-out infinite; }
+@keyframes chat-agent-pulse { 0%, 100% { transform: scale(.5); opacity: 0; } 50% { transform: scale(1); opacity: 1; } }
 .chat-agent-dot[data-status="stopped"], [data-status="stopped"] > .chat-agent-dot { opacity: .45; }
 .chat-agent-type { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--agent-color, var(--agent)) 16%, transparent); color: var(--agent-color, var(--agent)); font-size: 11px; font-weight: 600; }
 .chat-divider.agent-end { color: var(--muted); font-size: 12px; }
@@ -2312,7 +2326,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .chat-agent-live { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
 .chat-agent-report { padding-top: 8px; border-top: 1px solid var(--border); }
 .chat-agent-report h4 { margin: 0 0 4px; color: var(--add); font-size: 12px; }
-@media (prefers-reduced-motion: reduce) { .chat-agent-dot, .chat-agent-drawer { animation: none !important; } .chat-pane { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .chat-agent-dot, .chat-agent-dot::after, .chat-agent-drawer { animation: none !important; } .chat-pane { transition: none; } }
 .chat-approval-preview { max-height: 220px; overflow: auto; margin-top: 6px; }
 /* feedback requests (피드백 요청): right panel, capture overlay, annotate dialog */
 .feedback-panel { container-type: inline-size; }
