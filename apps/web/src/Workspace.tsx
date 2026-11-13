@@ -796,7 +796,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }
   const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', run: () => newTab() },
-    { id: 'newTab2', label: '새 탭', hidden: true, run: () => newTab() },
     ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
       { id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, run: () => launch(item.command, 'tab') },
       { id: `split${item.id}`, label: `오른쪽 pane에서 ${item.label} 실행`, run: () => launch(item.command, 'split') }
@@ -820,12 +819,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
     { id: 'focusNext', label: '다음 pane으로 이동', run: () => moveFocus(1) },
     { id: 'focusPrev', label: '이전 pane으로 이동', run: () => moveFocus(-1) },
-    { id: 'focusNext2', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusPrev2', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModright', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModleft', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
-    { id: 'focusModdown', label: '다음 pane으로 이동', hidden: true, run: () => moveFocus(1) },
-    { id: 'focusModup', label: '이전 pane으로 이동', hidden: true, run: () => moveFocus(-1) },
     { id: 'review', label: '변경사항(Diff) 패널 전환', run: toggleReview },
     { id: 'feedback', label: '피드백 요청', run: toggleFeedback },
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', run: startCapture },
@@ -860,7 +853,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
-  const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 변경을 기본 저장소에 fast-forward 통합할까요?`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
+  const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
   const editorCtx: EditorCtx = {
     settings, gitVersion, loadDiff,
     onSelectTab: (group, path) => { commitFor(group, mapLeaf(treeOf(group)!, group, leaf => ({ ...leaf, active: path }))); setFocusLeaf(group); },
@@ -956,7 +949,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
-      <IconButton icon="settings" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
+      <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
       </div>
     </header>
     <ErrorToast scope={root} active={active} />
