@@ -15,6 +15,11 @@ export const contextTip = (tokens: number | undefined, minK: number) => tokens &
 export const queueTip = '💡 작업 중엔 Enter 대신 Tab: 끝나자마자 자동 전송되고 수정·취소도 돼요';
 export const splitTip = (keys: (binding: string) => string) => `💡 터미널에서 ${keys('ctrl+d')} 좌우 · ${keys('ctrl+shift+d')} 상하 분할`;
 
-// Eligibility is migrated once for existing users; closing the card clears it in shared settings.
-export const chatModeTipDue = (settings: { defaultMode: string; chatTipPending: boolean; tips: boolean }, kind: string | undefined, agent: string | undefined) =>
-  settings.tips && settings.chatTipPending && settings.defaultMode === 'cli' && (kind === 'terminal' || kind === undefined) && ['claude', 'codex', 'cursor'].includes(agent ?? '');
+// `chatTipPending`: Chat has not been opened yet and the card was not dismissed. Shown while an agent CLI terminal is focused.
+export const chatModeTipDue = (settings: { chatTipPending: boolean; tips: boolean }, kind: string | undefined, agent: string | undefined) =>
+  settings.tips && settings.chatTipPending && (kind === 'terminal' || kind === undefined) && ['claude', 'codex', 'cursor'].includes(agent ?? '');
+
+// One-time pointers at easy-to-miss buttons (Hint.tsx): the first candidate whose condition holds and that was not acknowledged yet.
+// Never during the first-run tour; the tips switch turns them off with the other tips.
+export const nextHint = (settings: { tips: boolean; onboarded: boolean; hintsSeen: string[] }, candidates: [string, unknown][]) =>
+  settings.tips && settings.onboarded ? candidates.find(([id, due]) => due && !settings.hintsSeen.includes(id))?.[0] : undefined;
