@@ -295,23 +295,38 @@ export function validPluginState(value) {
   }
   return state;
 }
+// A built-in plugin's storage is a plain file (0600) in its data folder, not sealed: it ships with the app and needs no approval,
+// and on macOS sealing it asked for the Keychain password on every start (agent-bus saves its bus address each time).
+const storageFile = dir => path.join(dir, 'storage.json');
+const readStorageFile = dir => { try { return fs.readFileSync(storageFile(dir), 'utf8'); } catch { return null; } };
+function writeStorageFile(dir, text) {
+  if (readStorageFile(dir) === text) return;
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${storageFile(dir)}.${randomUUID()}.tmp`;
+  try { fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, storageFile(dir)); } finally { fs.rmSync(tmp, { force: true }); }
+}
+
 // Sealed with safeStorage: without working encryption nothing is stored and plugins stay off.
+// On macOS every safeStorage call, even isEncryptionAvailable(), reads the key from the Keychain, which asks for the login password
+// whenever the app's ad-hoc signature is not on the item's list. So nothing touches it until there is something sealed to read or
+// something to seal; until then `available` assumes yes and save() still checks for real.
 export function createPluginStore({ file, crypto }) {
-  let state = emptyPluginState(), problem = null;
+  let state = emptyPluginState(), problem = null, available = null;
+  const probe = () => (available = crypto.isEncryptionAvailable());
   return {
     get state() { return state; },
     get problem() { return problem; },
-    get available() { return crypto.isEncryptionAvailable(); },
+    get available() { return available ?? true; },
     load() {
       problem = null; state = emptyPluginState();
-      if (!crypto.isEncryptionAvailable()) { problem = 'unavailable'; return state; }
       let sealed;
       try { sealed = fs.readFileSync(file); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; return state; }
+      if (!probe()) { problem = 'unavailable'; return state; }
       try { state = validPluginState(JSON.parse(crypto.decryptString(sealed))); } catch { problem = 'unreadable'; }
       return state;
     },
     save(next) {
-      if (!crypto.isEncryptionAvailable()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
+      if (!probe()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
       const value = validPluginState(next), sealed = crypto.encryptString(JSON.stringify(value));
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.${randomUUID()}.tmp`;
@@ -611,7 +626,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     child.on('exit', code => onHostExit(host, code));
     child.on('error', error => { host.error = error.message; });
     let storage = null;
-    try { storage = store.state.data[manifest.id] ? JSON.parse(store.state.data[manifest.id]) : null; } catch { storage = null; }
+    try { const text = (item.builtin && readStorageFile(dataDir)) || store.state.data[manifest.id]; storage = text ? JSON.parse(text) : null; } catch { storage = null; }
     child.send({ type: 'init', apiVersion: PLUGIN_API, id: manifest.id, appVersion, dataDir, storage, features: [...PLUGIN_FEATURES] });
   }
   function stop(host) {
@@ -672,7 +687,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       case 'storage': {
         const text = JSON.stringify(message.value ?? null);
         if (text.length > MAX_STORAGE) { log.warn(`[plugin ${host.id}] 저장할 데이터가 너무 큽니다.`); break; }
-        store.update(state => ({ ...state, data: { ...state.data, [manifest.id]: text } }));
+        if (host.item.builtin) { writeStorageFile(path.join(dataRoot, manifest.id), text); break; }
+        // Plugins send it on every start; sealing the same value again would read the Keychain for nothing.
+        if (store.state.data[manifest.id] !== text) store.update(state => ({ ...state, data: { ...state.data, [manifest.id]: text } }));
         break;
       }
       case 'confirm': {

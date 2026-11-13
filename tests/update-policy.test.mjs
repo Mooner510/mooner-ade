@@ -20,8 +20,8 @@ test('a report that cannot be understood counts as busy', () => {
     assert.equal(report.busy, true, JSON.stringify(bad));
     assert.equal(report.reasons[0].kind, 'unknown');
   }
-  assert.deepEqual(normalizeReport({ busy: false, reasons: [] }), { busy: false, reasons: [], kept: [], keepsTerminals: false });
-  assert.deepEqual(normalizeReport({ busy: true, reasons: [null, 'x', { kind: 'turn' }] }), { busy: true, reasons: [{ kind: 'turn' }], kept: [], keepsTerminals: false });
+  assert.deepEqual(normalizeReport({ busy: false, reasons: [] }), { busy: false, reasons: [], kept: [], keepsTerminals: false, keepsChats: false });
+  assert.deepEqual(normalizeReport({ busy: true, reasons: [null, 'x', { kind: 'turn' }] }), { busy: true, reasons: [{ kind: 'turn' }], kept: [], keepsTerminals: false, keepsChats: false });
   assert.equal(unknownReport('boom').reasons[0].detail, 'boom');
 });
 
@@ -56,12 +56,15 @@ test('only old update scratch folders are swept', () => {
 
 test('with terminals kept through the restart, only what does not survive counts as busy', () => {
   const turn = { project: 'a', terminal: 'b', kind: 'turn', agent: 'claude', keeps: true }, plugin = { project: '', terminal: 'p', kind: 'plugin' };
-  assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn] }), { busy: false, reasons: [], kept: [turn], keepsTerminals: true });
-  assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn, plugin] }), { busy: true, reasons: [plugin], kept: [turn], keepsTerminals: true });
+  assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn] }), { busy: false, reasons: [], kept: [turn], keepsTerminals: true, keepsChats: false });
+  assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, reasons: [turn, plugin] }), { busy: true, reasons: [plugin], kept: [turn], keepsTerminals: true, keepsChats: false });
   // A `keeps` mark means nothing unless the server says its terminals are kept.
   assert.equal(normalizeReport({ busy: true, reasons: [turn] }).busy, true);
   assert.equal(normalizeReport({ busy: true, keepsTerminals: 'yes', reasons: [turn] }).busy, true);
   assert.equal(unknownReport('x').keepsTerminals, false);
+  // A chat turn in the pty-host is kept like a terminal; keepsChats only counts with the terminals' host.
+  assert.deepEqual(normalizeReport({ busy: true, keepsTerminals: true, keepsChats: true, reasons: [{ ...turn, agent: 'claude' }] }), { busy: false, reasons: [], kept: [{ ...turn, agent: 'claude' }], keepsTerminals: true, keepsChats: true });
+  assert.equal(normalizeReport({ busy: true, keepsChats: true, reasons: [] }).keepsChats, false);
 });
 
 test('versions order numerically, and a prerelease is older than its stable release', () => {
