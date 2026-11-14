@@ -108,10 +108,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // Where this chat's Claude Code keeps its settings and transcripts: the chat's own account, else the one a plain `claude` in this environment would use.
   const configDirOf = () => meta.configDir || (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   // Several refreshes can be in flight (open, catalog, init, result); only the newest one's answer is applied.
-  // "auto" is the one window ADE works out itself. Claude Code tunes its own "auto" per account and, for a 1M model, may not compact before the full window,
-  // so the window the gauge shows is handed to the CLI (CLAUDE_CODE_AUTO_COMPACT_WINDOW) at launch. A window the user set in settings or env is left to the CLI.
-  let compactGeneration = 0, launchedWindow = null;
-  const handedWindow = compact => (compact?.source === 'auto' ? compact.window : null);
+  // Only a window the user set (settings or env) is shown; "auto" is left to Claude Code, and the CLI reads the setting itself.
+  let compactGeneration = 0;
   const refreshAutoCompact = async (model = state.model) => {
     if (agent !== 'claude') { if (state.autoCompact) { state.autoCompact = null; publish(); } return; }
     const generation = ++compactGeneration, configDir = configDirOf();
@@ -119,8 +117,6 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (generation !== compactGeneration) return;
     const prev = JSON.stringify(state.autoCompact), ready = JSON.stringify(next);
     if (prev !== ready) { state.autoCompact = next; publish(); }
-    // The running child was started with another window (the model turned out different): the next message resumes the session with the right one.
-    if (child && handedWindow(next) !== launchedWindow) { restartWhenQuiet(); }
   };
   void refreshAutoCompact();
   // The prompt cache's clock, read from the session's transcript (the same reading the terminal's cache timer uses): `state.cache` = the last main-thread
@@ -429,16 +425,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const args = [...argsOf(executableArgs), ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
-      // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the CLI starts with the window the gauge shows.
+      // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the gauge matches what the CLI starts with.
       const model = meta.model ?? state.model, compactNow = await readAutoCompact(configDirOf(), cwd, model, maxContextForModel(model));
-      launchedWindow = handedWindow(compactNow);
       if (JSON.stringify(state.autoCompact) !== JSON.stringify(compactNow)) { state.autoCompact = compactNow; publish(); }
     }
     // shell:false and argv only: the message text never reaches a shell.
     const run = () => {
       const launchEnv = withUtf8Ctype({ ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' });
       state.apiKey = usesApiKey(launchEnv);
-      if (agent === 'claude' && launchedWindow) launchEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(launchedWindow);
       if (agent === 'codex') { meta.configDir ??= launchEnv.CODEX_HOME || path.join(os.homedir(), '.codex'); launchEnv.CODEX_HOME = meta.configDir; }
       if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
       // Once a chat has used Artifact every restart and resume keeps it on, so the tools do not vanish (the CLI cannot take them back mid-session anyway).
@@ -549,7 +543,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent !== 'claude') { protocol = createChatProtocol(agent, { write, emit: handleEvent }); protocol.restore(saved.protocol ?? {}); }
     attach(proc);
     turnOpen = saved.turnOpen === true; reopened = saved.reopened === true; turnSeq = saved.turnSeq ?? 0; inflight = saved.inflight ?? null;
-    restartAfterTurn = state.restartPending = saved.restartAfterTurn === true; launchedWindow = saved.launchedWindow ?? null; lastCommandOutput = saved.lastCommandOutput ?? null;
+    restartAfterTurn = state.restartPending = saved.restartAfterTurn === true; lastCommandOutput = saved.lastCommandOutput ?? null;
     for (const event of saved.approvals ?? []) approvals.set(event.requestId, event);
     for (const [uuid, item] of saved.steers ?? []) steers.set(uuid, item);
     for (const [toolUseId, taskId] of saved.taskIds ?? []) taskIds.set(toolUseId, taskId);
@@ -566,7 +560,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (closed) return;
       const proc = child;
       if (!proc?.detach || !proc.pid) return this.close();
-      const saved = { v: 1, procKey: proc.key, ack: proc.lastLine, turnOpen, reopened, turnSeq, inflight, restartAfterTurn, launchedWindow, lastCommandOutput,
+      const saved = { v: 1, procKey: proc.key, ack: proc.lastLine, turnOpen, reopened, turnSeq, inflight, restartAfterTurn, lastCommandOutput,
         approvals: [...approvals.values()], steers: [...steers], taskIds: [...taskIds], liveTasks: state.liveTasks, protocol: protocol?.snapshot() };
       proc.detach();
       closed = true; child = null; protocol = null; carryCost();
@@ -586,7 +580,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       emit({ kind: 'title', source: 'custom', text }); publish();
       return { title: state.chatTitle };
     },
-    // /autocompact: saved like the CLI's own command, so it works while a turn runs; a running child that was handed another window is replaced after the turn.
+    // /autocompact: saved like the CLI's own command, so it works while a turn runs.
     async setAutoCompact(value) {
       if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', 'Auto Compact 창은 Claude 채팅에서만 바꿀 수 있습니다.', 409);
       const model = meta.model ?? state.model;

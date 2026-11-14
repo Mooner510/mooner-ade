@@ -1316,10 +1316,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       }
       case 'autocompact': {
         if (agent !== 'claude') { note('Auto Compact 창은 Claude 채팅에서만 바꿀 수 있습니다.'); return true; }
-        if (!argument) { const gauge = contextGauge(state); note(gauge.autoCompact ? `Auto Compact 창: ${compact(gauge.basis)} 토큰 (최대 ${compact(gauge.max)}). 변경: /autocompact auto 또는 350k` : 'Auto Compact 창을 쓰지 않습니다. 줄이려면 /autocompact auto 또는 350k'); return true; }
+        if (!argument) { const gauge = contextGauge(state); note(gauge.autoCompact ? `Auto Compact 창: ${compact(gauge.basis)} 토큰 (최대 ${compact(gauge.max)}). 변경: /autocompact auto 또는 350k` : '별도 Auto Compact 창을 정하지 않았습니다(auto는 Claude Code가 알아서 정합니다). 줄이려면 /autocompact 350k'); return true; }
         const result = await ctx.call<{ autoCompact: { window: number; auto: boolean } | null }>('chat/autocompact', { id, value: argument });
         if (result?.autoCompact) changed({ compact: { value: `${compact(result.autoCompact.window)} 토큰${result.autoCompact.auto ? ' (auto)' : ''}`, color: 'var(--term-magenta)', icon: 'compress' } });
-        else note('저장했습니다. 최대 컨텍스트와 같아 별도 창은 쓰지 않습니다.');
+        else note(/^auto$/i.test(argument.trim()) ? 'auto로 저장했습니다. 창 크기는 Claude Code가 모델에 맞게 정하며, 게이지는 모델의 전체 컨텍스트 기준으로 표시합니다.' : '저장했습니다. 최대 컨텍스트와 같아 별도 창은 쓰지 않습니다.');
         return true;
       }
       case 'rename': {
@@ -1679,7 +1679,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
         {shown && <progress className={settings.usageColors ? 'graded' : ''} style={settings.usageColors ? usageHueStyle(percent) : undefined} value={Math.min(100, percent)} max={100} aria-label={compacting ? 'Auto Compact 창 사용률' : '컨텍스트 사용률'} />}
       </div>
       {compacting && <p className="usage-note auto-compact-detail">
-        {percent > 100 ? '창을 넘었습니다. ' : ''}창 {compact(gauge.basis)}{gauge.autoEstimated ? '(자동 설정)' : ''}, 최대 {compact(gauge.max)}. 가득 차기 전에 자동으로 요약합니다.
+        {percent > 100 ? '창을 넘었습니다. ' : ''}창 {compact(gauge.basis)}, 최대 {compact(gauge.max)}. 가득 차기 전에 자동으로 요약합니다.
       </p>}
       <header className="chat-usage-title"><strong>사용 한도</strong>{usage?.plan && <span className="plan">{usage.plan}</span>}
         <button type="button" className="icon-btn" title="새로고침" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
