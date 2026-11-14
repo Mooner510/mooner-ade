@@ -25,7 +25,9 @@ export function modelSettingsFor(model, settings) {
   return hit ? map[hit] : null;
 }
 
-// Returns null when auto compact is off or the effective window matches the max (gauge would duplicate the full window).
+// Returns null when auto compact is off, set to "auto", or the effective window matches the max (gauge would duplicate the full window).
+// "auto" is Claude Code's own call (it tunes the window per model, account and experiment, ~90% of a 1M model), so ADE neither guesses a window
+// nor hands one to the CLI: the gauge stays on the model's full window, like a session that never set a window.
 export function resolveAutoCompact({ settings = {}, env = {}, model, maxWindow = 200_000 }) {
   const get = key => env[key] ?? process.env[key];
   if (settings.autoCompactEnabled === false) return null;
@@ -36,16 +38,13 @@ export function resolveAutoCompact({ settings = {}, env = {}, model, maxWindow =
   if (perModel?.autoCompactWindow != null) raw = perModel.autoCompactWindow;
   const parsed = parseTokenAmount(raw ?? 'auto');
   if (parsed === null) return null;
-  const auto = parsed === 'auto';
-  const window = auto
-    ? (max >= 500_000 ? Math.min(max, 350_000) : Math.min(max, 200_000))
-  : Math.min(max, parsed);
+  if (parsed === 'auto') return null;
+  const window = Math.min(max, parsed);
   if (window >= max) return null;
-  let source = 'auto';
+  let source = 'settings';
   if (perModel?.autoCompactWindow != null) source = 'modelSettings';
   else if (get('CLAUDE_CODE_AUTO_COMPACT_WINDOW')) source = 'env';
-  else if (settings.autoCompactWindow != null) source = 'settings';
-  return { window, maxWindow: max, auto, source };
+  return { window, maxWindow: max, auto: false, source };
 }
 
 export async function readClaudeSettingsLayers(configDir, cwd) {

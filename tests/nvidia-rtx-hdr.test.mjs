@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { elevatedCommand, moduleLoaded, rtxHdrHooked, setRtxHdrProfile, watchRtxHdr } from '../apps/desktop/src/nvidia-rtx-hdr.js';
+import { elevatedCommand, moduleLoaded, rtxHdrHooked, rtxHdrProfileSet, setRtxHdrProfile, watchRtxHdr } from '../apps/desktop/src/nvidia-rtx-hdr.js';
 
 const ROW = '"MoonerADE.exe","2240","nvppex.dll"';
 const NONE_KO = '정보: 지정된 조건에 일치하는 작업이 없습니다.';
@@ -52,17 +52,38 @@ test('setting the profile returns the script result and removes the result file'
   assert.deepEqual(fs.readdirSync(tmp), []);
 });
 
-function harness(t, { hooked = true, answers = [], script = 'ok applied MoonerADE', state } = {}) {
+// The read-only check runs the script directly (no Start-Process): -Result is a plain argument and -Check the last one.
+const checker = line => async (file, args) => {
+  assert.equal(file, 'powershell.exe');
+  assert.equal(args.at(-1), '-Check');
+  assert.ok(!args.includes('-Command'));
+  if (line !== null) fs.writeFileSync(args[args.indexOf('-Result') + 1], `${line}
+`);
+  return { error: line === null ? new Error('exit 1') : null, stdout: '' };
+};
+
+test('the read-only check is true only when the driver already has RTX HDR off', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-nvidia-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  assert.equal(await rtxHdrProfileSet({ exe: 'moonerade.exe', exec: checker('ok set'), tmp }), true);
+  assert.equal(await rtxHdrProfileSet({ exe: 'moonerade.exe', exec: checker('ok unset'), tmp }), false);
+  assert.equal(await rtxHdrProfileSet({ exe: 'moonerade.exe', exec: checker('error load -3'), tmp }), false);
+  assert.equal(await rtxHdrProfileSet({ exe: 'moonerade.exe', exec: checker(null), tmp }), false);
+  assert.deepEqual(fs.readdirSync(tmp), []);
+});
+
+function harness(t, { hooked = true, answers = [], script = 'ok applied MoonerADE', profileSet = false, state } = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-nvidia-user-'));
   t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   if (state) fs.writeFileSync(path.join(userData, 'nvidia-rtx-hdr.json'), JSON.stringify(state));
   const asked = [], calls = [];
   const app = { getAppMetrics: () => [{ type: 'Browser', pid: 1 }, { type: 'GPU', pid: 2240 }], relaunch: () => calls.push('relaunch'), quit: () => calls.push('quit') };
   const dialog = { showMessageBox: async (...args) => { const options = args.at(-1); asked.push(options); return answers.shift() ?? { response: 1, checkboxChecked: false }; } };
-  const ps = powershell(script);
+  const ps = powershell(script), check = checker(profileSet ? 'ok set' : 'ok unset');
   const exec = async (file, args) => {
+    if (file === 'tasklist.exe') { calls.push(file); return { stdout: hooked ? ROW : NONE_KO }; }
+    if (args.at(-1) === '-Check') { calls.push('check'); return check(file, args); }
     calls.push(file);
-    if (file === 'tasklist.exe') return { stdout: hooked ? ROW : NONE_KO };
     return ps(file, args);
   };
   const run = (extra = {}) => watchRtxHdr({ app, dialog, getWindow: () => null, userData, platform: 'win32', env: {}, exec, delayMs: 0, exe: 'MoonerADE.exe', ...extra });
@@ -84,6 +105,14 @@ test('a GPU process without the RTX HDR module asks nothing', async t => {
   assert.deepEqual(h.calls, ['tasklist.exe']);
 });
 
+// The driver keeps nvppex.dll in the GPU process after the fix, so the module alone asked on every start, forever.
+test('a module that stays loaded after the fix asks nothing once the driver profile is in place', async t => {
+  const h = harness(t, { profileSet: true });
+  assert.equal(await h.run(), 'applied');
+  assert.deepEqual(h.asked, []);
+  assert.deepEqual(h.calls, ['tasklist.exe', 'check']);
+});
+
 test('"나중에" with "다시 묻지 않기" remembers the choice and changes nothing', async t => {
   const h = harness(t, { answers: [{ response: 1, checkboxChecked: true }] });
   assert.equal(await h.run(), 'later');
@@ -91,14 +120,14 @@ test('"나중에" with "다시 묻지 않기" remembers the choice and changes n
   assert.equal(h.asked[0].type, 'warning');
   assert.deepEqual(h.asked[0].buttons, ['해결', '나중에']);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.userData, 'nvidia-rtx-hdr.json'), 'utf8')), { dismissed: true });
-  assert.deepEqual(h.calls, ['tasklist.exe']);
+  assert.deepEqual(h.calls, ['tasklist.exe', 'check']);
   assert.equal(await h.run(), 'dismissed');
 });
 
 test('"해결" sets the profile for the lower-cased executable and offers a restart', async t => {
   const h = harness(t, { answers: [{ response: 0 }, { response: 0 }] });
   assert.equal(await h.run(), 'fixed');
-  assert.deepEqual(h.calls, ['tasklist.exe', 'powershell.exe', 'relaunch', 'quit']);
+  assert.deepEqual(h.calls, ['tasklist.exe', 'check', 'powershell.exe', 'relaunch', 'quit']);
   assert.equal(h.asked[1].message, 'NVIDIA 설정을 추가했습니다');
 });
 
