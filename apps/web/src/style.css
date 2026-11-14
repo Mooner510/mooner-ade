@@ -2588,5 +2588,5 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-entry li[data-kind="신규 기능"] { --kind: var(--info); }
 .changelog-entry li[data-kind="개선"] { --kind: var(--add); }
 .changelog-entry li[data-kind="변경"] { --kind: var(--ask); }
-.changelog-entry li[data-kind="버그 수정"] { --kind: var(--warn); }
-.changelog-entry li[data-kind="최적화"] { --kind: var(--accent); }
+.changelog-entry li[data-kind="버그 수정"] { --kind: var(--error); }
+.changelog-entry li[data-kind="최적화"] { --kind: var(--warn); }
