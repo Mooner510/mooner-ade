@@ -8,6 +8,7 @@ import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { CacheTimer } from './CacheTimer';
+import { cacheSendWarning, cacheSendWarningText } from './claude-cache-warning';
 import { Hint } from './Hint';
 import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
@@ -1367,6 +1368,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if ((!message && !images.length) || !view.ready) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
+    // Cold (or nearly) prompt cache on a filled, not-cleared context: confirm before the whole context is re-read; cancel keeps the draft.
+    const cache = view.state.cache, warning = agent === 'claude' && !busy && !queue.length && !queueSending && !message.startsWith('/') && shown.length && cache ? cacheSendWarning(cache, Date.now(), { enabled: ctx.settings.cacheSendWarn, minutes: ctx.settings.cacheSendWarnMinutes, working: false }) : undefined;
+    if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }]) !== 'yes') return;
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
     if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);

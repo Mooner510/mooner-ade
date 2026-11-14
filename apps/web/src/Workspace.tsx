@@ -358,7 +358,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     return () => window.removeEventListener('focus', clear);
   }, [active, focus, activeTab, needsYou]);
   const attentionCount = Object.keys(attention).length;
-  const cacheOf = (id: string) => agentOf(id) === 'claude' ? caches[id] : undefined;
+  const cacheOf = (id: string) => agentOf(id) === 'claude' || chatPrev.current.has(id) ? caches[id] : undefined;
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
@@ -678,6 +678,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
     if (state.liveTasks?.length) bgChats.current.add(id); else bgChats.current.delete(id);
     paneProps.onAgentWorking(id, state.status === 'working' || state.status === 'attention');
+    // The chat's prompt cache feeds the sidebar timer like a terminal Claude's does; only changed values re-render.
+    const cache = state.cache;
+    if (!cache) dropCache(id);
+    else setCaches(previous => { const old = previous[id]; return old && old.at === cache.at && old.ttl === cache.ttl && old.tokens === cache.tokens && old.compactAt === cache.compactAt && old.compacted?.at === cache.compacted?.at ? previous : { ...previous, [id]: cache }; });
     if (state.status === 'attention' && before !== 'attention') paneProps.onAgentEvent(id, 'attention');
     else if (before === 'attention' && state.status !== 'attention') clearAttention(id);
     if (state.status === 'idle' && before === 'working') paneProps.onAgentEvent(id, 'done');
