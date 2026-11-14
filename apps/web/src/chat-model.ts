@@ -365,13 +365,13 @@ export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatS
 // tokens is the window (Sonnet 5.5 is 1M with no [1m] suffix). A [1m] id is 1M when the catalog has no row; anything else is 200k.
 export const contextWindow = (model: string | null, reported?: number | null, catalog?: { id: string; window?: number }[]) =>
   reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : catalog?.find(item => item.id === model)?.window) || 200_000;
-export type ContextGauge = { percent: number; used: number; basis: number; max: number; autoCompact: boolean; autoEstimated: boolean };
+export type ContextGauge = { percent: number; used: number; basis: number; max: number; autoCompact: boolean };
 export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 'autoCompact'> & { contextWindow?: number | null; capabilities?: { catalog?: { id: string; window?: number }[] } }): ContextGauge => {
   const max = contextWindow(state.model, state.contextWindow, state.capabilities?.catalog);
   const compact = state.autoCompact && state.autoCompact.window > 0 && state.autoCompact.window < max ? state.autoCompact : null;
   const basis = compact?.window ?? max;
   // Not capped: a gauge stuck at 100% hid that the context had already outgrown the window.
-  return { percent: Math.round(state.contextTokens * 100 / basis), used: state.contextTokens, basis, max, autoCompact: Boolean(compact), autoEstimated: Boolean(compact?.auto) };
+  return { percent: Math.round(state.contextTokens * 100 / basis), used: state.contextTokens, basis, max, autoCompact: Boolean(compact) };
 };
 export const contextPercent = (state: Parameters<typeof contextGauge>[0]) => contextGauge(state).percent;
 // Each model family has its own color (CSS variables --model-*, defined per theme in style.css); unknown models stay uncolored.

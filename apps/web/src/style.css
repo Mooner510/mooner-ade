@@ -1342,7 +1342,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 }
 
 /* ---- Chat tab (ChatPane.tsx, ChatStatus.tsx, Markdown.tsx) ---- */
-.chat-pane { --agent: var(--brand-claude); --chat-font: 13px; --chat-width: 780px; background: var(--surface); }
+.chat-pane { container-type: size; --agent: var(--brand-claude); --chat-font: 13px; --chat-width: 780px; background: var(--surface); }
 /* The bottom fade is a background-coloured overlay, not a mask-image: anything moving under a mask (the turn's spinner) made the whole window recomposite every frame (docs/perf/FRAME_COST.md). */
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: auto; }
 .chat-scroll::after { content: ''; display: block; position: sticky; bottom: 0; height: 28px; margin-top: -28px; pointer-events: none; background: linear-gradient(transparent, var(--surface)); }
@@ -1592,7 +1592,9 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 @keyframes chat-stat-swap { from { opacity: 0; transform: translateY(3px); filter: blur(2px); } }
 @media (prefers-reduced-motion: reduce) { .chat-stat-swap { animation: none; } }
 .chat-dock { position: relative; flex: none; width: 100%; max-width: var(--chat-width); margin: 0 auto; padding: 0 16px 12px; display: grid; gap: 6px; }
-.chat-approval { border: 1px solid var(--warn); border-radius: 10px; background: color-mix(in srgb, var(--warn) 8%, var(--raised)); overflow: hidden; }
+.chat-approval { border: 1px solid var(--warn); border-radius: 10px; background: color-mix(in srgb, var(--warn) 8%, var(--raised)); overflow: hidden; display: flex; flex-direction: column; max-height: 60vh; max-height: 60cqh; }
+/* A long command or preview must never push the buttons off screen: the card stops at 60% of the chat pane and only its body scrolls. */
+.chat-approval > header, .chat-approval > footer { flex: none; }
 .chat-approval header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--warn); }
 .chat-approval header span { color: var(--muted); }
 .chat-approval-desc { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; } /* a shell command's one-line purpose, above the command itself */
@@ -1602,7 +1604,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-approval-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .chat-approval-agent b { font-weight: 600; color: var(--fg); }
 .chat-agents-done[data-outcome="approval"] { color: var(--warn); }
 .chat-agent-state[data-status="approval"] { gap: 3px; color: var(--warn); font-size: 11.5px; white-space: nowrap; }
-.chat-approval-body { padding: 0 12px 8px; }
+.chat-approval-body { padding: 0 12px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .chat-approval footer { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
 /* "다르게 하기…" (refuse and say what to do instead) sits apart at the right end, away from 허용·거부; once open, 취소 takes the same spot and look,
