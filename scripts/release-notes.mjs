@@ -3,10 +3,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+const kinds = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '../apps/web/src/changelog-kinds.json'), 'utf8'));
+
 export const notes = (version, changelog) => {
   const entry = changelog.find(item => item.version === version);
   if (!entry) return null;
-  return entry.items.map(item => `- **${item.title}**: ${item.text}`).join('\n') + '\n';
+  const items = [...entry.items].sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind));
+  return items.map(item => `- **[${item.kind}] ${item.title}**: ${item.text}`).join('\n') + '\n';
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
