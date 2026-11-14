@@ -32,6 +32,15 @@ test('new users start in Chat and are invited until they open it; old users reta
   assert.deepEqual(migrateSettings(old), old);
 });
 
+test('new chats default to auto mode; the old saved "cli" default moves once, a later explicit choice stays', () => {
+  assert.equal(defaultSettings.chatDefaultPermission, 'auto');
+  assert.equal(migrateSettings({ chatDefaultPermission: 'cli' }).chatDefaultPermission, 'auto', 'the old default, not a choice');
+  assert.equal(migrateSettings({}).chatDefaultPermission, 'auto');
+  assert.equal(migrateSettings({ chatDefaultPermission: 'plan' }).chatDefaultPermission, 'plan', 'an explicit pick is kept');
+  const migrated = migrateSettings({ chatDefaultPermission: 'cli' });
+  assert.equal(migrateSettings({ ...migrated, chatDefaultPermission: 'cli' }).chatDefaultPermission, 'cli', 'chosen after the migration');
+});
+
 test('a newer tutorial is due once more for everyone who finished an older one, then stays done', () => {
   assert.equal(migrateSettings({ onboarded: true, defaultMode: 'chat' }).onboarded, false, 'finished before tourVersion existed');
   assert.equal(migrateSettings({ onboarded: true, tourVersion: TOUR_VERSION - 1 }).onboarded, false);
