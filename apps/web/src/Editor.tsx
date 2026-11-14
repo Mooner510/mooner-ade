@@ -32,7 +32,7 @@ export type Settings = {
   chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
   chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatToolDisplay: 'summary' | 'detail'; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
-  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean;
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
@@ -70,6 +70,8 @@ export const TOUR_VERSION = 2;
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
   if (saved.onboarded === undefined) next.onboarded = true;
+  // New chats start in auto mode now. A saved 'cli' from before that is the old default, not a choice (the marker is set once this ran), so it moves to 'auto' one time.
+  if (saved.chatPermissionAutoSet !== true) { next.chatPermissionAutoSet = true; if (saved.chatDefaultPermission === undefined || saved.chatDefaultPermission === 'cli') next.chatDefaultPermission = 'auto'; }
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
@@ -102,7 +104,7 @@ export const defaultSettings: Settings = {
   clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false, tourVersion: 0,
   chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
-  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'cli', chatDefaultEffort: 'auto',
+  chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
   feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low'
