@@ -161,10 +161,12 @@ export function findDirenv({ env = process.env, exists = file => fs.access(file)
 export function createAccountResolver({ env = process.env, platform = process.platform, home = os.homedir(), readVariable = processVariable, direnv = findDirenv, exec = run, exists = file => fs.access(file).then(() => true, () => false), now = Date.now } = {}) {
   const loaded = new Map(), seen = new Set();
   let direnvPath;
-  const fromDirenv = async (root, name) => {
+  // The answer is remembered for a minute, but not across an edit of the .envrc (its mtime is in the key), not for long when direnv said no
+  // (`direnv allow` is what flips that, and it changes no file the key could see), and never for a forced refresh.
+  const fromDirenv = async (root, name, force = false) => {
     if (platform === 'win32') return null;
-    const key = `${root}\0${name}`, hit = loaded.get(key);
-    if (hit && now() - hit.at < 60_000) return hit.value;
+    const key = `${root}\0${name}\0${await fs.stat(path.join(root, '.envrc')).then(stat => stat.mtimeMs, () => 0)}`, hit = loaded.get(key);
+    if (!force && hit && now() - hit.at < (hit.value === null ? 3_000 : 60_000)) return hit.value;
     direnvPath ??= direnv();
     const file = await direnvPath;
     // A blocked, denied or missing .envrc makes direnv fail (null), which leaves the decision to the next source.
@@ -191,10 +193,10 @@ export function createAccountResolver({ env = process.env, platform = process.pl
     if (dir !== null) { byPid.set(key, dir); if (byPid.size > 256) byPid.delete(byPid.keys().next().value); }
     return dir;
   };
-  const resolve = async (provider, project) => {
+  const resolve = async (provider, project, { force = false } = {}) => {
     const name = accountVariable[provider], server = env[name] || '';
     if (!project) return { dir: server, from: 'server' };
-    const configured = await fromDirenv(project.root, name);
+    const configured = await fromDirenv(project.root, name, force);
     // A folder an allowed .envrc names is the account the project is meant to use, even if an agent was started without it.
     if (configured) return { dir: configured, from: 'direnv' };
     for (const terminal of project.terminals?.values?.() ?? []) {
@@ -300,7 +302,7 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
     // Each account folder has its own reading, so projects on different logins never share one.
     async status(provider, { force = false, project } = {}) {
       if (!providers.includes(provider)) throw fault('INVALID_INPUT', '알 수 없는 사용량 공급자입니다.');
-      const { dir, from } = await account(provider, project);
+      const { dir, from } = await account(provider, project, { force });
       const key = `${provider}\0${dir}`, entry = cache.get(key) ?? { checked: -Infinity, retryAt: 0, value: null, error: null, pending: null };
       cache.set(key, entry);
       const age = now() - entry.checked;

@@ -32,6 +32,8 @@ const zero = () => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
 // Normal child end and intentional idle kill must not read as a failed agent. macOS often reports SIGTERM as exit 143 (128+15) with no signal name.
 export const agentExitBenign = (code, signal) => code === 0 || signal === 'SIGTERM' || signal === 'SIGINT' || code === 143 || code === 130;
 const addTokens = (base, extra) => ({ input: base.input + extra.input, output: base.output + extra.output, cacheRead: base.cacheRead + extra.cacheRead, cacheCreate: base.cacheCreate + extra.cacheCreate });
+// The usual price ratios (output 5x input, cache read 0.1x, cache write 1.25x): one number per turn that the cost can be divided by.
+const weigh = usage => usage.input + usage.output * 5 + usage.cacheRead * 0.1 + usage.cacheCreate * 1.25;
 const mergeTurnUsage = (current, patch) => ({
   input: patch.input || current?.input || 0,
   output: patch.output || current?.output || 0,
@@ -87,9 +89,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const usesApiKey = launch => Boolean(agent === 'claude' ? launch.ANTHROPIC_API_KEY : agent === 'codex' ? launch[CODEX_KEY_ENV] : launch.CURSOR_API_KEY);
   state.apiKey = usesApiKey({ ...process.env, ...(typeof env === 'function' ? env() : env) });
   // A turn is several API calls: `turnDone` holds the calls already finished, `turnUsage` the one streaming (`liveId`). result.usage is the whole turn, so it replaces both.
-  let turnUsage = null, thinkingTokens = 0, turnDone = zero(), liveId = null;
-  const resetLive = () => { turnUsage = null; thinkingTokens = 0; turnDone = zero(); liveId = null; };
-  const nextMessage = id => { if (id == null || id !== liveId) { if (turnUsage) turnDone = addTokens(turnDone, turnUsage); turnUsage = null; liveId = id ?? null; } };
+  // The API reports a message's real output_tokens only once, at its end (message_delta), so while it streams the shown output is the larger of that report and an
+  // estimate: the CLI's thinking estimate plus the streamed text / tool input (`streamBytes`, ~4 bytes a token, so it runs under the real count and never overshoots).
+  let costPerUnit = 0;
+  let turnUsage = null, thinkingTokens = 0, streamBytes = 0, outputFinal = false, turnDone = zero(), liveId = null;
+  const resetLive = () => { turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; turnDone = zero(); liveId = null; };
+  const nextMessage = id => { if (id == null || id !== liveId) { if (turnUsage) turnDone = addTokens(turnDone, turnUsage); turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; liveId = id ?? null; } };
   // The transcript with rewinds applied, and the last request not yet answered. Both are read on every state publish (token updates included),
   // so they are kept until the next stored event instead of being rebuilt from up to 6000 events each time. Callers must not mutate them.
   let retainedCache = null, unansweredCache;
@@ -192,11 +197,17 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     writing = saved.catch(reportStorage); return saved;
   };
   const tokensShown = () => {
-    const live = turnUsage ?? (thinkingTokens > 0 ? { input: 0, output: thinkingTokens, cacheRead: 0, cacheCreate: 0 } : null);
-    const base = addTokens(state.tokens, turnDone);
-    return live ? addTokens(base, live) : base;
+    const reported = turnUsage ?? zero();
+    const live = outputFinal ? reported : { ...reported, output: Math.max(reported.output, thinkingTokens + (streamBytes >> 2)) };
+    return addTokens(addTokens(state.tokens, turnDone), live);
   };
-  const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }); };
+  // The CLI reports the cost only in a turn's result, so while a turn runs the cost is the committed one plus the in-flight tokens at the last turn's price per unit.
+  // ponytail: no estimate before the first result of this process (no price known yet); a built-in price table would give one.
+  const shown = () => {
+    const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens);
+    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' && costPerUnit && live > 0 ? state.costUsd + live * costPerUnit : state.costUsd, pending: approvals.size, recoverable: canRetryTurn() };
+  };
+  const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
   const publishSoon = () => { if (publishTimer) return; publishTimer = setTimeout(publish, 150); publishTimer.unref?.(); };
   // The last request since the last /clear, unless a successful result answered it.
@@ -250,7 +261,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
       // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
-      if (!replay && event.costUsd != null) { state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
+      if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && meta.costBase + event.costUsd > state.costUsd) costPerUnit = (meta.costBase + event.costUsd - state.costUsd) / spent; state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
@@ -322,9 +333,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           else if (event.phase === 'thinkingTokens') { thinkingTokens = Number(event.tokens) || 0; publishSoon(); }
           else if (event.phase === 'usage') {
             // A subagent's usage is not this conversation's context; the status line only follows the main thread. Usage itself is not drawn, so it is not sent.
-            if (event.usage && !stream) { turnUsage = mergeTurnUsage(turnUsage, event.usage); thinkingTokens = 0; publishSoon(); }
+            if (event.usage && !stream) { turnUsage = mergeTurnUsage(turnUsage, event.usage); if (event.final) outputFinal = true; publishSoon(); }
             return;
           } else if (event.messageId === undefined && streamIds.has(stream)) event = { ...event, messageId: streamIds.get(stream) };
+          // Thinking text is not counted: the CLI sends its token estimate instead (a CLI that streamed both would count it twice).
+          if (!stream && (event.phase === 'text' || event.phase === 'toolInput')) { streamBytes += Buffer.byteLength(String(event.text ?? '')); publishSoon(); }
           // A Write's whole file arrives as tool input; the card only needs the first few KB for its summary.
           if (event.phase === 'toolInput') {
             const slot = `${event.messageId}:${event.index}`, size = (toolInputSize.get(slot) ?? 0) + (event.text?.length ?? 0);
@@ -339,7 +352,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'command_output') { const same = `${turnSeq}\0${event.isError}\0${event.text}`; if (lastCommandOutput === same) return; lastCommandOutput = same; }
       emit(event);
       noteBackgroundActivity(event);
-      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage }; thinkingTokens = 0; publishSoon(); }
+      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; publishSoon(); }
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
         if (agent === 'claude') void refreshAutoCompact(event.model ?? state.model);
@@ -604,7 +617,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (agent === 'claude') void refreshAutoCompact();
     },
     retry: () => resendLastUser(),
-    state: () => ({ ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() }),
+    state: shown,
     // The latest thing the user typed in this chat (not a message from another agent). The agent bus quotes it to the chat it messages, so the receiver
     // sees what the user actually asked for instead of taking the sender's word for it.
     lastUserInstruction() {
@@ -617,7 +630,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
     // right away when idle, or once the running turn ends. The next message starts a child with the new key.
     relaunch() { if (child) { restartWhenQuiet(); } },
-    replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: { ...state, tokens: tokensShown(), pending: approvals.size, recoverable: canRetryTurn() },
+    replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: shown(),
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.

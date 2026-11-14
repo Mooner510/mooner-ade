@@ -1,15 +1,15 @@
 import { showAppKey } from './shortcuts';
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
-import { basename, findLeaf, isLeaf, type Leaf, type Pane } from './api';
+import { basename, findLeaf, isLeaf, leafList, type Leaf, type Pane } from './api';
 import { useHiddenAgents } from './installed-agents';
 import { pickGreeting } from './chat-model';
 import { DiffView, terminalFontStack, type Settings } from './Editor';
-import { Icon, IconButton, type IconName } from './Icon';
+import { Icon, IconButton, SplitButton, type IconName } from './Icon';
 import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
 import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
@@ -621,7 +621,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" title={cwds[id]}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
         {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
-        <IconButton icon="splitH" tip="header" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={event => { onSplit(id, 'row'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} /><IconButton icon="splitV" tip="header" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={event => { onSplit(id, 'column'); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
+        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
@@ -673,13 +673,16 @@ function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Le
 }
 
 // `keys` keeps a child mounted when siblings appear or disappear (terminals must not be recreated).
-export function Splitter({ direction, sizes, onSizes, children, keys, equalOnClick }: { direction: 'row' | 'column'; sizes: number[]; onSizes(sizes: number[]): void; children: ReactNode[]; keys?: string[]; equalOnClick?: boolean }) {
+// The pane a split just created grows in with a spring (style.css .split-slot[data-fresh]); the mark expires so a later remount does not replay it.
+let freshLeaf = '';
+export function markSplit(id: string) { freshLeaf = id; setTimeout(() => { if (freshLeaf === id) freshLeaf = ''; }, 800); }
+export function Splitter({ direction, sizes, onSizes, children, keys, equalOnClick, fresh, ids }: { direction: 'row' | 'column'; sizes: number[]; onSizes(sizes: number[]): void; children: ReactNode[]; keys?: string[]; equalOnClick?: boolean; fresh?: boolean[]; ids?: string[] }) {
   const host = useRef<HTMLDivElement>(null);
   function adjust(index: number, delta: number) {
     const sum = sizes[index] + sizes[index + 1], next = [...sizes];
     next[index] = Math.max(sum * .1, Math.min(sum * .9, next[index] + delta)); next[index + 1] = sum - next[index]; onSizes(next);
   }
-  return <div className={`split ${direction}`} ref={host}>{children.map((child, index) => <div className="split-slot" key={keys?.[index] ?? index} style={{ flex: sizes[index] || 1 }}>
+  return <div className={`split ${direction}`} ref={host}>{children.map((child, index) => <div className="split-slot" key={keys?.[index] ?? index} data-fresh={fresh?.[index] ? direction : undefined} data-leaf={ids?.[index]} data-dir={direction} data-last={index === children.length - 1 || undefined} style={{ flex: sizes[index] || 1 }}>
     {child}{index < children.length - 1 && <div className="divider" role="separator" tabIndex={0} aria-label="패널 크기" aria-orientation={direction === 'row' ? 'vertical' : 'horizontal'} aria-valuenow={Math.round(sizes[index] * 100 / sizes.reduce((a, b) => a + b, 0))}
       onKeyDown={event => { if (['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key)) { event.preventDefault(); adjust(index, sizes.reduce((a, b) => a + b, 0) * (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -.03 : .03)); } }}
       onPointerDown={event => {
@@ -699,8 +702,52 @@ export function Splitter({ direction, sizes, onSizes, children, keys, equalOnCli
   </div>)}</div>;
 }
 
+// A pane that closed leaves a copy of itself in its place in the layout (React drops the node but its children stay intact until the passive cleanups run). The copy is a real flex item, so the
+// neighbours shrink and grow around it by themselves as it swells a little and then folds away, the mirror of split-grow. (A WebGL terminal's canvas copies blank.)
+type Ghost = { el: Element; slot: DOMRect; row: boolean; last: boolean; host: HTMLElement; hostParent: HTMLElement | null; index: number };
+function playGhost({ el, slot, row, last, host, hostParent, index }: Ghost) {
+  // The split is still there with one slot fewer (3+ panes), or it collapsed into its only pane and the ghost goes next to that pane in the parent.
+  const container = host.isConnected ? host : hostParent?.isConnected ? hostParent : null;
+  if (!container) return;
+  const copy = el.cloneNode(true) as HTMLElement, ghost = document.createElement('div'), before = container.style.flexDirection, axis = row ? 'row' : 'column';
+  copy.removeAttribute('id'); copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+  copy.inert = true;
+  Object.assign(copy.style, { flex: '1 1 0%', minWidth: '0', minHeight: '0', width: 'auto', height: 'auto', margin: '0' });
+  ghost.className = 'pane-ghost';
+  Object.assign(ghost.style, { flexDirection: axis, justifyContent: last ? 'flex-end' : 'flex-start' });
+  const size = row ? slot.width : slot.height;
+  ghost.style.flex = `0 0 ${size}px`;
+  ghost.append(copy);
+  const survivors = [...container.children];
+  if (getComputedStyle(container).flexDirection !== axis) { container.style.flexDirection = axis; survivors.forEach(node => ((node as HTMLElement).style.flex = '1 1 0%')); }
+  container.insertBefore(ghost, host.isConnected ? container.children[index] ?? null : last ? null : container.firstChild);
+  const done = () => { ghost.remove(); container.style.flexDirection = before; survivors.forEach(node => ((node as HTMLElement).style.flex = '')); };
+  ghost.animate([{ flexBasis: `${size}px`, easing: 'ease-out' }, { flexBasis: `${size * 1.07}px`, offset: .22, easing: 'cubic-bezier(.5, 0, .75, 0)' }, { flexBasis: '0px' }], { duration: 380, fill: 'forwards' }).finished.then(done, done);
+}
+function useCloseGhost(pane: Pane, visible: boolean, zoom: string) {
+  const last = useRef(new Map<string, Ghost>()), lastIds = useRef<string[]>([]), lastZoom = useRef(zoom);
+  const capture = () => {
+    const now = new Map<string, Ghost>();
+    for (const leaf of leafList(pane)) {
+      const slot = document.querySelector<HTMLElement>(`[data-leaf="${CSS.escape(leaf.id)}"]`), el = slot?.firstElementChild, rect = slot?.getBoundingClientRect(), host = slot?.parentElement;
+      if (slot && el && host && rect?.width && rect.height) now.set(leaf.id, { el, slot: rect, row: slot.dataset.dir === 'row', last: !!slot.dataset.last, host, hostParent: host.parentElement, index: [...host.children].indexOf(slot) });
+    }
+    return now;
+  };
+  // Only a pane count that dropped inside one tab and one zoom state counts as a close (a launcher turning into a terminal, a tab switch and zooming all change ids without closing anything).
+  // The ids come from the tree, not the DOM: the last pane left of a split sits in no slot at all.
+  useLayoutEffect(() => {
+    const ids = leafList(pane).map(leaf => leaf.id), before = last.current;
+    if (visible && zoom === lastZoom.current && ids.length < lastIds.current.length && ids.some(id => lastIds.current.includes(id)) && !matchMedia('(prefers-reduced-motion: reduce)').matches) for (const [id, ghost] of before) if (!ids.includes(id)) playGhost(ghost);
+    last.current = capture(); lastIds.current = ids; lastZoom.current = zoom;
+  });
+  // Stored rects go stale on a window resize, and a pane that is still growing in (split-grow) is stored tiny or not at all, so measure again once it settles.
+  useEffect(() => { const refresh = () => { last.current = capture(); }, timer = setTimeout(refresh, 700); window.addEventListener('resize', refresh); return () => { clearTimeout(timer); window.removeEventListener('resize', refresh); }; });
+}
+
 export function Panes(props: Props) {
   const { pane, zoom } = props;
+  useCloseGhost(pane, props.visible, zoom || '');
   const zoomed = zoom ? findLeaf(pane, zoom) : undefined;
   if (zoomed) return <Tree {...props} pane={zoomed} zoom={zoom} />;
   return <Tree {...props} />;
@@ -712,7 +759,7 @@ function Tree(props: Props) {
     : pane.kind === 'chat' ? <ChatPane leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} visible={props.visible} ctx={props.chat} onFocus={props.onFocus} onZoom={props.onZoom} onSplit={props.onSplit} />
     : pane.kind === 'launcher' ? <LauncherPane onModeChange={props.onModeChange} shell={props.editor.settings.terminalShell} mode={props.editor.settings.defaultMode} hidden={props.editor.settings.agentsOff} nudge={props.editor.settings.chatTipPending} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
     : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
-  return <Splitter equalOnClick direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
+  return <Splitter equalOnClick ids={pane.children.map(child => isLeaf(child) ? child.id : '')} fresh={pane.children.map(child => isLeaf(child) && child.id === freshLeaf)} direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
     {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}
   </Splitter>;
 }

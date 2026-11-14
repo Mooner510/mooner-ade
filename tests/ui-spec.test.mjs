@@ -34,6 +34,7 @@ test('form fields get sane defaults and submit as a plain message', () => {
   assert.deepEqual(form.fields.map(f => [f.k, f.type, f.value, f.max]), [['seats', 'slider', '2', 2], ['c', 'radio', 'monthly', 100], ['ok', 'check', 'false', 100], ['n', 'text', 'Ann', 100]]);
   assert.equal(form.submit, 'Go'); assert.equal(form.fill, false);
   assert.equal(formMessage(form, { seats: '5', c: 'yearly', ok: 'true', n: 'Bo' }), 'Plan\n- Seats: 5\n- Billing: yearly\n- Ok: yes\n- Name: Bo');
+  assert.equal(formMessage(form, { seats: '5', c: 'yearly', ok: 'false', n: '  ' }), 'Plan\n- Seats: 5\n- Billing: yearly\n- Ok: no'); // empty text is omitted
   assert.equal(parseUi('["draft","t","s",["text","a","A"]]')[0].fill, true);
 });
 
