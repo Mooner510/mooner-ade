@@ -2501,13 +2501,14 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .usage-row > div > span { min-width: 0; }
 .usage-row > div > b { flex: none; }
 
-/* One-line composer (ChatPane `compact`, ChatGPT-like): + · input · permission mode … model · Effort · context · send. Only the model keeps its name; the other
+/* One-line composer (ChatPane `compact`, ChatGPT-like): + · permission mode · input … model · Effort · context · send. Only the model keeps its name; the other
    controls show just their icons, and extras (notes, switches, the settings button) wait for the full composer. Every control is 28px tall and both layouts keep
    their rows on the bottom edge (flex-end), which is what lets playFlip slide them while the box height animates. */
 .chat-composer { justify-content: flex-end; }
 .chat-composer[data-compact] { flex-direction: row; align-items: flex-end; gap: 2px; padding: 7px 8px 7px 7px; border-radius: 22px; }
 .chat-composer[data-compact] > .chat-foot { display: contents; }
 .chat-composer[data-compact] .chat-attach { order: -1; margin-block: 1px; border-radius: 50%; }
+.chat-composer[data-compact] .fit-mode .chat-mode { order: -1; }
 .chat-composer[data-compact] > .chat-input-row { flex: 1 1 0; min-width: 64px; height: 28px; align-items: center; padding: 0 4px; }
 .chat-composer[data-compact] textarea { white-space: nowrap; overflow: hidden; }
 .chat-composer[data-compact] :is(.fit-note, .fit-inline, .drag-space), .chat-composer[data-compact] .tune-wrap:not(.forced) { display: none; }
