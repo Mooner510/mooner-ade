@@ -1114,7 +1114,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     for (let level = 0; level <= 4; level++) { el.dataset.fit = String(level); if (el.scrollWidth <= el.clientWidth + 1) break; }
     fitSig.current = sig;
   }, [foot]);
-  // The composer rests as one line (+ · input · mode … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
+  // The composer rests as one line (+ · mode · input … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
   // One line: a few seconds after the input loses focus (not while the pointer is on it or a menu in it is open), or right after sending (focus stays).
   // Full: focusing or clicking the input, or any text or image in it. Changes slide every control from where it was (see playFlip).
   const composer = useRef<HTMLDivElement>(null), [oneLine, setCompactState] = useState(true), compactNow = useRef(true), flipFrom = useRef<FlipSnapshot | null>(null), compactTimer = useRef(0), mountedAt = useRef(performance.now()), draft = useRef({ text, images: images.length }); draft.current = { text, images: images.length };
