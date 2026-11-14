@@ -457,7 +457,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           <IconButton icon="chevronsLeft" label="사이드바 접기" keys={showKeys('mod+alt+b')} onClick={() => note('사이드바를 접으면 프로젝트 머리글자만 보여요.')} /></div>
         <div className="folders" role="tree">{tour.projects.map(folder)}</div>
         <div className="projects-foot">
-          <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} onClick={() => dispatch({ type: 'settings', open: true })} />
+          <IconButton icon="sparkles" label="변경 내역" onClick={() => note('업데이트할 때마다 달라진 점을 여기서 볼 수 있어요.')} />
           <span className="spacer" /><AppVersion /><span className="spacer" />
           <IconButton icon="book" label="둘러보기" onClick={() => note('지금 보고 계신 것이 둘러보기예요.')} />
         </div>

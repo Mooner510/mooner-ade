@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { notes } from './release-notes.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -16,6 +17,8 @@ assert.equal(git('rev-parse', '--abbrev-ref', 'HEAD'), 'master', 'Releases are c
 assert.equal(git('rev-parse', 'HEAD'), git('rev-parse', 'origin/master'), 'Local master differs from origin/master: push or pull so the tag matches what is on origin');
 assert.equal(git('status', '--porcelain'), '', 'Commit or stash your changes first: the tag must match a pushed commit');
 assert.equal(git('ls-remote', '--tags', 'origin', `refs/tags/${tag}`), '', `${tag} already exists on origin; bump "version" first`);
+// A stable release needs its changelog entry (the app shows it and the release notes are built from it); a beta does not.
+if (!version.includes('-')) assert.ok(notes(version, JSON.parse(readFileSync(path.join(root, 'apps/web/src/changelog.json'), 'utf8'))), `Add ${version} to apps/web/src/changelog.json first`);
 git('tag', tag);
 execFileSync('git', ['push', 'origin', tag], { cwd: root, stdio: 'inherit' });
 console.log(`Pushed ${tag}. Build progress: https://github.com/Mooner510/mooner-ade/actions/workflows/release.yml`);
