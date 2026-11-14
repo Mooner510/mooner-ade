@@ -5,8 +5,10 @@
 #   -Exe      executable name the setting applies to (e.g. moonerade.exe)
 #   -ProfileName  name of the profile to create when no profile lists the executable yet
 #   -Undo     remove what -Exe/-ProfileName added: the whole profile if this script created it, otherwise only the setting
-#   -Result   file that receives one line: "ok applied <profile>", "ok removed", "ok nothing" or "error <step> <NvAPI status>"
-param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][string]$ProfileName, [Parameter(Mandatory)][string]$Result, [switch]$Undo)
+#   -Check    read only, no elevation needed: "ok set" when the profile listing -Exe already has RTX HDR off, otherwise "ok unset".
+#             nvppex.dll stays loaded in the GPU process even then, so the app asks this before offering the fix again.
+#   -Result   file that receives one line: "ok applied <profile>", "ok removed", "ok nothing", "ok set", "ok unset" or "error <step> <NvAPI status>"
+param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][string]$ProfileName, [Parameter(Mandatory)][string]$Result, [switch]$Undo, [switch]$Check)
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System; using System.Runtime.InteropServices;
@@ -21,6 +23,7 @@ public static class AdeNvDrs {
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FnProfileBuf(IntPtr session, IntPtr profile, IntPtr buffer);
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FnProfile(IntPtr session, IntPtr profile);
   [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FnDeleteSetting(IntPtr session, IntPtr profile, uint setting);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FnGetSetting(IntPtr session, IntPtr profile, uint setting, IntPtr buffer);
   static T Get<T>(uint id) where T : class { IntPtr f = QueryInterface(id); if (f == IntPtr.Zero) throw new Exception("NvAPI function 0x" + id.ToString("X8") + " missing"); return Marshal.GetDelegateForFunctionPointer(f, typeof(T)) as T; }
 
   // NVDRS_* structs, version 1: 2048-character UTF-16 strings.
@@ -63,6 +66,15 @@ public static class AdeNvDrs {
     error = Save(); return error ?? "ok applied " + NameOf(profile);
   }
 
+  // NVDRS_SETTING: version, settingName, settingId, settingType, settingLocation, isCurrentPredefined, isPredefinedValid, predefined, current.
+  public static string Check(string exe) {
+    string error = Open(); if (error != null) return error;
+    IntPtr profile = ProfileOf(exe); if (profile == IntPtr.Zero) return "ok unset";
+    IntPtr setting = Buffer(SETTING, 1);
+    try { return Get<FnGetSetting>(0x73BF8338)(session, profile, RTX_HDR_ALLOW, setting) == 0 && Marshal.ReadInt32(setting, 4 + STRING + 20 + 4100) == 0 ? "ok set" : "ok unset"; }
+    finally { Marshal.FreeHGlobal(setting); }
+  }
+
   public static string Remove(string exe, string name) {
     string error = Open(); if (error != null) return error;
     IntPtr profile = ProfileOf(exe); if (profile == IntPtr.Zero) return "ok nothing";
@@ -74,6 +86,6 @@ public static class AdeNvDrs {
   }
 }
 '@
-try { $line = if ($Undo) { [AdeNvDrs]::Remove($Exe.ToLowerInvariant(), $ProfileName) } else { [AdeNvDrs]::Apply($Exe.ToLowerInvariant(), $ProfileName) } }
+try { $line = if ($Check) { [AdeNvDrs]::Check($Exe.ToLowerInvariant()) } elseif ($Undo) { [AdeNvDrs]::Remove($Exe.ToLowerInvariant(), $ProfileName) } else { [AdeNvDrs]::Apply($Exe.ToLowerInvariant(), $ProfileName) } }
 catch { $line = "error exception $($_.Exception.Message -replace '\s+', ' ')" }
 Set-Content -LiteralPath $Result -Value $line -Encoding ASCII
