@@ -2577,7 +2577,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-entry h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
 .changelog-version { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
 .changelog-new { align-self: center; font-size: 12px; font-weight: 600; color: var(--accent); }
-.changelog-entry time { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.changelog-entry time { align-self: center; margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .changelog-entry ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
 .changelog-entry li { display: flex; align-items: flex-start; gap: 12px; --kind: var(--muted); }
 .changelog-entry li > .icon { flex: none; margin-top: 1px; color: var(--kind); }
