@@ -240,6 +240,16 @@ body.resizing .right-panel { transition: none; }
 .split.column { flex-direction: column; }
 .split-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .split-slot > * { flex: 1; min-width: 0; min-height: 0; }
+/* A fresh split: the new pane springs open (reaches its size in ~0.1s, overshoots ~9%, then settles) while its neighbour gives way; flex-grow is animated from 0 to the inline value.
+   linear() is a damped spring, 1 - e^(-7t)·cos(2π·1.3t). Keep the duration under markSplit's 800ms expiry (Panes.tsx). */
+.split-slot[data-fresh] { overflow: hidden; animation: split-grow .45s linear(0, .566, .935, 1.079, 1.089, 1.052, 1.018, .999, .994, .995, .997, .999, 1); }
+.split-slot[data-fresh] > :not(.divider) { animation: split-fade .18s ease-out backwards; }
+/* Copy of a pane that just closed (Panes.tsx playGhost): a flex item in the layout while its box folds, with the copy's own animations stopped so it does not replay its entrance. */
+.pane-ghost { display: flex; min-width: 0; min-height: 0; overflow: hidden; pointer-events: none; }
+.pane-ghost, .pane-ghost * { animation: none !important; transition: none !important; }
+@keyframes split-grow { from { flex-grow: 0; } }
+@keyframes split-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .split-slot[data-fresh], .split-slot[data-fresh] > * { animation: none; } }
 .divider { position: absolute; z-index: 5; touch-action: none; background: transparent; border-radius: 3px; }
 .row > .split-slot > .divider { width: 6px; right: -3px; top: 0; height: 100%; cursor: col-resize; }
 .column > .split-slot > .divider { height: 6px; bottom: -3px; left: 0; width: 100%; cursor: row-resize; }
@@ -328,14 +338,12 @@ body.resizing .right-panel { transition: none; }
 .xterm-host.bell { animation: bell-flash .25s ease-out; }
 .xterm-host { box-sizing: content-box; flex: 1; min-height: 0; padding: 8px 10px 12px; overflow: hidden; }
 .pane-tools { flex: none; height: 24px; display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; padding: 0 4px 0 10px; background: var(--surface); border-bottom: 1px solid var(--border); }
-.pane-tools button { width: 22px; height: 20px; padding: 0; color: var(--muted); opacity: 0; transition: opacity .12s; }
-.terminal-pane:hover .pane-tools button, .pane-tools:focus-within button { opacity: 1; }
+.pane-tools button { width: 22px; height: 20px; padding: 0; color: var(--muted); }
 .pane-tools button:hover { color: var(--fg); }
 .terminal-pane.focused .pane-title { color: var(--fg); }
 .pane-mark { flex: none; display: grid; place-items: center; color: var(--muted); }
 .terminal-pane.focused .pane-mark { color: var(--accent); }
-.pane-sep { align-self: center; width: 1px; height: 12px; margin: 0 4px; background: var(--border-strong, var(--border)); opacity: 0; transition: opacity .12s; }
-.terminal-pane:hover .pane-sep, .pane-tools:focus-within .pane-sep { opacity: 1; }
+.pane-sep { align-self: center; width: 1px; height: 12px; margin: 0 4px; background: var(--border-strong, var(--border)); }
 .pane-actions { grid-column: 3; justify-self: end; display: flex; gap: 2px; }
 .pane-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pane-title { grid-column: 2; display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; max-width: 100%; white-space: nowrap; font-size: 11.5px; color: var(--muted); }
@@ -956,19 +964,27 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-source { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; background: none; font-size: 11.5px; }
 @media (max-width: 640px) { .plugin-modes { grid-template-columns: 1fr; } }
 
-/* GitHub account for private plugin repositories. */
-.plugin-github { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
-.plugin-github .setting-group { margin: 0; }
-.plugin-github-card { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.plugin-github-status { display: flex; align-items: center; gap: 10px; }
+/* GitHub account for private plugin repositories: a toolbar button that opens a modal. */
+.plugin-github-open { position: relative; }
+.plugin-github-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
+.plugin-github-open[data-linked] .plugin-github-dot { background: var(--add); }
+.plugin-github-modal { width: min(480px, 94vw); padding: 0; overflow: hidden; }
+.plugin-github-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 10px; }
+.plugin-github-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.plugin-github-body { display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; }
+.plugin-github-body > p { margin: 0; }
+.plugin-github-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .plugin-github-status > .icon { flex: none; color: var(--tone); }
 .plugin-github-status > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-github-status small { color: var(--muted); }
-.plugin-github-connect { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plugin-github-status small { color: var(--muted); line-height: 1.4; }
+.plugin-github-connect { display: flex; flex-direction: column; gap: 12px; }
 .plugin-github-connect > .plugin-button { align-self: flex-start; }
+.plugin-token { display: flex; flex-direction: column; gap: 6px; }
+.plugin-token > label { font-weight: 600; font-size: 12.5px; }
+.plugin-token small { line-height: 1.5; color: var(--muted); }
 .plugin-token-row { display: flex; gap: 8px; }
 .plugin-token-row input { flex: 1; min-width: 0; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
-.plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; background: none; }
+.plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; background: none; }
 .shortcut-list { margin-top: 16px; }
 .shortcut-list h3 { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
 .key-edit { display: inline-flex; align-items: center; gap: 6px; }
@@ -1261,6 +1277,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .tour-coach.hero footer .primary { padding: 6px 14px; font-size: 13px; }
 .tour-coach footer .primary:disabled { opacity: .45; cursor: default; }
 .tour-skip { color: var(--muted); }
+.tour-skip-note { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .tour-summary { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
 .tour-summary > div { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
 .tour-summary kbd, .tour-keys kbd { white-space: nowrap; }
@@ -2054,7 +2071,6 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .icon-btn.hint-anchor { color: var(--accent) !important; isolation: isolate; }
 .icon-btn.hint-anchor::before { content: ""; position: absolute; inset: -1px -2px; z-index: -1; border: 1px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; }
 .icon-btn.hint-anchor > * { scale: .82; }
-.pane-tools button.hint-anchor { opacity: 1; } /* header buttons otherwise show only on hover: the one being pointed at must be visible */
 .dropdown.hint-anchor > summary { outline: 1px solid var(--accent); outline-offset: 2px; }
 .hint-card { position: fixed; position-anchor: --ade-hint; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline; inset: auto; margin: 9px -6px 0 0;
   width: 236px; padding: 10px 12px; display: grid; gap: 3px; overflow: visible;
@@ -2220,10 +2236,10 @@ dialog.chat-stats > header small { flex: 1; color: var(--faint); font-family: va
 .stats-table th { text-align: left; font-weight: 500; color: var(--faint); padding: 3px 6px 3px 0; } .stats-table td { padding: 4px 6px 4px 0; border-top: 1px solid var(--border); }
 .stats-table th:not(:first-child), .stats-table td:not(:first-child) { text-align: right; }
 .stats-tools { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; font-size: 12px; }
-.stats-tools li { display: grid; grid-template-columns: 84px 1fr auto auto; align-items: center; gap: 8px; }
+.stats-tools li { display: grid; grid-template-columns: 84px 1fr 3ch 4.5em; align-items: center; gap: 8px; }
 .stats-tools li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats-tools li > i { height: 6px; border-radius: 3px; background: linear-gradient(var(--s1), var(--s1)) left / var(--w) 100% no-repeat, var(--hover); }
-.stats-tools li > b { font-variant-numeric: tabular-nums; } .stats-tools li > small { color: var(--error); }
+.stats-tools li > b { font-variant-numeric: tabular-nums; text-align: right; } .stats-tools li > small { color: var(--error); white-space: nowrap; } /* the error cell is always there (empty when 0), so every bar keeps the same length */
 
 /* Plan review: tall, readable body; footer outside the scroller; full-size dialog on demand. */
 .chat-plan { border-color: var(--agent); background: color-mix(in srgb, var(--agent) 5%, var(--raised)); }
@@ -2505,13 +2521,14 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .usage-row > div > span { min-width: 0; }
 .usage-row > div > b { flex: none; }
 
-/* One-line composer (ChatPane `compact`, ChatGPT-like): + · input · permission mode … model · Effort · context · send. Only the model keeps its name; the other
+/* One-line composer (ChatPane `compact`, ChatGPT-like): + · permission mode · input … model · Effort · context · send. Only the model keeps its name; the other
    controls show just their icons, and extras (notes, switches, the settings button) wait for the full composer. Every control is 28px tall and both layouts keep
    their rows on the bottom edge (flex-end), which is what lets playFlip slide them while the box height animates. */
 .chat-composer { justify-content: flex-end; }
 .chat-composer[data-compact] { flex-direction: row; align-items: flex-end; gap: 2px; padding: 7px 8px 7px 7px; border-radius: 22px; }
 .chat-composer[data-compact] > .chat-foot { display: contents; }
 .chat-composer[data-compact] .chat-attach { order: -1; margin-block: 1px; border-radius: 50%; }
+.chat-composer[data-compact] .fit-mode .chat-mode { order: -1; }
 .chat-composer[data-compact] > .chat-input-row { flex: 1 1 0; min-width: 64px; height: 28px; align-items: center; padding: 0 4px; }
 .chat-composer[data-compact] textarea { white-space: nowrap; overflow: hidden; }
 .chat-composer[data-compact] :is(.fit-note, .fit-inline, .drag-space), .chat-composer[data-compact] .tune-wrap:not(.forced) { display: none; }
@@ -2543,3 +2560,10 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 :root .monaco-diff-editor.side-by-side .editor.modified, :root .monaco-diff-editor.side-by-side .editor.original { box-shadow: none; }
 :root .monaco-diff-editor.side-by-side .editor.modified { border-left: 1px solid var(--border); }
 :root .monaco-diff-editor.side-by-side .editor.original { border-right: 0; }
+
+/* Split menu (SplitButton in Icon.tsx): hangs under its button in the top layer. */
+.split-menu { position: fixed; inset: auto; margin: 6px 0 0; position-area: bottom span-left; position-try-fallbacks: flip-block; padding: 4px; min-width: 150px; background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); color: var(--fg); }
+.split-menu:popover-open { display: flex; flex-direction: column; }
+.split-menu button { width: auto; height: auto; color: var(--fg); display: flex; align-items: center; gap: 8px; padding: 6px 10px; text-align: left; border-radius: 6px; white-space: nowrap; }
+.split-menu button:hover, .split-menu button:focus-visible { background: var(--selected); }
+.split-menu kbd { margin-left: auto; padding-left: 12px; font-size: 11px; color: var(--muted); }

@@ -126,8 +126,8 @@ try {
   await click('.tour .app:not([hidden]) .tabbar [aria-label="변경사항 Diff 패널"]'); await pause(3000);
   await click('.tour .app:not([hidden]) .tabbar [aria-label="변경사항 Diff 패널"]'); await next();
   say('7 / 11 분할');
-  await click(`${shown} [aria-label="좌우 분할"]`); await pause(900); await clickText(`${shown} .launcher-pane .launchers button`, '터미널'); await pause(900);
-  await click(`${shown} .terminal-pane.focused [aria-label="상하 분할"]`); await pause(600);
+  await click(`${shown} .terminal-pane [aria-label="분할"]`); await pause(300); await click(`${shown} [aria-label="좌우 분할"]`); await pause(900); await clickText(`${shown} .launcher-pane .launchers button`, '터미널'); await pause(900);
+  await click(`${shown} .terminal-pane.focused [aria-label="분할"]`); await pause(300); await click(`${shown} .terminal-pane.focused [aria-label="상하 분할"]`); await pause(600);
   if (await js(`Boolean(document.querySelector(${JSON.stringify(shown + ' .launcher-pane')}))`)) await clickText(`${shown} .launcher-pane .launchers button`, '터미널');
   await next();
   say('8 / 11 칸 이동과 최대화');

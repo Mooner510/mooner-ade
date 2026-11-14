@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { findLeaf, isLeaf, leafList, type Leaf, type Pane } from './api';
 import { usageHue, type Settings } from './Editor';
-import { Icon, IconButton } from './Icon';
+import { Icon, IconButton, SplitButton } from './Icon';
 import { ChatPane, type ChatCtx } from './ChatPane';
 import { chatDemo, demoChatState, demoModels } from './chat-demo';
 import { LauncherMenu } from './LauncherMenu';
@@ -26,9 +26,8 @@ import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPr
 // status bar) and the real launchers, chat pane, command palette, review panel, settings window and xterm. A coach card points at what to do next.
 // Nothing here changes anything on the server (the chat pane runs on tourChatCall); finishing fades it away onto the real screen underneath.
 
-// `setup`: start with the theme and font screen (first run); a replay goes straight to the tour. `required`: this tutorial was never finished,
-// so it has no "건너뛰기" (a replay has). `onDone` runs as the tour starts to fade.
-type Props = { settings: Settings; onSettings(next: Settings): void; setup: boolean; required: boolean; onDone(): void };
+// `setup`: start with the theme and font screen (first run); a replay goes straight to the tour. Every step but the last has "건너뛰기". `onDone` runs as the tour starts to fade.
+type Props = { settings: Settings; onSettings(next: Settings): void; setup: boolean; onDone(skipped?: boolean): void };
 
 const agentOf = (command: string): Agent | '' => command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : command === 'cursor-agent' ? 'cursor' : '';
 const before = "import express from 'express';\n\nconst app = express();\nconst port = 3000;\n\napp.get('/health', (_req, res) => res.send('ok'));\n\napp.listen(port, () => console.log(`listening on :${port}`));\n";
@@ -148,8 +147,7 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
       <span className="pane-title"><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{tour.labels[id]}</span>
         {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
-        <IconButton icon="splitH" tip="header" label="좌우 분할" keys={showAppKey(settings.appKeys, 'splitRight')} onClick={() => dispatch({ type: 'split', dir: 'row' })} />
-        <IconButton icon="splitV" tip="header" label="상하 분할" keys={showAppKey(settings.appKeys, 'splitDown')} onClick={() => dispatch({ type: 'split', dir: 'column' })} />
+        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={dir => dispatch({ type: 'split', dir })} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
         <IconButton icon="x" tip="none" label="터미널 종료" onClick={close} /></span></div>
     <TourTerminal lines={tour.lines[id] ?? []} prompt={ctx.prompt(id)} settings={settings} focused={focused} focusKey={ctx.focusKey} onSubmit={text => ctx.submit(id, text)} onTab={text => ctx.tab(id, text)} />
@@ -166,7 +164,7 @@ function Tree({ pane, ctx, onLayout }: { pane: Pane; ctx: Ctx; onLayout(next: Pa
   </Splitter>;
 }
 
-export function Tutorial({ settings, onSettings, setup, required, onDone }: Props) {
+export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
   const configuredKey = (keys: string) => {
     const def = appKeyDefs.find(def => def.keys === keys);
     return def ? appKey(settings.appKeys, def.id)! : keys;
@@ -448,7 +446,7 @@ export function Tutorial({ settings, onSettings, setup, required, onDone }: Prop
     </main>;
   };
 
-  const skip = leave; // no confirm: the book button replays it any time
+  const skip = () => { setLeaving(true); onDone(true); }; // no confirm: it counts as done, and the book button replays it any time
   // Feature steps are numbered; the welcome and finish cards stand apart in the middle of the screen.
   const hero = !step.tasks.length, lessons = list.filter(item => item.tasks.length), lesson = lessons.indexOf(step), now = step.tasks.find(task => !tour.done.includes(task.flag));
   return <div className={`tour ${leaving ? 'leaving' : ''} ${phase === 'setup' ? 'setting-up' : ''}`}>
@@ -484,8 +482,9 @@ export function Tutorial({ settings, onSettings, setup, required, onDone }: Prop
       {last && <div className="shortcut-list tour-summary">{summary.map(([label, keys], index) => <div key={label} style={{ '--i': index } as CSSProperties}><span>{label}</span><kbd>{showKeys(keys)}</kbd></div>)}</div>}
       </Fragment>
       {!hero && <p className={`tour-feedback ${done ? 'ok' : ''}`} role="status" aria-live="polite">{done ? step.after ?? '다 했어요. ‘다음’을 누르세요.' : feedback}</p>}
+      {hero && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
       <footer>
-        {!last && !required && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
+        {!last && <button type="button" className="tour-skip" onClick={skip} title="건너뛰어도 사이드바 아래 책 버튼으로 다시 볼 수 있어요">건너뛰기</button>}
         <span className="spacer" />
         {at > 1 && <button type="button" onClick={() => setAt(at - 1)}>이전</button>}
         <button ref={next} type="button" className="primary" disabled={!done} title={done ? '' : '해 볼 것을 모두 마치면 넘어갈 수 있어요'} onClick={() => last ? leave() : setAt(at + 1)}>

@@ -105,6 +105,21 @@ test('a project resolves to its .envrc account, then its running agent, then the
   assert.deepEqual(await make({ platform: 'linux', readVariable: async () => '/acc-c' })('codex', project([{ agent: 'codex', agentPid: 9 }])), { dir: '/acc-c', from: 'process' });
 });
 
+test('`direnv allow` is picked up within seconds, and a forced refresh asks direnv again', async () => {
+  let clock = 0, allowed = false, runs = 0;
+  const resolve = createAccountResolver({ env: { CLAUDE_CONFIG_DIR: '/acc-a' }, platform: 'darwin', home: '/h', readVariable: async () => '', direnv: async () => '/bin/direnv', exec: async () => { runs++; return allowed ? '/acc-b' : null; }, exists: async () => false, now: () => clock });
+  const project = { root: '/nowhere', terminals: new Map() };
+  assert.deepEqual(await resolve('claude', project), { dir: '/acc-a', from: 'server' });
+  allowed = true;
+  assert.equal((await resolve('claude', project)).dir, '/acc-a', 'a refusal is remembered for a moment');
+  clock = 4_000;
+  assert.deepEqual(await resolve('claude', project), { dir: '/acc-b', from: 'direnv' });
+  allowed = false; clock = 10_000;
+  assert.equal((await resolve('claude', project)).dir, '/acc-b', 'an allowed answer is kept for a minute');
+  assert.equal((await resolve('claude', project, { force: true })).dir, '/acc-a');
+  assert.equal(runs, 3);
+});
+
 test('each account folder gets its own cached reading', async () => {
   const seen = [];
   const usage = createUsage({

@@ -2,7 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useId, useLayo
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type Settings } from './Editor';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
-import { Icon, type IconName, IconButton, SettingGlyph } from './Icon';
+import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
 import { QuestionCard, QuestionList } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
@@ -1115,7 +1115,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     for (let level = 0; level <= 4; level++) { el.dataset.fit = String(level); if (el.scrollWidth <= el.clientWidth + 1) break; }
     fitSig.current = sig;
   }, [foot]);
-  // The composer rests as one line (+ · input · mode … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
+  // The composer rests as one line (+ · mode · input … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
   // One line: a few seconds after the input loses focus (not while the pointer is on it or a menu in it is open), or right after sending (focus stays).
   // Full: focusing or clicking the input, or any text or image in it. Changes slide every control from where it was (see playFlip).
   const composer = useRef<HTMLDivElement>(null), [oneLine, setCompactState] = useState(true), compactNow = useRef(true), flipFrom = useRef<FlipSnapshot | null>(null), compactTimer = useRef(0), mountedAt = useRef(performance.now()), draft = useRef({ text, images: images.length }); draft.current = { text, images: images.length };
@@ -1497,7 +1497,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} className={hint === 'tocli' ? 'hint-anchor' : ''} onClick={() => { hintSeen('tocli'); ctx.toTerminal(id, !view.state.sessionId); }} />}
         {(view.state.status === 'idle' || (agent === 'claude' && view.state.sessionId)) && <i className="pane-sep" aria-hidden="true" />}
         <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
-        <IconButton icon="splitH" tip="header" label="좌우 분할" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" tip="header" label="상하 분할" onClick={() => onSplit(id, 'column')} />
+        <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { if (event.deltaY < 0) release(); }} onTouchMove={release}

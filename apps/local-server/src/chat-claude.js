@@ -265,7 +265,7 @@ export function normalizeClaude(raw) {
         usage &&
         (usage.input || usage.output || usage.cacheRead || usage.cacheCreate)
       )
-        return [{ kind: "delta", phase: "usage", usage, parentToolUseId }];
+        return [{ kind: "delta", phase: "usage", usage, parentToolUseId, final: true }]; // the message's real output_tokens
       return [];
     }
     if (event.type === "content_block_delta") {
