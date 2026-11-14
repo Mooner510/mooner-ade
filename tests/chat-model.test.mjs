@@ -276,6 +276,12 @@ test('thinking tokens follow the message', () => {
   assert.equal(reduce(view, { kind: 'delta', phase: 'start' }).thinkingTokens, 0);
 });
 
+test('a finished or new turn does not show the previous turn\'s thinking tokens', () => {
+  let view = reduce(emptyView(), { kind: 'delta', phase: 'thinkingTokens', tokens: 170 });
+  assert.equal(reduce(view, { kind: 'result', status: 'success' }).thinkingTokens, 0);
+  assert.equal(reduce(view, { kind: 'user', text: '다음' }).thinkingTokens, 0);
+});
+
 test('a steering message waits, then becomes an ordinary user message or disappears', () => {
   let view = reduce(emptyView(), { kind: 'steer', phase: 'queued', uuid: 'u1', text: '멈춰', images: 0 });
   assert.deepEqual(view.steers.map(item => item.text), ['멈춰']);

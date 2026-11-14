@@ -96,7 +96,7 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
           <tbody>{stats.models.map(row => <tr key={row.model}><td>{shortModel(row.model)}</td><td>{row.requests}</td><td>{compact(row.input + row.read + row.write)}</td><td>{compact(row.output)}</td><td>{money(row.costUsd)}</td></tr>)}</tbody></table>
       </section>
       <section><h3>도구 사용 <small>{stats.toolCalls}회</small></h3>
-        {stats.tools.length ? <ul className="stats-tools">{stats.tools.map(tool => <li key={tool.name}><span>{tool.name}</span><i style={{ '--w': `${(tool.count / toolMax) * 100}%` } as CSSProperties} /><b>{tool.count}</b>{tool.errors > 0 && <small>오류 {tool.errors}</small>}</li>)}</ul> : <p className="stats-empty">도구를 쓰지 않았습니다.</p>}
+        {stats.tools.length ? <ul className="stats-tools">{stats.tools.map(tool => <li key={tool.name}><span>{tool.name}</span><i style={{ '--w': `${(tool.count / toolMax) * 100}%` } as CSSProperties} /><b>{tool.count}</b><small>{tool.errors > 0 ? `오류 ${tool.errors}` : ''}</small></li>)}</ul> : <p className="stats-empty">도구를 쓰지 않았습니다.</p>}
       </section>
     </div>
 

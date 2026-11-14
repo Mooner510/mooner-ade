@@ -48,7 +48,9 @@ export function parseUi(code: string): Spec[] | null {
 
 // What a submitted form says to the agent: a normal user message.
 export function formMessage(form: Extract<Spec, { t: 'form' }>, values: Record<string, string>) {
-  const rows = form.fields.map(f => `- ${f.label}: ${f.type === 'check' ? (values[f.k] === 'true' ? 'yes' : 'no') : values[f.k] ?? ''}`).join('\n');
+  const rows = form.fields
+    .filter(f => f.type === 'check' || (values[f.k] ?? '').trim()) // empty answers are left out
+    .map(f => `- ${f.label}: ${f.type === 'check' ? (values[f.k] === 'true' ? 'yes' : 'no') : values[f.k]}`).join('\n');
   return (form.title ? `${form.title}\n` : '') + rows;
 }
 

@@ -2,7 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useId, useLayo
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type Settings } from './Editor';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
-import { Icon, type IconName, IconButton, SettingGlyph } from './Icon';
+import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
 import { QuestionCard, QuestionList } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
@@ -1493,7 +1493,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} className={hint === 'tocli' ? 'hint-anchor' : ''} onClick={() => { hintSeen('tocli'); ctx.toTerminal(id, !view.state.sessionId); }} />}
         {(view.state.status === 'idle' || (agent === 'claude' && view.state.sessionId)) && <i className="pane-sep" aria-hidden="true" />}
         <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
-        <IconButton icon="splitH" tip="header" label="좌우 분할" onClick={() => onSplit(id, 'row')} /><IconButton icon="splitV" tip="header" label="상하 분할" onClick={() => onSplit(id, 'column')} />
+        <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { if (event.deltaY < 0) release(); }} onTouchMove={release}

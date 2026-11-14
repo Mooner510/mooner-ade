@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } 
 import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
+import { Modal } from './views';
 
 // Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
 // confirmed by the desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
@@ -297,6 +298,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
           </button>)}
       </div>
       {shownTab === 'installed' && <div className="plugin-toolbar">
+        {state.github?.available && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
         {bridge.checkUpdates && installed.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
         <IconButton icon="refresh" label="플러그인 폴더 다시 읽기" disabled={working} onClick={() => run('global:rescan', bridge.rescan)} />
         <IconButton icon="folder" label="플러그인 폴더 열기" disabled={working} onClick={() => run('global:folder', bridge.openFolder)} />
@@ -310,8 +312,6 @@ export function PluginSettings({ query = '' }: { query?: string }) {
         : <p className="setting-note plugin-tab-note">MoonerADE에 포함된 플러그인입니다. 승인 없이 실행되고, 각자 켜고 끌 수 있습니다.</p>}
       {list(builtins)}
     </>}
-
-    {!filtering && state.github?.available && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
 
     {(filtering || shownTab === 'installed') && <>
     {filtering && installed.length > 0 && <div className="plugin-list-head"><h4 className="setting-group">설치한 플러그인</h4></div>}
@@ -634,6 +634,7 @@ function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginIn
 // The GitHub account for plugins from private repositories: connected in MoonerADE, or this PC's gh / git login.
 function GithubSection({ github, busy, run, bridge, notice }: { github: GithubAccount; busy: string; run: Run; bridge: PluginsBridge; notice: Notice | null }) {
   const [token, setToken] = useState('');
+  const [open, setOpen] = useState(false);
   const working = Boolean(busy);
   // Which login this PC has is looked up once when the page opens (it runs `gh`), not on every render.
   useEffect(() => { if (!github.login && !github.machineChecked && bridge.probeGithub) void bridge.probeGithub().catch(() => {}); }, []);
@@ -642,35 +643,39 @@ function GithubSection({ github, busy, run, bridge, notice }: { github: GithubAc
   if (github.login) status = <><Icon name="check" size={15} /><span><strong>{github.login}</strong> 계정이 연결되어 있습니다<small>{github.via === 'oauth' ? 'GitHub 로그인' : '개인 액세스 토큰'} · 비공개 저장소의 플러그인 업데이트에 씁니다</small></span></>;
   else if (github.machine) status = <><Icon name="check" size={15} /><span><strong>이 PC의 {github.machine === 'gh' ? 'gh' : 'git'} 로그인</strong>을 씁니다<small>MoonerADE에 따로 연결하지 않아도 그 계정이 볼 수 있는 저장소에서 업데이트를 받습니다.</small></span></>;
   else status = <><Icon name="info" size={15} /><span><strong>연결된 계정이 없습니다</strong><small>{github.machineChecked ? '공개 저장소의 플러그인만 업데이트를 확인합니다.' : '이 PC의 GitHub 로그인을 확인하는 중…'}</small></span></>;
-  return <section className="plugin-github" aria-label="GitHub 연결">
-    <h4 className="setting-group">GitHub 연결</h4>
-    <p className="plugin-muted">비공개 저장소에서 받는 플러그인을 업데이트할 때 씁니다. 공개 저장소의 플러그인은 연결하지 않아도 됩니다.</p>
-    {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
-    {github.error && !notice && <Callout tone="error">{github.error}</Callout>}
-    <div className="plugin-github-card">
-      <div className="plugin-github-status" data-tone={github.login || github.machine ? 'ok' : 'info'}>{status}
-        {github.login && <BusyButton className="danger" busy={working} running={busy === 'github:disconnect'} onClick={() => run('github:disconnect', () => bridge.disconnectGithub!())}>연결 해제</BusyButton>}
-      </div>
-      {github.device && <Callout tone="info" action={<BusyButton busy={working} running={busy === 'github:cancel'} onClick={() => run('github:cancel', () => bridge.cancelSignIn!())}>취소</BusyButton>}>
-        브라우저에서 GitHub 페이지가 열렸습니다. 코드 <b className="mono">{github.device.userCode}</b>를 입력하고 승인하세요.
-        <button type="button" className="plugin-link" onClick={() => copyText(github.device!.userCode)}>코드 복사</button>
-      </Callout>}
-      {!github.login && <div className="plugin-github-connect">
-        {github.signIn && bridge.signInGithub && <BusyButton className="primary" busy={working} running={busy === 'github:signin'} icon="person" onClick={() => run('github:signin', () => bridge.signInGithub!())}>GitHub로 로그인</BusyButton>}
-        <form className="plugin-token" onSubmit={event => { event.preventDefault(); if (!working) connect(); }}>
-          <label className="plugin-field">
-            <span>{github.signIn ? '또는 토큰으로 연결' : '토큰으로 연결'}</span>
+  const linked = Boolean(github.login || github.machine);
+  return <>
+    <button type="button" className="plugin-button plugin-github-open" data-linked={linked || undefined} title="비공개 저장소 플러그인 업데이트용 GitHub 계정" onClick={() => setOpen(true)}>
+      <Icon name="person" />GitHub<i className="plugin-github-dot" aria-hidden="true" />
+    </button>
+    {open && <Modal className="plugin-github-modal" labelledBy="plugin-github-title" region="GitHub 연결" onClose={() => { if (!working) setOpen(false); }}>
+      <header><h2 id="plugin-github-title">GitHub 연결</h2><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></header>
+      <div className="plugin-github-body">
+        <p className="plugin-muted">비공개 저장소에서 받는 플러그인을 업데이트할 때 씁니다. 공개 저장소의 플러그인은 연결하지 않아도 됩니다.</p>
+        {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
+        {github.error && !notice && <Callout tone="error">{github.error}</Callout>}
+        <div className="plugin-github-status" data-tone={linked ? 'ok' : 'info'}>{status}
+          {github.login && <BusyButton className="danger" busy={working} running={busy === 'github:disconnect'} onClick={() => run('github:disconnect', () => bridge.disconnectGithub!())}>연결 해제</BusyButton>}
+        </div>
+        {github.device && <Callout tone="info" action={<BusyButton busy={working} running={busy === 'github:cancel'} onClick={() => run('github:cancel', () => bridge.cancelSignIn!())}>취소</BusyButton>}>
+          브라우저에서 GitHub 페이지가 열렸습니다. 코드 <b className="mono">{github.device.userCode}</b>를 입력하고 승인하세요.
+          <button type="button" className="plugin-link" onClick={() => copyText(github.device!.userCode)}>코드 복사</button>
+        </Callout>}
+        {!github.login && <div className="plugin-github-connect">
+          {github.signIn && bridge.signInGithub && <BusyButton className="primary" busy={working} running={busy === 'github:signin'} icon="person" onClick={() => run('github:signin', () => bridge.signInGithub!())}>GitHub로 로그인</BusyButton>}
+          <form className="plugin-token" onSubmit={event => { event.preventDefault(); if (!working) connect(); }}>
+            <label htmlFor="plugin-github-token">{github.signIn ? '또는 토큰으로 연결' : '토큰으로 연결'}</label>
             <div className="plugin-token-row">
-              <input type="password" value={token} placeholder="github_pat_…" autoComplete="off" spellCheck={false} aria-label="GitHub 토큰" onChange={event => setToken(event.target.value)} />
+              <input id="plugin-github-token" type="password" value={token} placeholder="github_pat_…" autoComplete="off" spellCheck={false} onChange={event => setToken(event.target.value)} />
               <BusyButton className={github.signIn ? undefined : 'primary'} busy={working || !token.trim()} running={busy === 'github:connect'} icon="key" onClick={connect}>연결</BusyButton>
             </div>
             <small>Fine-grained 토큰에서 플러그인 저장소만 고르고 <b>Contents: Read-only</b> 권한만 주세요. 토큰은 이 PC에 암호화해 저장하고 GitHub에만 보냅니다.
               {bridge.openTokenPage && <button type="button" className="plugin-link" onClick={() => run('github:token-page', () => bridge.openTokenPage!())}>토큰 만들기<Icon name="externalLink" size={12} /></button>}</small>
-          </label>
-        </form>
-      </div>}
-    </div>
-  </section>;
+          </form>
+        </div>}
+      </div>
+    </Modal>}
+  </>;
 }
 
 // Each thing the plugin adds, spelled out: its commands, its MCP tools (each can be turned off) and what it may do.

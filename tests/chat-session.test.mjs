@@ -188,11 +188,27 @@ test('Claude streaming usage updates live tokens once and commits on result', as
   await until(() => session.state().status === 'idle');
   assert.ok(tokenSnapshots.some(tokens => tokens.output === 80 && tokens.input === 0), 'thinking estimate shows as provisional output');
   assert.ok(tokenSnapshots.some(tokens => tokens.input === 120 && tokens.output === 0), 'message_start usage');
+  assert.ok(tokenSnapshots.some(tokens => tokens.input === 120 && tokens.output === 20), 'streamed text counts as output before message_delta reports it');
   assert.ok(tokenSnapshots.some(tokens => tokens.input === 120 && tokens.output === 35), 'message_delta output');
   assert.deepEqual(session.state().tokens, { input: 120, output: 35, cacheRead: 0, cacheCreate: 0 });
   assert.equal(session.state().costUsd, 0.03);
   const committedOutputs = tokenSnapshots.filter((tokens, index) => index === tokenSnapshots.length - 1 || tokenSnapshots[index + 1]?.output !== tokens.output).map(tokens => tokens.output);
   assert.ok(committedOutputs.includes(35));
+});
+
+test('Claude: while a turn runs the cost grows with its tokens (priced like the last turn) and lands on the reported total', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-livecost-'));
+  const costs = [];
+  const session = await openChatSession({ directory, id: 'livecost', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))], onState: state => costs.push(state.costUsd) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  await session.send('one');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.state().costUsd, 0.03);
+  costs.length = 0;
+  await session.send('two');
+  await until(() => session.state().turns === 2 && session.state().status === 'idle');
+  assert.ok(costs.some(cost => cost > 0.03), 'cost rose before the result');
+  assert.equal(session.state().costUsd, 0.03);
 });
 
 test('Claude: a turn with several API calls only ever adds to the shown tokens, and ends on the result total', async t => {
