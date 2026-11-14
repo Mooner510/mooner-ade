@@ -37,7 +37,9 @@ jobs:
           git merge-base --is-ancestor HEAD origin/master || { echo "::error::$TAG is not on master; merge it into master and release from there"; exit 1; }
           # v1.2.3-beta1 is a prerelease: "latest" (and so the installer scripts and stable-channel updates) never points at it.
           case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes $pre
+          # The notes come from the changelog the app bundles (one source for both); a beta, which has no entry, keeps the generated list.
+          if node scripts/release-notes.mjs "${TAG#v}" > "$RUNNER_TEMP/notes.md" 2>/dev/null; then notes="--notes-file $RUNNER_TEMP/notes.md"; else notes=--generate-notes; fi
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" $notes $pre
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   build:
     needs: create
