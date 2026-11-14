@@ -24,26 +24,6 @@ import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/noto-sans-kr/wght.css';
 import '@fontsource-variable/jetbrains-mono/wght.css';
 
-// Comet tail: 18 overlapping dashes sharing one head stack into a smooth fade (~45% of the outline); the short extras brighten the tip.
-const TRAIL: [number, number][] = [[1.5, .7], [4, .35], ...Array.from({ length: 18 }, (_, i): [number, number] => [2.5 * (i + 1), .11])];
-// The comets move on one shared 24 fps clock (--f, 0..1 of a lap, eased) rather than a CSS animation. Blink restyles the document on every display
-// frame for a running animation it cannot hand to the compositor (stroke-dashoffset), even a stepped one, and each frame costs the whole
-// paint-and-composite pipeline (more with a terminal on screen), for as long as agents work. Measured with a terminal in view (renderer + GPU
-// process, % of one core): 20 fps ~14%, 24 fps ~17%, 30 fps ~22%, 60 fps about twice 30. Filters, layers and fewer dashes did not change it.
-// With the window in the background (data-blurred) they hold still, like the CSS loops.
-const orbits = new Set<SVGSVGElement>(); let orbitTimer = 0;
-// Close to the cubic-bezier(.42, .12, .58, .88) the comet used to run on: slow at the start and end of a lap, quick in the middle.
-const ease = (x: number) => x - .52 * Math.sin(2 * Math.PI * x) / (2 * Math.PI);
-const orbitTick = () => {
-  if (document.documentElement.hasAttribute('data-blurred')) return;
-  const now = performance.now() / 1000;
-  for (const svg of orbits) svg.style.setProperty('--f', ease(((now + Number(svg.dataset.phase)) / Number(svg.dataset.lap)) % 1).toFixed(4));
-};
-const orbit = (svg: SVGSVGElement | null) => {
-  if (!svg || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  orbits.add(svg); orbitTick(); orbitTimer ||= window.setInterval(orbitTick, 1000 / 24);
-  return () => { orbits.delete(svg); if (!orbits.size) { clearInterval(orbitTimer); orbitTimer = 0; } };
-};
 // data-blurred: the window is not the one in use. A blur also comes when focus moves into a chat's UI iframe, so it is decided by hasFocus() a tick later.
 const syncFocus = () => document.documentElement.toggleAttribute('data-blurred', !document.hasFocus());
 addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(syncFocus)); syncFocus();
@@ -540,7 +520,7 @@ function Shell() {
                   }
                 };
                 const state = (pane: { asking: boolean; attention: boolean; working: boolean }) => pane.asking ? 'attention' : pane.attention ? 'done' : pane.working ? 'working' : undefined;
-                const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <svg className="agent-trail" aria-hidden="true" ref={orbit} data-lap={3.8 + (h % 5) * .35} data-phase={(h % 7) * .7}>{TRAIL.map(([len, opacity]) => <rect key={len} pathLength={100} strokeDasharray={`${len} ${100 - len}`} strokeOpacity={opacity} style={{ '--from': len } as React.CSSProperties} />)}</svg>; };
+                const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <span className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}><i /><i /><i /><i /></span>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
                   <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}

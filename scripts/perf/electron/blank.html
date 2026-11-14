@@ -1,0 +1,10 @@
+<!doctype html><html><body style="margin:0;background:#15171c;color:#ccc;font:14px sans-serif">
+<style>.sp{position:fixed;left:50%;top:50%;width:16px;height:16px;border:2px solid #888;border-top-color:transparent;border-radius:50%;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(1turn)}}
+canvas{display:block;width:100%;height:30vh}</style>
+<div id=c></div><!-- 80 lines of static text; spinner unless mode=idle; mode=webgl adds 3 static WebGL canvases (like xterm) -->
+<script>
+const m = new URLSearchParams(location.search).get('mode');
+for (let i = 0; i < 80; i++) document.getElementById('c').insertAdjacentHTML('beforeend', '<div>line '+i+' lorem ipsum dolor sit amet</div>');
+if (m !== 'idle') document.body.insertAdjacentHTML('beforeend', '<div class=sp></div>');
+if (m === 'webgl') for (let i = 0; i < 3; i++) { const cv = document.createElement('canvas'); cv.width = innerWidth*devicePixelRatio; cv.height = innerHeight*0.3*devicePixelRatio; document.body.prepend(cv); const g = cv.getContext('webgl'); g.clearColor(.1,.1,.12,1); g.clear(g.COLOR_BUFFER_BIT); }
+</script></body></html>

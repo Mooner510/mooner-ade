@@ -611,7 +611,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               <Dropdown label="메시지 전송 키" value={settings.chatSendKey} options={[{ value: 'enter', label: 'Enter' }, { value: 'mod-enter', label: 'Cmd/Ctrl+Enter' }]} onChange={value => set('chatSendKey', value as Settings['chatSendKey'])} /></Row>
           </Group>
           <Group title="새 채팅 기본값">
-            <p className="setting-note">새 채팅에 적용됩니다. 에이전트가 지원하는 권한 모드와 Effort만 반영되며, 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
+            <p className="setting-note">새 채팅에 적용됩니다. 에이전트가 지원하는 권한 모드와 Effort만 반영되며(Cursor는 자동 모드가 없어 기본 모드로 시작), 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
             <Row title="권한 모드" hint="모든 권한 건너뛰기(bypassPermissions)는 위험해서 기본값으로 고를 수 없습니다.">
               <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'cli', label: 'CLI 설정 따름' }, { value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }, { value: 'auto', label: '자동' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
             <Row title="Effort" hint="자동은 에이전트의 기본값을 따릅니다. 높을수록 오래 생각하고 비용이 늘어납니다.">

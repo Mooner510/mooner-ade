@@ -3,7 +3,8 @@
 // core while it waits. Chrome, Edge and Slack are exempt through NVIDIA's predefined profiles (setting 0x1077A11A "RTX HDR allow" = 0);
 // no Chromium switch avoids it without giving up GPU compositing. So on Windows, once after start, this checks whether the GPU
 // process has the RTX HDR module and, if so, offers to add that one setting for this executable. Writing it needs admin rights,
-// hence one UAC prompt (nvidia-profile.ps1). Nothing is asked again after "다시 묻지 않기" or once the profile is in place.
+// hence one UAC prompt (nvidia-profile.ps1). Nothing is asked again after "다시 묻지 않기" or once the profile is in place: the driver
+// keeps loading nvppex.dll into the GPU process even with the setting applied, so the module alone would ask on every start.
 // No electron import: main.js passes app/dialog in, so tests drive it with fakes.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -36,6 +37,16 @@ export function elevatedCommand({ exe, profile = PROFILE_NAME, result, undo = fa
   return `Start-Process -FilePath powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList ${args.map(argument).join(',')}`;
 }
 
+// Reads (no elevation) whether the driver already has RTX HDR off for this executable (the script answers "ok set"); false on any doubt.
+export async function rtxHdrProfileSet({ exe, profile = PROFILE_NAME, exec = run, tmp = os.tmpdir(), script = SCRIPT }) {
+  const result = path.join(tmp, `ade-nvidia-check-${process.pid}-${Date.now()}.txt`);
+  await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Exe', exe, '-ProfileName', profile, '-Result', result, '-Check']);
+  let line = '';
+  try { line = fs.readFileSync(result, 'utf8').trim(); } catch { /* the script did not run */ }
+  fs.rmSync(result, { force: true });
+  return line === 'ok set';
+}
+
 // Resolves the script's one-line result ("ok applied <profile>", "ok removed", "error <step> <status>"), or "cancelled" when the UAC
 // prompt was declined (Start-Process throws and no result file is written).
 export async function setRtxHdrProfile({ exe, profile = PROFILE_NAME, undo = false, exec = run, tmp = os.tmpdir() }) {
@@ -64,6 +75,7 @@ export function watchRtxHdr({ app, dialog, getWindow, userData, platform = proce
   return new Promise(resolve => setTimeout(resolve, delayMs).unref?.()).then(async () => {
     const gpu = app.getAppMetrics().find(metric => metric.type === 'GPU');
     if (!gpu || !(await rtxHdrHooked(gpu.pid, exec))) return 'clear';
+    if (await rtxHdrProfileSet({ exe: exe.toLowerCase(), profile, exec })) return 'applied';
     const { response, checkboxChecked } = await ask({ type: 'warning', buttons: ['해결', '나중에'], defaultId: 0, cancelId: 1, message: 'NVIDIA RTX HDR 때문에 화면이 끊기고 있습니다', detail: DETAIL, checkboxLabel: '다시 묻지 않기' });
     if (checkboxChecked) fs.writeFileSync(stateFile, JSON.stringify({ dismissed: true }));
     if (response !== 0) return 'later';

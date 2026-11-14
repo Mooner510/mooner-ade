@@ -235,12 +235,12 @@ test('Claude: the session cost keeps adding up when a setting change replaces th
   assert.ok(Math.abs(session.state().costUsd - 0.06) < 1e-9, String(session.state().costUsd));
 });
 
-test('Claude: the auto Compact window the gauge shows is handed to the CLI; a window the user set is left to the CLI', async t => {
+test('Claude: ADE never hands an Auto Compact window to the CLI; "auto" shows no window and a window the user set is shown as is', async t => {
   // A test run from inside an ADE chat inherits the window ADE handed to that chat's CLI, which would read as one the user set.
   const saved = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, DISABLE_AUTO_COMPACT: process.env.DISABLE_AUTO_COMPACT };
   delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW; delete process.env.DISABLE_AUTO_COMPACT;
   t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  for (const [settings, expected] of [[{}, '350000'], [{ autoCompactWindow: 300000 }, undefined], [{ autoCompactEnabled: false }, undefined]]) {
+  for (const [settings, shown] of [[{}, null], [{ autoCompactWindow: 'auto' }, null], [{ autoCompactWindow: 150000 }, 150000], [{ autoCompactEnabled: false }, null]]) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-window-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'window');
     await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });
     await writeFile(path.join(configDir, 'settings.json'), JSON.stringify(settings));
@@ -250,7 +250,8 @@ test('Claude: the auto Compact window the gauge shows is handed to the CLI; a wi
       env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '', DISABLE_AUTO_COMPACT: '' }, spawnProcess: (command, args, options) => { windows.push(options.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW); return spawn(command, args, options); } });
     t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
     await session.send('hello'); await until(() => session.state().status === 'idle');
-    assert.equal(windows[0] || undefined, expected, JSON.stringify(settings));
+    assert.equal(windows[0] || undefined, undefined, JSON.stringify(settings));
+    assert.equal(session.state().autoCompact?.window ?? null, shown, JSON.stringify(settings));
   }
 });
 
