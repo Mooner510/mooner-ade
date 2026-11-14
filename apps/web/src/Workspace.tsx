@@ -9,7 +9,7 @@ import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
 import { useHiddenAgents } from './installed-agents';
-import { chatAgent, Launchers, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
+import { chatAgent, Launchers, markSplit, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { useShells, shellLabel } from './shells';
 import { LauncherMenu } from './LauncherMenu';
 import { launchersFor, type AgentMode } from './launchers';
@@ -537,7 +537,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   function splitTerminal(id: string, direction: 'row' | 'column') {
     const leaf: Leaf = { id: newId(), kind: 'launcher' }, current = activePane();
     const anchor = leaves(current).includes(id) ? id : leaves(current)[0];
-    commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
+    markSplit(leaf.id); commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
   }
   async function fillLauncher(id: string, command: string) {
     if (chatAgent(command)) {

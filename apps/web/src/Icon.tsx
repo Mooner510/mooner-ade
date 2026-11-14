@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from 'react';
+import { useId, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 
 // Material Symbols (bundled font, so it works offline). Claude Code and Codex have no Material glyph, so they stay inline SVG.
 const glyphs = {
@@ -124,4 +124,17 @@ type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(
 export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip }: IconButtonProps) {
   const text = keys ? `${label} (${keys})` : label;
   return <button type="button" className={`icon-btn ${className}`} title={tip ? undefined : text} data-tip={tip === 'header' ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} /></button>;
+}
+
+// One split button for every pane header: it opens a small popover with the two directions. Native popover (top layer), so the pane edges never clip it.
+export function SplitButton({ onSplit, keys }: { onSplit(direction: 'row' | 'column', event: MouseEvent<HTMLButtonElement>): void; keys?: { row?: string; column?: string } }) {
+  const id = useId(), name = `--split-${id.replace(/:/g, '')}`;
+  const pick = (direction: 'row' | 'column') => (event: MouseEvent<HTMLButtonElement>) => { (event.currentTarget.closest('[popover]') as HTMLElement | null)?.hidePopover(); onSplit(direction, event); };
+  return <>
+    <button type="button" className="icon-btn" data-tip="분할" aria-label="분할" aria-haspopup="menu" popoverTarget={id} style={{ anchorName: name } as CSSProperties}><Icon name="splitH" /></button>
+    <div id={id} popover="auto" className="split-menu" role="menu" style={{ positionAnchor: name } as CSSProperties}>
+      <button type="button" role="menuitem" aria-label="좌우 분할" onClick={pick('row')}><Icon name="splitH" size={16} />좌우 분할{keys?.row && <kbd>{keys.row}</kbd>}</button>
+      <button type="button" role="menuitem" aria-label="상하 분할" onClick={pick('column')}><Icon name="splitV" size={16} />상하 분할{keys?.column && <kbd>{keys.column}</kbd>}</button>
+    </div>
+  </>;
 }

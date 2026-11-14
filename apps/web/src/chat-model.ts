@@ -252,7 +252,7 @@ export function reduce(view: ChatView, event: any): ChatView {
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return refreshViewTitle(append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
+    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0 }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -322,7 +322,7 @@ export function reduce(view: ChatView, event: any): ChatView {
         const text = event.status === 'interrupted' ? '응답을 중단했습니다.' : '응답에 실패했습니다.';
         for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results) results = { ...results }; results[block.id] = { content: text, isError: true }; }
       }
-      view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null };
+      view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null, thinkingTokens: 0 };
       if (event.status === 'interrupted') return { ...append(view, { kind: 'note', key, text: '응답을 중단했습니다.', fresh }), approvals: [] };
       if (event.status === 'failed') {
         // The CLI also says the failure as a synthetic reply in the same words ("Invalid API key · …"); the error card says it once.

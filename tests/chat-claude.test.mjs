@@ -92,7 +92,7 @@ test('message_start and message_delta usage become live-only usage deltas', () =
     { kind: 'delta', phase: 'usage', usage: { input: 9, output: 0, cacheRead: 0, cacheCreate: 0 }, parentToolUseId: null },
   ]);
   assert.deepEqual(normalizeClaude({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 12 } } }), [
-    { kind: 'delta', phase: 'usage', usage: { input: 0, output: 12, cacheRead: 0, cacheCreate: 0 }, parentToolUseId: null },
+    { kind: 'delta', phase: 'usage', usage: { input: 0, output: 12, cacheRead: 0, cacheCreate: 0 }, parentToolUseId: null, final: true },
   ]);
 });
 

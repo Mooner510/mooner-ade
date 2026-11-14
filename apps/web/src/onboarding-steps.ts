@@ -83,7 +83,7 @@ export const steps = (keys: (binding: string) => string): Step[] => [
     tasks: [{ flag: 'diffOpen', label: 'Diff 패널 열기', hint: `상단 Diff 버튼 또는 ${keys('mod+shift+g')}` }, { flag: 'diffClose', label: '다시 닫기', hint: '같은 버튼을 한 번 더' }] },
   { id: 'split', title: '한 탭에 여러 칸', target: '.tour .app:not([hidden]) .tab-page:not([hidden])', keys: [['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'], ['한 칸 최대화', 'mod+shift+enter']],
     body: ['칸을 나눠 **서버 로그와 에이전트**를 한 화면에 두세요.', '새 칸에서도 **Chat이나 CLI**를 골라 띄워요.'],
-    tasks: [{ flag: 'splitRow', label: '좌우로 나누기', hint: `터미널 안에서 ${keys('ctrl+d')} 또는 칸 위쪽 버튼`, target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .focused .pane-actions [aria-label="좌우 분할"]' }, { flag: 'fill', label: '새 칸에 아무거나 띄우기', target: '.tour .app:not([hidden]) .launcher-pane .launchers button' }] },
+    tasks: [{ flag: 'splitRow', label: '좌우로 나누기', hint: `터미널 안에서 ${keys('ctrl+d')} 또는 칸 위쪽 버튼`, target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .focused .pane-actions [aria-label="분할"]' }, { flag: 'fill', label: '새 칸에 아무거나 띄우기', target: '.tour .app:not([hidden]) .launcher-pane .launchers button' }] },
   { id: 'palette', title: '모든 기능은 명령 팔레트에', target: '.tour .app:not([hidden]) .palette-button', keys: [['명령 팔레트', 'mod+shift+p']],
     body: ['모든 기능을 **이름으로 찾아** 바로 실행해요.', '옆에 적힌 **단축키**도 함께 익혀 보세요.'],
     tasks: [{ flag: 'palette', label: '명령 팔레트 열기', hint: '상단 검색 칸 또는 단축키' }] },
