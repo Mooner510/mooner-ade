@@ -1090,6 +1090,13 @@ async function route(action, input, project) {
       }
       return cached.promise;
     }
+    case 'files/upload': {
+      // A browser cannot tell the path of a file it was given, so the chat composer sends the bytes and mentions the copy (pruned with the pasted images).
+      const bytes = Buffer.from(typeof input.data === 'string' ? input.data : '', 'base64');
+      if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw fault('INVALID_INPUT', '파일은 비어 있지 않고 8MB 이하여야 합니다.');
+      const name = path.basename(String(input.name ?? '')).replace(/[^\w.\-가-힣]+/g, '_').slice(-80) || 'file';
+      return { path: await savePaste(bytes, `upload-${randomUUID()}-${name}`) };
+    }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
       // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
@@ -1147,7 +1154,7 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, origin);
     if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
-      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') ? 12 * 1024 * 1024 : undefined);
+      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' ? 12 * 1024 * 1024 : undefined);
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {

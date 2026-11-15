@@ -1691,7 +1691,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-composer textarea { resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; line-height: 1.5; max-height: 220px; min-height: 24px; }
 .chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
 .chat-input-row textarea { flex: 1; min-width: 0; padding: 2px 0; font-size: var(--chat-font); }
-.chat-attach { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--muted); cursor: pointer; }
+.chat-attach { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; padding: 0; color: var(--muted); cursor: pointer; }
 .chat-attach:hover { background: var(--hover); color: var(--fg); }
 .chat-send { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: 4px; padding: 0; border-radius: 50%; background: var(--agent); color: var(--bg); }
 .chat-send:hover:not(:disabled) { filter: brightness(1.12); }
@@ -2621,3 +2621,18 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .chat-done-row > span { display: inline-flex; align-items: center; gap: 1px; }
 .chat-done-row + .chat-done-row { padding-left: 8px; border-left: 1px solid var(--border-strong); }
 .chat-done-tip:is(:hover, :focus-within) .chat-done-pop { opacity: 1; transform: none; }
+
+/* Files dragged over a chat tab: the whole pane is the drop target. Always mounted and faded by data-on, so it eases in and out; pointer-events none keeps it from stealing the drag. */
+.chat-drop { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; pointer-events: none; border-radius: inherit; opacity: 0; visibility: hidden; background: color-mix(in srgb, var(--surface) 70%, transparent); backdrop-filter: blur(0); transition: opacity .16s ease, backdrop-filter .2s ease, visibility 0s .2s; }
+.chat-drop::before { content: ""; position: absolute; inset: 10px; border: 2px dashed var(--accent); border-radius: 12px; background: var(--accent-soft); opacity: 0; transform: scale(.985); transition: opacity .2s ease, transform .28s var(--spring, cubic-bezier(.34, 1.56, .64, 1)); }
+.chat-drop[data-on] { opacity: 1; visibility: visible; backdrop-filter: blur(3px); transition: opacity .12s ease, backdrop-filter .18s ease, visibility 0s; }
+.chat-drop[data-on]::before { opacity: 1; transform: none; animation: chat-drop-dash 1.2s linear infinite; }
+.chat-drop-card { position: relative; display: grid; justify-items: center; gap: 6px; padding: 20px 28px; text-align: center; opacity: 0; transform: translateY(8px) scale(.96); transition: opacity .15s ease, transform .15s ease; }
+.chat-drop[data-on] .chat-drop-card { opacity: 1; transform: none; transition: opacity .2s ease .03s, transform .34s var(--spring, cubic-bezier(.34, 1.56, .64, 1)) .03s; }
+.chat-drop-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; color: var(--accent-fg); background: var(--accent); box-shadow: 0 6px 20px var(--accent-soft); }
+.chat-drop[data-on] .chat-drop-icon { animation: chat-drop-bob 1s ease-in-out infinite; }
+.chat-drop-card b { margin-top: 6px; font-size: 15px; color: var(--fg); }
+.chat-drop-card > span:last-child { font-size: 12px; color: var(--muted); }
+@keyframes chat-drop-bob { 50% { transform: translateY(-4px); } }
+@keyframes chat-drop-dash { to { border-color: var(--accent-strong); } }
+@media (prefers-reduced-motion: reduce) { .chat-drop, .chat-drop::before, .chat-drop-card, .chat-drop-icon { transition: none !important; animation: none !important; } }
