@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents, keepAgents } from '../apps/web/src/chat-model.ts';
-import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions } from '../apps/web/src/chat-model.ts';
+import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions, turnDoneParts, turnTokenRows } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
 const flow = (...entries) => entries.map(entry => typeof entry === 'string' ? { block: say(entry), sub: false } : entry);
@@ -670,4 +670,21 @@ test('a tool call refused at its approval card is remembered as refused, not fai
   view = reduce(view, { kind: 'approval', phase: 'request', requestId: 'r2', tool: 'Bash', input: {}, toolUseId: 't2' });
   view = reduce(view, { kind: 'approval', phase: 'answer', requestId: 'r2', tool: 'Bash', allow: true });
   assert.deepEqual(view.denied, { t1: true });
+});
+
+test('a finished turn keeps its end time, duration and tokens on the last answer', () => {
+  let view = reduce(emptyView(), { kind: 'user', text: 'hi' });
+  view = reduce(view, { kind: 'message', id: 'm1', blocks: [{ type: 'text', text: 'ok' }] });
+  view = reduce(view, { kind: 'result', status: 'success', at: 1_700_000_000_000, durationMs: 65_000, usage: { input: 10, output: 2000, cacheRead: 500, cacheCreate: 30 } });
+  const done = view.items.find(item => item.kind === 'assistant')?.done;
+  assert.deepEqual(done?.ms, 65_000);
+  const noon = new Date(2026, 10, 15, 11, 40).getTime(), pm = new Date(2026, 10, 15, 15, 0).getTime(), mid = new Date(2026, 10, 15, 0, 5).getTime();
+  assert.deepEqual(turnDoneParts({ at: noon, ms: 65_000 }, noon), ['1분 5초 소요', '오전 11시 40분']);
+  assert.deepEqual(turnDoneParts({ at: pm, ms: null }, pm), ['오후 3시']);
+  assert.deepEqual(turnDoneParts({ at: mid, ms: 0 }, mid + 3 * 86_400_000), ['0초 소요', '11월 15일 오전 12시 5분']);
+  assert.deepEqual(turnTokenRows(done), [
+    { icon: 'token', label: '토큰', up: { label: '입력', value: '10' }, down: { label: '출력', value: '2k' } },
+    { icon: 'database', label: '캐시', up: { label: '쓰기', value: '30' }, down: { label: '읽기', value: '500' } }]);
+  assert.deepEqual(turnTokenRows({ at: 1, ms: null, tokens: { input: 1, output: 2, cacheRead: 0, cacheCreate: 0 } }).map(row => row.icon), ['token']);
+  assert.deepEqual(turnTokenRows({ at: 1, ms: null }), []);
 });

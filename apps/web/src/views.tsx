@@ -20,7 +20,19 @@ export type GitState = { branch: string; changes: GitChange[]; additions: number
 // `region` names the dialog for the feedback element capture (data-feedback-region).
 export function Modal({ children, onClose, className = '', labelledBy, region = '대화상자' }: { children: ReactNode; onClose(): void; className?: string; labelledBy: string; region?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
+  useEffect(() => {
+    const element = dialog.current!; element.showModal();
+    return () => {
+      // The parent drops the dialog at once (`{open && <Modal>}`), so there is nothing left to animate: a detached copy takes its place in the top layer and plays the exit.
+      if (!element.isConnected && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const copy = element.cloneNode(true) as HTMLDialogElement;
+        copy.removeAttribute('open'); copy.removeAttribute('id'); copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+        copy.classList.add('closing'); document.body.append(copy); copy.showModal(); copy.inert = true;
+        setTimeout(() => copy.remove(), 160);
+      }
+      element.close();
+    };
+  }, []);
   return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} data-feedback-region={region} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
 }
 // A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.

@@ -70,6 +70,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   if (saved === null && defaults) {
     const caps = chatCapabilities(agent);
     if (caps.permissionModes.includes(defaults.permissionMode) && defaults.permissionMode !== 'bypassPermissions') meta.permissionMode = defaults.permissionMode;
+    if (agent !== 'cursor' && typeof defaults.model === 'string' && /^[\w.\[\]-]{1,100}$/.test(defaults.model)) meta.model = defaults.model;
     if (EFFORTS.includes(defaults.effort)) meta.effort = defaults.effort;
   }
   if (saved !== null && (meta.agent ?? 'claude') !== agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');

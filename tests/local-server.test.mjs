@@ -66,6 +66,21 @@ test('chat API preserves agent identity and rejects unsupported Cursor settings'
   }
 });
 
+test('a new chat starts with the mode, model and effort last picked in the project, over Settings default', async t => {
+  const { call } = await boot(t);
+  const defaults = { permissionMode: 'plan', effort: 'high' };
+  assert.equal((await call('chat/open', { id: 'a', agent: 'claude', defaults })).state.permissionMode, 'plan');
+  await call('chat/set', { id: 'a', permissionMode: 'auto' });
+  await call('chat/set', { id: 'a', model: 'haiku' });
+  await call('chat/set', { id: 'a', effort: 'low' });
+  const b = (await call('chat/open', { id: 'b', agent: 'claude', defaults })).state;
+  assert.deepEqual([b.permissionMode, b.model, b.effort], ['auto', 'haiku', 'low']);
+  await call('chat/set', { id: 'b', model: 'sonnet' }); // a new model drops the old effort: back to Settings' default
+  const c = (await call('chat/open', { id: 'c', agent: 'claude', defaults })).state;
+  assert.deepEqual([c.permissionMode, c.model, c.effort], ['auto', 'sonnet', 'high']);
+  assert.equal((await call('chat/open', { id: 'd', agent: 'codex', defaults })).state.permissionMode, 'plan', 'per agent');
+});
+
 test('terminal restore keeps concurrent provider sessions separate and sends legacy terminals to the picker', async t => {
   const { call, data, projectId } = await boot(t);
   if (!(await call('readiness')).pty.installed) return t.skip('node-pty unavailable');
