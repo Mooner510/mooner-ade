@@ -391,6 +391,7 @@ body.resizing .right-panel { transition: none; }
 .panel-head { min-height: 40px; padding: 6px 8px 6px 12px; gap: 6px; flex-wrap: nowrap; border-bottom: 1px solid var(--border); }
 .panel-head > strong { font-size: 13px; font-weight: 600; margin-right: 4px; }
 .panel-head > button { color: var(--muted); padding: 2px 6px; }
+.panel-head > .icon-btn { padding: 0; } /* the rule above would otherwise leave a 14px box for an 18px glyph, which then sits off-centre */
 .panel-head > select { flex: 1; min-width: 0; padding: 3px 6px; }
 .chip { font-size: 12px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; color: var(--muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -871,7 +872,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-field small { line-height: 1.4; color: var(--muted); }
 .plugin-field input:not([role=switch]), .plugin-field select { flex: none; width: 220px; min-height: 30px; border-color: var(--border-strong); border-radius: 7px; }
 .plugin-field input[data-type=number] { width: 90px; }
-/* A switch field: the label on the left, the switch on the right, the hint under both. */
+/* A switch field: the switch at the left edge, then the title with its hint under it, so every switch lines up in one column. */
+.plugin-field-switch { justify-content: flex-start; align-items: flex-start; cursor: pointer; }
+.plugin-field-switch > input { flex: none; margin-top: 1px; }
 /* stays in view while a long form scrolls, so Save is never a scroll away; -22px cancels .settings-body padding so nothing shows below it */
 .plugin-actions { position: sticky; bottom: -22px; z-index: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 0 -14px -14px; padding: 12px 14px 14px; border-top: 1px solid var(--border); border-radius: 0 0 10px 10px; background: var(--surface); }
 
@@ -971,12 +974,12 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-github-modal { width: min(480px, 94vw); padding: 0; overflow: hidden; }
 .plugin-github-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 10px; }
 .plugin-github-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.plugin-github-body { display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; }
+.plugin-github-body { word-break: keep-all; overflow-wrap: break-word; display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; }
 .plugin-github-body > p { margin: 0; }
 .plugin-github-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .plugin-github-status > .icon { flex: none; color: var(--tone); }
-.plugin-github-status > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-github-status small { color: var(--muted); line-height: 1.4; }
+.plugin-github-status > span { flex: 1; min-width: 0; } /* a block, not a column: the <strong> and the text after it are one line of words */
+.plugin-github-status small { display: block; margin-top: 2px; color: var(--muted); line-height: 1.4; }
 .plugin-github-connect { display: flex; flex-direction: column; gap: 12px; }
 .plugin-github-connect > .plugin-button { align-self: flex-start; }
 .plugin-token { display: flex; flex-direction: column; gap: 6px; }
@@ -1176,6 +1179,11 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .settings-body > :not(header) { animation: view-in .2s var(--ease-out); }
 dialog[open], .quick { animation: pop-in .18s var(--ease-out); }
 dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out); }
+/* A closing dialog is a copy of the one React removed (views.tsx Modal): same box, played backwards a little faster. */
+@keyframes pop-out { to { opacity: 0; scale: .985; } }
+@keyframes fade-out { to { opacity: 0; } }
+dialog.closing[open] { animation: pop-out .14s cubic-bezier(.4, 0, 1, 1) forwards; pointer-events: none; }
+dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1, 1) forwards; }
 .workbench > .right-panel { animation: slide-in .14s linear; }
 @media (prefers-reduced-motion: reduce) {
   .app:not([hidden]), .tab-page:not([hidden]), .settings-body > :not(header), dialog[open], .quick, dialog[open]::backdrop, .quick-backdrop, .workbench > .right-panel { animation: none; }
@@ -1361,7 +1369,7 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 /* ---- Chat tab (ChatPane.tsx, ChatStatus.tsx, Markdown.tsx) ---- */
 .chat-pane { container-type: size; --agent: var(--brand-claude); --chat-font: 13px; --chat-width: 780px; background: var(--surface); }
 /* The bottom fade is a background-coloured overlay, not a mask-image: anything moving under a mask (the turn's spinner) made the whole window recomposite every frame (docs/perf/FRAME_COST.md). */
-.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: auto; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: auto; scrollbar-gutter: stable both-edges; }
 .chat-scroll::after { content: ''; display: block; position: sticky; bottom: 0; height: 28px; margin-top: -28px; pointer-events: none; background: linear-gradient(transparent, var(--surface)); }
 .chat-pin-wrap { position: sticky; top: 0; z-index: 5; height: 0; }
 .chat-pin { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; align-items: flex-start; gap: 8px; width: min(var(--chat-width), 100%); box-sizing: border-box; margin: 0; padding: 8px 20px 10px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; font-size: 12.5px; line-height: 1.45; text-align: left; cursor: pointer; box-shadow: 0 8px 16px color-mix(in srgb, var(--bg) 35%, transparent); }
@@ -1623,10 +1631,10 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-agent-state[data-status="approval"] { gap: 3px; color: var(--warn); font-size: 11.5px; white-space: nowrap; }
 .chat-approval-body { padding: 0 12px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
-.chat-approval footer { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
-/* "다르게 하기…" (refuse and say what to do instead) sits apart at the right end, away from 허용·거부; once open, 취소 takes the same spot and look,
-   so the same click goes back. */
-.chat-approval footer .approval-explain, .chat-approval .plan-revise .approval-explain { margin-left: auto; }
+.chat-approval footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+/* The decision (거부·항상 허용·허용) sits at the right, the main one last; "다르게 하기…" (refuse and say what to do instead) sits apart at the
+   left end; once open, 취소 takes the same spot and look, so the same click goes back. */
+.chat-approval footer .approval-explain, .chat-approval .plan-revise .approval-explain { margin-right: auto; }
 /* The agent's question: one card for every question it asked. Options are cards with a description; the last row is the person's own answer. */
 .chat-question { border: 1px solid var(--agent); border-radius: 12px; background: color-mix(in srgb, var(--agent) 6%, var(--raised)); overflow: hidden; }
 .chat-question header { display: flex; align-items: center; gap: 8px; padding: 9px 14px; color: var(--agent); }
@@ -1665,8 +1673,8 @@ dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out
 .chat-q-tabs + .chat-q { padding-top: 12px; animation: chat-q-in .26s var(--ease) both; }
 @keyframes chat-q-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .chat-q-tabs + .chat-q { animation: none; } }
-.chat-question footer { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
-.chat-q-hint { margin-left: auto; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.chat-question footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.chat-q-hint { margin-right: auto; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .chat-q-readonly { display: grid; gap: 10px; padding: 2px 2px 0; }
 .chat-q-readonly p { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .chat-q-readonly ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
@@ -1720,6 +1728,15 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-ring:hover { background: var(--hover); }
 .chat-statusbar .status-left, .chat-statusbar .status-right { display: flex; align-items: center; min-width: 0; overflow: hidden; }
 .chat-sep { color: var(--faint); padding: 0 2px; }
+/* The chat status line: every item is a box (the cache readings beside the tokens are their own box). Hover or focus lights the box and opens a top-layer tooltip that says what the value means. */
+.chat-statusbar .status-left, .chat-statusbar .status-right { gap: 4px; }
+.chat-statusbar .chat-stat { gap: 4px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); cursor: default; transition: background .15s, border-color .15s, color .15s; }
+.chat-statusbar .chat-stat:is(:hover, :focus-visible) { background: var(--overlay); border-color: var(--border-strong); color: var(--fg); outline: none; }
+.chat-stat-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: 270px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--muted); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11px; line-height: 1.55; white-space: normal; word-break: keep-all; pointer-events: none; opacity: 0; transition: opacity .12s; }
+.chat-stat-tip:popover-open { opacity: 1; }
+@starting-style { .chat-stat-tip:popover-open { opacity: 0; } }
+.chat-stat-tip strong { display: block; margin-bottom: 2px; font-weight: 600; color: color-mix(in srgb, var(--fg) 80%, var(--muted)); }
+.chat-stat-tip span { display: block; }
 
 /* markdown */
 .md { display: grid; gap: 8px; min-width: 0; }
@@ -1780,6 +1797,7 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .ui-steps [data-state=done] .ui-step-mark { background: color-mix(in srgb, var(--add) 22%, transparent); color: var(--add); }
 .ui-steps li[data-state=active] .ui-step-name { font-weight: 600; } .ui-steps [data-state=active] .ui-step-mark { background: var(--accent); color: var(--accent-fg); }
 .ui-form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.ui-form > button[type=submit] { align-self: flex-end; } /* the form's confirm button sits at the right, like the chat's other decisions */
 .ui-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); width: 100%; }
 /* Checkboxes and radios: the app's own marks (same shapes as the question card), the native input hidden but still focusable. Several checkboxes in a row read as one list. */
 .ui-native { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
@@ -2251,14 +2269,15 @@ dialog.chat-stats > header small { flex: 1; color: var(--faint); font-family: va
 .chat-plan-body { max-height: min(56dvh, 560px); overflow: auto; padding: 4px 18px 12px; border-top: 1px solid var(--border); font-size: 14px; line-height: 1.7; overscroll-behavior: contain; }
 .chat-plan-body h2 { margin: 14px 0 4px; font-size: 15px; } .chat-plan-body > :first-child > :first-child { margin-top: 8px; }
 .chat-plan footer, dialog.plan-modal footer { padding: 8px 12px; } .chat-plan footer .primary, dialog.plan-modal footer .primary { font-weight: 600; }
-.chat-approval footer.plan-actions, .plan-revise .plan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.chat-approval footer.plan-revise { display: grid; gap: 8px; } .plan-revise label { font-size: 12px; color: var(--muted); } .plan-revise textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 72px; max-height: 240px; line-height: 1.6; }
+.chat-approval footer.plan-actions, .plan-revise .plan-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.chat-approval footer.plan-revise { display: grid; justify-content: normal; gap: 8px; } .plan-revise label { font-size: 12px; color: var(--muted); } .plan-revise textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 72px; max-height: 240px; line-height: 1.6; }
 dialog.plan-modal { width: min(940px, calc(100vw - 48px)); height: calc(100dvh - 64px); padding: 0; overflow: hidden; }
 dialog.plan-modal[open] { display: flex; flex-direction: column; }
 dialog.plan-modal > header { color: var(--fg); padding: 12px 16px; border-bottom: 1px solid var(--border); }
 dialog.plan-modal > header h2 { margin: 0; min-width: 0; font-size: 15px; text-align: center; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 10px max(24px, calc(50% - 400px)) 24px; font-size: 15px; line-height: 1.75; }
-dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions .plan-back { margin-left: auto; }
+/* The approve buttons sit at the right (the main one last); the side ones (.plan-back: 돌아가기, 수정 요청…, 취소) at the left. */
+dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions > .plan-back + :not(.plan-back) { margin-left: auto; }
 
 /* Plan review: the dialog of a long plan has a side outline of its sections (the one in view is lit). */
 .chat-plan > header .plan-title { min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
@@ -2590,3 +2609,15 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-entry li[data-kind="변경"] { --kind: var(--ask); }
 .changelog-entry li[data-kind="버그 수정"] { --kind: var(--error); }
 .changelog-entry li[data-kind="최적화"] { --kind: var(--warn); }
+/* After the copy / branch / rewind / info icons: when the answer ended and how long it took, always shown, a little dimmer and smaller than the icons' muted text. The pieces are inline in one line box (separate flex items put
+   Latin digits and Korean glyphs on different baselines), joined by a middle dot; the info icon's tooltip (tokens, in icons) opens above it, aligned to its left edge. */
+.chat-msg-actions { align-items: center; }
+.chat-done-time { margin-left: 6px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; color: color-mix(in srgb, var(--muted) 72%, var(--bg)); }
+.chat-done-time > span + span::before { content: '·'; margin: 0 6px; }
+.chat-done-tip { position: relative; display: inline-flex; }
+.chat-done-pop { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 60; width: max-content; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--muted); white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11px; line-height: 1.4; pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity .12s, transform .12s; }
+.chat-done-row { display: flex; align-items: center; gap: 5px; }
+.chat-done-row > b { font-weight: 500; color: color-mix(in srgb, var(--fg) 70%, var(--muted)); }
+.chat-done-row > span { display: inline-flex; align-items: center; gap: 1px; }
+.chat-done-row + .chat-done-row { padding-left: 8px; border-left: 1px solid var(--border-strong); }
+.chat-done-tip:is(:hover, :focus-within) .chat-done-pop { opacity: 1; transform: none; }

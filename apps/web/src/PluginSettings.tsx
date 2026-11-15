@@ -545,17 +545,16 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
       {fields.map(field => {
         const value = values[field.key] ?? '', set = (next: string) => setValue(field.key, next);
         const label = <span>{field.label}{field.required && <em className="plugin-required">필수</em>}</span>;
+        const text = <span className="plugin-field-text">{label}{field.hint && <small>{field.hint}</small>}</span>; // title with its hint under it
         if (field.type === 'switch') return <label key={field.key} className="plugin-field plugin-field-switch">
-          {label}
           <input type="checkbox" role="switch" aria-label={field.label} checked={value === 'true'} onChange={event => set(String(event.target.checked))} />
-          {field.hint && <small>{field.hint}</small>}
+          {text}
         </label>;
         return <label key={field.key} className="plugin-field">
-          {label}
+          {text}
           {field.type === 'select' && field.options
             ? <select value={value} onChange={event => set(event.target.value)}>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
             : <input type={field.type === 'number' ? 'number' : 'text'} inputMode={field.type === 'number' ? 'numeric' : undefined} value={value} placeholder={field.placeholder} spellCheck={false} aria-required={field.required || undefined} onChange={event => set(event.target.value)} />}
-          {field.hint && <small>{field.hint}</small>}
         </label>;
       })}
       {actions.length > 0 && <div className="plugin-actions">
