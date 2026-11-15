@@ -14,7 +14,7 @@ import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
-import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
+import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -613,6 +613,20 @@ const sameTurn = (a: TurnProps, b: TurnProps) => a.items.length === b.items.leng
 // One request and everything that answered it, as one flat list of rows with stable keys. The answer is the text after the last tool or thought;
 // the rows before it are the process. Which rows are process is only a class, so nothing moves to another parent (and remounts) as the turn goes on:
 // the process folds away with a height transition when the turn ends, and can be opened again.
+// The info icon after the copy / branch / rewind icons: hover or focus opens this turn's tokens like the status line has them, one group per kind,
+// `token` ↑ in ↓ out | `database` ↑ cache written ↓ cache read, the groups divided by a thin rule.
+const GlyphIcon = ({ name, size = 14 }: { name: string; size?: number }) => <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{name}</span>;
+function TurnTokens({ done }: { done: TurnDone }) {
+  const rows = turnTokenRows(done);
+  return <span className="chat-done-tip">
+    <IconButton icon="info" tip="none" label={rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`).join(', ')} size={13} />
+    <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
+      <GlyphIcon name={row.icon} size={15} /><b>{row.label}</b>
+      <span><GlyphIcon name="arrow_upward" size={13} />{row.up.value}</span><span><GlyphIcon name="arrow_downward" size={13} />{row.down.value}</span>
+    </span>)}</span>
+  </span>;
+}
+
 const Turn = memo(function Turn({ items, agentIds, settled, working, results, settings, plainThinking, onBranch, onRewind, onRecover, recovering }: TurnProps) {
   const lead = items[0]?.kind === 'user' || items[0]?.kind === 'divider' ? items[0] : null;
   const body = lead ? items.slice(1) : items;
@@ -678,7 +692,9 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
     </a>)}
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
-      {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}</div>}
+      {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
+      {finalItem.done?.tokens && <TurnTokens done={finalItem.done} />}
+      {finalItem.done && <span className="chat-done-time">{turnDoneParts(finalItem.done).map(part => <span key={part}>{part}</span>)}</span>}</div>}
   </div>;
 }, sameTurn);
 
@@ -747,9 +763,9 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
     <textarea id="plan-feedback" autoFocus rows={3} maxLength={4000} value={note} placeholder="예: 2단계는 기존 API를 유지하는 쪽으로 다시 설계해 주세요. 테스트 계획도 추가해 주세요."
       onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
     <div className="plan-actions">
-      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>의견 보내고 다시 계획</button>
-      <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
+      <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
+      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>의견 보내고 다시 계획</button>
     </div>
   </footer>;
   // Like Claude Code: two ways to approve, differing only in the permission mode the run continues in. Auto (the CLI decides) is the default
@@ -757,15 +773,15 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   const auto = modes.includes('auto');
   // Cursor's plan has no permission mode to pick and no revision message: just approve or turn it down.
   if (!choices) return <footer className="plan-actions">
+    {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
+    <button type="button" className="secondary" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
     <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인</button>
-    <button type="button" className="secondary plan-back" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
-    {onBack && <button type="button" onClick={onBack}>돌아가기</button>}
   </footer>;
   return <footer className="plan-actions">
-    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="계획대로 실행하고, 허용 여부는 CLI가 판단합니다(자동 모드).">자동 모드로 승인</button>}
-    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="계획대로 실행하고, 파일 편집은 묻지 않고 허용합니다. 명령은 계속 묻습니다(편집 허용 모드).">편집 허용으로 승인</button>
+    {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
     <button type="button" className="secondary plan-back" onClick={() => setRevising(true)} title="계획을 반려하고 고칠 내용을 전달합니다. Claude가 계획을 다시 세웁니다.">수정 요청…</button>
-    {onBack && <button type="button" onClick={onBack}>돌아가기</button>}
+    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="계획대로 실행하고, 파일 편집은 묻지 않고 허용합니다. 명령은 계속 묻습니다(편집 허용 모드).">편집 허용으로 승인</button>
+    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="계획대로 실행하고, 허용 여부는 CLI가 판단합니다(자동 모드).">자동 모드로 승인</button>}
   </footer>;
 }
 // The dialog of a long plan lists its `##` sections down the side (the one in view is lit) so it can be jumped through; the card itself is just the plan.
@@ -840,14 +856,14 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
           else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && instead) { event.preventDefault(); onAnswer(false, false, undefined, { message: instead }); }
         }} />
       <div className="plan-actions">
-        <button type="button" className="primary" disabled={!instead} onClick={() => onAnswer(false, false, undefined, { message: instead })} title="Ctrl+Enter">거부하고 지시 보내기</button>
         <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)} title="원래 버튼으로 돌아갑니다 (Esc)">취소</button>
+        <button type="button" className="primary" disabled={!instead} onClick={() => onAnswer(false, false, undefined, { message: instead })} title="Ctrl+Enter">거부하고 지시 보내기</button>
       </div>
     </footer> : <footer>
-      <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
-      {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="비슷한 요청을 이 세션에서 계속 허용합니다">항상 허용</button>}
-      <button type="button" onClick={() => onAnswer(false, false)}>거부</button>
       {explain && <button type="button" className="secondary approval-explain" onClick={() => explainOpen(true)} title="실행하지 않고, 대신 어떻게 할지 Claude에게 알려 줍니다">다르게 하기…</button>}
+      <button type="button" onClick={() => onAnswer(false, false)}>거부</button>
+      {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="비슷한 요청을 이 세션에서 계속 허용합니다">항상 허용</button>}
+      <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
     </footer>}
   </div>;
 }
@@ -1507,7 +1523,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에 되돌리거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · 대기 중 · ↑ 되돌리기 · Esc 바로 보내기</small>{item.text}</div></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에서 수정하거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · ↑ 수정 · Esc 바로 보내기</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>

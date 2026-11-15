@@ -30,9 +30,11 @@ export type Tone = { value: string; color: string; icon?: string; bars?: number 
 /** What the user switched with /model, /effort and /permissions since the last thing said in the thread. */
 export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone; compact?: Tone; title?: Tone };
 const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previews) ? event.previews.filter((url): url is string => typeof url === 'string' && url.startsWith('data:image/')) : undefined;
+/** How a turn ended, kept on its last answer: when, how long it took and the tokens it used (no tokens for a CLI that does not report them). */
+export type TurnDone = { at: number; ms: number | null; tokens?: Tokens };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[] }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -246,6 +248,36 @@ function commandFallback(view: ChatView, event: any, key: string): ChatView {
   return isChatSlashCommand(lead.text) ? append(view, { kind: 'command', key, text: ranLine(parseChatSlashCommand(lead.text)?.name), isError: false, fresh: view.ready }) : view;
 }
 
+// The turn's last answer remembers when the turn ended, its duration and tokens (the info icon beside the copy / branch / rewind icons).
+function stampDone(view: ChatView, event: any): ChatView {
+  let at = -1;
+  for (let i = view.items.length - 1; i >= 0; i--) {
+    const item = view.items[i];
+    if (item.kind === 'user' || item.kind === 'divider') break;
+    if (item.kind === 'assistant' && !item.sub) { at = i; break; }
+  }
+  if (at < 0) return view;
+  const usage = event.usage, tokens = usage && ['input', 'output', 'cacheRead', 'cacheCreate'].every(key => Number.isFinite(usage[key])) ? usage as Tokens : undefined;
+  const items = [...view.items];
+  items[at] = { ...items[at] as AssistantItem, done: { at: Number(event.at) || Date.now(), ms: Number.isFinite(event.durationMs) ? event.durationMs : null, ...(tokens && { tokens }) } };
+  return { ...view, items };
+}
+
+/** Shown right after the info icon at all times, one piece each: how long the turn took, then when it ended (the date only when it was not today). */
+export function turnDoneParts(done: TurnDone, now = Date.now()): string[] {
+  const at = new Date(done.at), hour = at.getHours(), minute = at.getMinutes(), today = at.toDateString() === new Date(now).toDateString();
+  const time = `${today ? '' : `${at.getMonth() + 1}월 ${at.getDate()}일 `}${hour < 12 ? '오전' : '오후'} ${hour % 12 || 12}시${minute ? ` ${minute}분` : ''}`;
+  return done.ms != null ? [`${duration(done.ms)} 소요`, time] : [time];
+}
+
+/** The info icon's tooltip rows, as the status line has them: `token` (↑ input, ↓ output), then `database` for the cache (↑ written, ↓ read; only when there is any). */
+export type TurnTokenRow = { icon: 'token' | 'database'; label: string; up: { label: string; value: string }; down: { label: string; value: string } };
+export function turnTokenRows({ tokens }: TurnDone): TurnTokenRow[] {
+  if (!tokens) return [];
+  return [{ icon: 'token', label: '토큰', up: { label: '입력', value: compact(tokens.input) }, down: { label: '출력', value: compact(tokens.output) } },
+    ...(tokens.cacheRead + tokens.cacheCreate > 0 ? [{ icon: 'database' as const, label: '캐시', up: { label: '쓰기', value: compact(tokens.cacheCreate) }, down: { label: '읽기', value: compact(tokens.cacheRead) } }] : [])];
+}
+
 // Applies one server event. Stored events carry `seq` (a replayed or doubly delivered one is ignored); `delta` events are live-only.
 export function reduce(view: ChatView, event: any): ChatView {
   if (!event || typeof event !== 'object') return view;
@@ -323,6 +355,7 @@ export function reduce(view: ChatView, event: any): ChatView {
         for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results) results = { ...results }; results[block.id] = { content: text, isError: true }; }
       }
       view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null, thinkingTokens: 0 };
+      view = stampDone(view, event);
       if (event.status === 'interrupted') return { ...append(view, { kind: 'note', key, text: '응답을 중단했습니다.', fresh }), approvals: [] };
       if (event.status === 'failed') {
         // The CLI also says the failure as a synthetic reply in the same words ("Invalid API key · …"); the error card says it once.
