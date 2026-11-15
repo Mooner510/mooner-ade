@@ -3,6 +3,8 @@
 ## Releases
 - **Only master can be released.** Never tag, run `pnpm release`, or dispatch the Release workflow from a feature/fix branch.
 - Flow: merge the work into master (PR) -> bump `version` in package.json on master via a `chore: release x.y.z` commit -> push -> `pnpm release` on master.
+- **Version must be explicit.** If the user asks for a release without naming the version (e.g. "릴리스 해줘"), never pick one yourself. Ask which version to release (AskUserQuestion, one question) and always include your recommendation as the first option, marked "(Recommended)". Base it on the current `version` in package.json and the changes since the last tag (`git log <last-tag>..master`): patch for fixes/polish only, minor for new features, major for breaking changes. Show the current version and the reason for the recommendation. Bump, commit, and release only after the user answers.
+- **Release notes are mandatory.** Every stable release must have its entry in `apps/web/src/changelog.json` (version, date, items by kind from `changelog-kinds.json`), written and merged to master before the release commit. The in-app 변경 내역 window (version sidebar) and the GitHub release body (`scripts/release-notes.mjs`) are both built from it, and `scripts/release.mjs` refuses a stable release without it. Write the notes in the user's terms (what they can now do or what was fixed), not commit messages. Betas need none.
 - Enforced in `scripts/release.mjs` (must be on master, equal to origin/master) and in `.github/workflows/release.yml` (the tagged commit must be an ancestor of origin/master, otherwise the release fails). Do not weaken or bypass either.
 
 ## Testing
