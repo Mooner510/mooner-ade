@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
+import { APPLY, HELPER_STARTED, helperCommandLine, startHelperArguments, startHelperScript } from './update-windows.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 
@@ -15,7 +16,8 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // The release carries per platform a full zip, an app-only zip (just resources/app) and a small manifest naming the
 // shell key (Electron, Node, branding; see package.mjs). When the installed shell key matches, only the app zip is
 // fetched and only resources/app is replaced; otherwise the full zip replaces everything. Full update, Windows: after the app exits, a PowerShell helper mirrors the new folder
-// over the install folder and starts the app again; user data lives in %APPDATA%, outside the install folder.
+// over the install folder and starts the app again, with no console window of its own and without letting the app join a console
+// (update-windows.js); user data lives in %APPDATA%, outside the install folder.
 // macOS: the zip holds MoonerADE.app (made with ditto so the framework symlinks and signature survive); after the app
 // exits, a shell helper swaps the new bundle in for the old one and opens it. User data lives in ~/Library.
 // Terminals live in the pty-host, outside the app (apps/local-server/src/pty-host.js): just before the restart the app asks it to keep
@@ -36,17 +38,6 @@ const run = (file, args, env = {}) => new Promise((resolve, reject) => {
   child.once('error', reject);
   child.once('exit', code => code === 0 ? resolve() : reject(new Error(`${path.basename(file)} exit ${code}`)));
 });
-
-// $Work holds this very script, so it cannot delete itself; a short-lived cmd removes the whole scratch folder once PowerShell has exited.
-// That also holds when robocopy failed: the extracted copy is not kept, and the next check downloads it again.
-const APPLY = [
-  'param($ProcessId, $Source, $Target, $Exe, $Work)',
-  'Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue',
-  'robocopy $Source $Target /MIR /R:30 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null',
-  'Start-Process -FilePath $Exe',
-  `Start-Process -FilePath cmd.exe -ArgumentList '/c', ('ping -n 4 127.0.0.1 >nul & rmdir /s /q "' + $Work + '"') -WindowStyle Hidden`,
-  ''
-].join('\n');
 
 // $1 pid, $2 staged new bundle, $3 installed bundle, $4 backup path, $5 stage folder and $6 work folder to delete afterwards.
 // Renames stay on one volume (the stage sits next to the install), so the swap is quick and rolls back on failure.
@@ -339,13 +330,14 @@ async function stageWindows({ zip, work, kind }) {
   return {
     discard() {},
     async launch() {
-      const script = path.join(work, 'apply.ps1');
+      const script = path.join(work, 'apply.ps1'), starter = path.join(work, 'start.ps1');
       fs.writeFileSync(script, APPLY);
-      // Electron keeps its processes in a Windows job object that is torn down with the app, killing even a detached
-      // child. Win32_Process.Create starts the helper from the WMI service instead, outside that job.
-      const command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, String(process.pid), source, target, process.execPath, work]
-        .map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' ');
-      await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:MOONER_UPDATE_COMMAND }).ReturnValue'], { MOONER_UPDATE_COMMAND: command });
+      fs.writeFileSync(starter, startHelperScript());
+      // Started through WMI, outside the job object Electron's processes are killed with, and without a console window (update-windows.js).
+      // It answers once the helper has written its marker, so a helper that never came up fails here, while the app is still running.
+      const command = helperCommandLine({ script, pid: process.pid, source, target, exe: process.execPath, work });
+      try { await run('powershell.exe', startHelperArguments(starter), { MOONER_UPDATE_COMMAND: command, MOONER_UPDATE_MARKER: path.join(work, HELPER_STARTED) }); }
+      catch (error) { throw new Error(`업데이트를 적용할 도우미를 시작하지 못했습니다 (${error instanceof Error ? error.message : String(error)}).`); }
     },
   };
 }
