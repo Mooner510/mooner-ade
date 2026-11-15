@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { helloPtyHost, ptyHostControl } from '../../local-server/src/pty-client.js';
 import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
+import { NO_ATTACH_CONSOLE, shouldLeaveConsole, startOffConsole } from './console-detach.js';
 import { watchRtxHdr } from './nvidia-rtx-hdr.js';
 import { setupPlugins } from './plugins.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
@@ -34,6 +35,13 @@ let server = null, origin = '', quitting = false, restarting = false, mainWindow
 // launcher has none and uses the system Node. A GUI launch (Finder, Dock) has no node on PATH, so never rely on the fallback there.
 const bundledNode = path.resolve(import.meta.dirname, '../../../../runtime', process.platform === 'win32' ? 'node.exe' : 'node');
 const packaged = fs.existsSync(bundledNode);
+// Electron attaches itself to the console of whatever started it, so an app started from a PowerShell or cmd window (the update helper of an older
+// version, a terminal) lives and dies with that window: closing it ended the app. Such a start hands over to a copy of itself that is not on the
+// console and exits; the copy is the one that runs (console-detach.js). The marker the copy carries is dropped at once: terminals and every other
+// child of the app must not inherit it (an Electron app run in a terminal would lose its console output).
+const leavingConsole = shouldLeaveConsole({ packaged, dev }) && startOffConsole();
+delete process.env[NO_ATTACH_CONSOLE];
+if (leavingConsole) app.exit(0);
 // The version comes from package.json two folders above src/: the repository root in dev, the packaged app's own package.json
 // (written by package.mjs) once installed. Electron's app.getVersion() would report Electron's own version in dev.
 const appVersion = (() => { try { return JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8')).version || app.getVersion(); } catch { return app.getVersion(); } })();
@@ -356,7 +364,9 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' }]));
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (leavingConsole) {
+  // Nothing to start: the copy that is off the console takes over, and takes the single-instance lock itself.
+} else if (!app.requestSingleInstanceLock()) {
   console.error('무너에이드가 이미 실행 중입니다. 실행 중인 창을 앞으로 가져오고 종료합니다. (완전히 끄려면 앱을 종료한 뒤 다시 실행하세요)');
   app.quit();
 } else {
