@@ -31,6 +31,7 @@ if (!stream) {
   const asst = (content, parent) => send({ type: 'assistant', ...(parent && { parent_tool_use_id: parent }), message: { id: 'm' + Date.now() + Math.random(), content, usage: { input_tokens: 10, output_tokens: 5 } } });
   const toolResult = (id, content, is_error = false) => send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(is_error && { is_error: true }) }] } });
   const task = (subtype, id, more = {}) => send({ type: 'system', subtype, session_id: sid, tool_use_id: id, ...more });
+  let asking = false; // a can_use_tool request (approval, question, plan) is waiting for its reply
   let slowRun = null; const heldSteers = new Map(); // `slow` turn in flight (ctl.json {"slowms":N}, default 4 s) and steering lines queued behind it: uuid -> line
   const bgTasks = new Map(); // task_id -> { toolUseId, timer }: `bgtask` jobs still running
   readline.createInterface({ input: process.stdin }).on('line', async line => {
@@ -39,7 +40,7 @@ if (!stream) {
       const sub = m.request?.subtype; log({ kind: 'control', sub, request: m.request });
       if (sub === 'set_permission_mode') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { permissionMode: m.request.mode } } });
       else if (sub === 'cancel_async_message') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { cancelled: heldSteers.delete(m.request.message_uuid) } } });
-      else if (sub === 'interrupt') { send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); if (slowRun) { slowRun.abort(); setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } }
+      else if (sub === 'interrupt') { send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); if (slowRun) { slowRun.abort(); setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } else if (asking) { asking = false; setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } } // a turn waiting on an approval/question ends with the interrupt's `result`, like the real CLI
       else if (sub === 'apply_flag_settings') send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } });
       else send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
       // stop_task: the CLI reports the stopped task itself, after its control reply
@@ -47,7 +48,7 @@ if (!stream) {
       return;
     }
     if (m.type === 'control_response') {
-      const reply = m.response?.response ?? {}; log({ kind: 'approval-reply', reply });
+      const reply = m.response?.response ?? {}; asking = false; log({ kind: 'approval-reply', reply });
       say('reply=' + JSON.stringify(reply)); result('replied'); return;
     }
     if (m.type !== 'user') return;
@@ -76,9 +77,21 @@ if (!stream) {
       for (const [uuid, held] of heldSteers) { heldSteers.delete(uuid); send({ type: 'user', uuid, isReplay: true, message: { role: 'user', content: held.parts } }); say('steer ok: ' + held.text); result(); }
       return;
     }
-    if (text.includes('bashperm')) { send({ type: 'control_request', request_id: 'perm-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'toolu_perm', input: { command: 'npm test', description: '테스트 실행' }, permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }] } }); return; }
-    if (/\bask\b/.test(text)) { send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
-    if (text.includes('plan')) { say('계획을 세웠습니다.'); send({ type: 'control_request', request_id: 'plan-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', tool_use_id: 'toolu_plan', input: { plan: '# 계획\n\n요약 한 줄\n\n## 1단계 준비\n- a\n- b\n\n## 2단계 구현\n- c\n\n## 3단계 검증\n- d' } } }); return; }
+    // An MCP tool a subagent asks for: the CLI sent no permission_suggestions with it (as in the field), so "항상 허용" has to come from ADE.
+    if (text.includes('mcpperm')) { asking = true; send({ type: 'control_request', request_id: 'mcp-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'mcp__mooner_server__server_exec', tool_use_id: 'toolu_mcp', input: { command: 'ls -la /etc/stacks' } } }); return; }
+    if (text.includes('bashperm')) { asking = true; send({ type: 'control_request', request_id: 'perm-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'toolu_perm', input: { command: 'npm test', description: '테스트 실행' }, permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }] } }); return; }
+    if (/\bask\b/.test(text)) { asking = true; send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
+    if (text.includes('plan')) { say('계획을 세웠습니다.'); asking = true; send({ type: 'control_request', request_id: 'plan-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', tool_use_id: 'toolu_plan', input: { plan: '# 계획\n\n요약 한 줄\n\n## 1단계 준비\n- a\n- b\n\n## 2단계 구현\n- c\n\n## 3단계 검증\n- d' } } }); return; }
+    if (text.includes('subtools')) { const n = Date.now(); // unique ids, so a second run in the same chat is a second subagent. one subagent whose steps are a thought, 4 tools in a row, a thought, 2 tools: the drawer bundles the run of 4
+      asst([{ type: 'tool_use', id: 'toolu_s' + n, name: 'Agent', input: { description: '파일 조사', prompt: '파일을 조사' } }]);
+      task('task_started', 'toolu_s' + n, { description: '파일 조사', subagent_type: 'Explore', is_backgrounded: false });
+      asst([{ type: 'text', text: '파일을 차례로 읽겠습니다.' }], 'toolu_s' + n);
+      for (let i = 1; i <= 4; i++) { asst([{ type: 'tool_use', id: 'toolu_r' + n + i, name: 'Read', input: { file_path: `/tmp/f${i}.txt` } }], 'toolu_s' + n); toolResult('toolu_r' + n + i, 'x'); }
+      asst([{ type: 'text', text: '이제 검색합니다.' }], 'toolu_s' + n);
+      for (let i = 5; i <= 6; i++) { asst([{ type: 'tool_use', id: 'toolu_r' + n + i, name: 'Read', input: { file_path: `/tmp/f${i}.txt` } }], 'toolu_s' + n); toolResult('toolu_r' + n + i, 'x'); }
+      task('task_notification', 'toolu_s' + n, { status: 'completed', handback_report: { text: '조사 끝' }, usage: { total_tokens: 900, tool_uses: 6, duration_ms: 900 } });
+      toolResult('toolu_s' + n, '조사 끝'); say('조사가 끝났습니다.'); result('waiting'); return;
+    }
     if (text.includes('tasks')) {
       asst([{ type: 'tool_use', id: 'toolu_a1', name: 'Agent', input: { description: '조사 A', prompt: 'A를 조사' } }, { type: 'tool_use', id: 'toolu_a2', name: 'Agent', input: { description: '조사 B', prompt: 'B를 조사' } }]);
       task('task_started', 'toolu_a1', { description: '조사 A', subagent_type: 'general-purpose', is_backgrounded: false });

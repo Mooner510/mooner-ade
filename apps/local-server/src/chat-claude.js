@@ -124,6 +124,11 @@ export const askUserInput = (input, questions, answers) => ({
   answers: Object.fromEntries(questions.map((question) => [question.prompt, (answers[question.id] ?? []).join(", ")])),
 });
 export const ASK_SKIPPED = "The user chose not to answer these questions. Do not ask them again right away: continue with your best judgment, or ask in plain text if you cannot proceed without an answer.";
+// "Always allow" sends back the CLI's own permission_suggestions. Some requests (an MCP tool a subagent calls) arrive with none, so the button would
+// not exist; for an MCP tool a session-wide allow rule for exactly that tool stands in. Anything else without suggestions stays a one-time answer.
+export const isMcpTool = (tool) => typeof tool === "string" && /^mcp__[^_].*__.+/.test(tool);
+export const alwaysSuggestions = (tool, suggestions) =>
+  suggestions?.length ? suggestions : isMcpTool(tool) ? [{ type: "addRules", rules: [{ toolName: tool }], behavior: "allow", destination: "session" }] : [];
 export function approvalLine(
   requestId,
   { allow, input, message, suggestions, mode },

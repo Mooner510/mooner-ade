@@ -19,7 +19,7 @@ test('changelog: newest first, stable versions only, short items', () => {
 
 test('release notes: one bullet per item, grouped by kind', () => {
   assert.equal(notes('9.9.9', changelog), null);
-  assert.equal(notes('0.5.5', changelog).trim().split('\n').length, changelog[0].items.length);
+  assert.equal(notes('0.5.5', changelog).trim().split('\n').length, changelog.find(entry => entry.version === '0.5.5').items.length);
   const order = notes('0.5.5', changelog).trim().split('\n').map(line => kinds.indexOf(/\[(.+?)\]/.exec(line)[1]));
   assert.deepEqual(order, [...order].sort((a, b) => a - b));
 });
