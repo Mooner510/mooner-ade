@@ -7,7 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
-import { ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
+import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
@@ -707,7 +707,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         // A Claude question is answered inside the tool input; skipping it tells the model so, instead of the generic "rejected, STOP" refusal.
         const asking = pending.tool === 'AskUserQuestion' && pending.questions;
         await write(approvalLine(requestId, { allow: answer.allow === true, input: asking && answer.allow ? askUserInput(pending.input, pending.questions, answer.answers) : pending.input,
-          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ? (asking ? answer.message : refusalWith(answer.message)) : asking ? ASK_SKIPPED : undefined, suggestions: answer.always === true ? pending.suggestions : [], mode: planMode }));
+          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ? (asking ? answer.message : refusalWith(answer.message)) : asking ? ASK_SKIPPED : undefined, suggestions: answer.always === true ? alwaysSuggestions(pending.tool, pending.suggestions) : [], mode: planMode }));
       }
       // Approving a plan makes the CLI leave plan mode (back to what it was before); it says nothing about it, so the mode chip is moved here.
       if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = planMode ?? prePlanMode; void saveMeta().catch(() => {}); publish(); }
