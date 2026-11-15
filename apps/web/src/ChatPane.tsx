@@ -496,6 +496,11 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
   // The subagent's last words usually are its report; the "결과" section below already shows them, so the same text is not repeated above it.
   const lastText = lastIndexWhere(parts, part => part.block.type === 'text');
   if (agent.report && lastText >= 0 && (parts[lastText].block as { text: string }).text.trim() === agent.report.trim()) parts.splice(lastText, 1);
+  // "Summary" display, as in the thread: a run of 3+ tools in a row is one bundle (its thoughts are plain text here, so they end a run).
+  const runStart = new Map<string, ToolRun>(), inRun = new Set<string>();
+  if (settings.chatToolDisplay === 'summary') for (const run of toolRuns(parts.map(part => ({ block: part.block, sub: part.item.sub })), [{ start: 0, end: parts.length, steps: parts.length, tools: 0, answered: false }], 3, true)) {
+    runStart.set(parts[run.start].key, run); for (let i = run.start; i < run.end; i++) inRun.add(parts[i].key);
+  }
   useEffect(() => { follow.current = true; body.current?.focus({ preventScroll: true }); }, [agent.id]);
   useLayoutEffect(() => { const el = body.current; if (el && follow.current) el.scrollTop = el.scrollHeight; }, [agent.id, parts.length, agent.status, agent.report]);
   const meta = agentMeta(agent, now);
@@ -511,7 +516,12 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
     </header>
     <div className="chat-agent-drawer-body" ref={body} tabIndex={-1} onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 16; }}>
       {agent.prompt && <details className="chat-agent-prompt" open={agent.job}><summary>{agent.job ? '명령' : '프롬프트'}</summary><div><Markdown text={agent.prompt} /></div></details>}
-      {parts.map(part => <div key={part.key} className="chat-agent-step"><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={agent.status === 'running'} plainThinking enter={part.item.fresh} /></div>)}
+      {parts.map(part => {
+        const run = runStart.get(part.key);
+        if (inRun.has(part.key) && !run) return null;
+        if (run) return <div key={`bundle:${part.key}`} className="chat-agent-step"><ToolBundle parts={parts.slice(run.start, run.end)} results={results} settings={settings} running={agent.status === 'running'} plainThinking /></div>;
+        return <div key={part.key} className="chat-agent-step"><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={agent.status === 'running'} plainThinking enter={part.item.fresh} /></div>;
+      })}
       {!parts.length && !agent.report && <p className="chat-agent-empty">{agent.status === 'running' ? '아직 받은 단계가 없습니다…' : '기록된 단계가 없습니다.'}</p>}
       {agent.status === 'running' && agent.now && <p className="chat-agent-live"><i className="chat-spin" />{agent.now}</p>}
       {agent.report && <section className="chat-agent-report"><h4>결과</h4><Markdown text={agent.report} /></section>}
