@@ -928,7 +928,10 @@ async function route(action, input, project) {
         try {
           const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
-          chat = await openChat(project, id, { cwd, agent: input.agent === undefined ? 'claude' : input.agent, defaults: input.defaults && typeof input.defaults === 'object' ? input.defaults : undefined });
+          const agent = input.agent === undefined ? 'claude' : input.agent, defaults = input.defaults && typeof input.defaults === 'object' ? input.defaults : {};
+          // What was last picked in this project (mode, model, effort) wins over Settings' defaults; openChatSession only applies it to a new chat, and only what the agent supports.
+          const last = (await readJson(path.join(project.directory, 'last-picks.json'), {}).catch(() => ({})))[agent];
+          chat = await openChat(project, id, { cwd, agent, defaults: { ...defaults, ...(last && typeof last === 'object' ? last : {}) } });
         } finally { project.openingChats--; }
       }
       if (input.agent !== undefined && chat.agent !== input.agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
@@ -993,6 +996,19 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
+      // Remembered per project and agent for the next new chat: the mode, and the model with its effort as a pair (a new model drops the old effort,
+      // like the chat itself does). bypassPermissions is never inherited. Cursor's model and effort are config options, not remembered.
+      const pick = {}, ok = value => typeof value === 'string' && value.length <= 200;
+      if (ok(input.permissionMode) && input.permissionMode !== 'bypassPermissions') pick.permissionMode = input.permissionMode;
+      if (chat.agent !== 'cursor') {
+        if (input.model !== undefined) { pick.model = ok(input.model) ? input.model : null; pick.effort = ok(input.effort) ? input.effort : null; }
+        else if (input.effort !== undefined) pick.effort = ok(input.effort) ? input.effort : null;
+      }
+      if (Object.keys(pick).length) {
+        const file = path.join(project.directory, 'last-picks.json'), all = await readJson(file, {}).catch(() => ({}));
+        const merged = Object.fromEntries(Object.entries({ ...all[chat.agent], ...pick }).filter(([, value]) => value != null));
+        await writeJson(file, { ...all, [chat.agent]: merged }).catch(() => {});
+      }
       return {};
     }
     case 'chat/rename': {
