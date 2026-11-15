@@ -55,10 +55,10 @@ export function UsageRows({ windows, colors }: { windows: UsageWindow[]; colors:
 }
 
 // Light-dismiss popover in the top layer, so no overflow clipping cuts it off; opened by the element before it, placed above it.
-export function placeAbove(event: { newState: string; currentTarget: HTMLElement }, align: 'left' | 'right' = 'left') {
+export function placeAbove(event: { newState: string; currentTarget: HTMLElement }, align: 'left' | 'right' = 'left', gap = 14) {
   if (event.newState !== 'open') return;
   const menu = event.currentTarget, anchor = (menu.previousElementSibling as HTMLElement).getBoundingClientRect(), width = menu.offsetWidth;
   const left = align === 'right' ? anchor.right - width : anchor.left;
   menu.style.left = `${Math.max(8, Math.min(left, innerWidth - width - 8))}px`;
-  menu.style.bottom = `${innerHeight - anchor.top + 14}px`;
+  menu.style.bottom = `${innerHeight - anchor.top + gap}px`;
 }
