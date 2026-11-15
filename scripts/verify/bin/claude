@@ -26,7 +26,7 @@ if (!stream) {
   const sid = 'fake-session-' + process.pid;
   const init = { type: 'system', subtype: 'init', session_id: sid, model: (argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null) ?? 'Model 1.0', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
   send(init);
-  const result = (text = 'ok', extra = {}) => send({ type: 'result', is_error: false, result: text, session_id: sid, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5 }, ...extra });
+  const result = (text = 'ok', extra = {}) => send({ type: 'result', is_error: false, result: text, session_id: sid, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 30, cache_read_input_tokens: 500 }, ...extra });
   const say = (text, id = 'm' + Date.now() + Math.random()) => send({ type: 'assistant', message: { id, content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 5 } } });
   const asst = (content, parent) => send({ type: 'assistant', ...(parent && { parent_tool_use_id: parent }), message: { id: 'm' + Date.now() + Math.random(), content, usage: { input_tokens: 10, output_tokens: 5 } } });
   const toolResult = (id, content, is_error = false) => send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(is_error && { is_error: true }) }] } });
@@ -76,6 +76,7 @@ if (!stream) {
       for (const [uuid, held] of heldSteers) { heldSteers.delete(uuid); send({ type: 'user', uuid, isReplay: true, message: { role: 'user', content: held.parts } }); say('steer ok: ' + held.text); result(); }
       return;
     }
+    if (text.includes('bashperm')) { send({ type: 'control_request', request_id: 'perm-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'toolu_perm', input: { command: 'npm test', description: '테스트 실행' }, permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }] } }); return; }
     if (/\bask\b/.test(text)) { send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
     if (text.includes('plan')) { say('계획을 세웠습니다.'); send({ type: 'control_request', request_id: 'plan-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', tool_use_id: 'toolu_plan', input: { plan: '# 계획\n\n요약 한 줄\n\n## 1단계 준비\n- a\n- b\n\n## 2단계 구현\n- c\n\n## 3단계 검증\n- d' } } }); return; }
     if (text.includes('tasks')) {
@@ -106,6 +107,7 @@ if (!stream) {
       for (let i = 1; i <= 8; i++) { const id = `toolu_mt${i}_${Date.now()}`; asst([{ type: 'tool_use', id, name: 'Read', input: { file_path: `src/file${i}.ts` } }]); await wait(ctl().mtms ?? 400); toolResult(id, `line ${i}\n`.repeat(12)); }
       say('## 결과\n\n' + Array.from({ length: 12 }, (_, i) => `${i + 1}. 긴 설명 문단 ${'가나다라 '.repeat(20)}`).join('\n')); result(); return;
     }
+    if (text.includes('uiframeform')) { say('폼입니다.\n\n```ade-ui\n' + '<div class="stack"><div class="card"><span class="label">이름</span><input id="n"><button class="primary" id="b-solo">적용</button></div><div class="row"><button id="b-cancel">취소</button><button class="primary" id="b-main">보내기</button><script>void 0</script></div></div>' + '\n```\n'); result(); return; }
     if (text.includes('adeui')) { say('UI입니다.\n\n```ade-ui\n' + "<div><h3>테스트 UI</h3><button id=\"b-send\" class=\"primary\" onclick=\"ade.send('UI에서 보낸 메시지')\">보내기</button> <button id=\"b-pre\" onclick=\"ade.prefill('UI가 채운 문장')\">입력창에 채우기</button> <button id=\"b-net\" onclick=\"fetch('https://example.com/x').then(()=>r.textContent='NET OK').catch(e=>r.textContent='NET BLOCKED')\">외부 요청</button> <button id=\"b-grow\" onclick=\"more.style.height='200px'\">키우기</button><p id=\"r\">대기</p><div id=\"more\"></div></div>" + '\n```\n'); result(); return; }
     if (text.includes('uiblock')) { say('결과입니다.\n\n```ui\n["stats",["가동률","99%","ok","30일"],["지연","24ms"]]\n```\n\n```ui\n["form","계획","보내기",["slider","seats","좌석",2,1],["radio","c","결제","월","년"]]\n```\n\n```ui\n{깨진 json\n```\n'); result(); return; }
     if (text.includes('tools')) {

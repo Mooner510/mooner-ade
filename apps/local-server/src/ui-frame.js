@@ -93,6 +93,8 @@ function shell(runtimeSource) {
     + 'button{font:inherit;font-size:12.5px;font-weight:500;color:var(--fg);height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--border-strong);background:color-mix(in srgb,var(--fg) 6%,transparent);cursor:pointer;transition:background-color .15s,box-shadow .15s}'
     + 'button:hover{background:color-mix(in srgb,var(--fg) 11%,transparent)}button:disabled{opacity:.4;cursor:default}button:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}'
     + 'button.primary,button[type=submit]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}button.primary:hover,button[type=submit]:hover{background:var(--accent-strong)}'
+    // the main button (primary or submit) that ends its box sits at the right, as on the chat's own cards; what comes before it stays at the left
+    + ':is(body,div,form,fieldset)>:is(button.primary,button[type=submit]):not(:has(~ :not(script,style,template))){display:block;margin-left:auto}'
     // checkbox: the drawn box and tick of the app; a checkbox in a <label> is a list row with a hover tint
     + 'input[type=checkbox],input[type=radio]{-webkit-appearance:none;appearance:none;position:relative;display:inline-block;flex:none;width:16px;height:16px;padding:0;margin:0 6px 0 0;vertical-align:-3px;border:1.5px solid var(--border-strong);background:var(--input);cursor:pointer}'
     + 'input[type=checkbox]{border-radius:4.5px}input[type=radio]{border-radius:50%}input[type=checkbox]:hover,input[type=radio]:hover{border-color:color-mix(in srgb,var(--accent) 60%,var(--border-strong))}'

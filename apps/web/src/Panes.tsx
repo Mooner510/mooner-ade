@@ -718,10 +718,10 @@ function playGhost({ el, slot, row, last, host, hostParent, index }: Ghost) {
   const size = row ? slot.width : slot.height;
   ghost.style.flex = `0 0 ${size}px`;
   ghost.append(copy);
-  const survivors = [...container.children];
-  if (getComputedStyle(container).flexDirection !== axis) { container.style.flexDirection = axis; survivors.forEach(node => ((node as HTMLElement).style.flex = '1 1 0%')); }
+  const survivors = [...container.children] as HTMLElement[], flexes = survivors.map(node => node.style.flex); // React owns a slot's inline flex (its size): put it back, never blank it
+  if (getComputedStyle(container).flexDirection !== axis) { container.style.flexDirection = axis; survivors.forEach(node => (node.style.flex = '1 1 0%')); }
   container.insertBefore(ghost, host.isConnected ? container.children[index] ?? null : last ? null : container.firstChild);
-  const done = () => { ghost.remove(); container.style.flexDirection = before; survivors.forEach(node => ((node as HTMLElement).style.flex = '')); };
+  const done = () => { ghost.remove(); container.style.flexDirection = before; survivors.forEach((node, i) => (node.style.flex = flexes[i])); };
   ghost.animate([{ flexBasis: `${size}px`, easing: 'ease-out' }, { flexBasis: `${size * 1.07}px`, offset: .22, easing: 'cubic-bezier(.5, 0, .75, 0)' }, { flexBasis: '0px' }], { duration: 380, fill: 'forwards' }).finished.then(done, done);
 }
 function useCloseGhost(pane: Pane, visible: boolean, zoom: string) {
