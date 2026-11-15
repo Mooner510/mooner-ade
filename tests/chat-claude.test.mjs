@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
+import { alwaysSuggestions, ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
 
 const askInput = { questions: [
   { question: 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.', header: '웹 서비스', multiSelect: true, options: [{ label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { label: 'DONGPO', description: '' }] },
@@ -70,6 +70,18 @@ test('approval request and its answers', () => {
   assert.deepEqual([request.kind, request.requestId, request.tool], ['approval', 'r1', 'Bash']);
   assert.equal(JSON.parse(approvalLine('r1', { allow: true, input: { a: 1 } })).response.response.behavior, 'allow');
   assert.equal(JSON.parse(approvalLine('r1', { allow: false })).response.response.behavior, 'deny');
+});
+
+test('"always allow" falls back to a session allow rule for an MCP tool that came without suggestions', () => {
+  const rule = [{ type: 'addRules', rules: [{ toolName: 'mcp__mooner_server__server_exec' }], behavior: 'allow', destination: 'session' }];
+  assert.deepEqual(alwaysSuggestions('mcp__mooner_server__server_exec', []), rule);
+  assert.deepEqual(alwaysSuggestions('mcp__mooner_server__server_exec', undefined), rule);
+  const own = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }], behavior: 'allow', destination: 'session' }];
+  assert.equal(alwaysSuggestions('mcp__x__y', own), own, 'the CLI\'s own suggestions win');
+  assert.deepEqual(alwaysSuggestions('Bash', []), [], 'a built-in tool without suggestions stays a one-time answer');
+  assert.deepEqual(alwaysSuggestions('mcp__', []), []);
+  const line = JSON.parse(approvalLine('r1', { allow: true, input: {}, suggestions: alwaysSuggestions('mcp__a__b', []) }));
+  assert.deepEqual(line.response.response.updatedPermissions, [{ type: 'addRules', rules: [{ toolName: 'mcp__a__b' }], behavior: 'allow', destination: 'session' }]);
 });
 
 test('unknown types pass through as raw instead of being dropped', () => {
