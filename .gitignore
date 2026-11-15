@@ -10,3 +10,4 @@ coverage/
 .claude-account/
 wakatime.txt
 *.stackdump
+scripts/verify/bin/claude.exe
