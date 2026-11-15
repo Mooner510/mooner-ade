@@ -831,13 +831,13 @@ const writeLabel = (file: string, content: string, exists?: boolean) => {
   const lines = content ? content.replace(/\n+$/, '').split('\n').length : 0;
   return [file, exists === true ? '덮어쓰기' : exists === false ? '새 파일' : '', `${lines.toLocaleString()}줄`].filter(Boolean).join(' · ');
 };
-function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void }) {
+function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
   const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
   const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
-  if (approval.questions?.length) return <QuestionCard approval={approval} onAnswer={onAnswer} />;
+  if (approval.questions?.length) return <QuestionCard approval={approval} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
   // Claude's ExitPlanMode and Cursor's create_plan ('계획 승인') read the same; only Claude picks the mode it continues in.
   if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} />;
-  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
+  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0 || (explain === true && /^mcp__/.test(approval.tool)), summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
   const written = approval.tool === 'Write' && typeof input.content === 'string' ? input.content : null;
   // The same diff view as the Edit tool card (only what changes, coloured), not the whole old text as removed and the new as added.
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
@@ -1571,7 +1571,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-dock">
       {away && <button type="button" className="chat-jump" title="맨 아래로" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
-      {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} />)}
+      {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
