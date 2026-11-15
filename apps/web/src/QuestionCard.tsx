@@ -8,7 +8,9 @@ import { emptyPick, pickOption, pickOther, questionAnswers, questionsAnswered, t
 // and only one shows at a time, so the card stays low and its send button in view; picking a single-choice option moves on to the next
 // unanswered question. Options carry their description on the same line; unless the agent forbids it there is always a row to type one's
 // own answer, and a question with no options is just a text box.
-export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>): void }) {
+// Esc closes the question and stops the turn at once (the same as the stop button next to the skip one): from inside the card, from the message box
+// (its own Esc handling), or with focus nowhere (the document listener below, which leaves any key another control already took).
+export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Approval; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>): void; onInterrupt(): void }) {
   const questions = approval.questions ?? [], uid = useId();
   const [picks, setPicks] = useState<Record<string, QuestionPick>>({}), [active, setActive] = useState(0), [card, capture] = useHeightMorph<HTMLDivElement>();
   const answers = questionAnswers(questions, picks), ready = questionsAnswered(questions, answers), done = questions.filter(question => answers[question.id]?.length).length;
@@ -18,6 +20,12 @@ export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAns
   const nextOpen = open.find(index => index > active) ?? open[0] ?? Math.min(active + 1, questions.length - 1);
   const go = (index: number) => { if (index === active || index < 0 || index >= questions.length) return; capture(); setActive(index); };
   useEffect(() => () => clearTimeout(advance.current), []);
+  const stop = useRef(onInterrupt); stop.current = onInterrupt;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && event.target === document.body) { event.preventDefault(); stop.current(); } };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
   const update = (question: ChatQuestion, next: QuestionPick, chose = false) => {
     setPicks(current => ({ ...current, [question.id]: next }));
     // A single choice is the whole answer: a beat later (so the pick is seen), go to the next question still unanswered.
@@ -28,7 +36,11 @@ export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAns
   };
   const submit = () => { if (ready) onAnswer(true, false, answers); };
   const title = approval.tool === 'AskUserQuestion' || approval.tool === '질문' ? '질문' : approval.tool;
-  return <div ref={card} className="chat-question" role="group" aria-label={`에이전트의 ${title}`} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }}>
+  return <div ref={card} className="chat-question" role="group" aria-label={`에이전트의 ${title}`} onKeyDown={event => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onInterrupt(); }
+  }}>
     <header><span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">help</span><strong>{title}</strong>
       <span>{questions.length > 1 ? `${questions.length}개 질문에 답해 주세요` : '답변을 기다리고 있어요'}</span></header>
     {tabs && <div className="chat-q-tabs" role="tablist" aria-label="질문" onKeyDown={event => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); go(active + (event.key === 'ArrowRight' ? 1 : -1)); } }}>
@@ -62,6 +74,7 @@ export function QuestionCard({ approval, onAnswer }: { approval: Approval; onAns
     <footer>
       {/* Several questions: "다음" (to the next one still unanswered) until every one is answered, then that same button becomes "답변 보내기". */}
       <span className="chat-q-hint">{ready ? 'Ctrl/⌘+Enter로 보내기' : `${done}/${questions.length}개 답변함`}</span>
+      <button type="button" className="secondary" onClick={onInterrupt} title="질문을 닫고 작업을 즉시 중단합니다 (Esc)">중단</button>
       <button type="button" onClick={() => onAnswer(false, false)} title={tabs ? `질문 ${questions.length}개를 모두 건너뜁니다. 에이전트가 스스로 판단합니다.` : '건너뜁니다. 에이전트가 스스로 판단합니다.'}>{tabs ? '모두 건너뛰기' : '건너뛰기'}</button>
       {tabs && !ready ? <button type="button" className="primary" onClick={() => go(nextOpen)}>다음</button>
         : <button type="button" className="primary" disabled={!ready} onClick={submit}>답변 보내기</button>}
