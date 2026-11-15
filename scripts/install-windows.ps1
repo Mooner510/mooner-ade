@@ -41,7 +41,9 @@
       $link.Save()
     }
     Write-Host "설치 완료: $exe (시작 메뉴·바탕 화면 바로 가기 추가)"
-    Start-Process $exe
+    # Electron attaches itself to the console it is started from, so closing this window would end the app; the variable (set for this launch only) stops that.
+    $env:ELECTRON_NO_ATTACH_CONSOLE = '1'
+    try { Start-Process $exe } finally { Remove-Item Env:ELECTRON_NO_ATTACH_CONSOLE -ErrorAction SilentlyContinue }
   } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
