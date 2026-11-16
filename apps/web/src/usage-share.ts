@@ -1,8 +1,9 @@
 // How much of the plan's usage limit (5-hour / weekly window) one chat used, in percentage points (%p).
 // The server only reports whole percents, so a before/after difference is off by up to ±1%p; a cost-based estimate (cost ÷ k, k = dollars per 1%p learned
-// from the turns seen so far) is finer but only as good as k. The two are combined: the estimate is shown, and clamped into what the readings allow.
+// from the turns seen so far) is finer but only as good as k. The two are combined: the estimate is shown, and clamped into what the readings allow
+// (never above the window's own reading).
 export type Reading = { util: number; resetsAt: number | null };
-export type Share = { label: string; est: number | null; observed: number | null; quality: 'none' | 'delta' | 'estimate' | 'consistent' | 'clamped' | 'tiny' };
+export type Share = { label: string; est: number | null; observed: number | null; quality: 'none' | 'delta' | 'consistent' | 'clamped' | 'tiny' };
 export type KSums = { usd: number; dUtil: number };
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
@@ -29,8 +30,9 @@ export function contribution({ before, after, costUsd, cal }: { before?: Reading
   }
   // whole-percent readings: a 0 change only means "under 1%p"
   if (est === null) { if (bound) { out.label = out.observed! >= 1 ? `${out.observed}%p` : '<1%p'; out.quality = 'delta'; } return out; }
-  if (!bound) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `${shown(est)}%p`; out.quality = 'estimate'; return out; }
-  const [lo, hi] = bound;
+  // one chat cannot have used more than the whole window's reading (whole percent: the true value is under util + 0.5), whatever k and the cost say
+  const cap = after.util + 0.5;
+  const [lo, hi] = bound ? [bound[0], Math.min(bound[1], cap)] : [0, cap];
   if (est >= lo - 1e-9 && est <= hi + 1e-9) { if (est < TINY) { out.quality = 'tiny'; return out; } out.label = `${shown(est)}%p`; out.quality = 'consistent'; return out; }
   out.label = `${shown(Math.min(Math.max(est, lo), hi))}%p`; out.quality = 'clamped';
   return out;

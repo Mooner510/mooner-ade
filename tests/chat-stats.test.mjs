@@ -59,6 +59,20 @@ test('stats: the CLI per-model cost is kept and split over requests by token wei
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('stats: spentSince is what the requests from a time on cost (the usage share window), by the CLI price or, in a live session, the chat total split by token weight', async () => {
+  const state = line({ type: 'cost-state', timestamp: at(7), totalCostUSD: 3, modelUsage: { 'claude-opus-5-5': { inputTokens: 60, outputTokens: 21, cacheReadInputTokens: 6000, cacheCreationInputTokens: 500, cacheCreationEphemeral5mInputTokens: 0, cacheCreationEphemeral1hInputTokens: 500, costUSD: 3 } } });
+  const rows = [user(0, 'a'), assistant('m1', 'r1', 1, usage(10, 5, 1000, 0)), assistant('m2', 'r2', 2, usage(20, 7, 2000, 500)), assistant('m3', 'r3', 4, usage(30, 9, 3000, 0))];
+  const { root, file } = await fixture([...rows, state]), bare = await fixture(rows);
+  try {
+    const [all, late, none] = (await readSessionStats([file], [Date.parse(at(0)), Date.parse(at(3)), Date.parse(at(60))])).spentSince;
+    assert.ok(Math.abs(all - 3) < 1e-9, `all ${all}`); assert.ok(late > 0 && late < all, `late ${late}`); assert.equal(none, 0);
+    assert.deepEqual((await readSessionStats([bare.file], [0])).spentSince, [null], 'no price and no chat total');
+    const [live, liveLate] = (await readSessionStats([bare.file], [0, Date.parse(at(3))], 2)).spentSince;
+    assert.ok(Math.abs(live - 2) < 1e-9 && liveLate > 0 && liveLate < 2, 'a live session: the chat total split by token weight');
+    assert.deepEqual((await readSessionStats([file])).spentSince, []);
+  } finally { await rm(root, { recursive: true, force: true }); await rm(bare.root, { recursive: true, force: true }); }
+});
+
 test('stats: session files are found under the config dir by cwd, with sub-agent files, and only for a plain session id', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ade-stats-files-')), id = '7105c835-0000-4000-8000-000000000000', cwd = 'C:/work/app';
   const folder = path.join(root, 'projects', 'C--work-app');
