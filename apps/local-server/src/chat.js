@@ -6,6 +6,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
+import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
@@ -92,6 +93,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // A turn is several API calls: `turnDone` holds the calls already finished, `turnUsage` the one streaming (`liveId`). result.usage is the whole turn, so it replaces both.
   // The API reports a message's real output_tokens only once, at its end (message_delta), so while it streams the shown output is the larger of that report and an
   // estimate: the CLI's thinking estimate plus the streamed text / tool input (`streamBytes`, ~4 bytes a token, so it runs under the real count and never overshoots).
+  const btwRuns = new Map(); // /btw questions in flight, by the id the UI gave them (to cancel)
   let costPerUnit = 0;
   let turnUsage = null, thinkingTokens = 0, streamBytes = 0, outputFinal = false, turnDone = zero(), liveId = null;
   const resetLive = () => { turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; turnDone = zero(); liveId = null; };
@@ -928,6 +930,19 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       setStatus();
       return { agent, sessionId: meta.sessionId, configDir: meta.configDir };
     },
+    // /btw: a side question answered from a fork of this conversation (see chat-btw.js). Needs no idle state: it runs beside a working turn and never touches the chat's events.
+    // It runs on the agent's cheap default model (BTW_DEFAULTS), not the chat's own; `pick` ({ model, effort }) overrides that.
+    async btw(question, btwId, pick = {}) {
+      const text = typeof question === 'string' ? question.trim() : '';
+      if (!text) throw fault('INVALID_INPUT', '질문을 입력하세요. 예: /btw 이 함수는 왜 비동기야?');
+      const controller = new AbortController(), key = String(btwId ?? ''); if (key) btwRuns.set(key, controller);
+      const launchEnv = withUtf8Ctype({ ...process.env, ...(typeof env === 'function' ? env() : env) });
+      if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
+      if (agent === 'codex' && meta.configDir) launchEnv.CODEX_HOME = meta.configDir;
+      try { return await runBtw({ agent, executable, executableArgs: argsOf(executableArgs), sessionId: state.sessionId ?? meta.sessionId ?? undefined, model: pick.model, effort: pick.effort, question: text, digest: agent === 'cursor' ? conversationDigest(events) : '', cwd: meta.worktreePath ?? cwd, env: launchEnv, spawnProcess, signal: controller.signal }); }
+      finally { if (key) btwRuns.delete(key); }
+    },
+    cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.
     sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath, costUsd: typeof state.costUsd === 'number' ? state.costUsd : null }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
