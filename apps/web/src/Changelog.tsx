@@ -36,7 +36,7 @@ export function Changelog({ onClose }: { onClose(): void }) {
     <div className="changelog-main">
       <nav className="changelog-nav" aria-label="버전">
         {entries.map(item => <button key={item.version} aria-pressed={item.version === entry?.version} onClick={() => view(item.version)}>
-          <span className="changelog-nav-text"><span className="changelog-nav-version">v{item.version}</span><time className="changelog-nav-date">{item.time ? `${item.date} ${item.time}` : item.date}</time></span>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
+          <span className="changelog-nav-text"><span className="changelog-nav-version">v{item.version}</span><time className="changelog-nav-date">{item.date}</time></span>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
         </button>)}
       </nav>
       <div className="changelog-body">
