@@ -609,26 +609,35 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const tab: PaneTab = { id: newId(), pane: leaf };
     commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
   }
-  async function resumeChat(id: string, agent: Agent) {
+  // Resume / 이전 대화 불러오기 takes over the pane it was asked from; the chat that was there ends but stays saved.
+  async function takeOver(from: string | undefined, leaf: Leaf) {
+    const tree = from ? treeOf(from) : null;
+    if (!from || !tree) {
+      const tab: PaneTab = { id: newId(), pane: leaf };
+      commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id); return;
+    }
+    await call('chat/close', { id: from }).catch(report);
+    chatBus.current.delete(from); chatPrev.current.delete(from); clearAttention(from);
+    commitFor(from, mapLeaf(tree, from, () => leaf)); setFocusLeaf(leaf.id);
+  }
+  async function resumeChat(id: string, agent: Agent, from?: string) {
     const existing = tabOf(id);
     if (existing) { selectTab(existing.id); setFocusLeaf(id); return; }
-    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+    if (!from && refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
     // Open first: invalid or missing stored sessions must not create an empty tab.
     const sessions = await call<{ id: string }[]>('chat/sessions', { agent });
     if (!sessions.some(session => session.id === id)) throw new Error('저장된 대화를 찾을 수 없습니다.');
     await call('chat/open', { id, agent });
     const opened = tabOf(id);
     if (opened) { selectTab(opened.id); setFocusLeaf(id); return; }
-    const tab: PaneTab = { id: newId(), pane: { id, kind: 'chat', agent } };
-    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(id);
+    await takeOver(from, { id, kind: 'chat', agent });
   }
   // A conversation made with the plain `claude` CLI becomes a new chat tab; the server writes its transcript into the chat first.
-  async function importCliChat(sessionId: string) {
-    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+  async function importCliChat(sessionId: string, from?: string) {
+    if (!from && refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
     const leaf = chatLeaf(undefined, 'claude');
     await call('chat/import-cli', { sessionId, newId: leaf.id });
-    const tab: PaneTab = { id: newId(), pane: leaf };
-    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
+    await takeOver(from, leaf);
   }
   async function launch(command: string, where: 'tab' | 'split') {
     if (where === 'tab') await newTab(command);

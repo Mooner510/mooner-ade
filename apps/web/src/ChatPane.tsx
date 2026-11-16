@@ -34,9 +34,9 @@ export type ChatCtx = {
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
   // Continue this conversation in a terminal (`claude --resume`); the server refuses unless the chat is idle.
   toTerminal(id: string, fresh: boolean): void;
-  resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor'): Promise<void>;
+  resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor', from?: string): Promise<void>;
   // Continue a conversation made with the plain `claude` CLI as a new chat tab.
-  importCliChat(sessionId: string): Promise<void>;
+  importCliChat(sessionId: string, from?: string): Promise<void>;
   // Start screen only: replace this pane with an empty chat of another provider (forget = drop the stored empty chat).
   switchAgent(id: string, agent: 'claude' | 'codex' | 'cursor', forget: boolean): Promise<boolean>;
   onSettingsChange(settings: Settings): void;
@@ -1463,7 +1463,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }
   async function pickResume(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }) {
     setResumeOpen(false); setResuming(true);
-    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent) : ctx.importCliChat(choice.sessionId)); }
+    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent, id) : ctx.importCliChat(choice.sessionId, id)); }
     catch (cause) { ctx.fail(cause); }
     finally { setResuming(false); }
   }
