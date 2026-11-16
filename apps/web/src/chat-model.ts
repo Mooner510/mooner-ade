@@ -31,7 +31,7 @@ export type Tone = { value: string; color: string; icon?: string; bars?: number 
 export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone; compact?: Tone; title?: Tone };
 const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previews) ? event.previews.filter((url): url is string => typeof url === 'string' && url.startsWith('data:image/')) : undefined;
 /** How a turn ended, kept on its last answer: when, how long it took and the tokens it used (no tokens for a CLI that does not report them). */
-export type TurnDone = { at: number; ms: number | null; tokens?: Tokens };
+export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd?: number };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[] }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
@@ -259,7 +259,7 @@ function stampDone(view: ChatView, event: any): ChatView {
   if (at < 0) return view;
   const usage = event.usage, tokens = usage && ['input', 'output', 'cacheRead', 'cacheCreate'].every(key => Number.isFinite(usage[key])) ? usage as Tokens : undefined;
   const items = [...view.items];
-  items[at] = { ...items[at] as AssistantItem, done: { at: Number(event.at) || Date.now(), ms: Number.isFinite(event.durationMs) ? event.durationMs : null, ...(tokens && { tokens }) } };
+  items[at] = { ...items[at] as AssistantItem, done: { at: Number(event.at) || Date.now(), ms: Number.isFinite(event.durationMs) ? event.durationMs : null, ...(tokens && { tokens }), ...(Number.isFinite(event.turnCostUsd) && event.turnCostUsd > 0 && { costUsd: event.turnCostUsd }) } };
   return { ...view, items };
 }
 
