@@ -222,7 +222,7 @@ test('Claude: a turn with several API calls only ever adds to the shown tokens, 
   assert.deepEqual(session.state().tokens, { input: 250, output: 50, cacheRead: 0, cacheCreate: 0 });
 });
 
-test('Claude: the session cost keeps adding up when a setting change replaces the child (its total_cost_usd starts over)', async t => {
+test('Claude: a setting change that replaces the child does not count the session cost twice (the resumed CLI reports the session total)', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-cost-'));
   const session = await openChatSession({ directory, id: 'cost', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))] });
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });

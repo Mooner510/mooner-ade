@@ -432,31 +432,45 @@ function Shell() {
         {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon={compact ? 'chevronsRight' : 'chevronsLeft'} label={`사이드바 ${compact ? '펼치기' : '접기'}`} keys={showAppKey(settings.appKeys, 'toggleProjects')} onClick={() => setCompact(value => !value)} />
       </div>
-      <div className="folders" role="tree">
+      <div className="folders" role="tree"
+        onDragOver={event => { if (!projectDrag) return; const last = entries[entries.length - 1]; if (!last || last.root === projectDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setProjectDrop(previous => previous?.root === last.root && previous.after ? previous : { root: last.root, after: true }); }}
+        onDrop={event => { if (!projectDrag) return; event.preventDefault(); const last = entries[entries.length - 1]; if (last && last.root !== projectDrag) moveProject(projectDrag, last.root, true); setProjectDrag(''); setProjectDrop(null); }}
+        onDragLeave={event => { if (projectDrag && !event.currentTarget.contains(event.relatedTarget as Node | null)) setProjectDrop(null); }}>
         {entries.map((entry, index) => {
           const item = status[entry.root] || idle, name = item.name || shortName(entry.root), selected = entry.root === current, open = !folded.has(entry.root);
           const asking = item.tabs.some(tab => tab.asking);
           const owner = () => handles.current.get(entry.root);
           const hint = `${name}\n${entry.root}\n${showAppKey(settings.appKeys, `project${Math.min(index + 1, 9)}`)}`;
-          const projectDnd = {
+          // The drag handle is the row itself; the drop target is the whole project block (its tab rows included), so a drop that lands a little
+          // below the folder name still moves the project instead of being refused and flying back.
+          const projectSource = {
             draggable: true,
             onDragStart: (event: React.DragEvent<HTMLElement>) => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
-            onDragEnd: () => { setProjectDrag(''); setProjectDrop(null); },
+            onDragEnd: () => { setProjectDrag(''); setProjectDrop(null); }
+          };
+          const projectTarget = {
             onDragOver: (event: React.DragEvent<HTMLElement>) => {
-              if (!projectDrag || projectDrag === entry.root) return;
+              if (!projectDrag) return;
+              event.stopPropagation();
+              if (projectDrag === entry.root) { event.dataTransfer.dropEffect = 'none'; setProjectDrop(null); return; }
               event.preventDefault(); event.dataTransfer.dropEffect = 'move';
               const box = event.currentTarget.getBoundingClientRect(), after = event.clientY >= box.top + box.height / 2;
               setProjectDrop(previous => previous?.root === entry.root && previous.after === after ? previous : { root: entry.root, after });
             },
-            onDrop: (event: React.DragEvent<HTMLElement>) => { if (!projectDrag || projectDrag === entry.root) return; event.preventDefault(); event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); moveProject(projectDrag, entry.root, event.clientY >= box.top + box.height / 2); setProjectDrag(''); setProjectDrop(null); }
+            onDrop: (event: React.DragEvent<HTMLElement>) => {
+              if (!projectDrag) return;
+              event.preventDefault(); event.stopPropagation();
+              if (projectDrag !== entry.root) { const box = event.currentTarget.getBoundingClientRect(); moveProject(projectDrag, entry.root, event.clientY >= box.top + box.height / 2); }
+              setProjectDrag(''); setProjectDrop(null);
+            }
           };
-          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectDnd}
+          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectSource} {...projectTarget}
             onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
           </div>;
-          return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`}>
-            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectDnd}
+          return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} {...projectTarget}>
+            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectSource}
               onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
@@ -510,8 +524,9 @@ function Shell() {
                     setDropAt(previous => previous?.id === tab.id && previous.mode === next ? previous : { id: tab.id, mode: next });
                   },
                   onDrop: (event: React.DragEvent) => {
+                    if (!drag) return; // a project being dragged is handled by the project block around this row
                     event.preventDefault(); event.stopPropagation();
-                    if (drag && drag.root === entry.root && drag.id !== tab.id) {
+                    if (drag.root === entry.root && drag.id !== tab.id) {
                       const next = tabDropMode(event, drag.id, tab.id);
                       if (drag.pane) owner()?.movePane(drag.id, drag.pane, tab.id, next);
                       else if (next === 'merge') owner()?.mergeTabs(drag.id, tab.id);

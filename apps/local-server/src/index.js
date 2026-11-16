@@ -940,7 +940,7 @@ async function route(action, input, project) {
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
     // Session statistics (Claude only): read from the transcript the CLI keeps, nothing is sent anywhere.
-    case 'chat/stats': {
+    case 'chat/stats': case 'chat/spend': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const ref = chat.sessionRef();
@@ -949,6 +949,8 @@ async function route(action, input, project) {
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
       if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      // chat/spend: what this chat cost from the given times on (the 5h / weekly window starts), straight from its transcript
+      if (action === 'chat/spend') return { spent: (await readSessionStats(files, (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite), ref.costUsd)).spentSince };
       return { sessionId: ref.sessionId, ...await readSessionStats(files) };
     }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
@@ -1099,10 +1101,21 @@ async function route(action, input, project) {
     }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
-      // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
       const result = await runtime.processes.exec('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeoutMs: 10_000, maxOutputBytes: 32 * 1024 * 1024 }).catch(() => null);
-      if (!result || result.exitCode !== 0) return { files: [] };
+      if (!result || result.exitCode !== 0) {
+        // Not a git folder: walk it breadth-first (3 levels, 20k entries), skipping dependency/VCS folders.
+        const found = [], skip = new Set(['.git', 'node_modules']);
+        for (let level = [''], depth = 0; level.length && depth < 4 && found.length < 20_000; depth++) {
+          const next = [];
+          for (const dir of level) for (const entry of await fs.readdir(path.join(cwd, dir), { withFileTypes: true }).catch(() => [])) {
+            if (skip.has(entry.name)) continue;
+            if (entry.isDirectory()) { found.push(`${dir}${entry.name}/`); next.push(`${dir}${entry.name}/`); } else found.push(`${dir}${entry.name}`);
+          }
+          level = next;
+        }
+        return { files: found };
+      }
       const files = result.stdout.split('\0').filter(Boolean).slice(0, 50_000), dirs = new Set();
       for (const file of files) for (let at = file.indexOf('/'); at > 0; at = file.indexOf('/', at + 1)) dirs.add(file.slice(0, at + 1));
       return { files: [...dirs, ...files] };

@@ -27,31 +27,41 @@ function Tile({ label, value, hint }: { label: string; value: string; hint?: str
   return <div className="stats-tile" title={hint}><small>{label}</small><b>{value}</b></div>;
 }
 
-// A thin area + line over the request order; hovering reads one request out in the line above, the way a crosshair would.
-function Trend({ values, readout, marks, label }: { values: number[]; readout(index: number): string; marks: number[]; label: string }) {
-  const [hover, setHover] = useState<number | null>(null), width = 600, height = 120, max = Math.max(1, ...values);
-  if (values.length < 2) return <p className="stats-empty">그래프를 그리려면 요청이 2개 이상 필요합니다.</p>;
-  const x = (index: number) => (index / (values.length - 1)) * width, y = (value: number) => height - 6 - (value / max) * (height - 14);
-  const line = values.map((value, index) => `${index ? 'L' : 'M'}${x(index).toFixed(1)} ${y(value).toFixed(1)}`).join(' ');
+// The context size of every request as a line, with each turn drawn on it: a dot where the turn was asked, a shaded band over the requests it took, and under the dot a
+// thin bar for its cost. One x position (pct) feeds the line, dots, bars and numbers, so they line up exactly; bars share one width, so only height says "more".
+type Turn = Stats['turnSeries'][number];
+function TurnChart({ stats, value, unit, short, unitName }: { stats: Stats; value(turn: Turn): number; unit(turn: Turn): string; short(turn: Turn): string; unitName: string }) {
+  const [hover, setHover] = useState<number | null>(null), points = stats.timeline, count = points.length;
+  if (count < 2 || !stats.turnSeries.length) return <p className="stats-empty">그래프를 그리려면 요청이 2개 이상 필요합니다.</p>;
+  const last = count - 1, pct = (index: number) => (index / last) * 100, maxCtx = Math.max(1, ...points.map(point => point.ctx)), y = (ctx: number) => 92 - (ctx / maxCtx) * 78;
+  // A turn starts at its first request; the timeline can be thinned, so a turn whose first request was dropped starts at the next kept one, and two turns that land
+  // on the same point keep the later one. ponytail: that turn's cost bar is then hidden, rare below ~240 requests.
+  const found = stats.turnSeries.map(turn => ({ turn, start: points.findIndex(point => point.turn >= turn.index) })).filter(span => span.start >= 0);
+  const spans = found.filter((span, index) => index + 1 === found.length || found[index + 1].start !== span.start).map((span, index, all) => ({ ...span, end: index + 1 < all.length ? all[index + 1].start : last }));
+  const maxValue = Math.max(1e-9, ...spans.map(span => value(span.turn))), top = spans.find(span => value(span.turn) === maxValue)!.turn;
+  const minGap = Math.min(100, ...spans.slice(1).map((span, index) => pct(span.start) - pct(spans[index].start)));
+  let shown = -Infinity; const labelled = new Set(spans.map((span, index) => { if (pct(span.start) - shown < 3.2) return -1; shown = pct(span.start); return index; })); // numbers only where they do not touch
+  // Amounts written on the bars: the costliest turns first, each only if no already written one is within 8% of the width (the hovered turn is always written).
+  const priced = new Set<number>(); [...spans.keys()].sort((a, b) => value(spans[b].turn) - value(spans[a].turn)).forEach(index => { if (priced.size < 5 && value(spans[index].turn) > 0 && [...priced].every(other => Math.abs(pct(spans[other].start) - pct(spans[index].start)) >= 8)) priced.add(index); });
+  const marks = stats.compactionAt.map(at => points.reduce((best, point, index) => Math.abs(point.at - at) < Math.abs(points[best].at - at) ? index : best, 0));
+  const line = points.map((point, index) => `${index ? 'L' : 'M'}${pct(index).toFixed(2)} ${y(point.ctx).toFixed(2)}`).join(' ');
+  const active = hover === null ? -1 : spans.reduce((found, span, index) => span.start <= hover ? index : found, -1), turn = active >= 0 ? spans[active].turn : null;
   return <div className="stats-chart">
-    <div className="stats-readout" aria-live="polite">{hover === null ? `최대 ${compact(max)}` : readout(hover)}</div>
-    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={label}
-      onMouseLeave={() => setHover(null)} onMouseMove={event => { const box = event.currentTarget.getBoundingClientRect(); setHover(Math.max(0, Math.min(values.length - 1, Math.round(((event.clientX - box.left) / box.width) * (values.length - 1))))); }}>
-      <path d={`${line} L${width} ${height} L0 ${height} Z`} className="stats-area" />
-      <path d={line} className="stats-line" vectorEffect="non-scaling-stroke" />
-      {marks.map(mark => <line key={mark} x1={x(mark)} x2={x(mark)} y1={0} y2={height} className="stats-mark" vectorEffect="non-scaling-stroke" />)}
-      {hover !== null && <g><line x1={x(hover)} x2={x(hover)} y1={0} y2={height} className="stats-cross" vectorEffect="non-scaling-stroke" /><circle cx={x(hover)} cy={y(values[hover])} r={4} className="stats-dot" /></g>}
-    </svg>
-  </div>;
-}
-
-function Bars({ values, readout, label }: { values: number[]; readout(index: number): string; label: string }) {
-  const [hover, setHover] = useState<number | null>(null), max = Math.max(1e-9, ...values);
-  if (!values.length) return <p className="stats-empty">아직 턴이 없습니다.</p>;
-  return <div className="stats-chart">
-    <div className="stats-readout" aria-live="polite">{hover === null ? '막대에 마우스를 올리면 턴별 값을 봅니다' : readout(hover)}</div>
-    <div className="stats-bars" role="img" aria-label={label} onMouseLeave={() => setHover(null)}>
-      {values.map((value, index) => <span key={index} className={hover === index ? 'on' : ''} onMouseEnter={() => setHover(index)}><i style={{ height: `${Math.max(2, (value / max) * 100)}%` }} /></span>)}
+    <div className="tc-legend"><span><i className="d" />컨텍스트 <b>최대 {compact(maxCtx)}</b></span><span><i className="d" style={{ borderRadius: '50%' }} />턴을 요청한 시점</span><span><i className="b" />{unitName} <b>최대 {unit(top)}</b></span></div>
+    <div className="stats-readout" aria-live="polite">{hover === null ? '그래프에 마우스를 올리면 그 요청과 턴의 값을 봅니다' : `${turn ? `#${turn.index} · ${unit(turn)} · 요청 ${turn.requests}${turn.ms ? ` · ${duration(turn.ms)}` : ''} · ` : ''}${clock(points[hover].at)} · 컨텍스트 ${compact(points[hover].ctx)}${points[hover].sub ? ' · 서브에이전트' : ''}${marks.includes(hover) ? ' · 컴팩션' : ''}`}</div>
+    <div className="turn-chart">
+      <div className="tc-plot" role="img" aria-label="요청별 컨텍스트 크기와 턴별 비용" onMouseLeave={() => setHover(null)}
+        onMouseMove={event => { const box = event.currentTarget.getBoundingClientRect(); setHover(Math.max(0, Math.min(last, Math.round(((event.clientX - box.left) / box.width) * last)))); }}>
+        {spans.map(({ turn: t, start, end }, index) => <div key={t.index} className={`tc-band${index === active ? ' on' : ''}`} style={{ left: `${pct(start)}%`, width: `${pct(end) - pct(start)}%` }} />)}
+        <div className="tc-ctx">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d={`${line} L100 100 L0 100 Z`} className="stats-area" /><path d={line} className="stats-line" vectorEffect="non-scaling-stroke" /></svg>
+          {marks.map(mark => <u key={mark} className="tc-pack" style={{ left: `${pct(mark)}%` }}><small>컴팩션</small></u>)}
+          {hover !== null && <><u className="tc-cross" style={{ left: `${pct(hover)}%` }} /><i className="tc-here" style={{ left: `${pct(hover)}%`, top: `${y(points[hover].ctx)}%` }} /></>}
+          {spans.map(({ turn: t, start }, index) => <i key={t.index} className={`tc-dot${index === active ? ' on' : ''}`} style={{ left: `${pct(start)}%`, top: `${y(points[start].ctx)}%` }} />)}
+        </div>
+        <div className="tc-lane">{spans.map(({ turn: t, start }, index) => (priced.has(index) || index === active) && <b key={t.index} className={`tc-val${index === active ? ' on' : ''}`} style={{ left: `${pct(start)}%`, bottom: Math.max(3, (value(t) / maxValue) * 52) + 3 }}>{short(t)}</b>)}{spans.map(({ turn: t, start }, index) => <i key={t.index} className={`tc-bar${index === active ? ' on' : ''}`} style={{ left: `${pct(start)}%`, height: Math.max(3, (value(t) / maxValue) * 52), width: `clamp(2px, calc(${minGap}% - 1px), 5px)` }} />)}</div>
+        <div className="tc-axis">{spans.map(({ turn: t, start }, index) => labelled.has(index) && <em key={t.index} className={index === active ? 'on' : ''} style={{ left: `${pct(start)}%` }}>{t.index}</em>)}</div>
+      </div>
     </div>
   </div>;
 }
@@ -59,8 +69,7 @@ function Bars({ values, readout, label }: { values: number[]; readout(index: num
 function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
   const { tokens } = stats, split = { input: tokens.input, output: tokens.output, read: tokens.read, write: tokens.write5m + tokens.write1h };
   const total = Object.values(split).reduce((a, b) => a + b, 0) || 1, hasCost = stats.timeline.some(point => point.costUsd !== null);
-  const marks = stats.compactionAt.map(at => { let best = 0; stats.timeline.forEach((point, index) => { if (Math.abs(point.at - at) < Math.abs(stats.timeline[best].at - at)) best = index; }); return best; });
-  const perTurn = stats.turnSeries.slice(-40), turnValue = (turn: Stats['turnSeries'][number]) => hasCost ? turn.costUsd ?? 0 : turn.output;
+  const turnValue = (turn: Stats['turnSeries'][number]) => hasCost ? turn.costUsd ?? 0 : turn.output;
   const toolMax = Math.max(1, ...stats.tools.map(tool => tool.count));
   return <div className="stats-body">
     <div className="stats-tiles">
@@ -78,15 +87,9 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
       {tokens.thinking > 0 && <p className="stats-note">출력 중 생각 토큰 {compact(tokens.thinking)}</p>}
     </section>
 
-    <section><h3>컨텍스트 크기 추이</h3>
-      <Trend label="요청별 컨텍스트 크기" values={stats.timeline.map(point => point.ctx)} marks={marks}
-        readout={index => { const point = stats.timeline[index]; return `${clock(point.at)} · 컨텍스트 ${compact(point.ctx)} · 출력 ${compact(point.output)}${point.costUsd !== null ? ` · ${money(point.costUsd)}` : ''}${point.sub ? ' · 서브에이전트' : ''}`; }} />
+    <section><h3>컨텍스트 크기와 턴 <small>전체 {stats.turnSeries.length}턴</small></h3>
+      <TurnChart stats={stats} value={turnValue} unitName={hasCost ? '턴 비용' : '턴 출력 토큰'} unit={turn => hasCost ? money(turn.costUsd) : `출력 ${compact(turn.output)}`} short={turn => hasCost ? money(turn.costUsd) : compact(turn.output)} />
       {stats.compactions > 0 && <p className="stats-note">세로 점선은 컴팩션 {stats.compactions}회입니다.</p>}
-    </section>
-
-    <section><h3>{hasCost ? '턴별 비용' : '턴별 출력 토큰'} <small>최근 {perTurn.length}턴</small></h3>
-      <Bars label={hasCost ? '턴별 비용' : '턴별 출력 토큰'} values={perTurn.map(turnValue)}
-        readout={index => { const turn = perTurn[index]; return `#${turn.index} · ${hasCost ? money(turn.costUsd) : `출력 ${compact(turn.output)}`} · 요청 ${turn.requests}${turn.ms ? ` · ${duration(turn.ms)}` : ''}${turn.at ? ` · ${clock(turn.at)}` : ''}`; }} />
       {hasCost && <p className="stats-note">턴별 비용은 실제 비용을 요청별 토큰 사용량으로 나눈 추정치입니다.</p>}
     </section>
 
