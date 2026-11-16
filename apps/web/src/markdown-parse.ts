@@ -8,6 +8,7 @@ const cells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').m
 // The code fence opening at lines[start], up to its closing line (the returned index; lines.length when it never closed).
 // An indented fence (inside a list item) loses that indent from each code line, so the code reads as written.
 function fenced(lines: string[], start: number): [Node, number] {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- only a number (indent length) is interpolated
   const [, indent, mark, lang] = /^(\s*)(```+|~~~+)\s*([\w+-]*)/.exec(lines[start])!, strip = new RegExp(`^ {0,${indent.length}}`), code: string[] = [];
   let i = start + 1;
   for (; i < lines.length && !lines[i].trimStart().startsWith(mark); i++) code.push(lines[i].replace(strip, ''));

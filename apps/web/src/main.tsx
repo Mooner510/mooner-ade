@@ -69,7 +69,7 @@ function useHub(enabled: boolean) {
     if (!enabled) return;
     let stopped = false, retry: ReturnType<typeof setTimeout>;
     function connect() {
-      const ws = new WebSocket(`ws://${location.host}/ws`); state.current.ws = ws;
+      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`); state.current.ws = ws;
       ws.onopen = () => {
         setConnection('연결됨');
         for (const projectId of state.current.subs.keys()) ws.send(JSON.stringify({ type: 'subscribe', projectId }));

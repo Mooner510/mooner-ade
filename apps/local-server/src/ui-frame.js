@@ -6,6 +6,7 @@ export const UI_FRAME_CSP = "default-src 'none'; script-src 'unsafe-inline'; sty
 // Runs inside the written document, before the reply's own markup: the `ade` API and the height report.
 // Both functions below are stringified into the page, so they must stay self-contained (no imports, no outer variables).
 function runtime() {
+  // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- the frame is sandboxed (opaque origin), so "*" is the only possible target; the receiving parent checks the source window
   const post = message => parent.postMessage({ ade: 1, ...message }, '*');
   // `send` needs a real click/keypress in this frame (userActivation), so a script cannot fire follow-up requests on its own.
   window.ade = {
@@ -128,9 +129,11 @@ function shell(runtimeSource) {
     // document.write (not innerHTML) so the reply's <script> tags run; the runtime is part of the written text because open() clears this page's listeners.
     document.open();
     const fonts = typeof data.fonts === 'string' ? data.fonts.replace(/</g, '') : '';
+    // nosemgrep: typescript.react.security.audit.react-unsanitized-method.react-unsanitized-method, javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag -- reply HTML is written into a sandboxed frame on purpose so its scripts run; theme values are stripped of ; { } <
     document.write(`<!doctype html><meta charset="utf-8"><style>${fonts}:root{${vars}}${base}</style><script>(${runtimeSource})()</scr` + `ipt>${data.html}`);
     document.close();
   });
+  // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- sandboxed frame has an opaque origin, "*" is the only possible target
   parent.postMessage({ ade: 1, type: 'ready' }, '*');
 }
 

@@ -127,6 +127,7 @@ export async function connectPtyHost({ endpoint, token }) {
     pending += chunk;
     for (let newline = pending.indexOf('\n'); newline >= 0; newline = pending.indexOf('\n')) {
       const message = JSON.parse(pending.slice(0, newline)); pending = pending.slice(newline + 1);
+      // nosemgrep: javascript.lang.security.insecure-object-assign.insecure-object-assign -- only attaches the error code of a message from our own pty-host child
       if (message.re) { const waiting = replies.get(message.re); replies.delete(message.re); waiting?.sync?.(message); if (message.ok === false) waiting?.reject(Object.assign(new Error(message.error || 'pty-host request failed'), message.code && { code: message.code })); else waiting?.resolve(message); }
       else if (message.ev === 'line') procs.get(message.key)?.line(message.n, message.line);
       else if (message.ev === 'stderr') procs.get(message.key)?.stderr.emit('data', Buffer.from(String(message.data)));
