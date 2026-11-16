@@ -71,7 +71,7 @@ const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
   { id: 'cursor', label: agentNames.cursor, icon: 'cursor' }
 ];
 export const statusLabels: Record<string, string> = {
-  connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', changes: '변경 파일 수', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
+  connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
   claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태', openproject: '프로젝트 열기 버튼'
 };
 const statusHints: Record<string, string> = {
@@ -90,7 +90,6 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
     connection: <span className="conn"><Icon name="wifi" size={13} />연결 끊김</span>,
     path: <span className="stat"><Icon name="folder" size={13} />~/projects/my-app</span>,
     branch: <span className="stat"><Icon name="branch" size={13} />main</span>,
-    changes: <span className="stat"><Icon name="diff" size={13} />3개 파일<ins>+42</ins><del>−7</del></span>,
     terminals: <span className="stat"><Icon name="terminal" size={13} />2</span>,
     size: <span className="stat">120×32</span>,
     cpu: <span className="stat">12%</span>,
