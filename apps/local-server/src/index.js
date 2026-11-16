@@ -995,6 +995,14 @@ async function route(action, input, project) {
       await chat.rewind(input.uuid);
       return {};
     }
+    // /btw works whatever the chat is doing: no idle check, the question runs in its own process.
+    case 'chat/btw': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      const ok = value => typeof value === 'string' && /^[\w.\-\[\]=,]{1,80}$/.test(value) ? value : undefined; // a model/effort id, never free text
+      return chat.btw(input.question, typeof input.btwId === 'string' ? input.btwId.slice(0, 80) : '', { model: ok(input.model), effort: ok(input.effort) });
+    }
+    case 'chat/btw-cancel': return { cancelled: project.chats.get(input.id)?.cancelBtw(input.btwId) === true };
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
     case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
     case 'chat/stop-task': await project.chats.get(input.id)?.stopTask(String(input.toolUseId ?? '')); return {};
