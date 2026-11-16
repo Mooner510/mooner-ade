@@ -25,6 +25,12 @@ export type Approval = { requestId: string; tool: string; input: any; toolUseId?
 export type ChatQuestion = { id: string; prompt: string; header?: string; secret?: boolean; allowMultiple?: boolean; allowOther?: boolean; options?: { id: string; label: string; description?: string }[] };
 // `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
 type ItemBase = { key: string; fresh?: boolean };
+/** What /usage shows of the chat itself, frozen at the moment it was asked (the plan limits are read when the card opens). */
+export type UsageSnap = {
+  at: number; agent: 'claude' | 'codex' | 'cursor'; model: string; apiKey: boolean;
+  context: { used: number; basis: number; max: number; percent: number; autoCompact: boolean } | null;
+  costUsd: number | null; turns: number; tokens: Tokens | null; share: string | null;
+};
 /** The part of a system line that names what changed (a model, an Effort, a permission mode) and the colour it is drawn in elsewhere in the UI. */
 export type Tone = { value: string; color: string; icon?: string; bars?: number };
 /** What the user switched with /model, /effort and /permissions since the last thing said in the thread. */
@@ -41,6 +47,8 @@ export type Item = ItemBase & (
   | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
+  | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
+  | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
 export type ChatView = {

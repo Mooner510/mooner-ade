@@ -7,6 +7,7 @@ import { QuestionCard, QuestionList } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
+import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
 import { cacheSendWarning, cacheSendWarningText } from './claude-cache-warning';
 import { Hint } from './Hint';
@@ -14,7 +15,7 @@ import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
-import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
+import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -216,7 +217,7 @@ const LOCAL: CommandInfo[] = [
   { name: 'model', description: '모델을 바꿉니다', hint: '[모델]' },
   { name: 'effort', description: 'Effort(추론 노력 수준)를 바꿉니다', hint: '[low|medium|high|max]' },
   { name: 'permissions', description: '권한 모드를 바꿉니다', hint: '[default|acceptEdits|plan|auto]' },
-  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'usage', description: '컨텍스트와 플랜 사용 한도를 보여 줍니다' },
+  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
   { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: '연결된 MCP 서버와 도구 수를 보여 줍니다' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
   { name: 'cost', description: '이 채팅의 비용·토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰·비용·도구·컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
   { name: 'config', description: 'ADE 설정을 엽니다' }, { name: 'exit', description: '이 채팅을 닫습니다' }
@@ -397,6 +398,9 @@ function BlockView({ block, result, settings, running, plainThinking, enter }: {
 type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>; opened: string | null; waiting: ReadonlySet<string>; open(id: string): void; stop(id: string): void };
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
+// What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {} });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -599,7 +603,7 @@ const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type =
 const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  const isLocal = (entry?: Item) => (entry?.kind === 'note' || entry?.kind === 'info') && entry.local === true;
+  const isLocal = (entry?: Item) => (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw') && entry.local === true;
   // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
   // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
   const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
@@ -760,8 +764,18 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'note') return <SystemLine text={item.text} tones={item.tones} rev={item.rev} enter={enter} />;
   if (item.kind === 'agent_end') return <AgentEnd id={item.toolUseId} enter={enter} />;
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
+  if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
+  if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
   return null;
 });
+function UsageCardRow({ item, enter }: { item: Extract<Item, { kind: 'usage' }>; enter?: true }) {
+  const { projectId, colors, showSession } = useContext(LocalCardsContext);
+  return <div data-enter={enter}><UsageCard snap={item.snap} projectId={projectId} colors={colors} showSession={showSession} /></div>;
+}
+function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; enter?: true }) {
+  const { closeBtw, retryBtw } = useContext(LocalCardsContext);
+  return <div data-enter={enter}><BtwCard item={item} onClose={() => closeBtw(item.key)} onRetry={() => retryBtw(item.key)} /></div>;
+}
 
 // ExitPlanMode: the plan is the thing being decided, so it gets room to read (tall body, larger type) and a full-size dialog
 // that carries the same decision buttons. The footer stays outside the scroll area, so the answer is never scrolled away.
@@ -1320,6 +1334,24 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     await ctx.call('chat/reset', { id, ...(force && { force }) });
     return true;
   }
+  // /btw runs beside whatever the chat is doing: a separate server-side run, so it never waits for or disturbs a turn. The card lives only in this pane.
+  const patchLocal = (key: string, patch: Partial<Extract<Item, { kind: 'btw' }>>) => apply(view => ({ ...view, items: view.items.map(item => item.key === key && item.kind === 'btw' ? { ...item, ...patch, fresh: false } : item) }));
+  const closedBtw = useRef(new Set<string>());
+  function askBtw(key: string, question: string) {
+    closedBtw.current.delete(key); patchLocal(key, { status: 'pending', error: undefined });
+    void ctx.call<{ answer: string; costUsd: number | null }>('chat/btw', { id, question, btwId: key }).then(
+      result => { if (!closedBtw.current.has(key)) patchLocal(key, { status: 'done', answer: result.answer, costUsd: result.costUsd }); },
+      cause => { if (!closedBtw.current.has(key)) patchLocal(key, { status: 'error', error: cause instanceof Error ? cause.message : String(cause) }); });
+  }
+  const closeBtw = (key: string) => {
+    const item = viewRef.current.items.find(entry => entry.key === key);
+    if (item?.kind === 'btw' && item.status === 'pending') { closedBtw.current.add(key); void ctx.call('chat/btw-cancel', { id, btwId: key }).catch(() => {}); }
+    apply(view => ({ ...view, items: view.items.filter(entry => entry.key !== key) }));
+  };
+  const retryBtw = (key: string) => { const item = viewRef.current.items.find(entry => entry.key === key); if (item?.kind === 'btw') askBtw(key, item.question); };
+  // The cards sit in memoised rows, so they reach these through a ref that always holds this render's functions.
+  const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key) }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession]);
   async function runLocal(name: string, argument: string): Promise<boolean> {
     if (locked && ['model', 'effort', 'permissions'].includes(name)) { note(`지금은 설정을 바꿀 수 없습니다. ${locked}`); return true; }
     switch (name) {
@@ -1391,6 +1423,24 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           : [['모델', model], ['Effort', effortLabel(state.effort ?? 'medium')], ['권한 모드', permissionLabels[state.permissionMode] ?? state.permissionMode],
             ['비용', `${cost} · ${state.turns}턴`], ...(contextRow ? [contextRow] : []), ['세션', state.sessionId ? `\`${state.sessionId}\`` : '아직 없음']];
         info(`### ${name === 'cost' ? '비용' : '상태'}\n\n| 항목 | 값 |\n|---|---|\n${rows.map(([label, value]) => `| ${label} | ${value} |`).join('\n')}`);
+        return true;
+      }
+      case 'usage': {
+        // Drawn from the chat's own state at once (no request, so it also works mid-turn); the plan limits fill in inside the card.
+        const gauge = contextGauge(state), shownContext = state.capabilities?.context !== false && contextReported(state);
+        const snap: UsageSnap = {
+          at: Date.now(), agent, apiKey: state.apiKey === true, model: modelChoices.find(option => option.value === modelValue(selectedModel, aliases))?.label ?? displayModel(state.model, agent),
+          context: shownContext ? { used: gauge.used, basis: gauge.basis, max: gauge.max, percent: gauge.percent, autoCompact: gauge.autoCompact } : null,
+          costUsd: state.costUsd, turns: state.turns, tokens: caps?.tokens === false ? null : state.tokens, share
+        };
+        apply(view => ({ ...view, items: [...view.items, { kind: 'usage', key: `u${Date.now()}${Math.random()}`, snap, local: true, fresh: true }] }));
+        return true;
+      }
+      case 'btw': {
+        if (!argument) { note('사용법: /btw <질문> — 지금 대화를 아는 가벼운 모델이 짧게 답하고, 대화 기록과 진행 중인 작업에는 영향을 주지 않습니다.'); return true; }
+        const key = `b${Date.now()}${Math.random()}`;
+        apply(view => ({ ...view, items: [...view.items, { kind: 'btw', key, question: argument, status: 'pending', local: true, fresh: true }] }));
+        askBtw(key, argument);
         return true;
       }
       case 'help': note(`이 창에서 바로 처리: ${LOCAL.map(item => `/${item.name}`).join(' ')}\n${agentLabel}가 지원하는 명령만 사용할 수 있습니다. 화면형 선택이 필요한 명령은 터미널 탭에서 쓰세요.`); return true;
@@ -1536,7 +1586,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {((maxOption && maxSelected(maxOption)) || (!maxOption && maxContext && contextOption?.currentValue === maxContext.on)) && <span className="tune-ico" style={{ color: '#f2566e' }}><SettingGlyph icon="local_fire_department" size={15} /></span>}</button>
     <div id={tunePanel} popover="auto" className="chat-tune-panel" role="dialog" aria-label="채팅 옵션" onToggle={event => placeAbove(event, 'right')}>{panelItems}</div>
   </span>;
-  return <ChatUiContext.Provider value={uiBlocks}><DiffLayoutContext.Provider value={diffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
+  return <ChatUiContext.Provider value={uiBlocks}><DiffLayoutContext.Provider value={diffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><LocalCardsContext.Provider value={localCards}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onDragEnter={event => { if (isFileDrag(event)) { event.preventDefault(); dragDepth.current++; setDropping(true); } }}
     onDragOver={event => { if (isFileDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); } }}
     onDragLeave={event => { if (isFileDrag(event) && --dragDepth.current <= 0) { dragDepth.current = 0; setDropping(false); } }}
@@ -1616,7 +1666,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); hintSeen('keymode'); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
             if (matches.length) {
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length); return; }
-              if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) { event.preventDefault(); complete(matches[menuAt].name); return; }
+              // Enter on a command typed out in full that takes no argument (/usage, /cost…) runs it at once instead of only completing it.
+              const exact = event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey) && matches[menuAt].name === slash?.[1] && !matches[menuAt].hint;
+              if (!exact && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) { event.preventDefault(); complete(matches[menuAt].name); return; }
               if (event.key === 'Escape') { event.preventDefault(); setText(''); return; }
             }
             if (mentions.length) {
@@ -1666,7 +1718,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} title={item === agent ? undefined : `${PROVIDER_LABELS[item]}로 전환`} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
     {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onStop={stopTask} onClose={() => setAgentOpen(null)} />}
-  </section></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></DiffLayoutContext.Provider></ChatUiContext.Provider>;
+  </section></LocalCardsContext.Provider></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></DiffLayoutContext.Provider></ChatUiContext.Provider>;
 }
 
 // Rising particles for the two highest Effort levels, kept inside the dropdown and under its label text. xhigh: a few small, faint, slow sparks, no glow or background. max: more, brighter and faster, with a few glowing flares. Every spark gets its own position, size, speed, drift and phase (rolled once per level), so nothing repeats in step.
@@ -1711,12 +1763,6 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
   const usageProvider = agent === 'codex' ? 'codex' : agent === 'cursor' ? 'cursor' : 'claude';
   const { usage, loading, load } = useUsage(usageProvider, ctx.projectId, active, settings.usageRefresh);
   const windows = usage ? (agent === 'cursor' ? usage.windows : (settings.claudeSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'))) : [];
-  // `/usage` in the composer opens this popover (it is answered here, never sent to the CLI, so it also works while a turn runs).
-  useEffect(() => {
-    const open = (event: Event) => { if ((event as CustomEvent).detail !== chatId) return; void load(true); const element = document.getElementById(panel); if (element && !element.matches(':popover-open')) element.showPopover(); };
-    window.addEventListener('ade-chat-usage', open);
-    return () => window.removeEventListener('ade-chat-usage', open);
-  }, [chatId, panel, load]);
   const supported = state.capabilities?.context !== false;
   const shown = supported && contextReported(state);
   const waiting = supported && !contextReported(state);
