@@ -536,6 +536,7 @@ type BundlePart = { key: string; item: AssistantItem; block: Block };
 function ToolBundle({ parts, results, settings, running, plainThinking, flat }: { parts: BundlePart[]; results: ChatView['results']; settings: Settings; running: boolean; plainThinking?: boolean; flat?: boolean }) {
   const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false, above: 0, below: 0, over: false });
   const list = useRef<HTMLDivElement>(null), follow = useRef(true), cwd = useContext(CwdContext), [root, capture] = useHeightMorph<HTMLDivElement>();
+  const anchor = useRef<{ head: HTMLElement; top: number } | null>(null);
   const tools = parts.flatMap(part => part.block.type === 'tool_use' ? [part.block] : []);
   const finished = tools.filter(tool => results[tool.id]).length, errored = tools.filter(tool => results[tool.id]?.isError).length;
   // An auto-mode denial is an error result too, but the card shows it as "blocked" (warning colour), so the summary counts it apart from real failures.
@@ -560,6 +561,11 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   useLayoutEffect(() => {
     const el = list.current;
     if (!el) return;
+    const saved = anchor.current; anchor.current = null;
+    if (saved) {
+      const scroll = el.closest<HTMLElement>('.chat-scroll, .chat-agent-drawer-body');
+      if (scroll) scroll.scrollTop += saved.head.getBoundingClientRect().top - saved.top;
+    }
     if (follow.current && !expanded) el.scrollTop = el.scrollHeight;
     measure();
     const watch = new ResizeObserver(measure);
@@ -582,6 +588,13 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
     </button>}
     <Collapse open={!folded}><div className="chat-bundle-scroll">
       <div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
+        onClick={event => {
+          const head = (event.target as HTMLElement).closest<HTMLElement>('.chat-tool-head[aria-expanded="false"]');
+          if (!head || expanded || flat) return;
+          // Reading a tool leaves the compact preview; keep its heading in place as the hidden rows above reappear.
+          anchor.current = { head, top: head.getBoundingClientRect().top };
+          follow.current = false; setExpanded(true);
+        }}
         onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
         {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
           <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
@@ -981,7 +994,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }, []);
   // Following the bottom: content growth glides the view down a fraction of the gap per frame instead of snapping a line at a time. Only the user's own
   // scrolling (wheel, touch, keys, scrollbar) lets go, so a fold collapsing or a block growing never unpins it; reaching the bottom pins it again.
-  const follow = useRef(0), pinFrame = useRef(0);
+  const follow = useRef(0), pinFrame = useRef(0), readingTool = useRef(false);
   const followBottom = useCallback(() => {
     if (!stick.current || !(ctxRef.current.settings.chatAutoScroll || jump.current) || follow.current) return;
     const step = () => {
@@ -1206,7 +1219,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const onScroll = () => {
     const element = scroller.current; if (!element) return;
     const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (gap < 4) stick.current = true;
+    // Opening a tool can emit a bottom scroll before its animation grows; that must not resume following while it is being read.
+    if (gap < 4 && !readingTool.current) stick.current = true;
     setAway(!stick.current && gap > 240);
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(() => { pinFrame.current = 0; syncPin(); });
   };
@@ -1219,7 +1233,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   };
   const branch = useCallback((uuid: string) => void ctxRef.current.branchChat(id, uuid, leaf.cwd).catch(ctxRef.current.fail), [id, leaf.cwd]);
   const rewind = useCallback((uuid: string) => void ctxRef.current.pick('여기로 되돌릴까요? 이후 대화는 사라지고 에이전트가 이미 바꾼 파일은 그대로입니다.', [{ id: 'yes', label: '되돌리기' }]).then(choice => choice === 'yes' ? ctxRef.current.call('chat/rewind', { id, uuid }) : undefined).catch(ctxRef.current.fail), [id]);
-  const jumpToEnd = () => { const element = scroller.current; if (!element) return; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
+  const jumpToEnd = () => { const element = scroller.current; if (!element) return; readingTool.current = false; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
 
   const note = (message: string) => apply(view => ({ ...view, items: [...view.items, { kind: 'note', key: `n${Date.now()}${Math.random()}`, text: message, local: true, fresh: true }] }));
   // A switched setting: the line just above is edited when it is also a switch, so repeating /model or /effort does not pile up lines.
@@ -1235,7 +1249,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     else if (pending.started) { compactThenSwitch.current = null; note('압축이 완료되지 않아 모델을 바꾸지 않았습니다.'); }
   }, [compactCount, busy]);
   const transmit = async (message: string, attachments: Attachment[], steer = false) => {
-    stick.current = true; jump.current = true;
+    readingTool.current = false; stick.current = true; jump.current = true;
     try { const previews = (await Promise.all(attachments.map(item => thumbnail(item.url)))).filter((url): url is string => url !== null); await ctx.call('chat/send', { id, text: message, steer, interactiveUi: ctx.settings.interactiveUi, artifact: ctx.settings.artifactAlways, images: attachments.map(({ mime, data }) => ({ mime, data })), previews: previews.length === attachments.length ? previews : [] }); }
     catch (cause) { ctx.fail(cause); }
   };
@@ -1557,8 +1571,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
-    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { if (event.deltaY < 0) release(); }} onTouchMove={release}
-      onKeyDown={event => { if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) release(); }}>
+    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
+      onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
+      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
       {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" title="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
