@@ -67,7 +67,9 @@ jobs:
     name: Semgrep
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    container: semgrep/semgrep@sha256:012c8fe81c14da2d7691b90fcd826ce07f460a3301442b16c460575c87d3efb6
+    container:
+      image: semgrep/semgrep@sha256:012c8fe81c14da2d7691b90fcd826ce07f460a3301442b16c460575c87d3efb6
+      options: --user root # the runner's workspace/_temp are owned by root-mapped uid; checkout cannot write otherwise
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

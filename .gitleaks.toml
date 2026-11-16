@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Keyboard-shortcut definitions (`keys: 'mod+shift+enter'`) and fake test fixtures, not credentials"
+condition = "OR"
+regexTarget = "match"
+regexes = ['''keys:\s*['"][a-z0-9+ ]+['"]''', '''key: 'abcdefgh1234\'''', '''waka_12345678-1234-1234-1234-1234567890ab''']
