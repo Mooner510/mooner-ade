@@ -15,7 +15,8 @@ import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
-import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { FileIcon } from './FileIcon';
+import { modeIcons as MODE_ICONS, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -34,9 +35,9 @@ export type ChatCtx = {
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
   // Continue this conversation in a terminal (`claude --resume`); the server refuses unless the chat is idle.
   toTerminal(id: string, fresh: boolean): void;
-  resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor'): Promise<void>;
+  resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor', from?: string): Promise<void>;
   // Continue a conversation made with the plain `claude` CLI as a new chat tab.
-  importCliChat(sessionId: string): Promise<void>;
+  importCliChat(sessionId: string, from?: string): Promise<void>;
   // Start screen only: replace this pane with an empty chat of another provider (forget = drop the stored empty chat).
   switchAgent(id: string, agent: 'claude' | 'codex' | 'cursor', forget: boolean): Promise<boolean>;
   onSettingsChange(settings: Settings): void;
@@ -63,7 +64,6 @@ const cursorSandboxOptions = [
 ];
 const sandboxKey = (sandbox?: string | null, network?: boolean) => !sandbox ? 'follow' : sandbox === 'workspace-write' && network ? 'workspace-write+network' : sandbox;
 const sandboxFromKey = (key: string): [string | null, boolean] => key === 'follow' ? [null, false] : key === 'workspace-write+network' ? ['workspace-write', true] : [key, false];
-const MODE_ICONS: Record<string, string> = { default: 'front_hand', acceptEdits: 'edit_note', plan: 'assignment', auto: 'bolt', bypassPermissions: 'lock_open', ask: 'help' };
 const cycleMode = (modes: string[], mode: string) => { const ring = modes.filter(item => item !== 'bypassPermissions'); return ring[(ring.indexOf(mode) + 1) % ring.length]; };
 // Shift+Tab cycles like Claude Code: default -> accept edits -> plan -> auto. Bypass is dropdown-only.
 const nextMode = (mode: string) => ({ default: 'acceptEdits', acceptEdits: 'plan', plan: 'auto', auto: 'default' } as Record<string, string>)[mode] ?? 'default';
@@ -417,7 +417,7 @@ function useTick(on: boolean) {
 }
 const agentElapsed = (agent: SubAgent, now: number) => agent.status === 'running' ? (agent.startedAt ? Math.max(0, now - agent.startedAt) : agent.durationMs)
   : agent.durationMs ?? (agent.startedAt && agent.endedAt ? agent.endedAt - agent.startedAt : undefined);
-const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? duration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
+const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [[agent.model && shortModel(agent.model), agent.effort && effortLabel(agent.effort)].filter(Boolean).join(' '), agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? duration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
 // ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
 function StopTask({ id }: { id: string }) {
   const { stop } = useContext(AgentsContext);
@@ -540,6 +540,7 @@ type BundlePart = { key: string; item: AssistantItem; block: Block };
 function ToolBundle({ parts, results, settings, running, plainThinking, flat }: { parts: BundlePart[]; results: ChatView['results']; settings: Settings; running: boolean; plainThinking?: boolean; flat?: boolean }) {
   const [expanded, setExpanded] = useState(false), [edge, setEdge] = useState({ top: false, bottom: false, above: 0, below: 0, over: false });
   const list = useRef<HTMLDivElement>(null), follow = useRef(true), cwd = useContext(CwdContext), [root, capture] = useHeightMorph<HTMLDivElement>();
+  const anchor = useRef<{ head: HTMLElement; top: number } | null>(null);
   const tools = parts.flatMap(part => part.block.type === 'tool_use' ? [part.block] : []);
   const finished = tools.filter(tool => results[tool.id]).length, errored = tools.filter(tool => results[tool.id]?.isError).length;
   // An auto-mode denial is an error result too, but the card shows it as "blocked" (warning colour), so the summary counts it apart from real failures.
@@ -564,6 +565,11 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
   useLayoutEffect(() => {
     const el = list.current;
     if (!el) return;
+    const saved = anchor.current; anchor.current = null;
+    if (saved) {
+      const scroll = el.closest<HTMLElement>('.chat-scroll, .chat-agent-drawer-body');
+      if (scroll) scroll.scrollTop += saved.head.getBoundingClientRect().top - saved.top;
+    }
     if (follow.current && !expanded) el.scrollTop = el.scrollHeight;
     measure();
     const watch = new ResizeObserver(measure);
@@ -586,6 +592,13 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
     </button>}
     <Collapse open={!folded}><div className="chat-bundle-scroll">
       <div ref={list} className="chat-bundle-list" data-edge-top={edge.top || undefined} data-edge-bottom={edge.bottom || undefined}
+        onClick={event => {
+          const head = (event.target as HTMLElement).closest<HTMLElement>('.chat-tool-head[aria-expanded="false"]');
+          if (!head || expanded || flat) return;
+          // Reading a tool leaves the compact preview; keep its heading in place as the hidden rows above reappear.
+          anchor.current = { head, top: head.getBoundingClientRect().top };
+          follow.current = false; setExpanded(true);
+        }}
         onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; measure(); }}>
         {parts.map(part => <div key={part.key} className={`chat-bundle-item${part.item.sub ? ' sub' : ''}`}>
           <BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={running} plainThinking={plainThinking} enter={part.item.fresh} />
@@ -633,11 +646,11 @@ const GlyphIcon = ({ name, size = 14 }: { name: string; size?: number }) => <spa
 function TurnTokens({ done }: { done: TurnDone }) {
   const rows = turnTokenRows(done);
   return <span className="chat-done-tip">
-    <IconButton icon="info" tip="none" label={rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`).join(', ')} size={13} />
+    <IconButton icon="info" tip="none" label={[...rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`), ...(done.costUsd ? [`비용 ${dollars(done.costUsd)}달러`] : [])].join(', ')} size={13} />
     <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
       <GlyphIcon name={row.icon} size={15} /><b>{row.label}</b>
       <span><GlyphIcon name="arrow_upward" size={13} />{row.up.value}</span><span><GlyphIcon name="arrow_downward" size={13} />{row.down.value}</span>
-    </span>)}</span>
+    </span>)}{done.costUsd != null && <span className="chat-done-row"><GlyphIcon name="payments" size={15} /><b>비용</b><span>{'$' + dollars(done.costUsd)}</span></span>}</span>
   </span>;
 }
 
@@ -707,7 +720,7 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
       {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
-      {finalItem.done?.tokens && <TurnTokens done={finalItem.done} />}
+      {(finalItem.done?.tokens || finalItem.done?.costUsd) && <TurnTokens done={finalItem.done} />}
       {finalItem.done && <span className="chat-done-time">{turnDoneParts(finalItem.done).map(part => <span key={part}>{part}</span>)}</span>}</div>}
   </div>;
 }, sameTurn);
@@ -969,6 +982,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     return () => clearTimeout(timer);
   }, [ctx.projectId, id, text]);
   const [queueSending, setQueueSending] = useState(false);
+  // Pictures of a steering message: the server keeps them only while the turn has not taken the message in, so the composer remembers them by uuid to restore them on withdraw (↑).
+  const pendingSteers = useRef<{ text: string; images: Attachment[] }[]>([]), steerImages = useRef(new Map<string, Attachment[]>());
   const [commands, setCommands] = useState<CommandInfo[]>([]), [menuAt, setMenuAt] = useState(0), [openError, setOpenError] = useState(''), [user, setUser] = useState(''), [away, setAway] = useState(false);
   const greeting = useMemo(() => pickGreeting(user), [user, id]);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null), fitSig = useRef(''), flipping = useRef(0), tunePanel = `chat-tune-${useId()}`, scroller = useRef<HTMLDivElement>(null), thread = useRef<HTMLDivElement>(null), box = useRef<HTMLTextAreaElement>(null), stick = useRef(true), jump = useRef(false), ctxRef = useRef(ctx); ctxRef.current = ctx;
@@ -995,7 +1010,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }, []);
   // Following the bottom: content growth glides the view down a fraction of the gap per frame instead of snapping a line at a time. Only the user's own
   // scrolling (wheel, touch, keys, scrollbar) lets go, so a fold collapsing or a block growing never unpins it; reaching the bottom pins it again.
-  const follow = useRef(0), pinFrame = useRef(0);
+  const follow = useRef(0), pinFrame = useRef(0), readingTool = useRef(false);
   const followBottom = useCallback(() => {
     if (!stick.current || !(ctxRef.current.settings.chatAutoScroll || jump.current) || follow.current) return;
     const step = () => {
@@ -1027,7 +1042,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => () => { const at = drainAt.current; cancelAnimationFrame(at.frame); if (at.timer) clearTimeout(at.timer); cancelAnimationFrame(follow.current); cancelAnimationFrame(pinFrame.current); }, []);
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
-  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
+  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
   const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
@@ -1055,7 +1070,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         enqueue(message);
         if (message.event?.kind === 'divider' && message.event.reason === 'clear') setQueue([]);
         // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
-        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && !message.event.resent && typeof message.event.text === 'string') setText(current => current || message.event.text);
+        // Queued steers are matched to the pictures sent with them (by text and count); applied ones are forgotten.
+        const steer = message.event;
+        if (steer?.kind === 'steer' && steer.phase === 'queued') { const index = pendingSteers.current.findIndex(item => item.text === steer.text && item.images.length === steer.images); if (index >= 0) { steerImages.current.set(steer.uuid, pendingSteers.current[index].images); pendingSteers.current.splice(index, 1); } }
+        if (steer?.kind === 'steer' && steer.phase === 'applied') steerImages.current.delete(steer.uuid);
+        // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost, pictures included.
+        if (steer?.kind === 'steer' && steer.phase === 'cancelled' && !steer.resent && typeof steer.text === 'string') { const pictures = steerImages.current.get(steer.uuid); steerImages.current.delete(steer.uuid); setText(current => current || steer.text); if (pictures) setImages(current => current.length ? current : pictures); }
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
@@ -1220,7 +1240,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const onScroll = () => {
     const element = scroller.current; if (!element) return;
     const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (gap < 4) stick.current = true;
+    // Opening a tool can emit a bottom scroll before its animation grows; that must not resume following while it is being read.
+    if (gap < 4 && !readingTool.current) stick.current = true;
     setAway(!stick.current && gap > 240);
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(() => { pinFrame.current = 0; syncPin(); });
   };
@@ -1233,7 +1254,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   };
   const branch = useCallback((uuid: string) => void ctxRef.current.branchChat(id, uuid, leaf.cwd).catch(ctxRef.current.fail), [id, leaf.cwd]);
   const rewind = useCallback((uuid: string) => void ctxRef.current.pick('여기로 되돌릴까요? 이후 대화는 사라지고 에이전트가 이미 바꾼 파일은 그대로입니다.', [{ id: 'yes', label: '되돌리기' }]).then(choice => choice === 'yes' ? ctxRef.current.call('chat/rewind', { id, uuid }) : undefined).catch(ctxRef.current.fail), [id]);
-  const jumpToEnd = () => { const element = scroller.current; if (!element) return; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
+  const jumpToEnd = () => { const element = scroller.current; if (!element) return; readingTool.current = false; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
 
   const note = (message: string) => apply(view => ({ ...view, items: [...view.items, { kind: 'note', key: `n${Date.now()}${Math.random()}`, text: message, local: true, fresh: true }] }));
   // A switched setting: the line just above is edited when it is also a switch, so repeating /model or /effort does not pile up lines.
@@ -1249,7 +1270,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     else if (pending.started) { compactThenSwitch.current = null; note('압축이 완료되지 않아 모델을 바꾸지 않았습니다.'); }
   }, [compactCount, busy]);
   const transmit = async (message: string, attachments: Attachment[], steer = false) => {
-    stick.current = true; jump.current = true;
+    readingTool.current = false; stick.current = true; jump.current = true;
     try { const previews = (await Promise.all(attachments.map(item => thumbnail(item.url)))).filter((url): url is string => url !== null); await ctx.call('chat/send', { id, text: message, steer, interactiveUi: ctx.settings.interactiveUi, artifact: ctx.settings.artifactAlways, images: attachments.map(({ mime, data }) => ({ mime, data })), previews: previews.length === attachments.length ? previews : [] }); }
     catch (cause) { ctx.fail(cause); }
   };
@@ -1307,6 +1328,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const [files, setFiles] = useState<string[] | null>(null), [caret, setCaret] = useState(0), [mentionOff, setMentionOff] = useState(-1);
   const mention = slash ? null : /(?:^|\s)@([^\s@]*)$/.exec(text.slice(0, caret)), mentionAt = mention ? caret - mention[1].length - 1 : -1;
   const mentionOpen = mention !== null && mentionAt !== mentionOff;
+  // Escape only dismisses that one @: once the caret leaves it (sent, deleted), the same position must open the menu again.
+  useEffect(() => { if (!mention) setMentionOff(-1); }, [mention === null]);
   useEffect(() => {
     if (!mentionOpen) return;
     let alive = true;
@@ -1458,7 +1481,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }]) !== 'yes') return;
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
-    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);
+    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
     else await transmit(body, attachments);
   }
@@ -1497,7 +1520,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }
   async function pickResume(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }) {
     setResumeOpen(false); setResuming(true);
-    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent) : ctx.importCliChat(choice.sessionId)); }
+    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent, id) : ctx.importCliChat(choice.sessionId, id)); }
     catch (cause) { ctx.fail(cause); }
     finally { setResuming(false); }
   }
@@ -1513,7 +1536,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
   // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
   const agentsSeen = useRef<SubAgent[]>([]);
-  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks]);
+  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
   const agentKey = agentList.map(item => item.id).join(' ');
   const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
   const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
@@ -1594,7 +1617,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" title={cwd}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? `클릭하여 세션 ID 복사\n${view.state.sessionId}\n${cwd}` : cwd} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
@@ -1605,8 +1628,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
-    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { if (event.deltaY < 0) release(); }} onTouchMove={release}
-      onKeyDown={event => { if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) release(); }}>
+    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
+      onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
+      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
       {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" title="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
@@ -1645,8 +1669,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           </button></li>)}</ul>}
         {mentions.length > 0 && <ul className="chat-commands" role="listbox" aria-label="파일 언급">{mentions.map((file, index) => <li key={file} role="option" aria-selected={index === menuAt}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); pickMention(file); }}>
+            <FileIcon name={file.replace(/\/$/, '').split('/').pop()!} folder={file.endsWith('/')} size={16} />
             <span className="chat-command-head"><b>{file.replace(/\/$/, '').split('/').pop()}{file.endsWith('/') ? '/' : ''}</b></span>
-            <span className="chat-command-desc">{file}</span>
+            <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
           </button></li>)}</ul>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}

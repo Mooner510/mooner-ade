@@ -16,7 +16,7 @@ import { useFeedback } from './feedback-store';
 import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
 import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 
-type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean> };
+type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
 
 // Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
@@ -32,13 +32,16 @@ function FeedbackAvailabilityRow() {
 }
 
 function AboutSettings() {
-  const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null);
-  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.dev ? `${info.version} (dev)` : info.version), () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); }, []);
+  const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null), [systemCa, setSystemCa] = useState<boolean | null>(null);
+  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.dev ? `${info.version} (dev)` : info.version), () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); void desktop()?.getSystemCa?.().then(setSystemCa, () => {}); }, []);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
     <Row title="현재 버전" hint="새 버전은 자동으로 확인하며, 찾으면 종료할 때 또는 바로 설치할 수 있습니다."><span>{version || '—'}</span></Row>
-    {beta !== null && <Row title="베타 업데이트 받기" hint="0.4.1-beta1 같은 시험 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다.">
+    {beta !== null && <Row title="베타 업데이트 받기" hint="정식 버전이 아닌 개발 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다.">
       <input type="checkbox" role="switch" aria-label="베타 업데이트 받기" checked={beta} onChange={event => { const next = event.target.checked; setBeta(next); void desktop()!.setBetaUpdates!(next).then(setBeta, () => setBeta(!next)); }} />
+    </Row>}
+    {systemCa !== null && <Row title="시스템 인증서 신뢰 (플러그인)" hint="회사 등 HTTPS를 검사하는 네트워크에서 플러그인이 ‘fetch failed’로 연결하지 못할 때 켭니다. 운영체제가 신뢰하는 인증서를 플러그인도 신뢰하며, 바꾸면 앱을 다시 시작해야 적용됩니다.">
+      <input type="checkbox" role="switch" aria-label="시스템 인증서 신뢰" checked={systemCa} onChange={event => { const next = event.target.checked; setSystemCa(next); void desktop()!.setSystemCa!(next).then(setSystemCa, () => setSystemCa(!next)); }} />
     </Row>}
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교하고, 새 버전이 있으면 설치 여부를 묻습니다.">
       <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
@@ -68,7 +71,7 @@ const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
   { id: 'cursor', label: agentNames.cursor, icon: 'cursor' }
 ];
 export const statusLabels: Record<string, string> = {
-  connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', changes: '변경 파일 수', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
+  connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', terminals: '터미널 수', size: '터미널 크기', cpu: 'CPU 사용률', memory: '메모리 사용량',
   claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태', openproject: '프로젝트 열기 버튼'
 };
 const statusHints: Record<string, string> = {
@@ -87,7 +90,6 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
     connection: <span className="conn"><Icon name="wifi" size={13} />연결 끊김</span>,
     path: <span className="stat"><Icon name="folder" size={13} />~/projects/my-app</span>,
     branch: <span className="stat"><Icon name="branch" size={13} />main</span>,
-    changes: <span className="stat"><Icon name="diff" size={13} />3개 파일<ins>+42</ins><del>−7</del></span>,
     terminals: <span className="stat"><Icon name="terminal" size={13} />2</span>,
     size: <span className="stat">120×32</span>,
     cpu: <span className="stat">12%</span>,

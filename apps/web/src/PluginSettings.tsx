@@ -240,8 +240,10 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const run: Run = (key, step) => {
     const where = key.slice(0, key.lastIndexOf(':')), stepName = key.slice(key.lastIndexOf(':') + 1);
     setBusy(key); setNotice(null);
-    void step().then(value => { setState(value); if (value.message) setNotice({ where, step: stepName, text: value.message, error: false }); },
-      (error: Error) => setNotice({ where, step: stepName, text: errorText(error), error: true })).finally(() => setBusy(''));
+    // A plugin that cannot connect may be blocked by a TLS-inspecting network; the app checks and, if the OS certificate setting would fix it, asks once.
+    const offerCa = (text: string) => { if (/fetch failed|연결하지 못했습니다/.test(text)) void (window as unknown as { adeDesktop?: { offerSystemCa?(): Promise<boolean> } }).adeDesktop?.offerSystemCa?.().catch(() => {}); };
+    void step().then(value => { setState(value); if (value.message) { setNotice({ where, step: stepName, text: value.message, error: false }); offerCa(value.message); } },
+      (error: Error) => { const text = errorText(error); setNotice({ where, step: stepName, text, error: true }); offerCa(text); }).finally(() => setBusy(''));
   };
   const noticeFor = (where: string) => notice?.where === where ? notice : null;
   const open = selected === null ? null : state.plugins.find(plugin => plugin.folder === selected) ?? null;

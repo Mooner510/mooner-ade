@@ -1,88 +1,99 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUsage, type UsageWindow } from './Usage';
-import { addPair, contribution, learnedK, sameWindow, type KSums, type Reading } from './usage-share';
-import { loadShareStore, shareGet, shareSet } from './usage-share-store';
+import { contribution, learnedK, sameWindow, type KSums, type Reading } from './usage-share';
 
-// This chat's share of the plan's usage limits, for the status line. A turn is measured by reading the limits right before and right after it
-// (forced reads, a few hundred ms each) and pairing the change with what the turn cost; the pairs add up to k, dollars per 1%p, which turns the
-// chat's cost into %p. k is kept across chats and restarts (on the server, `usage-share-store`), per plan and window.
+// This chat's share of the plan's usage limits, for the status line. What the chat cost inside each window is read from its transcript on the server
+// (chat/spend: requests since the window's start = resetsAt - length), so it does not depend on when this chat was opened or what the UI remembered.
+// That cost becomes %p through k, dollars per 1%p: a turn is measured by reading the limits right before and right after it (forced reads, a few
+// hundred ms each), pairing the change with what the turn cost; the pairs add up to k, kept across chats and restarts (usage/k on the server), per plan and window.
 const WINDOWS = { session: '5h', weekly: '주' } as const;
+const LENGTH = { session: 5 * 3_600_000, weekly: 7 * 86_400_000 } as const;
 type Key = keyof typeof WINDOWS;
 type Readings = Partial<Record<Key, Reading>>;
-const store = shareGet, save = shareSet;
+type Spent = Partial<Record<Key, { resetsAt: number; usd: number; at: number }>>; // usd: the window's cost when the chat's total was `at`
+const store = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') ?? fallback; } catch { return fallback; } };
+// k lives on the server (usage/k); the first read also carries over what older versions kept in localStorage.
+let kSums: Record<string, KSums> | null = null;
 const readingsOf = (windows: UsageWindow[] | undefined): Readings => {
   const out: Readings = {};
   for (const item of windows ?? []) if (item.key in WINDOWS) out[item.key as Key] = { util: item.percent, resetsAt: item.resetsAt };
   return out;
 };
 
-export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd }: { id: string; enabled: boolean; projectId: string; refresh: number; status: string; costUsd: number | null }): string | null {
+export function useUsageShare({ id, enabled, ready, projectId, refresh, status, costUsd, call }: { id: string; enabled: boolean; ready: boolean; projectId: string; refresh: number; status: string; costUsd: number | null; call<T>(route: string, input: Record<string, unknown>): Promise<T> }): string | null {
   const { usage, load } = useUsage('claude', projectId, enabled, refresh);
-  const [tick, setTick] = useState(0), [ready, setReady] = useState(false);
-  useEffect(() => { let alive = true; void loadShareStore().then(() => { if (alive) setReady(true); }); return () => { alive = false; }; }, []);
+  const [tick, setTick] = useState(0), [spent, setSpent] = useState<Spent>({});
   const now = useRef({ cost: costUsd ?? 0, plan: usage?.plan ?? '' }); now.current = { cost: costUsd ?? 0, plan: usage?.plan ?? '' };
-  const previous = useRef(status), turn = useRef<{ cost: number; before: Readings } | null>(null);
-  const chatKey = `ade:usage-share:${id}`;
-
-  // The chat's first reading: with nothing spent yet it is the base for "how much did the readings move"; a chat restored with a cost has no such base.
-  useEffect(() => {
-    if (!ready || !enabled || !usage || store<unknown>(chatKey, null)) return;
-    const readings = readingsOf(usage.windows);
-    if (Object.keys(readings).length) { save(chatKey, { cost: now.current.cost, readings }); setTick(value => value + 1); }
-  }, [ready, enabled, usage, chatKey]);
-
-  // The 5h window resets: remember the chat's cost at that moment so the 5h share restarts from 0. Weekly keeps the chat's whole cost (cumulative).
-  useEffect(() => {
-    const session = readingsOf(usage?.windows).session;
-    if (!ready || !enabled || !session) return;
-    const marker = store<{ resetsAt: number | null; cost: number } | null>(`${chatKey}:session`, null);
-    if (marker && sameWindow(marker.resetsAt, session.resetsAt)) return;
-    const first = store<{ cost: number; readings: Readings } | null>(chatKey, null);
-    // the chat's own first window (started at cost 0) counts from 0; any later window counts from the cost at the reset
-    const own = first && first.cost === 0 && !marker && sameWindow(first.readings.session?.resetsAt, session.resetsAt);
-    save(`${chatKey}:session`, { resetsAt: session.resetsAt, cost: own ? 0 : now.current.cost }); setTick(value => value + 1);
-  }, [ready, enabled, usage, chatKey]);
+  const previous = useRef(status), turn = useRef<{ cost: number; before: Readings; credit: number } | null>(null);
 
   useEffect(() => {
-    if (!ready || !enabled) return;
+    if (!enabled || kSums) return;
+    const old = store<Record<string, KSums>>('ade:usage-k', {});
+    void (async () => {
+      try {
+        let all = await call<Record<string, KSums>>('usage/k', {});
+        for (const [key, sums] of Object.entries(old)) if (!all[key]) all = await call<Record<string, KSums>>('usage/k', { key, usd: sums.usd, dUtil: sums.dUtil });
+        kSums = all; setTick(value => value + 1);
+      } catch { /* server unreachable: no share until the next try */ }
+    })();
+  }, [enabled, call]);
+
+  // The window costs, re-read when a window changes or a turn starts/ends. Only once the chat's state has arrived: `at` must be its real total, not the 0 a restoring chat starts with.
+  const starts = readingsOf(usage?.windows), sessionEnd = starts.session?.resetsAt, weeklyEnd = starts.weekly?.resetsAt;
+  useEffect(() => {
+    if (!enabled || !ready) return;
+    const asked = ([['session', sessionEnd], ['weekly', weeklyEnd]] as const).filter((entry): entry is [Key, number] => entry[1] != null);
+    if (!asked.length) return;
+    let live = true; const at = now.current.cost;
+    call<{ spent: (number | null)[] }>('chat/spend', { id, since: asked.map(([key, end]) => end - LENGTH[key]) }).then(result => {
+      if (!live) return;
+      const next: Spent = {};
+      asked.forEach(([key, end], index) => { const usd = result.spent?.[index]; if (typeof usd === 'number') next[key] = { resetsAt: end, usd, at }; });
+      setSpent(next);
+    }, () => { /* no transcript yet (nothing sent) or not readable: no share is shown */ });
+    return () => { live = false; };
+  }, [enabled, ready, id, call, sessionEnd, weeklyEnd, status]);
+
+  useEffect(() => {
+    if (!enabled) return;
     const was = previous.current; previous.current = status;
     if (status === 'working' && was !== 'working') {
-      const start = { cost: now.current.cost, before: {} as Readings };
+      const start = { cost: now.current.cost, before: {} as Readings, credit: 0 };
       turn.current = start;
-      void load(true).then(fresh => { if (fresh && turn.current === start) start.before = readingsOf(fresh.windows); });
+      void load(true).then(fresh => { if (fresh && turn.current === start) { start.before = readingsOf(fresh.windows); start.credit = fresh.credit?.used ?? 0; } });
     } else if (status !== 'working' && was === 'working' && turn.current) {
       const start = turn.current; turn.current = null;
       void load(true).then(fresh => {
         if (!fresh) return;
-        const after = readingsOf(fresh.windows), spent = now.current.cost - start.cost, plan = fresh.plan || now.current.plan;
-        const sums = store<Record<string, KSums>>('ade:usage-k', {});
-        for (const key of Object.keys(WINDOWS) as Key[]) {
-          const a = after[key], b = start.before[key];
-          if (!a || !b || !sameWindow(a.resetsAt, b.resetsAt) || spent <= 0 || a.util < b.util) continue;
-          sums[`${plan}|${key}`] = addPair(sums[`${plan}|${key}`], spent, a.util - b.util);
-        }
-        save('ade:usage-k', sums); setTick(value => value + 1);
+        const after = readingsOf(fresh.windows), spentNow = now.current.cost - start.cost, plan = fresh.plan || now.current.plan;
+        // A turn that ran into a limit (a window at 100% before or after) or spent Usage Credit is not a clean pair: the plan did not take all of its cost.
+        const clean = (fresh.credit?.used ?? 0) <= start.credit;
+        void (async () => {
+          for (const key of Object.keys(WINDOWS) as Key[]) {
+            const a = after[key], b = start.before[key];
+            if (!clean || !a || !b || a.util >= 100 || b.util >= 100 || !sameWindow(a.resetsAt, b.resetsAt) || spentNow <= 0 || a.util < b.util) continue;
+            kSums = await call<Record<string, KSums>>('usage/k', { key: `${plan}|${key}`, usd: spentNow, dUtil: a.util - b.util }).catch(() => kSums);
+          }
+          setTick(value => value + 1);
+        })();
       });
     }
-  }, [ready, enabled, status, load]);
+  }, [enabled, status, load, call]);
 
   return useMemo(() => {
-    if (!ready || !enabled || !usage || !(costUsd && costUsd > 0)) return null;
-    const after = readingsOf(usage.windows), sums = store<Record<string, KSums>>('ade:usage-k', {}), first = store<{ cost: number; readings: Readings } | null>(chatKey, null);
+    if (!enabled || !usage || !(costUsd && costUsd > 0)) return null;
+    const after = readingsOf(usage.windows), sums = kSums ?? {};
     const parts: string[] = [];
     for (const key of Object.keys(WINDOWS) as Key[]) {
-      const reading = after[key]; if (!reading) continue;
+      const reading = after[key], window = spent[key]; if (!reading || !window) continue;
       if (key === 'session' && /ultra/i.test(usage.plan || '')) continue; // Ultra has no 5-hour window
-      const sum = sums[`${usage.plan}|${key}`], cal = learnedK(sum);
-      const base = key === 'session' ? store<{ resetsAt: number | null; cost: number } | null>(`${chatKey}:session`, null) : null;
-      if (key === 'session' && !(base && sameWindow(base.resetsAt, reading.resetsAt))) continue; // marker not written yet
-      const cost = costUsd - (base?.cost ?? 0); if (cost <= 0) continue;
-      const share = contribution({ before: first && first.cost === 0 && (!base || base.cost === 0) ? first.readings[key] : null, after: reading, costUsd: cost, cal });
-      if (share.quality === 'tiny') continue;
-      if (!share.label) continue; // nothing trustworthy yet (k not learned, no starting reading): show nothing rather than a placeholder
+      if (!sameWindow(window.resetsAt, reading.resetsAt)) continue; // the window rolled over; its cost is being read again
+      const cost = window.usd + Math.max(0, costUsd - window.at); if (cost <= 0) continue; // + what the chat spent since the cost was read
+      const share = contribution({ after: reading, costUsd: cost, cal: learnedK(sums[`${usage.plan}|${key}`]) });
+      if (share.quality === 'tiny' || !share.label) continue; // nothing trustworthy yet (k not learned): show nothing rather than a placeholder
       parts.push(share.label.replace(/(\S+?%p)/, `$1(${WINDOWS[key]})`)); // "5.6%p(5h)"
     }
     return parts.length ? parts.join(' ') : null;
-    // `tick` bumps whenever the stored first reading or k changed
-  }, [ready, enabled, usage, costUsd, chatKey, tick]);
+    // `tick` bumps whenever k changed
+  }, [enabled, usage, costUsd, spent, tick]);
 }

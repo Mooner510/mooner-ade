@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
+import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeCredit, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -165,4 +165,12 @@ test('the plan comes from the profile, so an Ultra login stored as max shows as 
   assert.deepEqual(ultra.windows.map(item => item.key), ['weekly']);
   const down = await make(async url => url.endsWith('/profile') ? json({}, 500) : json(body(url))).status('claude');
   assert.equal(down.plan, 'max', 'without a profile the stored plan stays');
+});
+
+test('extra-usage credit: capped orgs get a ratio, uncapped ones only the amount, disabled ones nothing', () => {
+  assert.deepEqual(parseClaudeCredit({ extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 1250, utilization: 25 } }), { used: 12.5, limit: 50, percent: 25, currency: 'USD' });
+  assert.equal(parseClaudeCredit({ extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 2500, utilization: null } }).percent, 50);
+  assert.deepEqual(parseClaudeCredit({ extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 300, utilization: null } }), { used: 3, limit: null, percent: null, currency: 'USD' });
+  assert.equal(parseClaudeCredit({ extra_usage: { is_enabled: false } }), null);
+  assert.equal(parseClaudeCredit({}), null);
 });

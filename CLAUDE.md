@@ -7,6 +7,10 @@
 - **Release notes are mandatory.** Every stable release must have its entry in `apps/web/src/changelog.json` (version, date, items by kind from `changelog-kinds.json`), written and merged to master before the release commit. The in-app 변경 내역 window (version sidebar) and the GitHub release body (`scripts/release-notes.mjs`) are both built from it, and `scripts/release.mjs` refuses a stable release without it. Write the notes in the user's terms (what they can now do or what was fixed), not commit messages. Betas need none.
 - Enforced in `scripts/release.mjs` (must be on master, equal to origin/master) and in `.github/workflows/release.yml` (the tagged commit must be an ancestor of origin/master, otherwise the release fails). Do not weaken or bypass either.
 
+## Merging PRs
+- **Merge with a merge commit (`gh pr merge --merge`), never `--squash` or `--rebase`.** The history is `Merge pull request #N from <branch>` throughout; keep each branch's own commits.
+- Delete the remote branch after the merge (`--delete-branch`).
+
 ## Testing
 - The session that develops also tests, in an isolated session only (temp `ADE_DATA_DIR`/repo, temp-profile Chrome over CDP). Never touch the installed app or the real `~/.claude`/`~/.codex`/`~/.cursor`. Real-AI runs use `AGENT_DIRS=1`: HOME stays real and only the CLI config dirs are isolated (`~/.ade-test/agents`); Cursor shares its Keychain login.
 - Pass `VERIFY_OUT=...` on every verify command (an `export` does not survive between commands; the scripts refuse to run without it).

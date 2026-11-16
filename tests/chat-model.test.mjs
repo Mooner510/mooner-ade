@@ -562,6 +562,15 @@ test('a background shell ends quietly: its end leaves no divider in the thread, 
   view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'sh', status: 'stopped', at: 2000 });
   assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'stopped');
   assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 0);
+  assert.equal(view.items.filter(item => item.kind === 'note').length, 0, 'a job the user stopped stays quiet');
+});
+
+test('a background job that ends by itself leaves one 알림 rule, since the CLI answers it with a turn of its own', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'mon', name: 'Monitor', input: { command: 'watch' } }] });
+  view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'mon', description: 'Watch hub', background: true, at: 1000 });
+  view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
+  view = reduce(view, { seq: 4, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
+  assert.deepEqual(view.items.filter(item => item.kind === 'note').map(item => item.text), ['알림 · Watch hub 끝남']);
 });
 
 test('agent list and pending maps keep their identity while nothing about them changed (pane contexts read by every tool card)', () => {
@@ -687,4 +696,33 @@ test('a finished turn keeps its end time, duration and tokens on the last answer
     { icon: 'database', label: '캐시', up: { label: '쓰기', value: '30' }, down: { label: '읽기', value: '500' } }]);
   assert.deepEqual(turnTokenRows({ at: 1, ms: null, tokens: { input: 1, output: 2, cacheRead: 0, cacheCreate: 0 } }).map(row => row.icon), ['token']);
   assert.deepEqual(turnTokenRows({ at: 1, ms: null }), []);
+});
+
+test('a subagent shows the model its messages report and the effort it was given, else the session\'s', () => {
+  const call = (id, input) => ({ kind: 'assistant', key: id, id, sub: false, blocks: [{ type: 'tool_use', id, name: 'Agent', input }] });
+  const kid = { kind: 'assistant', key: 'k', id: 'k', sub: true, parent: 'a1', model: 'claude-haiku-5-5', blocks: [] };
+  const [a, b] = agentsOf([call('a1', { prompt: 'x' }), kid, call('a2', { prompt: 'y', effort: 'low', model: 'opus' })], {}, {}, false, undefined, 'high');
+  assert.deepEqual([a.model, a.effort, b.model, b.effort], ['claude-haiku-5-5', 'high', 'opus', 'low']);
+});
+
+test('a mode the agent changed on its own gets a line in the thread; a settings event without that (cursor, own switch) does not', () => {
+  const view = reduce(emptyView(), { kind: 'settings', permissionMode: 'plan', by: 'agent' });
+  const [note] = view.items;
+  assert.equal(note.kind, 'note');
+  assert.equal(note.text, 'AI가 계획 모드로 변경했습니다.');
+  assert.deepEqual(note.tones.map(tone => tone.value), ['계획 모드']);
+  assert.equal(reduce(emptyView(), { kind: 'settings', permissionMode: 'plan' }).items.length, 0);
+});
+
+test('the thread says when the agent moved into or out of a worktree, a plan limit was warned or hit, and the model switched by itself', () => {
+  const line = event => reduce(emptyView(), event).items[0];
+  assert.equal(line({ kind: 'worktree', phase: 'enter', path: '/p/.claude/worktrees/a', branch: 'worktree-a' }).text, 'AI가 워크트리로 이동했습니다 · a (worktree-a)');
+  assert.equal(line({ kind: 'worktree', phase: 'exit', path: '/p', from: '/p/.claude/worktrees/a', removed: false }).text, 'AI가 워크트리에서 나왔습니다 · a 유지됨');
+  assert.match(line({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.99, resetsAt: 1794808800 }).text, /^5시간 한도의 99%를 사용했습니다 · .*초기화$/);
+  assert.match(line({ kind: 'limit', status: 'rejected', limit: 'seven_day', resetsAt: null }).text, /^주간 한도에 도달했습니다$/);
+  assert.match(line({ kind: 'limit', status: 'rejected', limit: 'five_hour', overage: true, resetsAt: null }).text, /추가 사용량으로 이어서 진행합니다$/);
+  const limit = { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1794808800 };
+  assert.equal(reduce(reduce(emptyView(), limit), limit).items.length, 1, 'the same warning is said once');
+  assert.match(line({ kind: 'settings', model: 'claude-sonnet-5-5', by: 'agent' }).text, /모델로 자동 전환되었습니다\.$/);
+  assert.match(line({ kind: 'settings', model: 'gpt-5.5', by: 'agent', reason: 'highRiskCyberActivity' }).text, /보안 정책$/);
 });

@@ -216,3 +216,27 @@ test('wantsArtifact matches an explicit Artifact request only', () => {
   assert.equal(wantsArtifact('build artifacts are in dist'), true); // ponytail: any mention counts; a false hit only costs ~12.9k tokens for that chat
   assert.equal(wantsArtifact('일반 질문입니다'), false);
 });
+
+test('a mode the CLI changed itself (EnterPlanMode, "allow all edits"...) becomes a settings event; compacting stays a delta', () => {
+  const status = permissionMode => ({ type: 'system', subtype: 'status', status: null, permissionMode });
+  assert.deepEqual(normalizeClaude(status('plan')), [{ kind: 'settings', permissionMode: 'plan', by: 'agent' }]);
+  assert.deepEqual(normalizeClaude(status('acceptEdits')), [{ kind: 'settings', permissionMode: 'acceptEdits', by: 'agent' }]);
+  assert.deepEqual(normalizeClaude(status('manual')), [{ kind: 'settings', permissionMode: 'default', by: 'agent' }]);
+  assert.deepEqual(normalizeClaude(status('somethingNew')), []);
+  assert.deepEqual(normalizeClaude({ type: 'system', subtype: 'status', status: 'compacting' }), [{ kind: 'delta', phase: 'compacting', active: true }]);
+});
+
+test('plan limit: only a warning or a hit is kept; worktree moves and picked models are read from what the CLI reports', async () => {
+  const { worktreeMove, isPickedModel } = await import('../apps/local-server/src/chat-claude.js');
+  const info = status => ({ type: 'rate_limit_event', rate_limit_info: { status, rateLimitType: 'five_hour', utilization: 0.99, surpassedThreshold: 0.9, resetsAt: 1794808800 } });
+  assert.deepEqual(normalizeClaude(info('allowed')), []);
+  assert.deepEqual(normalizeClaude(info('allowed_warning')), [{ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.99, threshold: 0.9, resetsAt: 1794808800, overage: false }]);
+  assert.equal(normalizeClaude(info('rejected'))[0].status, 'rejected');
+  assert.deepEqual(worktreeMove({ name: 'EnterWorktree' }, 'Created worktree at “/p/.claude/worktrees/a” on branch “worktree-a”. The session is now working in the worktree.'), { phase: 'enter', path: '/p/.claude/worktrees/a', branch: 'worktree-a' });
+  assert.deepEqual(worktreeMove({ name: 'ExitWorktree', input: { action: 'remove' } }, 'Exited worktree. Session is now back in “/p”.'), { phase: 'exit', path: '/p', removed: true });
+  assert.equal(worktreeMove({ name: 'ExitWorktree', input: {} }, 'No active worktree session to exit.'), null);
+  assert.equal(isPickedModel('haiku', 'claude-haiku-5-5'), true);
+  assert.equal(isPickedModel('opus[1m]', 'claude-opus-5-5'), true);
+  assert.equal(isPickedModel('haiku', 'claude-sonnet-5-5'), false);
+  assert.equal(isPickedModel(undefined, 'claude-sonnet-5-5'), false);
+});
