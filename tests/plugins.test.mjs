@@ -110,15 +110,20 @@ test('the store is sealed and fails closed', t => {
   const store = createPluginStore({ file, crypto: sealer() });
   store.save({ version: 1, enabled: true, approved: { 'example': { hash: 'a'.repeat(64), folder: 'example', version: '1', approvedAt: 1 } }, data: { 'example': '{"secret":"x"}' } });
   assert.ok(!fs.readFileSync(file, 'utf8').includes('secret'));
+  assert.ok(!fs.readFileSync(path.join(root, 'plugins.json'), 'utf8').includes('secret'));
   const again = createPluginStore({ file, crypto: sealer() });
   assert.equal(again.load().enabled, true);
+  assert.equal(again.state.approved.example.hash, 'a'.repeat(64));
+  // What is sealed is empty when it cannot be opened, so nothing is approved; the plain settings stay.
   const locked = createPluginStore({ file, crypto: sealer(false) });
-  assert.equal(locked.load().enabled, false);
+  assert.equal(locked.load().enabled, true);
+  assert.deepEqual(locked.state.approved, {});
   assert.equal(locked.problem, 'unavailable');
   assert.throws(() => locked.save({ version: 1, enabled: true }), /암호화/);
   fs.writeFileSync(file, 'garbage');
   const broken = createPluginStore({ file, crypto: sealer() });
-  assert.equal(broken.load().enabled, false);
+  assert.equal(broken.load().enabled, true);
+  assert.deepEqual(broken.state.data, {});
   assert.equal(broken.problem, 'unreadable');
 });
 

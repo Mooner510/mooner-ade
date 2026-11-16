@@ -9,6 +9,7 @@ import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
 import { NO_ATTACH_CONSOLE, shouldLeaveConsole, startOffConsole } from './console-detach.js';
 import { watchRtxHdr } from './nvidia-rtx-hdr.js';
 import { setupPlugins } from './plugins.js';
+import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
@@ -51,7 +52,9 @@ const nodeBinary = process.env.ADE_NODE || (packaged ? bundledNode : 'node');
 // replaced (dev reload, a crash) and while the app restarts for an update; the next app finds the host through pty-host.json and its
 // server takes the terminals over. A normal quit ends them as before. Without a host (it could not start) the server keeps its
 // terminals in its own process, which is how every terminal used to live.
-const ptyRoot = path.join(app.getPath('userData'), 'pty-host');
+// `pnpm dev` has a folder of its own: its host runs from the source tree (key null, maybe an older protocol), and an installed app
+// that found it through the shared pty-host.json would take it over, or the other way round.
+const ptyRoot = path.join(app.getPath('userData'), dev ? 'pty-host-dev' : 'pty-host');
 // How long the host keeps terminals for the app that an update is restarting.
 const UPDATE_LINGER_MS = 5 * 60_000;
 // keepTerminalsOnQuit: an update restart or the user's "leave running in the background"; `leftInBackground` is the latter, kept with no time limit.
@@ -379,7 +382,8 @@ if (leavingConsole) {
       // used to be: nothing is kept through a restart then.
       await ensurePtyHost().catch(error => console.warn(`pty-host 없이 시작합니다: ${error.message}`));
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
-      try { plugins = setupPlugins({ userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      const systemCa = setupSystemCa({ userData: app.getPath('userData'), nodeBinary, getWindow: () => mainWindow });
+      try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       createWindow(await startServer());
       if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });

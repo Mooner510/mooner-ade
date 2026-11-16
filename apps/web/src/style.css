@@ -930,6 +930,8 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-step[data-status=error] .plugin-step-state { color: var(--error); font-weight: 600; }
 .plugin-step[data-status=done] .plugin-step-state { color: var(--add); }
 .plugin-step-body { display: flex; flex-direction: column; gap: 12px; padding: 0 14px 14px 46px; }
+/* The sticky button bar is for a card's form; in a step it would be a darker box sticking out of the step's padding. */
+.plugin-step-body > .plugin-actions { position: static; margin: 0; padding: 0; border-top: 0; border-radius: 0; background: none; }
 .plugin-step-detail { margin: 0; color: var(--muted); line-height: 1.55; white-space: pre-line; }
 .plugin-parts { display: flex; flex-direction: column; gap: 12px; }
 .plugin-guide-done { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }

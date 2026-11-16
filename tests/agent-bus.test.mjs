@@ -311,19 +311,64 @@ function setup(t, { builtinDir = PLUGIN_DIR } = {}) {
   return { root, dir, store, manager, hosts, terminals };
 }
 
-test('the plugin store touches safeStorage (the macOS Keychain) only once something is sealed', t => {
+test('the plugin store touches safeStorage (the macOS Keychain) only when something sealed is read or written', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-store-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let calls = 0;
   const base = sealer(), crypto = { ...base, isEncryptionAvailable: () => { calls++; return true; }, decryptString: buffer => { calls++; return base.decryptString(buffer); } };
-  const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto });
-  store.load();
+  const file = path.join(root, 'plugins.bin'), open = () => { const store = createPluginStore({ file, crypto }); store.load(); return store; };
+  const approval = { hash: 'a'.repeat(64), folder: 'example', version: '1', approvedAt: 1 };
+  const store = open();
   assert.equal(store.available, true);
+  // Plain settings (plugins on, a built-in's choice, an update mode) never reach it.
+  store.update(state => ({ ...state, enabled: true }));
+  store.update(state => ({ ...state, builtin: { ...state.builtin, 'agent-bus': { enabled: false } } }));
+  store.update(state => ({ ...state, updates: { ...state.updates, example: { mode: 'manual' } } }));
   assert.equal(calls, 0);
-  store.save({ ...store.state, enabled: true });
+  // Sealing an approval and the GitHub token does.
+  store.update(state => ({ ...state, approved: { ...state.approved, example: approval } }));
+  store.update(state => ({ ...state, github: { token: 'ghp_' + 'x'.repeat(30), login: 'octo', via: 'pat', at: 1 } }));
   assert.ok(calls > 0);
-  const again = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto });
-  assert.equal(again.load().enabled, true);
+  // A later start reads the plain file only: the login is known, the token and approvals are not opened.
+  calls = 0;
+  const again = open();
+  assert.equal(again.state.enabled, true);
+  assert.equal(again.state.builtin['agent-bus'].enabled, false);
+  assert.equal(again.state.updates.example.mode, 'manual');
+  assert.equal(again.state.github.login, 'octo');
+  assert.equal(calls, 0);
+  again.update(state => ({ ...state, mcp: { ...state.mcp, example: { off: true, disabled: [] } } }));
+  assert.equal(calls, 0);
+  // ...until one of them is asked for.
+  assert.equal(again.state.github.token, 'ghp_' + 'x'.repeat(30));
+  assert.equal(again.state.approved.example.hash, approval.hash);
+  assert.ok(calls > 0);
+  assert.equal(again.state.mcp.example.off, true);
+  // Disconnecting GitHub keeps the approvals.
+  again.update(state => ({ ...state, github: null }));
+  const last = open();
+  assert.equal(last.state.github, null);
+  assert.equal(last.state.approved.example.hash, approval.hash);
+});
+
+test('a plugins.bin from before the split is opened once and its settings move to plugins.json', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-store-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let calls = 0;
+  const base = sealer(), crypto = { ...base, isEncryptionAvailable: () => { calls++; return true; }, decryptString: buffer => { calls++; return base.decryptString(buffer); } };
+  const file = path.join(root, 'plugins.bin');
+  fs.writeFileSync(file, base.encryptString(JSON.stringify({ version: 1, enabled: false, builtin: { 'agent-bus': { enabled: false } }, github: { token: 'ghp_' + 'y'.repeat(30), login: 'octo', via: 'oauth', at: 2 } })));
+  const first = createPluginStore({ file, crypto });
+  assert.equal(first.load().builtin['agent-bus'].enabled, false);
+  assert.ok(calls > 0);
+  assert.ok(fs.existsSync(path.join(root, 'plugins.json')));
+  assert.ok(!fs.readFileSync(path.join(root, 'plugins.json'), 'utf8').includes('ghp_'));
+  calls = 0;
+  const second = createPluginStore({ file, crypto });
+  assert.equal(second.load().builtin['agent-bus'].enabled, false);
+  assert.equal(second.state.github.via, 'oauth');
+  assert.equal(calls, 0);
+  assert.equal(second.state.github.token, 'ghp_' + 'y'.repeat(30));
 });
 
 test('the shipped agent-bus plugin is a valid manifest with everything it names', () => {
