@@ -411,7 +411,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
         <div className="bar-tools" role="group" aria-label="패널과 설정">
           <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
-            <Icon name="diff" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
+            <Icon name="diff" />{changes > 0 && <span className="diffstat"><span>{changes}</span><ins>+1</ins><del>−1</del></span>}</button>
           <button className="bar-button" title="피드백 요청" aria-label="피드백 요청" onClick={() => note('실제 앱에서는 여기서 화면을 캡처해 무너에이드 개발자에게 의견을 보낼 수 있어요.')}><Icon name="feedback" /></button>
           <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={() => dispatch({ type: 'settings', open: true })} />
         </div>
@@ -433,7 +433,6 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         <div className="status-left">
           <span className="stat" title={item.root}><Icon name="folder" size={13} />{item.root}</span>
           <button title="브랜치 전환" onClick={() => note('실제 앱에서는 여기서 브랜치를 바꿀 수 있습니다.')}><Icon name="branch" size={13} />main</button>
-          <button title="변경사항 열기" onClick={() => { if (!tour.diff) dispatch({ type: 'diff' }); }}><Icon name="diff" size={13} />{changes}개 파일<ins>+{changes}</ins><del>−{changes}</del></button>
         </div>
         <div className="status-right">
           <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{terminals}</span>
