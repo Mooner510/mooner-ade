@@ -11,7 +11,7 @@ import { createGithub, githubClientId, machineToken } from './plugin-updates.js'
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
-export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted }) {
+export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted, systemCa = () => false }) {
   // The plugins that ship with the app (apps/desktop/builtin-plugins): no approval, only their own on/off.
   const builtinDir = process.env.ADE_BUILTIN_PLUGINS_DIR || path.join(import.meta.dirname, '..', 'builtin-plugins');
   const dir = process.env.ADE_PLUGINS_DIR || path.join(userData, 'plugins'), stagingRoot = path.join(userData, 'plugin-staging');
@@ -55,7 +55,8 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   }
   // The plugin gets the user's environment, minus what only the app's own processes should see.
   const hostEnv = () => {
-    const env = { ...process.env, ADE_PLUGIN: '1' };
+    // Settings > 정보 (see system-ca.js): Node then also trusts the OS certificate store, which a TLS-inspecting network needs. An own NODE_USE_SYSTEM_CA wins.
+    const env = { ...(systemCa() && { NODE_USE_SYSTEM_CA: '1' }), ...process.env, ADE_PLUGIN: '1' };
     for (const name of Object.keys(env)) if (/^(ADE_PTY_|ADE_DEV$|ELECTRON_)/.test(name)) delete env[name];
     return env;
   };

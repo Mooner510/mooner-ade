@@ -306,36 +306,79 @@ function writeStorageFile(dir, text) {
   try { fs.writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, storageFile(dir)); } finally { fs.rmSync(tmp, { force: true }); }
 }
 
-// Sealed with safeStorage: without working encryption nothing is stored and plugins stay off.
+// Two files. `plugins.json` holds the settings that are not secret (plugins on/off, the built-ins' on/off, MCP and update choices, which
+// GitHub account is connected) and is read at every start. `plugins.bin` is sealed with safeStorage and holds what must not be read or
+// swapped by anything else: the approvals, the plugins' own storage and the GitHub token. It is opened only when one of those is asked for.
 // On macOS every safeStorage call, even isEncryptionAvailable(), reads the key from the Keychain, which asks for the login password
-// whenever the app's ad-hoc signature is not on the item's list. So nothing touches it until there is something sealed to read or
-// something to seal; until then `available` assumes yes and save() still checks for real.
+// whenever the app's ad-hoc signature is not on the item's list (every new version): so a start that needs nothing sealed never asks.
+// Without working encryption nothing sealed is stored and plugins that need approval stay off.
+const SEALED = ['approved', 'data'];
+const githubMeta = github => github && /^[A-Za-z0-9-]{1,39}$/.test(github.login) ? { login: github.login, via: github.via === 'oauth' ? 'oauth' : 'pat', at: Number.isFinite(github.at) ? github.at : 0 } : null;
+function writeAtomic(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try { fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
+}
 export function createPluginStore({ file, crypto }) {
-  let state = emptyPluginState(), problem = null, available = null;
+  const plainFile = path.join(path.dirname(file), 'plugins.json');
+  let plain = emptyPluginState(), sealed = null, problem = null, available = null;
   const probe = () => (available = crypto.isEncryptionAvailable());
-  return {
-    get state() { return state; },
+  // The sealed part, read once; what cannot be read counts as empty (and `problem` says why).
+  function openSealed() {
+    if (sealed) return sealed;
+    sealed = { approved: {}, data: {}, token: null, all: emptyPluginState() };
+    let blob;
+    try { blob = fs.readFileSync(file); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; return sealed; }
+    if (!probe()) { problem = 'unavailable'; return sealed; }
+    try { const all = validPluginState(JSON.parse(crypto.decryptString(blob))); sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, all }; }
+    catch { problem = 'unreadable'; }
+    return sealed;
+  }
+  // The state as callers see it. approved and data are not enumerable, so `{ ...state }` never opens the sealed file; reading them does.
+  function view() {
+    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null };
+    if (plain.github) value.github = Object.defineProperty({ ...plain.github }, 'token', { get: () => openSealed().token });
+    for (const key of SEALED) Object.defineProperty(value, key, { get: () => openSealed()[key] });
+    return value;
+  }
+  const store = {
+    get state() { return view(); },
     get problem() { return problem; },
     get available() { return available ?? true; },
     load() {
-      problem = null; state = emptyPluginState();
-      let sealed;
-      try { sealed = fs.readFileSync(file); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; return state; }
-      if (!probe()) { problem = 'unavailable'; return state; }
-      try { state = validPluginState(JSON.parse(crypto.decryptString(sealed))); } catch { problem = 'unreadable'; }
-      return state;
+      problem = null; sealed = null; plain = emptyPluginState();
+      let text;
+      try { text = fs.readFileSync(plainFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; }
+      if (text !== undefined) {
+        try { const value = JSON.parse(text); plain = { ...validPluginState({ ...value, github: null }), github: githubMeta(value.github) }; } catch { problem = 'unreadable'; }
+      } else if (problem === null && fs.existsSync(file)) {
+        // Settings of an earlier version, all inside plugins.bin: opened this once, and written out as plugins.json.
+        const { all } = openSealed();
+        if (problem === null) { plain = { ...all, github: githubMeta(all.github) }; writePlain(); }
+      }
+      return view();
     },
-    save(next) {
-      if (!probe()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
-      const value = validPluginState(next), sealed = crypto.encryptString(JSON.stringify(value));
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${randomUUID()}.tmp`;
-      try { fs.writeFileSync(tmp, sealed, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
-      state = value; problem = null;
-      return state;
-    },
-    update(change) { return this.save(change(state)); }
+    save(next) { return this.update(() => next, true); },
+    update(change, forceSealed = false) {
+      const current = view(), next = change(current), value = validPluginState({ ...next, github: null });
+      const github = githubMeta(next.github);
+      const touchesSealed = forceSealed || SEALED.some(key => Object.hasOwn(next, key)) || (next.github ?? null) !== current.github;
+      if (touchesSealed) {
+        if (!probe()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
+        const old = openSealed();
+        const token = next.github === current.github ? old.token : next.github?.token ?? null;
+        const all = validPluginState({ ...value, approved: Object.hasOwn(next, 'approved') ? next.approved : old.approved, data: Object.hasOwn(next, 'data') ? next.data : old.data, github: github && token ? { ...github, token } : null });
+        writeAtomic(file, crypto.encryptString(JSON.stringify(all)));
+        sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, all };
+      }
+      plain = { ...value, github: touchesSealed && !sealed.token ? null : github };
+      writePlain();
+      if (touchesSealed) problem = null;
+      return view();
+    }
   };
+  const writePlain = () => writeAtomic(plainFile, JSON.stringify({ ...plain, approved: {}, data: {} }));
+  return store;
 }
 
 // ---- what a plugin may show and add ------------------------------------------------------------------------------
@@ -626,7 +669,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     child.on('exit', code => onHostExit(host, code));
     child.on('error', error => { host.error = error.message; });
     let storage = null;
-    try { const text = (item.builtin && readStorageFile(dataDir)) || store.state.data[manifest.id]; storage = text ? JSON.parse(text) : null; } catch { storage = null; }
+    // A built-in never reads the sealed data (that would open the Keychain at every start); it keeps its own file.
+    try { const text = item.builtin ? readStorageFile(dataDir) : store.state.data[manifest.id]; storage = text ? JSON.parse(text) : null; } catch { storage = null; }
     child.send({ type: 'init', apiVersion: PLUGIN_API, id: manifest.id, appVersion, dataDir, storage, features: [...PLUGIN_FEATURES] });
   }
   function stop(host) {
