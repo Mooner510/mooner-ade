@@ -1101,10 +1101,21 @@ async function route(action, input, project) {
     }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
-      // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
       const result = await runtime.processes.exec('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeoutMs: 10_000, maxOutputBytes: 32 * 1024 * 1024 }).catch(() => null);
-      if (!result || result.exitCode !== 0) return { files: [] };
+      if (!result || result.exitCode !== 0) {
+        // Not a git folder: walk it breadth-first (3 levels, 20k entries), skipping dependency/VCS folders.
+        const found = [], skip = new Set(['.git', 'node_modules']);
+        for (let level = [''], depth = 0; level.length && depth < 4 && found.length < 20_000; depth++) {
+          const next = [];
+          for (const dir of level) for (const entry of await fs.readdir(path.join(cwd, dir), { withFileTypes: true }).catch(() => [])) {
+            if (skip.has(entry.name)) continue;
+            if (entry.isDirectory()) { found.push(`${dir}${entry.name}/`); next.push(`${dir}${entry.name}/`); } else found.push(`${dir}${entry.name}`);
+          }
+          level = next;
+        }
+        return { files: found };
+      }
       const files = result.stdout.split('\0').filter(Boolean).slice(0, 50_000), dirs = new Set();
       for (const file of files) for (let at = file.indexOf('/'); at > 0; at = file.indexOf('/', at + 1)) dirs.add(file.slice(0, at + 1));
       return { files: [...dirs, ...files] };

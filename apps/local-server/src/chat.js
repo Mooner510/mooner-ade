@@ -7,7 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
-import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
+import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
@@ -250,6 +250,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       });
       if (event.tools?.length) state.tools = event.tools;
     } else if (event.kind === 'capabilities') state.capabilities = event.capabilities;
+    else if (event.kind === 'worktree') { if (typeof event.path === 'string') state.cwd = event.path; }
     else if (event.kind === 'settings') { if (event.permissionMode !== undefined) state.permissionMode = event.permissionMode; if (event.effort !== undefined) state.effort = event.effort; }
     else if (event.kind === 'usage') {
       if (event.tokens) state.tokens = event.tokens;
@@ -261,8 +262,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     } else if (event.kind === 'result') {
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
-      // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
-      if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && meta.costBase + event.costUsd > state.costUsd) costPerUnit = (meta.costBase + event.costUsd - state.costUsd) / spent; state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
+      // total_cost_usd is the session total: the CLI restores it on --resume (its cost-state), so a replaced child continues from the old figure; nothing is added on top.
+      if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && event.costUsd > state.costUsd) costPerUnit = (event.costUsd - state.costUsd) / spent; state.costUsd = event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
@@ -280,6 +281,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   for (const event of retainedEvents()) fold(event, true);
   // Replaying old init events would show the model the child started with, not the one picked since (set_model sends no new init): the pick is stored, so it wins.
   if (meta.model) state.model = meta.model;
+  if (agent === 'claude' && meta.permissionMode !== undefined) state.permissionMode = meta.permissionMode; // a mode picked since (or reported by the CLI) wins over older events
   refreshChatTitle();
   state.sessionId = meta.sessionId ?? null;
   function emit(event, { store = true } = {}) {
@@ -351,7 +353,37 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'raw' || (event.kind === 'task' && event.phase === 'progress')) { emit(event, { store: false }); return; } // progress ticks often: live only
       // The CLI may print the same command output both in its echo and as a message of its own: it is shown once.
       if (event.kind === 'command_output') { const same = `${turnSeq}\0${event.isError}\0${event.text}`; if (lastCommandOutput === same) return; lastCommandOutput = same; }
+      let moved;
+      if (agent === 'claude') {
+        if (event.kind === 'session') lastMainModel = undefined;
+        if (event.kind === 'limit') { const sig = `${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`; if (sig === lastLimit) return; lastLimit = sig; }
+        if (event.kind === 'message') {
+          for (const block of event.blocks ?? []) if (block.type === 'tool_use' && (block.name === 'EnterWorktree' || block.name === 'ExitWorktree')) worktreeCalls.set(block.id, block);
+          // A reply from another model than the one before (and than the one picked): the CLI switched on its own (plan mode, a limit). Said before that reply.
+          if (event.role === 'assistant' && !event.parentToolUseId && typeof event.model === 'string' && !event.model.startsWith('<')) {
+            const was = lastMainModel; lastMainModel = event.model;
+            if (was && was !== event.model && !isPickedModel(meta.model, event.model)) emit({ kind: 'settings', model: event.model, from: was, by: 'agent' });
+          }
+        }
+        if (event.kind === 'tool_result' && worktreeCalls.has(event.toolUseId)) {
+          const call = worktreeCalls.get(event.toolUseId); worktreeCalls.delete(event.toolUseId);
+          const move = event.isError ? null : worktreeMove(call, event.content);
+          if (move) moved = { kind: 'worktree', ...move, ...(move.phase === 'exit' && { from: state.cwd }) };
+        }
+      }
+      // Claude changed its own mode (EnterPlanMode, ExitPlanMode, "allow all edits"...): follow it, and keep it in meta so a restart or reopen does not undo it.
+      // Our own set_permission_mode is echoed the same way; the mode is already ours then, so nothing changes twice.
+      const cliMode = agent === 'claude' && event.kind === 'settings' && event.permissionMode !== undefined ? event.permissionMode : undefined;
+      if (cliMode !== undefined) {
+        const own = cliMode === ownMode; if (own) ownMode = undefined;
+        if (cliMode === state.permissionMode) return;
+        if (own) event = { ...event, by: undefined };
+        if (cliMode === 'plan' && state.permissionMode !== 'plan') meta.prePlanMode = prePlanMode = state.permissionMode;
+        meta.permissionMode = cliMode;
+      }
       emit(event);
+      if (moved) { emit(moved); publish(); }
+      if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
       if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; publishSoon(); }
       if (event.kind === 'session') {
@@ -400,10 +432,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   };
   const reportStorage = error => { state.error = `채팅 저장 실패: ${error.message}`; publish(); };
 
-  // total_cost_usd restarts at 0 in every process, so what a replaced child had cost is carried by costBase. The child's own close handler does not run
-  // this (it sees it was already replaced), hence every place that drops the child calls it.
+  // A mode this app asked the CLI for (the picker, "always allow" on an edit): the CLI's report of it is not the agent changing mode, so it gets no line in the thread.
+  const worktreeCalls = new Map(); // EnterWorktree/ExitWorktree tool calls waiting for their result, which says where the CLI went
+  let lastMainModel, lastLimit; // the model the last main-thread reply came from; the last plan-limit report shown
+  let ownMode; // ponytail: cleared when the report arrives or the request ends; a report that never comes could hide one later change to the same mode
   let prePlanMode = meta.prePlanMode ?? 'default'; // kept in meta so a plan approved after reopening goes back to the mode before it
-  const carryCost = () => { if (typeof state.costUsd === 'number') meta.costBase = state.costUsd; };
 
   // Nothing in the child would be cut off: no turn, no approval, no background subagent.
   const quiet = () => !turnOpen && !approvals.size && state.liveTasks.length === 0;
@@ -411,7 +444,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function restartWhenQuiet() { if (quiet()) restart(); else { restartAfterTurn = true; state.restartPending = true; } }
   // Ends the child on purpose (restart, handoff, close). child is nulled first, so its close handler returns early: the subagents/tasks it took with it are
   // dropped here, or `quiet()` stays false (no idle kill, stale task UI).
-  function dropChild() { const proc = child; child = null; protocol?.dispose(); protocol = null; carryCost(); state.liveTasks = []; taskIds.clear(); proc.kill('SIGTERM'); return proc; }
+  function dropChild() { const proc = child; child = null; protocol?.dispose(); protocol = null; state.liveTasks = []; taskIds.clear(); proc.kill('SIGTERM'); return proc; }
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
   function restart() {
     restartAfterTurn = false; state.restartPending = false;
@@ -511,7 +544,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     proc.once('close', (code, signal) => {
       if (child !== proc) return;
       const wasTurn = turnOpen;
-      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); meta.costBase = state.costUsd; clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear(); state.liveTasks = []; // A turn cut off before its result still spent these tokens.
+      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear(); state.liveTasks = []; // A turn cut off before its result still spent these tokens.
       nextMessage(null); state.tokens = addTokens(state.tokens, turnDone); resetLive();
       const abort = !closed && !agentExitBenign(code, signal);
       const fail = (message, { store = true } = {}) => {
@@ -577,7 +610,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       const saved = { v: 1, procKey: proc.key, ack: proc.lastLine, turnOpen, reopened, turnSeq, inflight, restartAfterTurn, lastCommandOutput,
         approvals: [...approvals.values()], steers: [...steers], taskIds: [...taskIds], liveTasks: state.liveTasks, protocol: protocol?.snapshot() };
       proc.detach();
-      closed = true; child = null; protocol = null; carryCost();
+      closed = true; child = null; protocol = null;
       clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); stopCursorStorePoll();
       await writing.catch(() => {});
       await saveMeta().catch(() => {});
@@ -701,6 +734,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       // Approving a Claude plan can also pick the mode to work in (auto, accept edits); anything else just returns to the mode before the plan.
       const planMode = agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && answer.mode ? answer.mode : undefined;
+      if (agent === 'claude' && answer.allow === true) ownMode = planMode ?? (answer.always === true ? uiPermissionMode(alwaysSuggestions(pending.tool, pending.suggestions).find(item => item.type === 'setMode')?.mode) : undefined);
       if (planMode !== undefined && (!PERMISSION_MODES.includes(planMode) || planMode === 'plan' || planMode === 'bypassPermissions')) throw fault('INVALID_INPUT', '계획 승인 후 사용할 수 없는 권한 모드입니다.');
       if (protocol) await protocol.approve(requestId, answer);
       else {
@@ -816,7 +850,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (permissionMode !== undefined) {
         if (!PERMISSION_MODES.includes(permissionMode)) throw fault('INVALID_INPUT', '잘못된 권한 모드입니다.');
         if (child) {
-          const response = await control({ subtype: 'set_permission_mode', mode: cliPermissionMode(permissionMode) });
+          ownMode = permissionMode;
+          const response = await control({ subtype: 'set_permission_mode', mode: cliPermissionMode(permissionMode) }).finally(() => { ownMode = undefined; });
           if (!response || response.subtype !== 'success') throw fault('AGENT_PROTOCOL', '권한 모드를 적용하지 못했습니다. Claude Code 버전과 설정을 확인하세요.', 502);
         }
         if (permissionMode === 'plan' && state.permissionMode !== 'plan') meta.prePlanMode = prePlanMode = state.permissionMode;
@@ -824,7 +859,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       if (model !== undefined) {
         if (model !== null && !(typeof model === 'string' && /^[\w.\[\]-]{1,100}$/.test(model))) throw fault('INVALID_INPUT', '잘못된 모델입니다.');
-        meta.model = model ?? undefined;
+        meta.model = model ?? undefined; lastMainModel = undefined;
         if (model === null) {
           // "Default model": the running CLI has no way to go back to its default, so it is restarted without --model (same session). Until the next
           // answer's init event reports the real model, none is shown as chosen.
