@@ -118,12 +118,13 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return <span className="icon material-symbols-outlined" style={{ fontSize: size + 2 }} aria-hidden="true">{glyphs[name as keyof typeof glyphs]}</span>;
 }
 
-type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none' };
+type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none'; dot?: boolean };
 // Icon-only button: the label is both the tooltip and the accessible name, so no glyph has to be guessed.
 // tip='header' shows a styled tooltip (tab headers); tip='none' skips it for glyphs nobody has to guess (the close X).
-export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip }: IconButtonProps) {
+export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot }: IconButtonProps) {
   const text = keys ? `${label} (${keys})` : label;
-  return <button type="button" className={`icon-btn ${className}`} title={tip ? undefined : text} data-tip={tip === 'header' ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} /></button>;
+  // dot: a small red mark for something unread behind the button (the label should say so too).
+  return <button type="button" className={`icon-btn ${className}`} title={tip ? undefined : text} data-tip={tip === 'header' ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
 }
 
 // One split button for every pane header: it opens a small popover with the two directions. Native popover (top layer), so the pane edges never clip it.

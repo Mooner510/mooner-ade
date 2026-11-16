@@ -4,7 +4,7 @@ import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativ
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { PluginBadges } from './PluginSettings';
-import { accountSources, cursorUsageCompact, defaultAccountDir, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
+import { accountSources, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
@@ -97,7 +97,8 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   const windows = !usage ? [] : provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
   // Not installed or not signed in here (no login found) and a failed first reading both leave no windows: show nothing instead of a dead "—".
   // The hook keeps polling, so the item appears by itself once a reading succeeds.
-  if (!usage || !windows.length) return null;
+  const credit = provider === 'claude' ? usage?.credit : null;
+  if (!usage || (!windows.length && !credit)) return null;
   const preferred = usageStatusKeys[provider];
   const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
   const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
@@ -109,12 +110,14 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   return <>
     <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
-      {compact.length ? compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+      {compact.length || credit ? compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+      {credit && <span className={`usage-window ${colors && credit.percent !== null ? 'graded' : ''}`} style={colors && credit.percent !== null ? hue(credit.percent) : undefined}><small>크레딧</small>{credit.percent !== null ? `${credit.percent}%` : money(credit.used, credit.currency)}{credit.percent !== null && <i style={{ width: `${credit.percent}%` }} />}</span>}
     </button>
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
         <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
-      <UsageRows windows={windows} colors={colors} />
+      {windows.length > 0 && <UsageRows windows={windows} colors={colors} />}
+      {credit && <CreditRow credit={credit} colors={colors} />}
       <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
@@ -606,26 +609,35 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const tab: PaneTab = { id: newId(), pane: leaf };
     commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
   }
-  async function resumeChat(id: string, agent: Agent) {
+  // Resume / 이전 대화 불러오기 takes over the pane it was asked from; the chat that was there ends but stays saved.
+  async function takeOver(from: string | undefined, leaf: Leaf) {
+    const tree = from ? treeOf(from) : null;
+    if (!from || !tree) {
+      const tab: PaneTab = { id: newId(), pane: leaf };
+      commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id); return;
+    }
+    await call('chat/close', { id: from }).catch(report);
+    chatBus.current.delete(from); chatPrev.current.delete(from); clearAttention(from);
+    commitFor(from, mapLeaf(tree, from, () => leaf)); setFocusLeaf(leaf.id);
+  }
+  async function resumeChat(id: string, agent: Agent, from?: string) {
     const existing = tabOf(id);
     if (existing) { selectTab(existing.id); setFocusLeaf(id); return; }
-    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+    if (!from && refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
     // Open first: invalid or missing stored sessions must not create an empty tab.
     const sessions = await call<{ id: string }[]>('chat/sessions', { agent });
     if (!sessions.some(session => session.id === id)) throw new Error('저장된 대화를 찾을 수 없습니다.');
     await call('chat/open', { id, agent });
     const opened = tabOf(id);
     if (opened) { selectTab(opened.id); setFocusLeaf(id); return; }
-    const tab: PaneTab = { id: newId(), pane: { id, kind: 'chat', agent } };
-    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(id);
+    await takeOver(from, { id, kind: 'chat', agent });
   }
   // A conversation made with the plain `claude` CLI becomes a new chat tab; the server writes its transcript into the chat first.
-  async function importCliChat(sessionId: string) {
-    if (refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
+  async function importCliChat(sessionId: string, from?: string) {
+    if (!from && refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
     const leaf = chatLeaf(undefined, 'claude');
     await call('chat/import-cli', { sessionId, newId: leaf.id });
-    const tab: PaneTab = { id: newId(), pane: leaf };
-    commitTabs([...refs.paneTabs.current, tab]); refs.activeTab.current = tab.id; setActiveTab(tab.id); setZoom(''); setFocusLeaf(leaf.id);
+    await takeOver(from, leaf);
   }
   async function launch(command: string, where: 'tab' | 'split') {
     if (where === 'tab') await newTab(command);
@@ -920,7 +932,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     connection: connection !== '연결됨' && <span className="conn" role="status" title="로컬 서버와 연결이 끊겼습니다. 자동으로 다시 연결합니다."><Icon name="wifi" size={13} />{connection}</span>,
     path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
-    changes: <button title="변경사항 열기" onClick={showReview}><Icon name="diff" size={13} />{git.changes.length}개 파일<ins>+{git.additions}</ins><del>−{git.deletions}</del></button>,
     terminals: <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{liveTerminals}</span>,
     size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
@@ -955,7 +966,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${reviewShown ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
-        <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
+        <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><span>{git.changes.length}</span><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />

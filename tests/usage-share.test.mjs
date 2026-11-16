@@ -23,6 +23,11 @@ test('usage share: another window (reset time moved), first sample, no window, n
   assert.equal(contribution({ before: r(50), after: r(50), costUsd: 5, cal: null }).label, '<1%p');
   assert.equal(contribution({ before: null, after: r(53), costUsd: 5, cal: null }).label, '');
 });
+test('usage share: a chat never gets more than the whole window reading, whatever the cost says', () => {
+  const capped = contribution({ after: r(7), costUsd: 30.39, cal: { k: 0.38 } }); // 79.9%p by cost, but the 5h window reads 7%
+  assert.equal(capped.label, '7.5%p'); assert.equal(capped.quality, 'clamped');
+  assert.equal(contribution({ after: r(47), costUsd: 30.39, cal: { k: 1.79 } }).label, '17%p', 'under the reading it stays as it is');
+});
 test('usage share: k is learned from whole turns and needs 10 points before it is trusted', () => {
   let sums;
   for (const [usd, d] of [[20, 2], [35, 4], [12, 1]]) sums = addPair(sums, usd, d);

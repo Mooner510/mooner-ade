@@ -42,7 +42,7 @@ export const CacheTimer = memo(function CacheTimer({ cache, working, warn = 20 }
     {(state === 'hot' || state === 'using') && <Icon name="flame" size={12} />}
     {state === 'cold' && <Icon name="snowflake" size={12} />}
     {state === 'compacted' && <Icon name="archive" size={12} />}
-    {state === 'using' ? '캐시 사용중' : state === 'cold' || state === 'compacted' ? null : <b>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</b>}
+    {state === 'using' ? '캐시' :state === 'cold' || state === 'compacted' ? null : <b>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</b>}
     <i />
   </span>;
 });

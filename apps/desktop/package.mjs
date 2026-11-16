@@ -62,6 +62,7 @@ function prune(modules) {
 const deployment = mkdtempSync(path.join(os.tmpdir(), 'mooner-ade-deploy-'));
 const stage = path.join(dist, 'app');
 // Hoisted: real folders instead of pnpm's links, which the copy below turned into a second full copy of each package.
+// nosemgrep: javascript.lang.security.audit.spawn-shell-true.spawn-shell-true -- Windows needs a shell to run pnpm.cmd; every argument is a fixed string or a local path
 const run = spawnSync('pnpm', ['--filter', '@mooner/ade-local-server', 'deploy', '--prod', '--config.node-linker=hoisted', deployment], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 assert.equal(run.status, 0, 'Production dependency deployment failed');
 

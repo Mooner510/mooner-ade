@@ -23,7 +23,7 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { chatMcpServers, deniedMcpTools, readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
@@ -35,7 +35,6 @@ import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
 import { createAccountResolver, createUsage } from './usage.js';
-import { createUsageShareStore } from './usage-share-store.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore } from './feedback-store.js';
@@ -189,7 +188,6 @@ function applyAppState(state) {
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
 }
-const usageShare = createUsageShareStore(path.join(dataRoot, 'usage-share.json'));
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -756,7 +754,6 @@ async function route(action, input, project) {
     for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
     return status;
   }
-  if (action === 'usage/share') return usageShare.update(input.set);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
@@ -943,7 +940,7 @@ async function route(action, input, project) {
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
     // Session statistics (Claude only): read from the transcript the CLI keeps, nothing is sent anywhere.
-    case 'chat/stats': {
+    case 'chat/stats': case 'chat/spend': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const ref = chat.sessionRef();
@@ -952,7 +949,19 @@ async function route(action, input, project) {
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
       if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      // chat/spend: what this chat cost from the given times on (the 5h / weekly window starts), straight from its transcript
+      if (action === 'chat/spend') return { spent: (await readSessionStats(files, (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite), ref.costUsd)).spentSince };
       return { sessionId: ref.sessionId, ...await readSessionStats(files) };
+    }
+    // Dollars per 1%p learned for the Plan Usage share, kept with the app data (the web page's origin changes with every launch's port, so localStorage cannot hold it).
+    case 'usage/k': {
+      const file = path.join(dataRoot, 'usage-k.json'), all = await readJson(file, {}).catch(() => ({}));
+      const { key, usd, dUtil } = input;
+      if (typeof key === 'string' && key.length <= 64 && Number.isFinite(usd) && Number.isFinite(dUtil) && usd > 0 && dUtil >= 0) {
+        all[key] = { usd: (all[key]?.usd ?? 0) + usd, dUtil: (all[key]?.dUtil ?? 0) + dUtil };
+        await writeJson(file, all).catch(() => {});
+      }
+      return all;
     }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
@@ -1074,6 +1083,8 @@ async function route(action, input, project) {
       if (input.agent && input.agent !== 'claude') return route('chat/models', input, project);
       return { catalog: await claudeCatalog() };
     }
+    // The agent session ID of a terminal (Claude via its SessionStart hook, Codex via its log); null while unknown (Cursor never reports one).
+    case 'terminal/session': return { sessionId: (['claude', 'codex', 'cursor'].includes(input.agent) && await readTerminalSession(project.directory, text(input.id, '터미널 ID', 128), input.agent)) || null };
     case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
     // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
     case 'chat/to-terminal': {
@@ -1110,10 +1121,21 @@ async function route(action, input, project) {
     }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
-      // ponytail: git-only, a non-git folder returns nothing; add a readdir walk if that matters.
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
       const result = await runtime.processes.exec('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd, timeoutMs: 10_000, maxOutputBytes: 32 * 1024 * 1024 }).catch(() => null);
-      if (!result || result.exitCode !== 0) return { files: [] };
+      if (!result || result.exitCode !== 0) {
+        // Not a git folder: walk it breadth-first (3 levels, 20k entries), skipping dependency/VCS folders.
+        const found = [], skip = new Set(['.git', 'node_modules']);
+        for (let level = [''], depth = 0; level.length && depth < 4 && found.length < 20_000; depth++) {
+          const next = [];
+          for (const dir of level) for (const entry of await fs.readdir(path.join(cwd, dir), { withFileTypes: true }).catch(() => [])) {
+            if (skip.has(entry.name)) continue;
+            if (entry.isDirectory()) { found.push(`${dir}${entry.name}/`); next.push(`${dir}${entry.name}/`); } else found.push(`${dir}${entry.name}`);
+          }
+          level = next;
+        }
+        return { files: found };
+      }
       const files = result.stdout.split('\0').filter(Boolean).slice(0, 50_000), dirs = new Set();
       for (const file of files) for (let at = file.indexOf('/'); at > 0; at = file.indexOf('/', at + 1)) dirs.add(file.slice(0, at + 1));
       return { files: [...dirs, ...files] };

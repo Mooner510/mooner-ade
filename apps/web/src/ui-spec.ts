@@ -20,6 +20,9 @@ const num = (v: unknown, fallback = 0) => typeof v === 'number' && Number.isFini
 const pick = <T extends string>(v: unknown, all: readonly T[], fallback: T): T => all.includes(v as T) ? v as T : fallback;
 const FIELDS = ['text', 'number', 'area', 'select', 'radio', 'check', 'slider', 'date'] as const;
 
+// Every form that sends ends with this box: submitting always sends the chat, so the user needs a place to add their own instruction.
+const EXTRA: Field = { k: '__extra', label: '추가 지시 사항', type: 'area', options: [], value: '', min: 0, max: 100, step: 1 };
+
 function field(raw: unknown): Field {
   const [kind, key, name, ...rest] = list(raw, 30), type = pick(kind, FIELDS, 'text'), label = str(name, 80) || str(key, 40), min = num(rest[0], 0);
   const options = type === 'select' || type === 'radio' ? rest.slice(0, 20).map(opt => str(opt, 60)) : [];
@@ -33,7 +36,7 @@ function one(raw: unknown): Spec | null {
     case 'stats': return { t, items: r.slice(0, 12).map(i => { const [label, value, a, b] = list(i, 4), tone = pick(a, ['ok', 'warn', 'err', 'info', ''], ''); return { label: str(label), value: str(value), tone, sub: str(tone ? b : a) }; }) };
     case 'chart': { const [kind, title, x, ...series] = r; return { t, kind: pick(kind, ['line', 'bar', 'pie'], 'bar'), title: str(title), x: list(x, 100).map(label => str(label, 40)), y: series.slice(0, 6).map(s => { const [name, ...values] = list(s, 101); return [str(name, 60), values.map(n => num(n))]; }) }; }
     case 'steps': return { t, items: r.slice(0, 30).map(i => { const [name, state, detail] = Array.isArray(i) ? i : [i]; return [str(name), pick(state, ['done', 'active', 'todo'], 'todo'), str(detail)]; }) };
-    case 'form': case 'draft': { const [title, submit, ...fields] = r; return { t: 'form', title: str(title), submit: str(submit, 40) || '보내기', fill: t === 'draft', fields: fields.slice(0, 12).map(field).filter(f => f.label) }; }
+    case 'form': case 'draft': { const [title, submit, ...fields] = r; return { t: 'form', title: str(title), submit: str(submit, 40) || '보내기', fill: t === 'draft', fields: [...fields.slice(0, 12).map(field).filter(f => f.label), ...(t === 'form' ? [EXTRA] : [])] }; }
     default: return null;
   }
 }

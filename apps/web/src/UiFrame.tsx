@@ -24,6 +24,7 @@ const fontsNow = () => fontCss ||= [...document.styleSheets].flatMap(sheet => {
 export const UiFrame = memo(function UiFrame({ chatId, html }: { chatId: string; html: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(MIN_HEIGHT * 3), [width, setWidth] = useState<number | undefined>();
+  // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- target is a sandboxed frame with an opaque origin, "*" is the only possible target
   const init = () => frame.current?.contentWindow?.postMessage({ ade: 1, type: 'init', html, theme: themeNow(), fonts: fontsNow() }, '*');
   useEffect(() => {
     const gate = sendGate();

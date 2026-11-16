@@ -37,10 +37,10 @@ export type Tone = { value: string; color: string; icon?: string; bars?: number 
 export type SettingsChange = { model?: Tone; effort?: Tone; mode?: Tone; compact?: Tone; title?: Tone };
 const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previews) ? event.previews.filter((url): url is string => typeof url === 'string' && url.startsWith('data:image/')) : undefined;
 /** How a turn ended, kept on its last answer: when, how long it took and the tokens it used (no tokens for a CLI that does not report them). */
-export type TurnDone = { at: number; ms: number | null; tokens?: Tokens };
+export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd?: number };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[] }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; done?: TurnDone }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -267,7 +267,7 @@ function stampDone(view: ChatView, event: any): ChatView {
   if (at < 0) return view;
   const usage = event.usage, tokens = usage && ['input', 'output', 'cacheRead', 'cacheCreate'].every(key => Number.isFinite(usage[key])) ? usage as Tokens : undefined;
   const items = [...view.items];
-  items[at] = { ...items[at] as AssistantItem, done: { at: Number(event.at) || Date.now(), ms: Number.isFinite(event.durationMs) ? event.durationMs : null, ...(tokens && { tokens }) } };
+  items[at] = { ...items[at] as AssistantItem, done: { at: Number(event.at) || Date.now(), ms: Number.isFinite(event.durationMs) ? event.durationMs : null, ...(tokens && { tokens }), ...(Number.isFinite(event.turnCostUsd) && event.turnCostUsd > 0 && { costUsd: event.turnCostUsd }) } };
   return { ...view, items };
 }
 
@@ -306,10 +306,10 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (at < 0) {
         // After /compact the CLI re-sends earlier synthetic messages (what /context or /mcp printed) under a fresh id but the same uuid: a repeat, not a new reply.
         if (typeof event.uuid === 'string' && view.items.some(item => item.kind === 'assistant' && item.uuid === event.uuid)) return view;
-        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), ...parentOf(event), fresh });
+        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), ...parentOf(event), ...(event.model && { model: String(event.model) }), fresh });
       }
       const prev = view.items[at] as AssistantItem, items = [...view.items];
-      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), blocks: absorb(prev.blocks, incoming) };
+      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), ...(event.model && { model: String(event.model) }), blocks: absorb(prev.blocks, incoming) };
       return { ...view, items };
     }
     case 'task': {
@@ -320,6 +320,11 @@ export function reduce(view: ChatView, event: any): ChatView {
       const tasks = { ...view.tasks, [id]: next };
       // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
       const isJob = view.items.some(item => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      // A shell/Monitor that ends by itself makes the CLI start a turn on its own: a rule says why that reply appears (one the user stopped stays quiet).
+      if (phase === 'end' && isJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
+        const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
+        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${next.description || '백그라운드 작업'} ${status}`, fresh });
+      }
       if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
       return { ...view, tasks };
     }
@@ -374,6 +379,28 @@ export function reduce(view: ChatView, event: any): ChatView {
       return commandFallback(view, event, key);
     }
     case 'error': return { ...append(view, { kind: 'error', key, message: String(event.message ?? '오류'), recoverable: event.recoverable === true, fresh }), state: { ...view.state, error: String(event.message ?? '오류'), recoverable: event.recoverable === true || view.state.recoverable } };
+    // The agent changed its own permission mode (EnterPlanMode, ...): a line says so, in the words and colour of the line a user's own switch gets.
+    case 'settings': {
+      if (event.by !== 'agent') return view;
+      if (typeof event.model === 'string') {
+        const name = shortModel(event.model), why = event.reason === 'highRiskCyberActivity' ? ' · 보안 정책' : '';
+        return append(view, { kind: 'note', key, text: `${name} 모델로 자동 전환되었습니다.${why}`, tones: [{ value: name, color: modelColor(event.model) ?? 'var(--fg)' }], fresh });
+      }
+      if (typeof event.permissionMode !== 'string') return view;
+      const mode = event.permissionMode, label = `${permissionLabels[mode] ?? mode} 모드`;
+      return append(view, { kind: 'note', key, text: `AI가 ${label}로 변경했습니다.`, tones: [{ value: label, color: permissionModeColor(mode), icon: modeIcons[mode] ?? 'tune' }], fresh });
+    }
+    // The agent moved the session into a worktree or back out: file paths and the branch it works on differ from here on.
+    case 'worktree': {
+      const folder = (path: unknown) => typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '' : '';
+      const enter = event.phase === 'enter', name = folder(enter ? event.path : event.from);
+      const tail = enter ? (event.branch && event.branch !== name ? ` (${event.branch})` : '') : name ? ` ${event.removed ? '삭제됨' : '유지됨'}` : '';
+      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? ` · ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
+    }
+    case 'limit': {
+      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`;
+      return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
+    }
     case 'compact': return { ...append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh }), compacting: false };
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
@@ -580,7 +607,18 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
+const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', overage: '추가 사용량' };
+// A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).
+export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean }): { text: string; tones: Tone[] } {
+  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected', share = event.utilization ?? event.threshold;
+  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null;
+  const clock = at ? at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '', today = at && at.toDateString() === new Date().toDateString();
+  const when = at ? ` · ${today ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${clock}에 초기화` : '';
+  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${share != null ? `${Math.round(share * 100)}%를 사용했습니다` : '대부분을 사용했습니다'}${when}`;
+  return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
+}
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문 전용' };
+export const modeIcons: Record<string, string> = { default: 'front_hand', acceptEdits: 'edit_note', plan: 'assignment', auto: 'bolt', bypassPermissions: 'lock_open', ask: 'help' };
 // Resolved on the chat pane via agent-scoped `--mode-*` vars in style.css (Claude Code theme.ts, Codex TUI, Cursor CLI).
 export const permissionModeColor = (mode: string) => `var(--mode-${mode}, var(--muted))`;
 export const statusLabelsKo: Record<ChatState['status'], string> = { idle: '대기 중', working: '응답 중', attention: '승인 대기', closed: '종료' };
@@ -638,14 +676,14 @@ export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task'
 export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number };
 export type AgentStatus = 'running' | 'done' | 'error' | 'stopped';
 export type SubAgent = { id: string; type: string; description: string; prompt: string; background: boolean; status: AgentStatus; startedAt?: number; endedAt?: number; durationMs?: number;
-  tokens?: number; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };
+  tokens?: number; model?: string; effort?: string; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };
 type ToolUse = Extract<Block, { type: 'tool_use' }>;
 // Work that keeps running after its tool call returns: a Monitor, or a shell started with run_in_background. It is tracked like a background
 // subagent (the CLI reports its start and end the same way), shown as a job: its command instead of a prompt, no steps of its own.
 export const isJobTool = (block: { name: string; input?: any }) => block.name === 'Monitor' || ((block.name === 'Bash' || block.name === 'PowerShell') && block.input?.run_in_background === true);
 // Every Agent call in `items`, in order, with what its subagent did (its own messages are the items whose `parent` is the call), and every job.
 // Status: the CLI's end report wins; a background one without it runs while its child lives (`liveTasks`); a foreground one is over once its result is in.
-export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[]): SubAgent[] {
+export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[], sessionEffort?: string | null): SubAgent[] {
   const children = new Map<string, AssistantItem[]>();
   for (const item of items) if (item.kind === 'assistant' && item.parent) { const list = children.get(item.parent); if (list) list.push(item); else children.set(item.parent, [item]); }
   const agents: SubAgent[] = [];
@@ -673,6 +711,8 @@ export function agentsOf(items: Item[], results: ChatView['results'], tasks: Cha
       agents.push({
         id: block.id, type: String(task?.agentType || input.subagent_type || 'general-purpose'), description: String(task?.description || input.description || ''), prompt: String(input.prompt ?? ''), background, status,
         startedAt: task?.startedAt, endedAt: task?.endedAt, durationMs: task?.durationMs, tokens: task?.tokens,
+        // Model: what its own messages report, else the Agent call's pick. Effort is not reported by the CLI: the call's own, else the session's (what it inherits unless its definition sets one).
+        model: kids.find(kid => kid.model)?.model || (typeof input.model === 'string' ? input.model : undefined), effort: typeof input.effort === 'string' ? input.effort : sessionEffort || undefined,
         toolCount: Math.max(work.length, task?.toolUses ?? 0),
         now: status !== 'running' ? '' : task?.activity || (last ? `${toolLabel(last.name)} ${toolSummary(last.name, last.input ?? {})}`.trim() : task?.lastTool ?? ''),
         report: task?.report || (!background && result && !result.isError ? result.content : '') || (handback ? String(handback.input?.message ?? '') : ''),
