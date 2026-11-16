@@ -12,7 +12,7 @@ import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
-import { Changelog } from './Changelog';
+import { Changelog, hasUnreadChangelog } from './Changelog';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { errorText, pushError } from './errors';
 import { ErrorCorner } from './error-ui';
@@ -248,7 +248,7 @@ function Shell() {
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [changelogOpen, setChangelogOpen] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
   const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
@@ -578,7 +578,7 @@ function Shell() {
       </div>
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
-        <IconButton icon="sparkles" label="변경 내역" onClick={() => setChangelogOpen(true)} />
+        <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
         <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="튜토리얼 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
         {skippedTour && !touring && !splash && <Hint title="튜토리얼은 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 둘러보기를 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
@@ -594,7 +594,7 @@ function Shell() {
     </div>
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
-    {changelogOpen && <Changelog onClose={() => setChangelogOpen(false)} />}
+    {changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</>;
 }
