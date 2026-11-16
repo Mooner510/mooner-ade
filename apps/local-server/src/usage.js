@@ -139,7 +139,8 @@ export const accountVariable = { claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME
 
 // macOS `ps -E` appends the environment to the arguments, space-joined, so a value runs until the next NAME= token.
 export function envFromPs(output, name) {
-  const pattern = new RegExp(`(?:^|\\s)${name}=(.*?)(?=\\s[A-Za-z_][A-Za-z0-9_]*=|\\s*$)`, 'g');
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- `name` is escaped just above
+  const pattern = new RegExp(`(?:^|\\s)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=(.*?)(?=\\s[A-Za-z_][A-Za-z0-9_]*=|\\s*$)`, 'g');
   let value = null;
   for (const match of output.matchAll(pattern)) value = match[1];
   return value;

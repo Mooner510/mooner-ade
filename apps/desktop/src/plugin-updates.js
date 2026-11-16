@@ -71,6 +71,7 @@ const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Which asset of a release is the plugin, and the version its name carries when the name has `{version}`.
 export function matchAsset(template, name) {
   if (!template.includes('{version}')) return name === template ? { version: null } : null;
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- every literal part of the template is passed through escapeRegex
   const pattern = new RegExp(`^${template.split('{version}').map(escapeRegex).join('(v?\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?)')}$`);
   const match = pattern.exec(name);
   return match ? { version: versionText(match[1]) } : null;

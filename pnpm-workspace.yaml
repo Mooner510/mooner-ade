@@ -7,6 +7,8 @@ trustPolicy: no-downgrade
 overrides:
   # Only the published JSON/SVG assets are used; its YAML build tooling is unused.
   'atom-material-icons@3.0.0>js-yaml': '-'
+  # GHSA fixes in undici 7.30.1; @electron/get pulls it in as an optional dependency.
+  '@electron/get>undici': '^7.30.1'
 allowBuilds:
   electron: true
   esbuild: true

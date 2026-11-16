@@ -10,9 +10,11 @@ const byName = new Map(Object.entries(urls).map(([path, url]) => [path.slice(pat
 type Rule = { pattern: RegExp; file: string };
 // The association list is ordered by specificity (`*.test.ts` before `*.ts`), so the first match wins.
 const rules: Rule[] = associations.associations.associations.regex.flatMap(rule => {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- patterns come from the bundled icon-association JSON, not from user input
   try { return [{ pattern: new RegExp(rule.pattern, 'i'), file: rule.icon.slice(rule.icon.lastIndexOf('/') + 1) }]; } catch { return []; }
 });
 const folderRules: Rule[] = folderAssociations.associations.associations.regex.flatMap(rule => {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- patterns come from the bundled icon-association JSON, not from user input
   try { return [{ pattern: new RegExp(rule.pattern, 'i'), file: rule.icon.slice(rule.icon.lastIndexOf('/') + 1) }]; } catch { return []; }
 });
 const cache = new Map<string, string | undefined>();
