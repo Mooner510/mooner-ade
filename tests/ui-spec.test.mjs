@@ -31,11 +31,13 @@ test('model output is coerced and capped, never trusted', () => {
 
 test('form fields get sane defaults and submit as a plain message', () => {
   const [form] = parseUi('["form","Plan","Go",["slider","seats","Seats",2,1],["radio","c","Billing","monthly","yearly"],["check","ok","Ok"],["text","n","Name","Ann"],["zzz"]]');
-  assert.deepEqual(form.fields.map(f => [f.k, f.type, f.value, f.max]), [['seats', 'slider', '2', 2], ['c', 'radio', 'monthly', 100], ['ok', 'check', 'false', 100], ['n', 'text', 'Ann', 100]]);
+  assert.deepEqual(form.fields.map(f => [f.k, f.type, f.value, f.max]), [['seats', 'slider', '2', 2], ['c', 'radio', 'monthly', 100], ['ok', 'check', 'false', 100], ['n', 'text', 'Ann', 100], ['__extra', 'area', '', 100]]); // a sending form always ends with the extra-instruction box
   assert.equal(form.submit, 'Go'); assert.equal(form.fill, false);
   assert.equal(formMessage(form, { seats: '5', c: 'yearly', ok: 'true', n: 'Bo' }), 'Plan\n- Seats: 5\n- Billing: yearly\n- Ok: yes\n- Name: Bo');
   assert.equal(formMessage(form, { seats: '5', c: 'yearly', ok: 'false', n: '  ' }), 'Plan\n- Seats: 5\n- Billing: yearly\n- Ok: no'); // empty text is omitted
+  assert.equal(formMessage(form, { n: 'Bo', __extra: '끝나면 알려 줘' }), 'Plan\n- Ok: no\n- Name: Bo\n- 추가 지시 사항: 끝나면 알려 줘');
   assert.equal(parseUi('["draft","t","s",["text","a","A"]]')[0].fill, true);
+  assert.equal(parseUi('["draft","t","s",["text","a","A"]]')[0].fields.length, 1, 'a draft fills the editable message box, so it needs no extra box');
 });
 
 test('chart gridlines fall on round steps that cover every value', () => {
