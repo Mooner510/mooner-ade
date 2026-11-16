@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUsage, type UsageWindow } from './Usage';
 import { addPair, contribution, learnedK, sameWindow, type KSums, type Reading } from './usage-share';
+import { loadShareStore, shareGet, shareSet } from './usage-share-store';
 
 // This chat's share of the plan's usage limits, for the status line. A turn is measured by reading the limits right before and right after it
 // (forced reads, a few hundred ms each) and pairing the change with what the turn cost; the pairs add up to k, dollars per 1%p, which turns the
-// chat's cost into %p. k is kept across chats and restarts (localStorage), per plan and window.
+// chat's cost into %p. k is kept across chats and restarts (on the server, `usage-share-store`), per plan and window.
 const WINDOWS = { session: '5h', weekly: '주' } as const;
 type Key = keyof typeof WINDOWS;
 type Readings = Partial<Record<Key, Reading>>;
-const store = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') ?? fallback; } catch { return fallback; } };
-const save = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* full or blocked: the share just is not remembered */ } };
+const store = shareGet, save = shareSet;
 const readingsOf = (windows: UsageWindow[] | undefined): Readings => {
   const out: Readings = {};
   for (const item of windows ?? []) if (item.key in WINDOWS) out[item.key as Key] = { util: item.percent, resetsAt: item.resetsAt };
@@ -18,32 +18,33 @@ const readingsOf = (windows: UsageWindow[] | undefined): Readings => {
 
 export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd }: { id: string; enabled: boolean; projectId: string; refresh: number; status: string; costUsd: number | null }): string | null {
   const { usage, load } = useUsage('claude', projectId, enabled, refresh);
-  const [tick, setTick] = useState(0);
+  const [tick, setTick] = useState(0), [ready, setReady] = useState(false);
+  useEffect(() => { let alive = true; void loadShareStore().then(() => { if (alive) setReady(true); }); return () => { alive = false; }; }, []);
   const now = useRef({ cost: costUsd ?? 0, plan: usage?.plan ?? '' }); now.current = { cost: costUsd ?? 0, plan: usage?.plan ?? '' };
   const previous = useRef(status), turn = useRef<{ cost: number; before: Readings } | null>(null);
   const chatKey = `ade:usage-share:${id}`;
 
   // The chat's first reading: with nothing spent yet it is the base for "how much did the readings move"; a chat restored with a cost has no such base.
   useEffect(() => {
-    if (!enabled || !usage || store<unknown>(chatKey, null)) return;
+    if (!ready || !enabled || !usage || store<unknown>(chatKey, null)) return;
     const readings = readingsOf(usage.windows);
     if (Object.keys(readings).length) { save(chatKey, { cost: now.current.cost, readings }); setTick(value => value + 1); }
-  }, [enabled, usage, chatKey]);
+  }, [ready, enabled, usage, chatKey]);
 
   // The 5h window resets: remember the chat's cost at that moment so the 5h share restarts from 0. Weekly keeps the chat's whole cost (cumulative).
   useEffect(() => {
     const session = readingsOf(usage?.windows).session;
-    if (!enabled || !session) return;
+    if (!ready || !enabled || !session) return;
     const marker = store<{ resetsAt: number | null; cost: number } | null>(`${chatKey}:session`, null);
     if (marker && sameWindow(marker.resetsAt, session.resetsAt)) return;
     const first = store<{ cost: number; readings: Readings } | null>(chatKey, null);
     // the chat's own first window (started at cost 0) counts from 0; any later window counts from the cost at the reset
     const own = first && first.cost === 0 && !marker && sameWindow(first.readings.session?.resetsAt, session.resetsAt);
     save(`${chatKey}:session`, { resetsAt: session.resetsAt, cost: own ? 0 : now.current.cost }); setTick(value => value + 1);
-  }, [enabled, usage, chatKey]);
+  }, [ready, enabled, usage, chatKey]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!ready || !enabled) return;
     const was = previous.current; previous.current = status;
     if (status === 'working' && was !== 'working') {
       const start = { cost: now.current.cost, before: {} as Readings };
@@ -63,10 +64,10 @@ export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd
         save('ade:usage-k', sums); setTick(value => value + 1);
       });
     }
-  }, [enabled, status, load]);
+  }, [ready, enabled, status, load]);
 
   return useMemo(() => {
-    if (!enabled || !usage || !(costUsd && costUsd > 0)) return null;
+    if (!ready || !enabled || !usage || !(costUsd && costUsd > 0)) return null;
     const after = readingsOf(usage.windows), sums = store<Record<string, KSums>>('ade:usage-k', {}), first = store<{ cost: number; readings: Readings } | null>(chatKey, null);
     const parts: string[] = [];
     for (const key of Object.keys(WINDOWS) as Key[]) {
@@ -83,5 +84,5 @@ export function useUsageShare({ id, enabled, projectId, refresh, status, costUsd
     }
     return parts.length ? parts.join(' ') : null;
     // `tick` bumps whenever the stored first reading or k changed
-  }, [enabled, usage, costUsd, chatKey, tick]);
+  }, [ready, enabled, usage, costUsd, chatKey, tick]);
 }

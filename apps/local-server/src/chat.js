@@ -6,6 +6,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fault } from './files.js';
 import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
+import { runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, PERMISSION_MODES, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { readCursorStoreUsage } from './cursor-context.js';
@@ -32,6 +33,9 @@ const zero = () => ({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
 // Normal child end and intentional idle kill must not read as a failed agent. macOS often reports SIGTERM as exit 143 (128+15) with no signal name.
 export const agentExitBenign = (code, signal) => code === 0 || signal === 'SIGTERM' || signal === 'SIGINT' || code === 143 || code === 130;
 const addTokens = (base, extra) => ({ input: base.input + extra.input, output: base.output + extra.output, cacheRead: base.cacheRead + extra.cacheRead, cacheCreate: base.cacheCreate + extra.cacheCreate });
+// Dollars per `weigh` unit last seen for a model family, shared by every chat of this server process.
+const unitByFamily = new Map();
+const modelFamily = model => String(model ?? '').toLowerCase().match(/opus|sonnet|haiku/)?.[0] ?? 'other';
 // The usual price ratios (output 5x input, cache read 0.1x, cache write 1.25x): one number per turn that the cost can be divided by.
 const weigh = usage => usage.input + usage.output * 5 + usage.cacheRead * 0.1 + usage.cacheCreate * 1.25;
 const mergeTurnUsage = (current, patch) => ({
@@ -80,6 +84,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     for (const line of (await fs.readFile(logFile, 'utf8')).split('\n')) { if (!line) continue; try { const event = JSON.parse(line); events.push(event); seq = Math.max(seq, event.seq); } catch { /* torn last line after a crash */ } }
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   events = events.slice(-KEEP_EVENTS);
+  const btwRuns = new Map(); // /btw questions in flight, by the id the UI gave them (to cancel)
 
   const state = { agent, capabilities: chatCapabilities(agent), status: 'idle', model: meta.model ?? null, effort: meta.effort ?? null, worktree: meta.worktree === true, addDirs: meta.addDirs, permissionMode: meta.permissionMode ?? 'default', sandbox: meta.sandbox ?? null, network: meta.network === true, runEverything: meta.runEverything === true, sessionId: meta.sessionId ?? null, costUsd: agent === 'claude' ? meta.costBase : null, turns: 0, durationMs: 0,
     contextTokens: 0, contextWindow: null, autoCompact: null, tokens: zero(), slashCommands: [], commandInfo: [], tools: [], pending: 0, error: null, startedAt: Date.now(),
@@ -92,7 +97,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // A turn is several API calls: `turnDone` holds the calls already finished, `turnUsage` the one streaming (`liveId`). result.usage is the whole turn, so it replaces both.
   // The API reports a message's real output_tokens only once, at its end (message_delta), so while it streams the shown output is the larger of that report and an
   // estimate: the CLI's thinking estimate plus the streamed text / tool input (`streamBytes`, ~4 bytes a token, so it runs under the real count and never overshoots).
-  let costPerUnit = 0;
+  // Dollars per `weigh` unit. Kept in meta (a restored chat prices its first turn at once) and, per model family, for this server's other chats (a new chat's first turn).
+  let costPerUnit = Number.isFinite(meta.costPerUnit) && meta.costPerUnit > 0 ? meta.costPerUnit : 0;
   let turnUsage = null, thinkingTokens = 0, streamBytes = 0, outputFinal = false, turnDone = zero(), liveId = null;
   const resetLive = () => { turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; turnDone = zero(); liveId = null; };
   const nextMessage = id => { if (id == null || id !== liveId) { if (turnUsage) turnDone = addTokens(turnDone, turnUsage); turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; liveId = id ?? null; } };
@@ -191,7 +197,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, costPerUnit: costPerUnit || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -203,10 +209,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     return addTokens(addTokens(state.tokens, turnDone), live);
   };
   // The CLI reports the cost only in a turn's result, so while a turn runs the cost is the committed one plus the in-flight tokens at the last turn's price per unit.
-  // ponytail: no estimate before the first result of this process (no price known yet); a built-in price table would give one.
+  // No estimate until some result has priced a unit (this chat's, or another chat of the same model family on this server).
   const shown = () => {
-    const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens);
-    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' && costPerUnit && live > 0 ? state.costUsd + live * costPerUnit : state.costUsd, pending: approvals.size, recoverable: canRetryTurn() };
+    const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens), unit = costPerUnit || unitByFamily.get(modelFamily(state.model ?? meta.model)) || 0;
+    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' && unit && live > 0 ? state.costUsd + live * unit : state.costUsd, pending: approvals.size, recoverable: canRetryTurn() };
   };
   const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
@@ -262,7 +268,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
       // shortcut: total_cost_usd is read as cumulative per process; `costBase` carries earlier processes over a --resume.
-      if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && meta.costBase + event.costUsd > state.costUsd) costPerUnit = (meta.costBase + event.costUsd - state.costUsd) / spent; state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
+      if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && meta.costBase + event.costUsd > state.costUsd) { costPerUnit = (meta.costBase + event.costUsd - state.costUsd) / spent; unitByFamily.set(modelFamily(state.model ?? meta.model), costPerUnit); } state.costUsd = meta.costBase + event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
@@ -888,6 +894,18 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       setStatus();
       return { agent, sessionId: meta.sessionId, configDir: meta.configDir };
     },
+    // /btw: a side question answered from a fork of this conversation (see chat-btw.js). Needs no idle state: it runs beside a working turn and never touches the chat's events.
+    async btw(question, btwId) {
+      if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', '/btw는 Claude 채팅에서만 쓸 수 있습니다.', 409);
+      const text = typeof question === 'string' ? question.trim() : '';
+      if (!text) throw fault('INVALID_INPUT', '질문을 입력하세요. 예: /btw 이 함수는 왜 비동기야?');
+      const controller = new AbortController(), key = String(btwId ?? ''); if (key) btwRuns.set(key, controller);
+      const launchEnv = withUtf8Ctype({ ...process.env, ...(typeof env === 'function' ? env() : env) });
+      if (meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
+      try { return await runBtw({ executable, executableArgs: argsOf(executableArgs), sessionId: state.sessionId ?? meta.sessionId ?? undefined, model: meta.model ?? state.model ?? undefined, question: text, cwd: meta.worktreePath ?? cwd, env: launchEnv, spawnProcess, signal: controller.signal }); }
+      finally { if (key) btwRuns.delete(key); }
+    },
+    cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.
     sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
