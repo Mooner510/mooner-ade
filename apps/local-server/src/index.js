@@ -940,7 +940,7 @@ async function route(action, input, project) {
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
     // Session statistics (Claude only): read from the transcript the CLI keeps, nothing is sent anywhere.
-    case 'chat/stats': {
+    case 'chat/stats': case 'chat/spend': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const ref = chat.sessionRef();
@@ -949,6 +949,8 @@ async function route(action, input, project) {
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
       if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      // chat/spend: what this chat cost from the given times on (the 5h / weekly window starts), straight from its transcript
+      if (action === 'chat/spend') return { spent: (await readSessionStats(files, (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite), ref.costUsd)).spentSince };
       return { sessionId: ref.sessionId, ...await readSessionStats(files) };
     }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });

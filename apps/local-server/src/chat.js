@@ -889,7 +889,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       return { agent, sessionId: meta.sessionId, configDir: meta.configDir };
     },
     // Where this conversation's transcript lives, for the statistics view.
-    sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath }; },
+    sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath, costUsd: typeof state.costUsd === 'number' ? state.costUsd : null }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
     async cancelSteer() {
       live();
