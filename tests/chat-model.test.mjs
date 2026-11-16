@@ -688,3 +688,10 @@ test('a finished turn keeps its end time, duration and tokens on the last answer
   assert.deepEqual(turnTokenRows({ at: 1, ms: null, tokens: { input: 1, output: 2, cacheRead: 0, cacheCreate: 0 } }).map(row => row.icon), ['token']);
   assert.deepEqual(turnTokenRows({ at: 1, ms: null }), []);
 });
+
+test('a subagent shows the model its messages report and the effort it was given, else the session\'s', () => {
+  const call = (id, input) => ({ kind: 'assistant', key: id, id, sub: false, blocks: [{ type: 'tool_use', id, name: 'Agent', input }] });
+  const kid = { kind: 'assistant', key: 'k', id: 'k', sub: true, parent: 'a1', model: 'claude-haiku-5-5', blocks: [] };
+  const [a, b] = agentsOf([call('a1', { prompt: 'x' }), kid, call('a2', { prompt: 'y', effort: 'low', model: 'opus' })], {}, {}, false, undefined, 'high');
+  assert.deepEqual([a.model, a.effort, b.model, b.effort], ['claude-haiku-5-5', 'high', 'opus', 'low']);
+});

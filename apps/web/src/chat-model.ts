@@ -34,7 +34,7 @@ const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previe
 export type TurnDone = { at: number; ms: number | null; tokens?: Tokens };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[] }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; done?: TurnDone }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -298,10 +298,10 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (at < 0) {
         // After /compact the CLI re-sends earlier synthetic messages (what /context or /mcp printed) under a fresh id but the same uuid: a repeat, not a new reply.
         if (typeof event.uuid === 'string' && view.items.some(item => item.kind === 'assistant' && item.uuid === event.uuid)) return view;
-        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), ...parentOf(event), fresh });
+        return append(view, { kind: 'assistant', key, id: messageId, ...uuid, blocks: absorb([], incoming), sub: Boolean(event.parentToolUseId), ...parentOf(event), ...(event.model && { model: String(event.model) }), fresh });
       }
       const prev = view.items[at] as AssistantItem, items = [...view.items];
-      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), blocks: absorb(prev.blocks, incoming) };
+      items[at] = { ...prev, ...uuid, sub: prev.sub || Boolean(event.parentToolUseId), ...(prev.parent ? {} : parentOf(event)), ...(event.model && { model: String(event.model) }), blocks: absorb(prev.blocks, incoming) };
       return { ...view, items };
     }
     case 'task': {
@@ -630,14 +630,14 @@ export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task'
 export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number };
 export type AgentStatus = 'running' | 'done' | 'error' | 'stopped';
 export type SubAgent = { id: string; type: string; description: string; prompt: string; background: boolean; status: AgentStatus; startedAt?: number; endedAt?: number; durationMs?: number;
-  tokens?: number; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };
+  tokens?: number; model?: string; effort?: string; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };
 type ToolUse = Extract<Block, { type: 'tool_use' }>;
 // Work that keeps running after its tool call returns: a Monitor, or a shell started with run_in_background. It is tracked like a background
 // subagent (the CLI reports its start and end the same way), shown as a job: its command instead of a prompt, no steps of its own.
 export const isJobTool = (block: { name: string; input?: any }) => block.name === 'Monitor' || ((block.name === 'Bash' || block.name === 'PowerShell') && block.input?.run_in_background === true);
 // Every Agent call in `items`, in order, with what its subagent did (its own messages are the items whose `parent` is the call), and every job.
 // Status: the CLI's end report wins; a background one without it runs while its child lives (`liveTasks`); a foreground one is over once its result is in.
-export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[]): SubAgent[] {
+export function agentsOf(items: Item[], results: ChatView['results'], tasks: ChatView['tasks'], busy: boolean, liveTasks?: string[], sessionEffort?: string | null): SubAgent[] {
   const children = new Map<string, AssistantItem[]>();
   for (const item of items) if (item.kind === 'assistant' && item.parent) { const list = children.get(item.parent); if (list) list.push(item); else children.set(item.parent, [item]); }
   const agents: SubAgent[] = [];
@@ -665,6 +665,8 @@ export function agentsOf(items: Item[], results: ChatView['results'], tasks: Cha
       agents.push({
         id: block.id, type: String(task?.agentType || input.subagent_type || 'general-purpose'), description: String(task?.description || input.description || ''), prompt: String(input.prompt ?? ''), background, status,
         startedAt: task?.startedAt, endedAt: task?.endedAt, durationMs: task?.durationMs, tokens: task?.tokens,
+        // Model: what its own messages report, else the Agent call's pick. Effort is not reported by the CLI: the call's own, else the session's (what it inherits unless its definition sets one).
+        model: kids.find(kid => kid.model)?.model || (typeof input.model === 'string' ? input.model : undefined), effort: typeof input.effort === 'string' ? input.effort : sessionEffort || undefined,
         toolCount: Math.max(work.length, task?.toolUses ?? 0),
         now: status !== 'running' ? '' : task?.activity || (last ? `${toolLabel(last.name)} ${toolSummary(last.name, last.input ?? {})}`.trim() : task?.lastTool ?? ''),
         report: task?.report || (!background && result && !result.isError ? result.content : '') || (handback ? String(handback.input?.message ?? '') : ''),
