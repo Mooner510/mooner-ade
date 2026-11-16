@@ -111,6 +111,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   }
   // An alias ("sonnet") has no catalog row of its own: the family's first (newest) row stands in, else Auto Compact would be judged against 200k and switched off.
   const maxContextForModel = model => (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (state.capabilities.catalog?.find(item => item.id === model) ?? state.capabilities.catalog?.find(item => item.family === model))?.window) || state.contextWindow || 200_000;
+  // The CLI settles on the concrete model once it starts (modelSettings is then read under that id), so an alias is looked up as the model it stands for
+  // from the start; judged by its own key ("sonnet") the gauge would show a window that vanishes with the first reply.
+  const concreteModel = model => model && !state.capabilities.catalog?.some(item => item.id === model) ? state.capabilities.catalog?.find(item => item.family === model)?.id ?? model : model;
   // Where this chat's Claude Code keeps its settings and transcripts: the chat's own account, else the one a plain `claude` in this environment would use.
   const configDirOf = () => meta.configDir || (typeof env === 'function' ? env() : env)?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   // Several refreshes can be in flight (open, catalog, init, result); only the newest one's answer is applied.
@@ -119,7 +122,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const refreshAutoCompact = async (model = state.model) => {
     if (agent !== 'claude') { if (state.autoCompact) { state.autoCompact = null; publish(); } return; }
     const generation = ++compactGeneration, configDir = configDirOf();
-    const next = await readAutoCompact(configDir, cwd, model, maxContextForModel(model));
+    const next = await readAutoCompact(configDir, cwd, concreteModel(model), maxContextForModel(model));
     if (generation !== compactGeneration) return;
     const prev = JSON.stringify(state.autoCompact), ready = JSON.stringify(next);
     if (prev !== ready) { state.autoCompact = next; publish(); }
@@ -285,7 +288,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   refreshChatTitle();
   state.sessionId = meta.sessionId ?? null;
   function emit(event, { store = true } = {}) {
-    const stamped = store ? { ...event, seq: ++seq, at: Date.now() } : event;
+    // total_cost_usd is the session total; this turn's own cost is the step from the total before it (not when the old total is unknown: a session carried over from the CLI).
+    const turnCost = store && event.kind === 'result' && event.costUsd != null && (state.costUsd > 0 || state.turns === 0) ? event.costUsd - state.costUsd : 0;
+    const stamped = store ? { ...event, ...(turnCost > 0 && { turnCostUsd: turnCost }), seq: ++seq, at: Date.now() } : event;
     if (store) {
       events.push(stamped); if (events.length > KEEP_EVENTS * 1.5) events = events.slice(-KEEP_EVENTS);
       invalidate();
@@ -473,7 +478,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
       // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the gauge matches what the CLI starts with.
-      const model = meta.model ?? state.model, compactNow = await readAutoCompact(configDirOf(), cwd, model, maxContextForModel(model));
+      const model = meta.model ?? state.model, compactNow = await readAutoCompact(configDirOf(), cwd, concreteModel(model), maxContextForModel(model));
       if (JSON.stringify(state.autoCompact) !== JSON.stringify(compactNow)) { state.autoCompact = compactNow; publish(); }
     }
     // shell:false and argv only: the message text never reaches a shell.
@@ -631,7 +636,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     async setAutoCompact(value) {
       if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', 'Auto Compact 창은 Claude 채팅에서만 바꿀 수 있습니다.', 409);
       const model = meta.model ?? state.model;
-      try { await writeAutoCompact(configDirOf(), model, value, maxContextForModel(model)); } catch (cause) { throw fault('INVALID_INPUT', cause.message); }
+      try { await writeAutoCompact(configDirOf(), concreteModel(model), value, maxContextForModel(model)); } catch (cause) { throw fault('INVALID_INPUT', cause.message); }
       await refreshAutoCompact(model);
       return { autoCompact: state.autoCompact };
     },
