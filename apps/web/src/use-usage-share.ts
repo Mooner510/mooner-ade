@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUsage, type UsageWindow } from './Usage';
-import { addPair, contribution, learnedK, sameWindow, type KSums, type Reading } from './usage-share';
+import { contribution, learnedK, sameWindow, type KSums, type Reading } from './usage-share';
 
 // This chat's share of the plan's usage limits, for the status line. What the chat cost inside each window is read from its transcript on the server
 // (chat/spend: requests since the window's start = resetsAt - length), so it does not depend on when this chat was opened or what the UI remembered.
 // That cost becomes %p through k, dollars per 1%p: a turn is measured by reading the limits right before and right after it (forced reads, a few
-// hundred ms each), pairing the change with what the turn cost; the pairs add up to k, kept across chats and restarts (localStorage), per plan and window.
+// hundred ms each), pairing the change with what the turn cost; the pairs add up to k, kept across chats and restarts (usage/k on the server), per plan and window.
 const WINDOWS = { session: '5h', weekly: '주' } as const;
 const LENGTH = { session: 5 * 3_600_000, weekly: 7 * 86_400_000 } as const;
 type Key = keyof typeof WINDOWS;
 type Readings = Partial<Record<Key, Reading>>;
 type Spent = Partial<Record<Key, { resetsAt: number; usd: number; at: number }>>; // usd: the window's cost when the chat's total was `at`
 const store = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) ?? '') ?? fallback; } catch { return fallback; } };
-const save = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* full or blocked: k is just not remembered */ } };
+// k lives on the server (usage/k); the first read also carries over what older versions kept in localStorage.
+let kSums: Record<string, KSums> | null = null;
 const readingsOf = (windows: UsageWindow[] | undefined): Readings => {
   const out: Readings = {};
   for (const item of windows ?? []) if (item.key in WINDOWS) out[item.key as Key] = { util: item.percent, resetsAt: item.resetsAt };
@@ -23,7 +24,19 @@ export function useUsageShare({ id, enabled, ready, projectId, refresh, status, 
   const { usage, load } = useUsage('claude', projectId, enabled, refresh);
   const [tick, setTick] = useState(0), [spent, setSpent] = useState<Spent>({});
   const now = useRef({ cost: costUsd ?? 0, plan: usage?.plan ?? '' }); now.current = { cost: costUsd ?? 0, plan: usage?.plan ?? '' };
-  const previous = useRef(status), turn = useRef<{ cost: number; before: Readings } | null>(null);
+  const previous = useRef(status), turn = useRef<{ cost: number; before: Readings; credit: number } | null>(null);
+
+  useEffect(() => {
+    if (!enabled || kSums) return;
+    const old = store<Record<string, KSums>>('ade:usage-k', {});
+    void (async () => {
+      try {
+        let all = await call<Record<string, KSums>>('usage/k', {});
+        for (const [key, sums] of Object.entries(old)) if (!all[key]) all = await call<Record<string, KSums>>('usage/k', { key, usd: sums.usd, dUtil: sums.dUtil });
+        kSums = all; setTick(value => value + 1);
+      } catch { /* server unreachable: no share until the next try */ }
+    })();
+  }, [enabled, call]);
 
   // The window costs, re-read when a window changes or a turn starts/ends. Only once the chat's state has arrived: `at` must be its real total, not the 0 a restoring chat starts with.
   const starts = readingsOf(usage?.windows), sessionEnd = starts.session?.resetsAt, weeklyEnd = starts.weekly?.resetsAt;
@@ -45,28 +58,31 @@ export function useUsageShare({ id, enabled, ready, projectId, refresh, status, 
     if (!enabled) return;
     const was = previous.current; previous.current = status;
     if (status === 'working' && was !== 'working') {
-      const start = { cost: now.current.cost, before: {} as Readings };
+      const start = { cost: now.current.cost, before: {} as Readings, credit: 0 };
       turn.current = start;
-      void load(true).then(fresh => { if (fresh && turn.current === start) start.before = readingsOf(fresh.windows); });
+      void load(true).then(fresh => { if (fresh && turn.current === start) { start.before = readingsOf(fresh.windows); start.credit = fresh.credit?.used ?? 0; } });
     } else if (status !== 'working' && was === 'working' && turn.current) {
       const start = turn.current; turn.current = null;
       void load(true).then(fresh => {
         if (!fresh) return;
         const after = readingsOf(fresh.windows), spentNow = now.current.cost - start.cost, plan = fresh.plan || now.current.plan;
-        const sums = store<Record<string, KSums>>('ade:usage-k', {});
-        for (const key of Object.keys(WINDOWS) as Key[]) {
-          const a = after[key], b = start.before[key];
-          if (!a || !b || !sameWindow(a.resetsAt, b.resetsAt) || spentNow <= 0 || a.util < b.util) continue;
-          sums[`${plan}|${key}`] = addPair(sums[`${plan}|${key}`], spentNow, a.util - b.util);
-        }
-        save('ade:usage-k', sums); setTick(value => value + 1);
+        // A turn that ran into a limit (a window at 100% before or after) or spent Usage Credit is not a clean pair: the plan did not take all of its cost.
+        const clean = (fresh.credit?.used ?? 0) <= start.credit;
+        void (async () => {
+          for (const key of Object.keys(WINDOWS) as Key[]) {
+            const a = after[key], b = start.before[key];
+            if (!clean || !a || !b || a.util >= 100 || b.util >= 100 || !sameWindow(a.resetsAt, b.resetsAt) || spentNow <= 0 || a.util < b.util) continue;
+            kSums = await call<Record<string, KSums>>('usage/k', { key: `${plan}|${key}`, usd: spentNow, dUtil: a.util - b.util }).catch(() => kSums);
+          }
+          setTick(value => value + 1);
+        })();
       });
     }
-  }, [enabled, status, load]);
+  }, [enabled, status, load, call]);
 
   return useMemo(() => {
     if (!enabled || !usage || !(costUsd && costUsd > 0)) return null;
-    const after = readingsOf(usage.windows), sums = store<Record<string, KSums>>('ade:usage-k', {});
+    const after = readingsOf(usage.windows), sums = kSums ?? {};
     const parts: string[] = [];
     for (const key of Object.keys(WINDOWS) as Key[]) {
       const reading = after[key], window = spent[key]; if (!reading || !window) continue;
