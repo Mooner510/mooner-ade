@@ -211,6 +211,32 @@ test('Claude: while a turn runs the cost grows with its tokens (priced like the 
   assert.equal(session.state().costUsd, 0.03);
 });
 
+test('Claude: the price per unit is kept in the chat, so the first turn after a restart already shows a growing cost; a new chat of the same model uses it too', async t => {
+  const stream = [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))];
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-unit-'));
+  const sessions = [];
+  t.after(async () => { for (const session of sessions) await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
+  const first = await openChatSession({ directory, id: 'unit', cwd: directory, executable: process.execPath, executableArgs: stream });
+  await first.send('one');
+  await until(() => first.state().status === 'idle');
+  await first.close();
+  assert.ok(JSON.parse(await readFile(path.join(chatFolder(directory, 'unit'), 'meta.json'), 'utf8')).costPerUnit > 0, 'meta.json keeps the price');
+  // Restored chat (a fresh server would also have only the stored price).
+  const costs = [];
+  const again = await openChatSession({ directory, id: 'unit', cwd: directory, executable: process.execPath, executableArgs: stream, onState: state => costs.push(state.costUsd) });
+  sessions.push(again);
+  await again.send('two');
+  await until(() => again.state().turns === 2 && again.state().status === 'idle');
+  assert.ok(costs.some(cost => cost > 0.03 && cost < 0.06), `cost rose before the result: ${costs}`);
+  // A brand-new chat: no price of its own yet, but the model family was priced above.
+  const fresh = [];
+  const other = await openChatSession({ directory, id: 'unit-new', cwd: directory, executable: process.execPath, executableArgs: stream, onState: state => fresh.push(state.costUsd) });
+  sessions.push(other);
+  await other.send('hello');
+  await until(() => other.state().turns === 1 && other.state().status === 'idle');
+  assert.ok(fresh.some(cost => cost > 0 && cost < 0.03), `first turn of a new chat showed a rising cost: ${fresh}`);
+});
+
 test('Claude: a turn with several API calls only ever adds to the shown tokens, and ends on the result total', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-multi-'));
   const seen = [];

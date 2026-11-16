@@ -35,6 +35,7 @@ import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
 import { createAccountResolver, createUsage } from './usage.js';
+import { createUsageShareStore } from './usage-share-store.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore } from './feedback-store.js';
@@ -188,6 +189,7 @@ function applyAppState(state) {
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
 }
+const usageShare = createUsageShareStore(path.join(dataRoot, 'usage-share.json'));
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -754,6 +756,7 @@ async function route(action, input, project) {
     for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
     return status;
   }
+  if (action === 'usage/share') return usageShare.update(input.set);
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
@@ -983,6 +986,13 @@ async function route(action, input, project) {
       await chat.rewind(input.uuid);
       return {};
     }
+    // /btw works whatever the chat is doing: no idle check, the question runs in its own process.
+    case 'chat/btw': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return chat.btw(input.question, typeof input.btwId === 'string' ? input.btwId.slice(0, 80) : '');
+    }
+    case 'chat/btw-cancel': return { cancelled: project.chats.get(input.id)?.cancelBtw(input.btwId) === true };
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
     case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
     case 'chat/stop-task': await project.chats.get(input.id)?.stopTask(String(input.toolUseId ?? '')); return {};
