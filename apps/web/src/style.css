@@ -2241,14 +2241,21 @@ dialog.chat-stats > header small { flex: 1; color: var(--faint); font-family: va
 .stats-legend b { font-variant-numeric: tabular-nums; } .stats-legend small { color: var(--faint); }
 .stats-chart { display: grid; gap: 4px; }
 .stats-readout { min-height: 18px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.stats-chart svg { width: 100%; height: 120px; display: block; overflow: visible; cursor: crosshair; }
-.stats-area { fill: color-mix(in srgb, var(--s1) 16%, transparent); } .stats-line { fill: none; stroke: var(--s1); stroke-width: 2; }
-.stats-mark { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; } .stats-cross { stroke: var(--muted); stroke-width: 1; }
-.stats-dot { fill: var(--s1); stroke: var(--overlay); stroke-width: 2; }
-.stats-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; }
-.stats-bars > span { flex: 0 1 32px; height: 100%; display: flex; align-items: flex-end; min-width: 0; cursor: default; }
-.stats-bars > span > i { width: 100%; background: var(--s2); border-radius: 3px 3px 0 0; opacity: .85; transition: opacity .12s; }
-.stats-bars > span:hover > i, .stats-bars > span.on > i { opacity: 1; }
+.stats-area { fill: color-mix(in srgb, var(--s1) 10%, transparent); } .stats-line { fill: none; stroke: var(--s1); stroke-width: 1.5; }
+.tc-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11px; color: var(--faint); } .tc-legend b { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tc-legend span { display: inline-flex; align-items: center; gap: 6px; } .tc-legend .d { width: 8px; height: 8px; background: var(--s1); border-radius: 2px; } .tc-legend .b { width: 4px; height: 10px; background: var(--s2); border-radius: 1px; }
+.turn-chart { padding: 6px 8px 0; margin-bottom: 4px; }
+.tc-plot { position: relative; height: 222px; cursor: crosshair; }
+.tc-band { position: absolute; top: 0; height: 206px; border-radius: 4px; transition: background .12s; pointer-events: none; } .tc-band.on { background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.tc-ctx { position: absolute; inset: 0 0 auto 0; height: 130px; pointer-events: none; } .tc-ctx svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.tc-lane { position: absolute; inset: 130px 0 auto 0; height: 76px; border-top: 1px solid var(--border); pointer-events: none; }
+.tc-axis { position: absolute; inset: 210px 0 auto 0; height: 12px; pointer-events: none; }
+.tc-axis em { position: absolute; transform: translateX(-50%); font-style: normal; font-size: 10px; line-height: 12px; color: var(--faint); font-variant-numeric: tabular-nums; } .tc-axis em.on { color: var(--fg, var(--muted)); font-weight: 600; }
+.tc-dot { position: absolute; width: 6px; height: 6px; transform: translate(-50%, -50%); border-radius: 50%; background: var(--s1); box-shadow: 0 0 0 2px var(--overlay); transition: transform .12s; } .tc-dot.on { transform: translate(-50%, -50%) scale(1.7); }
+.tc-bar { position: absolute; bottom: 0; transform: translateX(-50%); background: var(--s2); border-radius: 3px 3px 0 0; opacity: .6; transition: opacity .12s; } .tc-bar.on { opacity: 1; }
+.tc-cross { position: absolute; top: 0; height: 206px; border-left: 1px solid var(--faint); opacity: .6; }
+.tc-here { position: absolute; width: 6px; height: 6px; transform: translate(-50%, -50%); border-radius: 50%; border: 1.5px solid var(--s1); background: var(--overlay); }
+.tc-pack { text-decoration: none; position: absolute; top: 0; height: 206px; border-left: 1px dashed var(--faint); opacity: .6; } .tc-pack small { position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--faint); white-space: nowrap; }
 .stats-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; } @media (max-width: 720px) { .stats-cols { grid-template-columns: 1fr; } }
 .stats-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .stats-table th { text-align: left; font-weight: 500; color: var(--faint); padding: 3px 6px 3px 0; } .stats-table td { padding: 4px 6px 4px 0; border-top: 1px solid var(--border); }
@@ -2643,3 +2650,5 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 @keyframes chat-drop-bob { 50% { transform: translateY(-4px); } }
 @keyframes chat-drop-dash { to { border-color: var(--accent-strong); } }
 @media (prefers-reduced-motion: reduce) { .chat-drop, .chat-drop::before, .chat-drop-card, .chat-drop-icon { transition: none !important; animation: none !important; } }
+
+.tc-val { position: absolute; transform: translateX(-50%); font-size: 10px; line-height: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; } .tc-val.on { color: var(--fg, var(--muted)); font-weight: 600; z-index: 1; }
