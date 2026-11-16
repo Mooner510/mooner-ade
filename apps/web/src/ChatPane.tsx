@@ -642,11 +642,11 @@ const GlyphIcon = ({ name, size = 14 }: { name: string; size?: number }) => <spa
 function TurnTokens({ done }: { done: TurnDone }) {
   const rows = turnTokenRows(done);
   return <span className="chat-done-tip">
-    <IconButton icon="info" tip="none" label={rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`).join(', ')} size={13} />
+    <IconButton icon="info" tip="none" label={[...rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`), ...(done.costUsd ? [`비용 ${dollars(done.costUsd)}달러`] : [])].join(', ')} size={13} />
     <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
       <GlyphIcon name={row.icon} size={15} /><b>{row.label}</b>
       <span><GlyphIcon name="arrow_upward" size={13} />{row.up.value}</span><span><GlyphIcon name="arrow_downward" size={13} />{row.down.value}</span>
-    </span>)}</span>
+    </span>)}{done.costUsd != null && <span className="chat-done-row"><GlyphIcon name="payments" size={15} /><b>비용</b><span>{'$' + dollars(done.costUsd)}</span></span>}</span>
   </span>;
 }
 
@@ -716,7 +716,7 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
       {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
-      {finalItem.done?.tokens && <TurnTokens done={finalItem.done} />}
+      {(finalItem.done?.tokens || finalItem.done?.costUsd) && <TurnTokens done={finalItem.done} />}
       {finalItem.done && <span className="chat-done-time">{turnDoneParts(finalItem.done).map(part => <span key={part}>{part}</span>)}</span>}</div>}
   </div>;
 }, sameTurn);

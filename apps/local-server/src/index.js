@@ -953,6 +953,16 @@ async function route(action, input, project) {
       if (action === 'chat/spend') return { spent: (await readSessionStats(files, (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite), ref.costUsd)).spentSince };
       return { sessionId: ref.sessionId, ...await readSessionStats(files) };
     }
+    // Dollars per 1%p learned for the Plan Usage share, kept with the app data (the web page's origin changes with every launch's port, so localStorage cannot hold it).
+    case 'usage/k': {
+      const file = path.join(dataRoot, 'usage-k.json'), all = await readJson(file, {}).catch(() => ({}));
+      const { key, usd, dUtil } = input;
+      if (typeof key === 'string' && key.length <= 64 && Number.isFinite(usd) && Number.isFinite(dUtil) && usd > 0 && dUtil >= 0) {
+        all[key] = { usd: (all[key]?.usd ?? 0) + usd, dUtil: (all[key]?.dUtil ?? 0) + dUtil };
+        await writeJson(file, all).catch(() => {});
+      }
+      return all;
+    }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/retry': {
