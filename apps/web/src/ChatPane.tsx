@@ -1546,7 +1546,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" title={cwd}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? `클릭하여 세션 ID 복사\n${view.state.sessionId}\n${cwd}` : cwd} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}

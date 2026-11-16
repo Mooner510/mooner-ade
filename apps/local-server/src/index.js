@@ -23,7 +23,7 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { chatMcpServers, deniedMcpTools, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { chatMcpServers, deniedMcpTools, readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
 import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
@@ -1065,6 +1065,8 @@ async function route(action, input, project) {
       if (input.agent && input.agent !== 'claude') return route('chat/models', input, project);
       return { catalog: await claudeCatalog() };
     }
+    // The agent session ID of a terminal (Claude via its SessionStart hook, Codex via its log); null while unknown (Cursor never reports one).
+    case 'terminal/session': return { sessionId: (['claude', 'codex', 'cursor'].includes(input.agent) && await readTerminalSession(project.directory, text(input.id, '터미널 ID', 128), input.agent)) || null };
     case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
     // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
     case 'chat/to-terminal': {
