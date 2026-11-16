@@ -1,225 +1,275 @@
-# MoonerADE (무너에이드)
+<p align="center">
+  <img src="apps/desktop/assets/icon.png" width="80" height="80" alt="MoonerADE 아이콘">
+</p>
 
-**Claude Code·Codex·Cursor Agent를 한 창에서 사용하는 개발 워크스페이스.**
+# MoonerADE · 무너에이드
 
-프로젝트마다 흩어져 있던 터미널을 한곳에 모으고, 여러 에이전트가 일하는 모습을 나란히 보면서 바뀐 코드를 바로 확인하세요. 평소 쓰던 CLI와 계정을 그대로 쓰는 macOS·Windows 데스크톱 앱입니다.
+**Claude Code · Codex · Cursor Agent를 한 창에서.**
 
-[설치](#설치) · [주요 기능](#주요-기능) · [사용법](#사용법) · [개발](#개발) · [문서](#문서) · [GPL v3](LICENSE)
+채팅과 터미널로 에이전트에게 일을 맡기고, 여러 프로젝트를 오가며 결과를 확인하는 macOS·Windows 개발 워크스페이스입니다. 컴퓨터에 설치된 공식 CLI와 계정을 그대로 사용합니다.
 
-![MoonerADE의 프로젝트 사이드바와 2 × 3 분할 터미널](docs/images/terminal-workspace.png)
+[설치](#설치) · [사용법](#사용법) · [주요 기능](#주요-기능) · [개발](#개발) · [문서](#문서) · [릴리스](https://github.com/Mooner510/mooner-ade/releases)
 
-*예제 프로젝트를 연 실제 앱 화면입니다. 터미널 출력은 데모 코드와 테스트를 실행한 결과입니다.*
+![프로젝트 사이드바와 채팅에서 에이전트의 작업 과정·결과를 확인하는 MoonerADE](docs/images/chat-workspace.png)
+
+*현재 소스로 촬영한 예제 화면입니다. 대화·사용량·카드 수치는 시연용이며, 터미널 출력은 예제를 실제 실행한 결과입니다.*
 
 ## 설치
 
-명령 한 줄이면 최신 버전을 받아 설치하고 바로 실행합니다. 같은 명령을 다시 실행하면 재설치되고, 그 뒤 업데이트는 앱이 알아서 합니다. 관리자 권한은 필요 없습니다.
+**macOS Apple Silicon**과 **Windows x64**용 앱을 제공합니다. 아래 명령은 최신 릴리스를 설치하고 앱을 실행합니다. 관리자 권한은 필요하지 않습니다.
 
-### macOS (Apple Silicon)
+### macOS
 
-**터미널** 앱을 열고 아래 줄을 붙여 넣으세요.
+터미널에서 실행하세요.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Mooner510/mooner-ade/master/scripts/install-mac.sh | sh
 ```
 
-`/Applications`(쓸 수 없으면 `~/Applications`)에 설치됩니다. 이 방법으로 받으면 "확인되지 않은 개발자" 경고 없이 바로 열립니다.
+설치 위치는 `/Applications/MoonerADE.app`이며, 해당 폴더에 쓸 수 없으면 `~/Applications`를 사용합니다.
 
-### Windows (x64)
+### Windows
 
-시작 메뉴에서 **PowerShell**을 열고 아래 줄을 붙여 넣으세요.
+PowerShell에서 실행하세요.
 
 ```powershell
 irm https://raw.githubusercontent.com/Mooner510/mooner-ade/master/scripts/install-windows.ps1 | iex
 ```
 
-`%LOCALAPPDATA%\Programs\MoonerADE`에 설치되고 시작 메뉴와 바탕 화면에 바로 가기가 생깁니다. SmartScreen 경고도 뜨지 않습니다.
+`%LOCALAPPDATA%\Programs\MoonerADE`에 설치하고 시작 메뉴·바탕 화면에 바로 가기를 만듭니다.
+
+> 설치 명령을 다시 실행하면 기존 앱을 종료하고 교체합니다. 설치 후에는 앱 안의 자동 업데이트를 사용하세요. Intel Mac 등 다른 환경은 [소스에서 실행](#소스에서-실행)을 참고하세요.
+
+### 에이전트 준비
+
+[Git](https://git-scm.com/downloads)과 사용할 에이전트의 공식 CLI를 설치한 뒤 로그인하세요. 에이전트는 하나만 준비해도 됩니다.
+
+| 에이전트 | 설치 안내 | 로그인 명령 |
+|---|---|---|
+| Claude Code | [공식 안내](https://docs.anthropic.com/claude-code) | `claude auth login` |
+| Codex | [공식 안내](https://github.com/openai/codex) | `codex login` |
+| Cursor Agent | [공식 안내](https://cursor.com/docs/cli/overview) | `cursor-agent login` |
+
+채팅은 **설정 → AI 툴 → 각 에이전트 → 채팅 인증**에서 API 키를 사용할 수도 있습니다. 이 설정은 채팅에만 적용되며, 터미널과 상태바 사용량 조회는 CLI 로그인을 사용합니다. 모델 이용 권한과 비용은 각 제공자의 계정·플랜을 따릅니다.
 
 <details>
-<summary>NVIDIA 그래픽카드에서 화면이 뚝뚝 끊길 때 (RTX HDR)</summary>
+<summary>설치 참고 · Windows 화면 끊김 · 삭제</summary>
 
-NVIDIA App의 **RTX HDR**을 켜 두면, NVIDIA 드라이버가 MoonerADE를 게임으로 보고 화면을 그릴 때마다 끼어듭니다. 그러면 애니메이션과 마우스 반응이 초당 20프레임으로 끊기고 CPU를 계속 씁니다. Chrome·Edge·Slack은 NVIDIA가 미리 넣어 둔 프로필로 RTX HDR에서 빠져 있어 같은 PC에서도 멀쩡합니다.
+- **macOS 서명:** 배포 앱은 Apple 공증 없이 ad-hoc 서명됩니다. 설치 스크립트는 앱의 격리 속성을 제거합니다.
+- **Windows ARM:** 제공하는 x64 앱은 Windows의 x64 에뮬레이션을 사용합니다.
+- **NVIDIA RTX HDR:** NVIDIA App의 RTX HDR이 앱에 적용되면 화면이 끊길 수 있습니다. 앱이 감지해 제안하는 **해결**을 누르면 관리자 권한 확인 후 MoonerADE에만 RTX HDR을 끄는 프로필을 추가합니다. 직접 설정하려면 NVIDIA App → 그래픽 → 프로그램 설정에서 MoonerADE의 RTX HDR을 끄세요.
 
-앱은 시작할 때 이 상태를 알아채고 **해결**을 권합니다. 누르면 관리자 권한을 한 번 확인한 뒤, NVIDIA 드라이버에 MoonerADE 전용 설정(RTX HDR 끔) 하나만 추가합니다. 다른 게임과 앱의 RTX HDR은 그대로입니다. 직접 하려면 NVIDIA App › 그래픽 › 프로그램 설정에서 MoonerADE를 추가하고 RTX HDR을 끄세요.
-
-되돌리려면 관리자 PowerShell에서 아래를 실행합니다.
+RTX HDR 프로필을 되돌리려면 관리자 PowerShell에서 실행합니다.
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\MoonerADE\resources\app\apps\desktop\src\nvidia-profile.ps1" -Exe moonerade.exe -ProfileName MoonerADE -Undo -Result "$env:TEMP\ade-nvidia.txt"
 ```
 
-</details>
+**앱 삭제:** 앱과 백그라운드 작업을 종료한 뒤 macOS는 설치된 `MoonerADE.app`을, Windows는 설치 폴더와 바로 가기를 지우세요. 설정·기록까지 삭제하려면 다음 폴더도 지웁니다. 실제 프로젝트와 CLI 자체 설정은 별도입니다.
 
-### 설치 후 할 일
-
-MoonerADE는 에이전트를 직접 품지 않고, 컴퓨터에 설치된 공식 CLI를 실행합니다. 쓰려는 도구를 설치하고 한 번 로그인해 두세요.
-
-| 준비물 | 설치 | 로그인 |
+| OS | 앱 데이터 | Electron 프로필 |
 |---|---|---|
-| [Git](https://git-scm.com/downloads) | 필수 | — |
-| [Claude Code](https://docs.anthropic.com/claude-code) | 선택 | `claude auth login` |
-| [Codex](https://github.com/openai/codex) | 선택 | `codex login` |
-| [Cursor Agent](https://cursor.com/docs/cli/overview) | 선택 | `cursor-agent login` |
-
-그다음 앱에서 **프로젝트 열기**로 작업 폴더를 고르면 끝입니다. 새 탭 메뉴에서 세 에이전트의 터미널 또는 채팅을 선택할 수 있습니다. 채팅은 공식 CLI의 로그인과 세션을 사용하며, CLI가 지원하지 않는 기능은 제한 이유를 표시합니다. 자세한 범위는 [채팅 검증 안내](docs/VERIFICATION.md#2026-11-10-codexcursor-채팅-확장)를 참고하세요.
-
-<details>
-<summary>삭제하기</summary>
-
-- **macOS:** 앱을 종료하고 `/Applications/MoonerADE.app`을 휴지통으로 옮깁니다. 설정까지 지우려면 `~/Library/Application Support/mooner-ade`와 `~/Library/Application Support/@mooner/ade-desktop`도 지웁니다.
-- **Windows:** 앱을 종료하고 `%LOCALAPPDATA%\Programs\MoonerADE` 폴더와 시작 메뉴·바탕 화면의 `MoonerADE` 바로 가기를 지웁니다. 설정까지 지우려면 `%LOCALAPPDATA%\mooner-ade`와 `%APPDATA%\@mooner\ade-desktop`도 지웁니다.
+| macOS | `~/Library/Application Support/mooner-ade` | `~/Library/Application Support/@mooner/ade-desktop` |
+| Windows | `%LOCALAPPDATA%\mooner-ade` | `%APPDATA%\@mooner\ade-desktop` |
 
 </details>
-
-<details>
-<summary>Intel Mac, Windows ARM 등 다른 환경</summary>
-
-릴리스는 Apple Silicon Mac과 Windows x64용만 만듭니다. Windows ARM은 x64 앱이 에뮬레이션으로 실행됩니다. 그 밖의 환경은 아래 [소스에서 실행](#소스에서-실행)을 따르세요.
-
-</details>
-
-## 주요 기능
-
-| 기능 | 할 수 있는 일 |
-|---|---|
-| **여러 프로젝트, 한 창** | 프로젝트마다 탭과 터미널을 그대로 둔 채 오가며 작업 |
-| **자유로운 터미널 분할** | 좌우·상하 분할, 크기 조절, 최대화, 2 × 3 그리드 한 번에 만들기 |
-| **Claude Code · Codex** | 공식 CLI를 실행하고 질문·승인·완료 상태를 한눈에 확인 |
-| **다음 요청 예약** | Claude가 일하는 동안 다음 요청을 적어 두면 끝나자마자 전송 |
-| **Chat 탭** | Claude Code·Codex·Cursor Agent를 터미널 대신 채팅 화면으로 사용. 질문 카드, 계획 검토, 서브에이전트 카드, 이미지 첨부, `@` 파일 언급, 이전 대화 불러오기. 지원 범위는 CLI마다 다름 ([채팅 기능 정리](CHAT_MODE_FEATURES.md)) |
-| **인터랙티브 UI** | 채팅에서 에이전트가 답변 안에 차트·상태 카드·입력 폼과 샌드박스 미리보기를 그림 (설정 → AI 툴 → Claude Code, 기본 켜짐) |
-| **플러그인** | 승인한 플러그인으로 터미널 명령·에이전트 도구·작업공간을 더함. 앱에 든 에이전트 버스는 채팅 에이전트끼리 메시지를 주고받음 ([플러그인](docs/PLUGINS.md), [에이전트 버스](docs/AGENT_BUS.md)) |
-| **피드백 요청** | 앱 화면을 캡쳐하고 글로 정리해 개선 요청을 보냄. AI·에이전트가 쓴 초안은 사람이 열어 검토한 뒤에만 제출 |
-| **변경사항 Diff** | 바뀐 파일과 추가·삭제 줄 수, 코드 비교를 터미널 옆에서 확인 |
-| **작업 환경 유지** | 화면 배치 복원, 테마·글꼴·알림·단축키 설정 |
-| **저장소별 worktree** | 여러 저장소가 담긴 폴더에서 저장소마다 작업 경로를 나누고 fast-forward로 합치기 |
-| **WakaTime 기록** | 앱 사용 시간과 에이전트 작업 시간을 WakaTime에 기록 (설정 → WakaTime) |
-| **자동 업데이트** | 새 버전을 받아 다시 시작해도 실행 중인 터미널과 에이전트 작업은 그대로 유지 |
-
-### 터미널 옆에서 바로 보는 Diff
-
-터미널을 그대로 둔 채 Diff 패널을 열어 파일별 변경을 확인합니다. 크게 보고 싶으면 Diff 탭으로 펼치면 됩니다. 커밋은 터미널이나 에이전트에게 맡깁니다.
-
-![터미널의 테스트 결과와 Git 변경사항 Diff를 함께 확인하는 MoonerADE](docs/images/git-diff.png)
 
 ## 사용법
 
-1. **프로젝트를 엽니다.** 사이드바에서 프로젝트를 추가하고 작업할 탭을 고릅니다.
-2. **터미널을 띄웁니다.** 새 탭 메뉴에서 셸·Claude Code·Codex를 고르거나 직접 명령을 입력합니다. 분할 버튼이나 명령 팔레트로 원하는 배치를 만듭니다.
-3. **결과를 확인합니다.** 질문이나 승인을 기다리는 터미널로 이동하고, 오른쪽 Diff 패널에서 바뀐 코드를 검토합니다.
+1. **프로젝트 열기:** 사이드바에서 작업 폴더를 추가합니다. 첫 실행의 둘러보기에서 기본 조작을 연습할 수 있습니다.
+2. **에이전트 시작:** 새 탭에서 **Chat** 또는 **CLI** 모드와 에이전트를 고릅니다. 일반 터미널도 열 수 있습니다.
+3. **작업 확인:** 채팅의 도구·질문·승인 카드를 확인하거나, 여러 칸으로 분할해 에이전트와 로그를 나란히 봅니다. 바뀐 코드는 상단 **변경사항 Diff**에서 검토합니다.
 
-열어 둔 프로젝트와 배치는 자동으로 저장됩니다. 창을 새로고침하면 실행 중이던 터미널에 다시 붙고, 앱을 완전히 껐다 켜면 저장된 배치에 새 셸을 엽니다.
+프로젝트 목록·탭·화면 배치는 자동 저장됩니다. 둘러보기는 사이드바 아래 책 버튼으로 다시 열 수 있습니다.
 
 ### 자주 쓰는 단축키
 
-`mod`는 macOS에서 ⌘, Windows에서 Ctrl입니다. 그 밖의 Ctrl 조합은 터미널 안의 셸과 CLI로 그대로 전달됩니다.
+`mod`는 macOS의 ⌘, Windows의 Ctrl입니다. 설정에서 단축키를 바꿀 수 있습니다.
 
 | 단축키 | 동작 |
 |---|---|
 | `mod+Alt+O` | 프로젝트 열기 |
-| `mod+Shift+T` / `Alt+T` | 새 터미널 탭 |
-| `mod+Shift+N` | 새 탭에서 실행할 CLI 고르기 |
-| `mod+Shift+P` / `F1` | 명령 팔레트 (분할, 2 × 3 그리드 등) |
-| `mod+Shift+Enter` | pane 최대화 켜기/끄기 |
+| `mod+Shift+T` | 새 탭 |
+| `mod+Shift+N` | 새 탭에서 실행할 도구 고르기 |
+| `mod+Shift+P` / `F1` | 명령 팔레트 |
+| `Ctrl+D` / `Ctrl+Shift+D` | 터미널 좌우 / 상하 분할 |
+| `mod+Shift+Enter` | 현재 칸 최대화 / 복원 |
 | `mod+Shift+G` | 변경사항 Diff 패널 |
-| `mod+Alt+F` | 피드백 요청 패널 |
-| `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 |
 | `mod+,` | 설정 |
 
-전체 단축키와 데이터 복구 방법은 [사용 안내](docs/LOCAL_IDE.md)에 있습니다.
+전체 단축키와 세션 복구 방법은 [사용 안내](docs/LOCAL_IDE.md)를 참고하세요.
 
-### Claude가 일하는 동안 다음 요청 예약하기
+## 주요 기능
 
-Claude가 작업 중일 때 Claude Code 입력란에 다음 요청을 평소처럼 쓰고 **Tab**을 누르면 예약됩니다(입력란은 비워집니다). 지금 작업이 끝나면 터미널마다 순서대로 자동 전송하고, 목록에서 수정(연필)·취소(X)할 수 있습니다. 작업 중이 아닐 때나 `/`·`@`로 시작하는 입력에서는 Tab이 평소대로 Claude에 전달되고, Codex와 일반 셸의 Tab도 그대로입니다. **Claude Code 2.1.303 이상**에서, ADE에서 새로 연 터미널부터 동작합니다.
+### 에이전트의 작업을 읽기 쉬운 채팅으로
+
+명령 실행과 파일 변경을 접을 수 있는 카드로 보여 주고, 질문·승인·계획 검토는 화면에서 답할 수 있습니다. 서브에이전트의 작업과 모델·Effort도 확인할 수 있습니다. 이미지 붙여넣기와 파일 끌어놓기, `@` 파일 언급, `/resume`으로 이전 대화 불러오기도 지원합니다.
+
+입력창에서 권한 모드·모델·Effort를 고르고, 상태 줄에서 컨텍스트·토큰·비용을 확인하세요. **새 채팅은 프로젝트에서 마지막으로 고른 설정을 이어받습니다.** 제공되는 항목은 에이전트와 CLI 버전에 따라 다릅니다.
 
 <details>
-<summary>완료 감지, 호환 조건과 예약 유지 범위</summary>
+<summary>에이전트별 채팅 지원 범위</summary>
 
-자동 전송은 Claude의 OSC 7501(없으면 OSC 9;4) 작업 상태 신호와 빈 입력란을 함께 확인하고, 서버에서 Claude 프로세스와 화면 출력 순번을 다시 검증한다. 질문·승인 화면이나 작성 중인 입력이 있으면 기다린다. 구버전, `terminalProgressBarEnabled`가 꺼진 세션, SSH 세션, 신호가 전달되지 않는 tmux 환경에서는 동작하지 않는다. (SSH 원격 tmux의 작업 중·완료 표시는 [docs/LOCAL_IDE.md](docs/LOCAL_IDE.md)의 tmux 설정 참고) 기존 터미널에는 새 환경 설정이 적용되지 않으므로 새 터미널을 열어야 한다.
+| 기능 | Claude Code | Codex | Cursor Agent |
+|---|---|---|---|
+| 채팅·이미지·파일 첨부 | 지원 | 지원 | 지원 |
+| 응답 중 추가 지시 | 지원 | 지원 | 응답 후 대기열 전송 |
+| 과거 대화에서 분기·되돌리기 | 지원 | 지원 | 미지원 |
+| 토큰 / 비용 표시 | 지원 / 지원 | 지원 / 미제공 | 미제공 / 미제공 |
+| 프롬프트 캐시 타이머·`/stats` | 지원 | 미지원 | 미지원 |
+| 채팅 → 터미널 전환 | 지원 | 지원 | 지원 |
+| 터미널 → 채팅 전환 | 유휴 로컬 세션에서 지원 | 미지원 | 미지원 |
 
-예약은 일시정지하지 않는다. 중단(Esc/Ctrl+C)이나 오류로 작업이 끝나도, 재접속 후 Claude가 이미 idle이어도 다음 예약을 보낸다. 서버가 전송을 거절하면 다음 갱신 때 다시 시도한다. 예약은 메모리에만 보관하므로 앱 새로고침·종료·pane 재생성 시 사라진다. 텍스트만 지원하며 이미지 첨부는 예약하지 않는다.
+이미지 입력·세션 복원 등은 CLI와 모델이 지원하는 범위에서 동작합니다. 사용할 수 없는 기능은 화면에서 이유를 안내합니다. 자세한 동작은 [채팅 기능 정리](CHAT_MODE_FEATURES.md), 확인한 범위는 [검증 상태](docs/VERIFICATION.md)를 참고하세요.
 
 </details>
 
-### 자동 업데이트
+### 답변 안에서 선택하고 조작하는 인터랙티브 UI
 
-설치한 앱은 시작 5초 뒤와 10분마다 새 버전을 확인합니다. 새 버전이 있으면 받아서 교체한 뒤 다시 시작하는데, **그동안 터미널은 꺼지지 않습니다.** 앱이 다시 뜨면 열려 있던 터미널에 다시 붙어 그사이 출력까지 보여 주므로, 에이전트가 일하는 중에도 걱정 없이 업데이트됩니다.
+에이전트가 답변에 상태 카드·차트·입력 폼을 넣고, 계산기나 미리보기를 보여 줄 수 있습니다. 폼에서 고른 내용을 다음 요청으로 보내거나 입력창에 채웁니다. 미리보기 코드는 격리된 샌드박스에서 실행됩니다.
+
+![채팅 답변 안의 상태 카드와 다음 작업 선택 폼](docs/images/interactive-ui.png)
+
+**설정 → AI 툴 → Claude Code → 인터랙티브 UI**에서 켜고 끌 수 있습니다. 기본으로 켜져 있으며, 변경은 새 채팅부터 적용됩니다.
+
+### 여러 프로젝트와 터미널을 한 화면에
+
+프로젝트마다 탭과 배치를 유지하고, 좌우·상하 분할과 크기 조절·최대화를 지원합니다. 명령 팔레트에서 **2 × 3 그리드**도 한 번에 만들 수 있습니다. 에이전트의 질문·승인·완료 상태는 사이드바와 알림으로 확인합니다.
+
+![현재 UI에서 테스트·소스·Git 상태·실행 결과를 나란히 보는 2 × 3 터미널](docs/images/terminal-workspace.png)
+
+### 바뀐 코드를 바로 검토
+
+오른쪽 Diff 패널에서 변경 파일과 추가·삭제 줄을 확인하고, 큰 화면에서 통합 또는 좌우 비교로 펼쳐 볼 수 있습니다. 여러 저장소가 있는 프로젝트는 비교할 저장소를 선택합니다.
 
 <details>
-<summary>자세한 동작</summary>
+<summary>채팅과 Diff를 함께 보는 화면</summary>
 
-- 새 버전이 없으면 작은 API 호출 한 번으로 끝나고 디스크에는 아무것도 쓰지 않습니다. 코드만 바뀐 릴리스는 그 부분(약 8MB)만 받습니다.
-- 앱이 5분 안에 다시 뜨지 않으면 남은 터미널을 정리합니다. 앱을 직접 종료하면 터미널도 함께 종료됩니다.
-- 버튼은 "종료할 때 업데이트", "지금 업데이트", "나중에"입니다. 종료할 때는 지금 받아 두고 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 진행 중인 작업을 보여 주고, 중단해도 괜찮으면 바로 설치합니다. "나중에"를 고른 버전은 앱을 다시 켤 때까지 묻지 않습니다.
-- 설정에서 업데이트를 직접 확인하거나, 받아 둔 업데이트를 지금 재시작·취소할 수 있습니다.
-- 소스에서 실행한 앱(`pnpm dev`, `pnpm start`)은 자동 업데이트하지 않습니다.
-- macOS 앱은 Apple 공증 없이 ad-hoc 서명되어 있고, 스스로 업데이트하려면 쓰기 가능한 폴더(예: `/Applications`)에 있어야 합니다.
+![채팅 결과 옆 Diff 패널에서 greeting.js의 변경을 검토하는 화면](docs/images/git-diff.png)
+
+</details>
+
+Diff는 **읽기 전용**입니다. 파일 편집·검색·스테이징·커밋은 터미널이나 에이전트를 사용하세요. 저장소별 worktree를 켜면 작업 경로를 나눌 수 있으며, 원본으로 통합할 때는 커밋 후 fast-forward만 지원합니다.
+
+### 작업을 이어 가는 도구
+
+| 기능 | 사용 방법 |
+|---|---|
+| **사용량·캐시** | 상태바에서 제공자별 사용 한도를 확인하고, Claude 채팅·터미널에서 프롬프트 캐시 타이머 확인 |
+| **세션 통계** | Claude 채팅의 `/stats`에서 컨텍스트 변화·턴 시작점·턴별 비용 추정치 확인 |
+| **플러그인·에이전트 버스** | 승인한 플러그인으로 도구를 추가하고, 내장 버스로 ADE의 채팅 에이전트끼리 메시지 교환 |
+| **피드백 요청** | `mod+Alt+F`로 열어 화면 캡처·주석과 함께 개선 요청 작성. AI 초안도 사람이 검토한 뒤 제출 |
+| **WakaTime** | 설정 → WakaTime에서 앱 사용 시간·에이전트 작업 시간 기록 |
+| **화면 맞춤** | 테마·강조 색·글꼴·상태바·알림 설정 |
+| **변경 내역** | 사이드바 아래 변경 내역에서 버전별 새 기능·수정 사항 확인 |
+
+### Claude가 일하는 동안 다음 요청 예약하기
+
+**터미널의 Claude Code가 작업 중일 때** 다음 요청을 입력하고 **Tab**을 누르세요. 입력을 비워 예약 목록에 넣고, 현재 작업이 끝나면 순서대로 보냅니다. 목록에서 수정·취소할 수 있습니다.
+
+Claude Code **2.1.303 이상**과 ADE에서 새로 연 터미널이 필요합니다. 작업 중이 아니거나 `/`·`@`로 시작하는 입력, Codex와 일반 셸의 Tab은 평소대로 동작합니다.
+
+<details>
+<summary>예약의 완료 감지·호환 조건·유지 범위</summary>
+
+- Claude의 OSC 7501(없으면 OSC 9;4) 상태 신호와 빈 입력란을 확인하고, 서버에서 Claude 프로세스·화면 출력 순번을 다시 검증합니다. 질문·승인 화면이나 작성 중인 입력이 있으면 기다립니다.
+- 구버전, `terminalProgressBarEnabled`가 꺼진 세션, SSH 세션, 신호가 전달되지 않는 tmux 환경에서는 동작하지 않습니다. 기존 터미널에는 새 환경 설정이 적용되지 않으므로 새 터미널을 열어야 합니다. 원격 tmux의 상태 표시는 [사용 안내](docs/LOCAL_IDE.md)를 참고하세요.
+- **Esc·Ctrl+C 중단이나 오류도 현재 작업의 종료로 봅니다.** 재연결 후 이미 유휴 상태여도 다음 예약을 보내며, 전송을 거절당하면 다음 갱신 때 다시 시도합니다. 예약을 멈추려면 목록에서 취소하세요.
+- 예약은 **텍스트만, 메모리에만** 보관합니다. 이미지 첨부는 예약하지 않으며, 앱 새로고침·종료·칸 재생성 시 사라집니다.
+
+</details>
+
+### 자동 업데이트와 백그라운드 실행
+
+설치한 앱은 시작 5초 뒤와 10분마다 업데이트를 확인합니다. 새 버전에서 **종료할 때 업데이트**, **지금 업데이트**, **나중에** 중 선택할 수 있고, 설정에서도 직접 확인할 수 있습니다.
+
+업데이트 재시작 동안 터미널·채팅 작업을 유지하고 새 창에 다시 연결합니다. 앱을 닫을 때는 **백그라운드로 남기기**를 선택해 작업을 이어 가거나, **종료**로 함께 끝낼 수 있습니다.
+
+<details>
+<summary>복원 조건과 예외</summary>
+
+- 업데이트 중 유지되는 프로세스는 별도 PTY 호스트가 관리합니다. 앱이 5분 안에 다시 뜨지 않으면 정리합니다. 백그라운드 유지는 다음 실행까지 계속됩니다.
+- 호스트를 시작하지 못했거나 이전 호스트가 채팅 유지 기능을 지원하지 않으면 작업이 끊길 수 있습니다. 앱은 실제 유지 가능 범위를 확인해 종료·업데이트 대화상자에서 안내합니다.
+- 일반 새로고침은 실행 중인 터미널에 다시 연결합니다. 프로세스까지 종료했다면 저장된 배치에 새 셸을 열고, 추적한 Claude·Codex 세션을 복구합니다. 채팅 기록은 다시 열어 이어 갈 수 있습니다.
+- 소스 실행(`pnpm start`, `pnpm dev`)은 자동 업데이트하지 않습니다. 설치 앱은 자신을 교체할 수 있는 쓰기 가능한 폴더에 있어야 합니다.
 
 </details>
 
 ## 로컬 실행과 데이터
 
-MoonerADE는 내 컴퓨터 한 대에서, 나 혼자 쓰는 것을 전제로 동작합니다. 공식 CLI의 계정과 권한 설정을 그대로 쓰고, 터미널은 앱을 실행한 사용자의 셸 권한을 가집니다. 모델을 쓰려면 해당 제공자의 이용 권한이 필요합니다.
+MoonerADE는 **내 컴퓨터에서 혼자 사용하는 로컬 앱**입니다. 모델 호출·로그인·도구 실행은 공식 CLI가 맡고, 터미널은 앱을 실행한 사용자의 셸 권한으로 동작합니다. 프로젝트 폴더를 여는 것이 에이전트의 파일 접근을 격리하지는 않습니다.
 
-프로젝트 목록·배치·설정과 터미널별 에이전트 세션 기록은 OS별 앱 데이터 폴더에 저장됩니다. 경로는 [환경 변수](ENVIRONMENT_VARIABLES.md), 접속 토큰과 데이터 취급은 [보안 경계](docs/SECURITY_REVIEW.md)에 정리되어 있습니다.
+프로젝트 목록·배치·설정·채팅 기록은 앱 데이터 폴더에 저장됩니다. 데이터 경로와 재정의 방법은 [환경 변수](ENVIRONMENT_VARIABLES.md), 인증·권한의 범위는 [보안 경계](docs/SECURITY_REVIEW.md)를 참고하세요.
 
 ## 개발
 
 ### 소스에서 실행
 
-[Node.js](https://nodejs.org/) **24.21.0 이상**, pnpm **11.27.1**(`corepack enable`로 켜짐), Git이 필요합니다. `node-pty`를 빌드하느라 OS의 네이티브 빌드 도구(macOS는 Xcode Command Line Tools, Windows는 Visual Studio Build Tools)가 필요할 수 있습니다.
+Node.js **24.21.0 이상**, pnpm **11.27.1**, Git이 필요합니다. `node-pty` 빌드를 위해 macOS의 Xcode Command Line Tools 또는 Windows의 Visual Studio Build Tools가 필요할 수 있습니다.
 
 ```sh
 git clone https://github.com/Mooner510/mooner-ade.git
 cd mooner-ade
 pnpm install --frozen-lockfile
-pnpm start   # 웹 UI를 빌드하고 앱 실행
-pnpm dev     # 개발 모드: 웹 HMR + 서버 변경 시 재시작
+pnpm start
 ```
 
-개발 모드에서도 서버가 바뀌는 동안 PTY 호스트가 터미널을 붙잡고 있습니다. Electron 메인 코드와 PTY 호스트를 고쳤다면 앱을 직접 다시 시작하세요.
+개발 모드는 `pnpm dev`로 실행합니다. 웹 HMR과 서버 자동 재시작을 지원하며, 서버가 바뀌는 동안 터미널은 별도 PTY 호스트가 유지합니다. Electron 메인 코드나 PTY 호스트를 고쳤다면 앱을 직접 다시 시작하세요.
 
 <details>
 <summary>검사 명령과 프로젝트 구조</summary>
 
 ```sh
-pnpm typecheck    # 웹 타입 검사
-pnpm check        # 웹 타입 검사 + Node 테스트
-pnpm e2e          # 빌드 없이 Vite 개발 서버로 띄운 서버와 실제 Chrome/PTY로 UI 검증, 모델 호출 없음
-pnpm audit        # lockfile 의존성 보안 검사
+pnpm typecheck   # 웹 타입 검사
+pnpm test        # Node 테스트
+pnpm check       # 웹 타입 검사 + Node 테스트
+pnpm e2e         # Vite 개발 서버 + 실제 Chrome/PTY 검증, 모델 호출 없음
+pnpm audit       # lockfile 의존성 보안 검사
 ```
 
 | 경로 | 역할 |
 |---|---|
-| `apps/desktop` | Electron 셸과 로컬 서버 실행 |
-| `apps/web` | React UI, 터미널, 읽기 전용 Monaco Diff |
-| `apps/local-server` | 루프백 HTTP/WebSocket, 프로젝트·Git·PTY·세션 복구 API |
+| `apps/desktop` | Electron 셸·업데이트·로컬 서버 실행 |
+| `apps/web` | React UI·터미널·채팅·읽기 전용 Monaco Diff |
+| `apps/local-server` | 로컬 HTTP/WebSocket·프로젝트·Git·PTY·채팅 API |
+| `scripts/verify` | 격리된 UI·에이전트 검증 도구 |
 
-자세한 구조는 [아키텍처](docs/ARCHITECTURE.md)를 참고하세요. 기여는 `feature/*` → `master` PR과 `.github/workflows/ci.yml`의 재사용 CI를 따릅니다. OS별 검증 범위는 [검증 상태](docs/VERIFICATION.md)에 있습니다.
+기여는 `feature/*` → `master` PR을 사용합니다. **CI/CD workflow 파일은 인프라팀이 관리합니다.** 테스트 절차는 [테스트 실행 안내](docs/TESTING_GUIDE.md), OS별 확인 범위는 [검증 상태](docs/VERIFICATION.md)를 참고하세요.
 
 </details>
 
 <details>
 <summary>앱 빌드와 릴리스</summary>
 
-`pnpm package`는 현재 OS용 앱을 만듭니다. macOS는 `apps/desktop/dist/MoonerADE.app`, Windows는 `apps/desktop/dist/MoonerADE-win32-<arch>/MoonerADE.exe`가 생깁니다. Node 런타임과 네이티브 PTY 모듈까지 들어 있으므로 Windows 빌드는 Windows에서, macOS 빌드는 macOS에서 만들어야 합니다.
+`pnpm package`는 현재 OS용 앱을 만듭니다.
 
-릴리스는 `package.json`의 `version`을 올려 커밋한 뒤 아무 컴퓨터에서 `pnpm release`를 한 번 실행하면 됩니다. 현재 커밋에 `v<version>` 태그를 달아 푸시하면 `Release` 워크플로가 GitHub 릴리스를 만들고, macOS(arm64)와 Windows(x64) 빌드(`MoonerADE-darwin-arm64.zip`, `MoonerADE-win32-x64.zip`)를 올립니다. 설치 스크립트와 앱의 자동 업데이트가 이 파일을 받습니다.
+| OS | 빌드 결과 |
+|---|---|
+| macOS | `apps/desktop/dist/MoonerADE.app` |
+| Windows | `apps/desktop/dist/MoonerADE-win32-<arch>/MoonerADE.exe` |
 
-- GitHub의 Actions 탭에서 태그를 넣어 직접 실행할 수도 있습니다. 이미 있는 태그를 넣으면 그 릴리스를 다시 빌드합니다.
-- 현재 OS용 빌드만 직접 올리려면 `pnpm release:local`을 실행합니다.
+Node 런타임과 네이티브 PTY 모듈이 포함되므로 각 OS에서 빌드해야 합니다.
+
+정식 릴리스는 `package.json` 버전과 앱 변경 내역(`apps/web/src/changelog.json`)을 함께 갱신해 `master`에 반영한 뒤 진행합니다. 작업 트리가 깨끗하고 현재 커밋이 `origin/master`와 같을 때 `pnpm release`를 실행하면 `v<version>` 태그를 푸시합니다. 기존 Release workflow가 macOS arm64·Windows x64 빌드를 릴리스에 올리며, 설치 스크립트와 자동 업데이트가 이 자산을 받습니다.
+
+현재 OS 빌드만 직접 올리는 명령은 `pnpm release:local`입니다. 릴리스 자동화 변경은 인프라팀에 요청하세요.
 
 </details>
 
 ## 문서
 
-- [로컬 실행·단축키·데이터 복구](docs/LOCAL_IDE.md)
-- [검증 결과와 확인 범위](docs/VERIFICATION.md) · [테스트 실행 안내](docs/TESTING_GUIDE.md) · [Full E2E 인수인계](docs/E2E_HANDOFF.md) · [실제 AI 에이전트가 필요한 테스트](docs/tests/261113_1021_실제AI체크리스트/GUIDE.md)
-- [아키텍처](docs/ARCHITECTURE.md) · [채팅 기능 정리](CHAT_MODE_FEATURES.md)
-- [플러그인](docs/PLUGINS.md) · [에이전트 버스](docs/AGENT_BUS.md)
-- [환경 변수](ENVIRONMENT_VARIABLES.md) · [보안 경계](docs/SECURITY_REVIEW.md)
+| 찾는 내용 | 문서 |
+|---|---|
+| 단축키·세션 복구·worktree | [사용 안내](docs/LOCAL_IDE.md) |
+| 채팅·첨부·모델·권한 모드 | [채팅 기능 정리](CHAT_MODE_FEATURES.md) |
+| 확장 기능·에이전트 간 통신 | [플러그인](docs/PLUGINS.md) · [에이전트 버스](docs/AGENT_BUS.md) |
+| 데이터 경로·설정·권한 | [환경 변수](ENVIRONMENT_VARIABLES.md) · [보안 경계](docs/SECURITY_REVIEW.md) |
+| 내부 구조 | [아키텍처](docs/ARCHITECTURE.md) |
+| 테스트 방법·검증 범위 | [테스트 실행 안내](docs/TESTING_GUIDE.md) · [검증 상태](docs/VERIFICATION.md) · [E2E 인수인계](docs/E2E_HANDOFF.md) |
+| 실제 AI가 필요한 확인 | [실제 AI 체크리스트](docs/tests/261113_1021_실제AI체크리스트/GUIDE.md) |
 
 ## 라이선스
 
-Copyright (C) 2026 mooner-ade contributors.
+Copyright (C) 2026 mooner-ade contributors. **GNU General Public License v3.0 only (`GPL-3.0-only`)**로 배포합니다. 사용·수정·재배포 조건과 무보증 조항은 [LICENSE](LICENSE)를 참고하세요.
 
-이 프로젝트는 **GNU General Public License version 3 only (`GPL-3.0-only`)**로 배포합니다. GPL v3 조건에 따라 사용·수정·재배포할 수 있으며, 어떠한 보증도 제공하지 않습니다. 전문은 [LICENSE](LICENSE)를 참고하세요. 포함하거나 사용하는 외부 라이브러리·아이콘·폰트에는 각 저작권자와 라이선스의 고지가 적용됩니다. 번들 글꼴(Inter, Noto Sans KR, JetBrains Mono)은 SIL OFL 1.1이며 라이선스 전문은 빌드 결과의 `licenses/`에 들어 있습니다.
+외부 라이브러리·아이콘·폰트에는 각 저작권과 라이선스가 적용됩니다. 번들 글꼴 Inter·Noto Sans KR·JetBrains Mono는 SIL OFL 1.1이며, 전문은 빌드 결과의 `licenses/`에 포함됩니다.
