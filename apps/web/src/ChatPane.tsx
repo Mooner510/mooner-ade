@@ -413,7 +413,7 @@ function useTick(on: boolean) {
 }
 const agentElapsed = (agent: SubAgent, now: number) => agent.status === 'running' ? (agent.startedAt ? Math.max(0, now - agent.startedAt) : agent.durationMs)
   : agent.durationMs ?? (agent.startedAt && agent.endedAt ? agent.endedAt - agent.startedAt : undefined);
-const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? duration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
+const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [[agent.model && shortModel(agent.model), agent.effort && effortLabel(agent.effort)].filter(Boolean).join(' '), agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? duration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
 // ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
 function StopTask({ id }: { id: string }) {
   const { stop } = useContext(AgentsContext);
@@ -1465,7 +1465,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
   // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
   const agentsSeen = useRef<SubAgent[]>([]);
-  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks]);
+  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
   const agentKey = agentList.map(item => item.id).join(' ');
   const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
   const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
