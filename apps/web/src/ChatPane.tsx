@@ -14,7 +14,8 @@ import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
-import { agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
+import { FileIcon } from './FileIcon';
+import { modeIcons as MODE_ICONS, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -62,7 +63,6 @@ const cursorSandboxOptions = [
 ];
 const sandboxKey = (sandbox?: string | null, network?: boolean) => !sandbox ? 'follow' : sandbox === 'workspace-write' && network ? 'workspace-write+network' : sandbox;
 const sandboxFromKey = (key: string): [string | null, boolean] => key === 'follow' ? [null, false] : key === 'workspace-write+network' ? ['workspace-write', true] : [key, false];
-const MODE_ICONS: Record<string, string> = { default: 'front_hand', acceptEdits: 'edit_note', plan: 'assignment', auto: 'bolt', bypassPermissions: 'lock_open', ask: 'help' };
 const cycleMode = (modes: string[], mode: string) => { const ring = modes.filter(item => item !== 'bypassPermissions'); return ring[(ring.indexOf(mode) + 1) % ring.length]; };
 // Shift+Tab cycles like Claude Code: default -> accept edits -> plan -> auto. Bypass is dropdown-only.
 const nextMode = (mode: string) => ({ default: 'acceptEdits', acceptEdits: 'plan', plan: 'auto', auto: 'default' } as Record<string, string>)[mode] ?? 'default';
@@ -1013,7 +1013,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => () => { const at = drainAt.current; cancelAnimationFrame(at.frame); if (at.timer) clearTimeout(at.timer); cancelAnimationFrame(follow.current); cancelAnimationFrame(pinFrame.current); }, []);
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
-  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
+  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
   const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
@@ -1293,6 +1293,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const [files, setFiles] = useState<string[] | null>(null), [caret, setCaret] = useState(0), [mentionOff, setMentionOff] = useState(-1);
   const mention = slash ? null : /(?:^|\s)@([^\s@]*)$/.exec(text.slice(0, caret)), mentionAt = mention ? caret - mention[1].length - 1 : -1;
   const mentionOpen = mention !== null && mentionAt !== mentionOff;
+  // Escape only dismisses that one @: once the caret leaves it (sent, deleted), the same position must open the menu again.
+  useEffect(() => { if (!mention) setMentionOff(-1); }, [mention === null]);
   useEffect(() => {
     if (!mentionOpen) return;
     let alive = true;
@@ -1544,7 +1546,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" title={cwd}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? `클릭하여 세션 ID 복사\n${view.state.sessionId}\n${cwd}` : cwd} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
@@ -1595,8 +1597,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           </button></li>)}</ul>}
         {mentions.length > 0 && <ul className="chat-commands" role="listbox" aria-label="파일 언급">{mentions.map((file, index) => <li key={file} role="option" aria-selected={index === menuAt}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); pickMention(file); }}>
+            <FileIcon name={file.replace(/\/$/, '').split('/').pop()!} folder={file.endsWith('/')} size={16} />
             <span className="chat-command-head"><b>{file.replace(/\/$/, '').split('/').pop()}{file.endsWith('/') ? '/' : ''}</b></span>
-            <span className="chat-command-desc">{file}</span>
+            <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
           </button></li>)}</ul>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}

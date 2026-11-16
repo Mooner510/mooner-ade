@@ -17,7 +17,7 @@ const usageOf = raw => {
 };
 const isPrompt = content => typeof content === 'string' ? content.trim() !== '' : Array.isArray(content) && content.some(part => part?.type === 'text' && String(part.text ?? '').trim() !== '');
 
-export async function readSessionStats(files) {
+export async function readSessionStats(files, since = [], total = null) {
   const requests = new Map(), tools = new Map(), toolName = new Map(), turns = [{ at: null, ms: 0 }], compactions = [];
   let costState = null;
   for (const file of files) {
@@ -58,6 +58,14 @@ export async function readSessionStats(files) {
   }
   const costOf = item => unit.has(item.model) ? unit.get(item.model) * weight(item.usage) : null;
   const sum = (items, pick) => items.reduce((total, item) => total + pick(item), 0);
+  // what the requests from each of these times on cost (the usage share's window cost). A live CLI session has no cost-state yet (it is written at exit), so then the
+  // chat's total cost is split by token weight. ponytail: one price for all models; a chat that mixes Haiku and Opus is split a little off
+  const everything = sum(list, item => weight(item.usage));
+  const spentSince = since.map(from => {
+    const mine = list.filter(item => item.at >= from);
+    if (unit.size) return sum(mine, item => costOf(item) ?? 0);
+    return Number.isFinite(total) && total !== null && everything > 0 ? total * sum(mine, item => weight(item.usage)) / everything : null;
+  });
   const tokens = { input: 0, output: 0, thinking: 0, read: 0, write5m: 0, write1h: 0 };
   for (const item of list) { tokens.input += item.usage.input; tokens.output += item.usage.output; tokens.thinking += item.usage.thinking; tokens.read += item.usage.read; tokens.write5m += item.usage.w5; tokens.write1h += item.usage.w1; }
   const promptSide = tokens.input + tokens.read + tokens.write5m + tokens.write1h;
@@ -89,7 +97,7 @@ export async function readSessionStats(files) {
   }
 
   return {
-    requests: list.length, subRequests: list.filter(item => item.sub).length, turns: perTurn.length, compactions: compactions.length, compactionAt: compactions,
+    spentSince, requests: list.length, subRequests: list.filter(item => item.sub).length, turns: perTurn.length, compactions: compactions.length, compactionAt: compactions,
     startedAt: list[0]?.at ?? null, endedAt: list.at(-1)?.at ?? null, activeMs: costState ? num(costState.totalAPIDuration) : sum(turns, turn => turn.ms),
     tokens, cacheHitRate: promptSide ? tokens.read / promptSide : null, peakContext: list.length ? Math.max(...list.map(ctxOf)) : 0,
     cost: costState ? { totalUsd: num(costState.totalCostUSD), toolMs: num(costState.totalToolDuration), linesAdded: num(costState.totalLinesAdded), linesRemoved: num(costState.totalLinesRemoved) } : null,

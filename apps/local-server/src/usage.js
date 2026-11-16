@@ -58,6 +58,17 @@ export function parseClaudeUsage(body) {
   return windows;
 }
 
+// extra_usage: { is_enabled, monthly_limit, used_credits, utilization } in minor units (cents). A null limit means the org set no cap, so there is no ratio to show.
+// ponytail: field shape follows the community-documented endpoint, not verified against a live org response; amounts are assumed to be cents.
+export function parseClaudeCredit(body) {
+  const extra = body?.extra_usage;
+  if (!extra?.is_enabled) return null;
+  const dollars = value => Number.isFinite(Number(value)) && value !== null ? Number(value) / 100 : null;
+  const used = dollars(extra.used_credits) ?? 0, limit = dollars(extra.monthly_limit);
+  const ratio = Number.isFinite(Number(extra.utilization)) && extra.utilization !== null ? Number(extra.utilization) : limit ? used / limit * 100 : null;
+  return { used, limit: limit || null, percent: limit && ratio !== null ? percent(ratio) : null, currency: extra.currency || 'USD' };
+}
+
 // The Ultra plan has no 5-hour window, so a 0% reading there would only mislead; the API leaves it out, and this covers it if it does not.
 export const claudeWindowsForPlan = (windows, plan) => /ultra/i.test(plan || '') ? windows.filter(item => item.key !== 'session') : windows;
 
@@ -128,7 +139,8 @@ export const accountVariable = { claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME
 
 // macOS `ps -E` appends the environment to the arguments, space-joined, so a value runs until the next NAME= token.
 export function envFromPs(output, name) {
-  const pattern = new RegExp(`(?:^|\\s)${name}=(.*?)(?=\\s[A-Za-z_][A-Za-z0-9_]*=|\\s*$)`, 'g');
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- `name` is escaped just above
+  const pattern = new RegExp(`(?:^|\\s)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=(.*?)(?=\\s[A-Za-z_][A-Za-z0-9_]*=|\\s*$)`, 'g');
   let value = null;
   for (const match of output.matchAll(pattern)) value = match[1];
   return value;
@@ -242,7 +254,7 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
       const [body, profile] = await Promise.all([getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/usage', headers), getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/profile', headers).catch(() => null)]);
       // The stored subscriptionType is the org type from sign-in (Ultra is a claude_max org); the profile names the plan.
       const plan = profile?.organization?.plan_display_name || login.plan;
-      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), plan), plan, source: 'api', at: now() };
+      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), plan), credit: parseClaudeCredit(body), plan, source: 'api', at: now() };
     },
     async codex(env) {
       const login = await codexLogin({ env });

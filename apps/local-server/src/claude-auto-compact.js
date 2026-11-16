@@ -52,7 +52,9 @@ export async function readClaudeSettingsLayers(configDir, cwd) {
   for (const file of [path.join(configDir, 'settings.json'), ...cwd ? [path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.claude', 'settings.local.json')] : []]) {
     try {
       const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+      // nosemgrep: javascript.lang.security.insecure-object-assign.insecure-object-assign -- JSON from the app's own settings file into a local plain object
       Object.assign(settings, parsed);
+      // nosemgrep: javascript.lang.security.insecure-object-assign.insecure-object-assign -- JSON from the app's own settings file into a local plain object
       Object.assign(env, parsed.env);
     } catch { /* missing or broken file */ }
   }
