@@ -312,6 +312,11 @@ export function reduce(view: ChatView, event: any): ChatView {
       const tasks = { ...view.tasks, [id]: next };
       // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
       const isJob = view.items.some(item => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      // A shell/Monitor that ends by itself makes the CLI start a turn on its own: a rule says why that reply appears (one the user stopped stays quiet).
+      if (phase === 'end' && isJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
+        const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
+        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${next.description || '백그라운드 작업'} ${status}`, fresh });
+      }
       if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
       return { ...view, tasks };
     }
@@ -366,6 +371,28 @@ export function reduce(view: ChatView, event: any): ChatView {
       return commandFallback(view, event, key);
     }
     case 'error': return { ...append(view, { kind: 'error', key, message: String(event.message ?? '오류'), recoverable: event.recoverable === true, fresh }), state: { ...view.state, error: String(event.message ?? '오류'), recoverable: event.recoverable === true || view.state.recoverable } };
+    // The agent changed its own permission mode (EnterPlanMode, ...): a line says so, in the words and colour of the line a user's own switch gets.
+    case 'settings': {
+      if (event.by !== 'agent') return view;
+      if (typeof event.model === 'string') {
+        const name = shortModel(event.model), why = event.reason === 'highRiskCyberActivity' ? ' · 보안 정책' : '';
+        return append(view, { kind: 'note', key, text: `${name} 모델로 자동 전환되었습니다.${why}`, tones: [{ value: name, color: modelColor(event.model) ?? 'var(--fg)' }], fresh });
+      }
+      if (typeof event.permissionMode !== 'string') return view;
+      const mode = event.permissionMode, label = `${permissionLabels[mode] ?? mode} 모드`;
+      return append(view, { kind: 'note', key, text: `AI가 ${label}로 변경했습니다.`, tones: [{ value: label, color: permissionModeColor(mode), icon: modeIcons[mode] ?? 'tune' }], fresh });
+    }
+    // The agent moved the session into a worktree or back out: file paths and the branch it works on differ from here on.
+    case 'worktree': {
+      const folder = (path: unknown) => typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '' : '';
+      const enter = event.phase === 'enter', name = folder(enter ? event.path : event.from);
+      const tail = enter ? (event.branch && event.branch !== name ? ` (${event.branch})` : '') : name ? ` ${event.removed ? '삭제됨' : '유지됨'}` : '';
+      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? ` · ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
+    }
+    case 'limit': {
+      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`;
+      return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
+    }
     case 'compact': return { ...append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh }), compacting: false };
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
@@ -572,7 +599,18 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
+const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', overage: '추가 사용량' };
+// A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).
+export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean }): { text: string; tones: Tone[] } {
+  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected', share = event.utilization ?? event.threshold;
+  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null;
+  const clock = at ? at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '', today = at && at.toDateString() === new Date().toDateString();
+  const when = at ? ` · ${today ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${clock}에 초기화` : '';
+  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${share != null ? `${Math.round(share * 100)}%를 사용했습니다` : '대부분을 사용했습니다'}${when}`;
+  return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
+}
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문 전용' };
+export const modeIcons: Record<string, string> = { default: 'front_hand', acceptEdits: 'edit_note', plan: 'assignment', auto: 'bolt', bypassPermissions: 'lock_open', ask: 'help' };
 // Resolved on the chat pane via agent-scoped `--mode-*` vars in style.css (Claude Code theme.ts, Codex TUI, Cursor CLI).
 export const permissionModeColor = (mode: string) => `var(--mode-${mode}, var(--muted))`;
 export const statusLabelsKo: Record<ChatState['status'], string> = { idle: '대기 중', working: '응답 중', attention: '승인 대기', closed: '종료' };

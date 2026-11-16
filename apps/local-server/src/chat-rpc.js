@@ -131,6 +131,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       if (params.threadId && params.threadId !== sessionId) return;
       if (method === 'thread/name/updated') { const event = agentTitle(params.threadName ?? params.thread_name ?? params.name); if (event) emit(event); return; }
       if (method === 'turn/started') { turnId = params.turn.id; startedAt = Date.now(); }
+      else if (method === 'model/rerouted') emit({ kind: 'settings', model: params.toModel, from: params.fromModel, reason: params.reason, by: 'agent' });
       else if (method === 'item/started' || method === 'item/completed') codexItem(params.item, method === 'item/completed', params.turnId);
       else if (method === 'item/agentMessage/delta' || method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta' || method === 'item/plan/delta') {
         const key = params.itemId, phase = method.includes('reasoning') ? 'thinking' : 'text';

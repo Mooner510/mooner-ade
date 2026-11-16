@@ -26,6 +26,17 @@ export const uiPermissionMode = (mode) =>
 // output and may refuse to follow them; this way they are plainly the user's.
 export const refusalWith = (instruction) => `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n${instruction}`;
 export const planRevision = (feedback) => `The user rejected this plan and asks for changes. Stay in plan mode, revise the plan to address the feedback, and present it again.\n\nUser feedback:\n${feedback}`;
+// EnterWorktree / ExitWorktree move the CLI's folder and report it only in the tool's result text; the paths are quoted there.
+export function worktreeMove(call, text) {
+  if (call?.name === "EnterWorktree") {
+    const made = /worktree at [“"]([^”"]+)[”"](?: on branch [“"]([^”"]+)[”"])?/.exec(text) ?? /[“"](\/[^”"]+|[A-Za-z]:[^”"]+)[”"]/.exec(text);
+    return made ? { phase: "enter", path: made[1], ...(made[2] && { branch: made[2] }) } : null;
+  }
+  const back = /back in [“"]([^”"]+)[”"]/.exec(text);
+  return call?.name === "ExitWorktree" && back ? { phase: "exit", path: back[1], removed: call.input?.action === "remove" } : null;
+}
+// The model a user picked ("haiku", "opus[1m]", a full id) against the one a reply came from: a reply from anything else was not the user's choice.
+export const isPickedModel = (pick, id) => typeof pick === "string" && typeof id === "string" && id.toLowerCase().includes(pick.toLowerCase().replace(/\[.*\]$/, ""));
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"]; // `claude --effort`
 
 export const validMessageUuid = (value) =>
@@ -238,8 +249,19 @@ export function normalizeClaude(raw) {
   // /compact and auto compact: the CLI says when it starts and ends (status), then reports the boundary with the sizes before and after.
   if (raw.type === "system" && raw.subtype === "status" && (raw.status === "compacting" || raw.compact_result))
     return [{ kind: "delta", phase: "compacting", active: raw.status === "compacting" }];
+  // The CLI changes its own permission mode (EnterPlanMode, ExitPlanMode, an "allow all edits this session" answer, a hook) and says so only here.
+  if (raw.type === "system" && raw.subtype === "status" && typeof raw.permissionMode === "string") {
+    const mode = uiPermissionMode(raw.permissionMode);
+    return PERMISSION_MODES.includes(mode) ? [{ kind: "settings", permissionMode: mode, by: "agent" }] : [];
+  }
   if (raw.type === "system" && raw.subtype === "compact_boundary")
     return [compactEvent(raw.compact_metadata)];
+  // A plan limit the CLI warns about (past 90%) or has hit. Every turn repeats the plain "allowed" report; only the two that matter are kept.
+  if (raw.type === "rate_limit_event") {
+    const info = raw.rate_limit_info ?? {};
+    if (info.status !== "allowed_warning" && info.status !== "rejected") return [];
+    return [{ kind: "limit", status: info.status, limit: info.rateLimitType ?? null, utilization: Number.isFinite(info.utilization) ? info.utilization : null, threshold: Number.isFinite(info.surpassedThreshold) ? info.surpassedThreshold : null, resetsAt: Number.isFinite(info.resetsAt) ? info.resetsAt : null, overage: info.isUsingOverage === true }];
+  }
   // A subagent (Agent/Task call) started, made progress (live only) or ended. Keyed by its Agent call's tool_use id, which the pane tracks it by.
   if (raw.type === "system" && TASK_PHASES[raw.subtype] && typeof raw.tool_use_id === "string")
     return [taskEvent(raw)];
