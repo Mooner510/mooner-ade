@@ -968,6 +968,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     return () => clearTimeout(timer);
   }, [ctx.projectId, id, text]);
   const [queueSending, setQueueSending] = useState(false);
+  // Pictures of a steering message: the server keeps them only while the turn has not taken the message in, so the composer remembers them by uuid to restore them on withdraw (↑).
+  const pendingSteers = useRef<{ text: string; images: Attachment[] }[]>([]), steerImages = useRef(new Map<string, Attachment[]>());
   const [commands, setCommands] = useState<CommandInfo[]>([]), [menuAt, setMenuAt] = useState(0), [openError, setOpenError] = useState(''), [user, setUser] = useState(''), [away, setAway] = useState(false);
   const greeting = useMemo(() => pickGreeting(user), [user, id]);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null), fitSig = useRef(''), flipping = useRef(0), tunePanel = `chat-tune-${useId()}`, scroller = useRef<HTMLDivElement>(null), thread = useRef<HTMLDivElement>(null), box = useRef<HTMLTextAreaElement>(null), stick = useRef(true), jump = useRef(false), ctxRef = useRef(ctx); ctxRef.current = ctx;
@@ -1054,7 +1056,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         enqueue(message);
         if (message.event?.kind === 'divider' && message.event.reason === 'clear') setQueue([]);
         // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
-        if (message.event?.kind === 'steer' && message.event.phase === 'cancelled' && !message.event.resent && typeof message.event.text === 'string') setText(current => current || message.event.text);
+        // Queued steers are matched to the pictures sent with them (by text and count); applied ones are forgotten.
+        const steer = message.event;
+        if (steer?.kind === 'steer' && steer.phase === 'queued') { const index = pendingSteers.current.findIndex(item => item.text === steer.text && item.images.length === steer.images); if (index >= 0) { steerImages.current.set(steer.uuid, pendingSteers.current[index].images); pendingSteers.current.splice(index, 1); } }
+        if (steer?.kind === 'steer' && steer.phase === 'applied') steerImages.current.delete(steer.uuid);
+        // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost, pictures included.
+        if (steer?.kind === 'steer' && steer.phase === 'cancelled' && !steer.resent && typeof steer.text === 'string') { const pictures = steerImages.current.get(steer.uuid); steerImages.current.delete(steer.uuid); setText(current => current || steer.text); if (pictures) setImages(current => current.length ? current : pictures); }
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
@@ -1424,7 +1431,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }]) !== 'yes') return;
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
-    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) await transmit(body, attachments, true);
+    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
     else await transmit(body, attachments);
   }
