@@ -37,6 +37,7 @@ assert.match(shell, /^[0-9a-f]{64}$/, 'runtime.json has no shell key');
 writeFileSync(manifest, JSON.stringify({ version, shell }));
 
 const assets = [zip, appZip, manifest];
+// nosemgrep: javascript.lang.security.audit.spawn-shell-true.spawn-shell-true -- Windows needs a shell to run gh.exe/gh.cmd; arguments come from our own release script
 const exists = spawnSync('gh', ['release', 'view', tag, '--repo', repo], { cwd: root, stdio: 'ignore', shell: !mac }).status === 0;
 if (exists) execFileSync('gh', ['release', 'upload', tag, ...assets, '--repo', repo, '--clobber'], { cwd: root, stdio: 'inherit', shell: !mac });
 else execFileSync('gh', ['release', 'create', tag, ...assets, '--repo', repo, '--title', tag, '--generate-notes', ...(version.includes('-') ? ['--prerelease'] : [])], { cwd: root, stdio: 'inherit', shell: !mac });

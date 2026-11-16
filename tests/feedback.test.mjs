@@ -141,7 +141,8 @@ async function tempQueue(t, { mode = 'anonymous', results = [] } = {}) {
       stable = !now.busy && now.text === before.text ? stable + 1 : 0; before = now;
     }
   };
-  const draft = async title => env.store.create({ title, body: 'b' });
+  // A distinct millisecond each, so the queue's tie-break on id cannot reorder drafts made in the same ms.
+  const draft = async title => { await new Promise(r => setTimeout(r, 2)); return env.store.create({ title, body: 'b' }); };
   return { ...env, queue, sent, timers, advance, settle, draft, way, now: () => clock };
 }
 

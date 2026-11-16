@@ -16,10 +16,11 @@ concurrency:
   group: release-${{ github.ref_name }}-${{ inputs.tag }}
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 jobs:
   create:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
       sha: ${{ steps.release.outputs.sha }}
     steps:
@@ -60,3 +61,5 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: node scripts/build-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
