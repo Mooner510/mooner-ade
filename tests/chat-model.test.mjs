@@ -237,6 +237,8 @@ test('status numbers and templates', () => {
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 132, 'past the window the percent keeps counting instead of sticking at 100');
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 1_000_000 }] } }), 26);
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 200_000 }] } }), 26);
+  // An alias has no catalog row of its own: the family's row sizes it.
+  assert.equal(contextPercent({ contextTokens: 345_000, model: 'opus', contextWindow: null, autoCompact: null, capabilities: { catalog: [{ id: 'claude-opus-5-5', family: 'opus', window: 1_000_000 }, { id: 'claude-haiku-4-5', family: 'haiku', window: 200_000 }] } }), 35);
   const withAuto = { contextTokens: 175_000, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, autoCompact: { window: 350_000, maxWindow: 1_000_000, auto: false, source: 'modelSettings' } };
   assert.equal(contextPercent(withAuto), 50);
   assert.deepEqual(contextGauge(withAuto), { percent: 50, used: 175_000, basis: 350_000, max: 1_000_000, autoCompact: true });

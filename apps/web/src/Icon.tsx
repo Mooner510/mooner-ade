@@ -96,7 +96,7 @@ const brands = {
 } satisfies Record<string, ReactNode>;
 
 const effortBars = [{ x: 2.5, h: 6 }, { x: 7.5, h: 9.5 }, { x: 12.5, h: 13 }, { x: 17.5, h: 16.5 }] as const;
-const effortBarBottom = 21;
+const effortBarBottom = 20.25; // the bars span 3.75-20.25 of the 24 box, so their centre is the box's centre (at 21 they sat .75 low)
 
 export function EffortSignalIcon({ bars, size = 15 }: { bars: number; size?: number }) {
   const active = Math.max(0, Math.min(4, bars));
