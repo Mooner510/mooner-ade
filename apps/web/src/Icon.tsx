@@ -27,6 +27,8 @@ const glyphs = {
   refresh: 'refresh',
   folder: 'folder',
   folderPlus: 'create_new_folder',
+  folderOpen: 'folder_open',
+  fileOpen: 'file_open',
   cpu: 'memory',
   memory: 'developer_board',
   clock: 'schedule',
