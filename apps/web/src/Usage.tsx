@@ -6,7 +6,9 @@ import { usageHue } from './Editor';
 export type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
 // Extra-usage credit (Claude): a null limit means no cap is set, so only the amount spent is known.
 export type UsageCredit = { used: number; limit: number | null; percent: number | null; currency: string };
-export type Usage = { provider: 'claude' | 'codex' | 'cursor'; windows: UsageWindow[]; credit?: UsageCredit | null; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
+export type CodexCredits = { balance: number | null; unlimited: boolean; hasCredits: boolean };
+export const codexCreditsLabel = (credits: CodexCredits) => credits.unlimited ? '무제한' : credits.balance !== null ? credits.balance.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : credits.hasCredits ? '잔액 있음' : '0';
+export type Usage = { provider: 'claude' | 'codex' | 'cursor'; windows: UsageWindow[]; credit?: UsageCredit | null; codexCredits?: CodexCredits | null; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
 export const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
 export const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex', cursor: 'Cursor 로그인(기기)' };
 export const usageStatusKeys: Record<Usage['provider'], string[]> = { claude: ['session', 'weekly'], codex: ['session', 'weekly'], cursor: ['auto', 'api', 'total', 'grok'] };
