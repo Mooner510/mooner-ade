@@ -157,6 +157,14 @@ test('the Ultra plan shows no 5-hour window, other plans keep it', async () => {
   assert.deepEqual(claudeWindowsForPlan(windows, '').map(item => item.key), ['session', 'weekly']);
 });
 
+test('Cursor session lookup uses its CLI config folder independently of the desktop usage account', async () => {
+  const names = [];
+  const accounts = createAccountResolver({ env: { CURSOR_APP_SUPPORT: '/desktop', CURSOR_CONFIG_DIR: '/cli' }, home: '/h',
+    readVariable: async (_pid, name) => { names.push(name); return null; }, direnv: async () => null });
+  assert.equal(await accounts.agentFolder('cursor', 42, '/p', 'CURSOR_CONFIG_DIR'), '/cli');
+  assert.deepEqual(names, ['CURSOR_CONFIG_DIR']);
+});
+
 test('the plan comes from the profile, so an Ultra login stored as max shows as Ultra', async () => {
   const body = url => url.endsWith('/profile') ? { organization: { organization_type: 'claude_max', plan_display_name: 'Ultra' } } : { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 79, resets_at: null } };
   const make = fetch => createUsage({ now: () => 1_000_000, claudeLogin: async () => ({ token: 't', expiresAt: 0, plan: 'max' }), fetch });

@@ -16,6 +16,7 @@ function agentCommand(command) {
   // npm installations run the CLI script through node; prompt arguments are never agent evidence.
   if (!/^(node|nodejs|bun)(\.exe)?$/.test(name)) return null;
   const script = (args[1] || '').replace(/^['"]|['"]$/g, '').replaceAll('\\', '/');
+  if (/(?:^|\/)cursor-agent\/versions\/[^/]+\/index\.js$/.test(script)) return 'cursor';
   if (/(?:^|\/)@anthropic-ai\/claude-code\/(?:cli\.js|[^/]+\/claude\.exe)$/.test(script)) return 'claude';
   if (/(?:^|\/)@openai\/codex\/bin\/codex\.js$/.test(script)) return 'codex';
   return null;

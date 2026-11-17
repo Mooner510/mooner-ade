@@ -25,9 +25,9 @@ function finish(status = 'completed') {
   if (cursor) {
     notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' + (process.argv.includes('--force') ? ' [force]' : '') + (process.argv.includes('--sandbox') ? ` [sandbox:${process.argv[process.argv.indexOf('--sandbox') + 1]}]` : '') } } });
     const size = values.context === '1m' ? 1_000_000 : 300_000;
-    notify('session/update', { sessionId, update: { sessionUpdate: 'usage_update', used: 12_000 + count * 2_000, size } });
+    notify('session/update', { sessionId, update: { sessionUpdate: 'usage_update', used: 12_000 + count * 2_000, size, ...(process.env.FAKE_CURSOR_USAGE === '1' && { cost: { amount: 0, currency: 'USD' } }) } });
     notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', title: `Cursor 테스트 ${count}` } });
-    reply(promptId, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn' });
+    reply(promptId, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn', ...(process.env.FAKE_CURSOR_USAGE === '1' && { usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 100, cachedWriteTokens: 5 } }) });
   } else {
     notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: `m${count}`, delta: '안녕' });
     notify('item/completed', { threadId: sessionId, turnId, item: { id: `m${count}`, type: 'agentMessage', text: '안녕' } });
@@ -38,10 +38,13 @@ function finish(status = 'completed') {
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const raw = JSON.parse(line), p = raw.params ?? {};
+  if (process.env.HISTORY_ONLY === '1' && !['initialize', 'initialized', 'thread/read', 'thread/turns/list'].includes(raw.method)) throw new Error('history must not start or resume a writer');
   if (!raw.method) { if (raw.id === requestId) { if (process.env.EXPECT_REJECT === '1' && raw.result?.decision !== 'decline' && raw.result?.outcome?.optionId !== 'deny') throw new Error('approval was not rejected'); finish(); } return; }
   if (cursor && raw.method === 'initialize' && p.clientCapabilities?._meta?.parameterizedModelPicker !== true) throw new Error('parameterized model picker must be advertised');
   if (raw.method === 'initialize') reply(raw.id, cursor ? { agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } } : {});
   else if (raw.method === 'initialized') {}
+  else if (raw.method === 'thread/read') reply(raw.id, { thread: { id: p.threadId, cwd: process.cwd(), createdAt: 1, updatedAt: 2, turns: [] } });
+  else if (raw.method === 'thread/turns/list') reply(raw.id, { data: [{ id: 'history-turn', status: 'completed', items: [{ type: 'userMessage', content: [{ type: 'text', text: 'history question' }] }, { type: 'agentMessage', id: 'history-answer', text: 'history answer' }] }], nextCursor: null });
   else if (raw.method === 'session/set_config_option') {
     const option = configOptions().find(item => item.id === p.configId);
     const choices = option?.type === 'boolean' ? ['false', 'true'] : option?.options?.map(item => item.value);

@@ -224,7 +224,7 @@ const LOCAL: CommandInfo[] = [
 ];
 // Shell tools show their command as code (coloured in the shell's language), with the model's one-line description above it on approval cards.
 const SHELLS: Record<string, string> = { Bash: 'bash', PowerShell: 'powershell', Monitor: 'shell' };
-const TOOL_ICONS: Record<string, string> = { Monitor: 'monitor_heart', CronCreate: 'schedule', CronList: 'schedule', CronDelete: 'schedule', ListAgents: 'groups', NotebookEdit: 'edit_note', TaskStop: 'stop_circle', SendMessage: 'send', Skill: 'bolt', EnterPlanMode: 'assignment', ExitPlanMode: 'assignment', ToolSearch: 'manage_search', EnterWorktree: 'account_tree', ExitWorktree: 'account_tree', AskUserQuestion: 'help', Bash: 'terminal', PowerShell: 'terminal', Read: 'description', Write: 'edit_document', Edit: 'edit', MultiEdit: 'edit', Glob: 'search', Grep: 'search', WebFetch: 'language', WebSearch: 'travel_explore', Task: 'account_tree', Agent: 'account_tree', TodoWrite: 'checklist', SubagentHandback: 'flag' };
+const TOOL_ICONS: Record<string, string> = { Monitor: 'monitor_heart', CronCreate: 'schedule', CronList: 'schedule', CronDelete: 'schedule', ListAgents: 'groups', NotebookEdit: 'edit_note', TaskStop: 'stop_circle', SendMessage: 'send', Skill: 'bolt', EnterPlanMode: 'assignment', ExitPlanMode: 'assignment', ToolSearch: 'manage_search', EnterWorktree: 'account_tree', ExitWorktree: 'account_tree', AskUserQuestion: 'help', Bash: 'terminal', PowerShell: 'terminal', Read: 'description', Write: 'edit_document', Edit: 'edit', MultiEdit: 'edit', Glob: 'search', Grep: 'search', WebFetch: 'language', WebSearch: 'travel_explore', webSearch: 'travel_explore', Task: 'account_tree', Agent: 'account_tree', TodoWrite: 'checklist', SubagentHandback: 'flag' };
 const chatWidths = { narrow: '680px', default: '780px', wide: '1000px', full: '100%' };
 // An MCP tool answers with JSON text on one line: shown indented. Anything else is left as it came.
 const prettyResult = (value: string) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : value; } catch { return value; } };
@@ -1380,8 +1380,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     switch (name) {
       case 'resume': await resume(); return true;
       case 'stats':
-        if (agent !== 'claude') note('세션 통계는 Claude 채팅에서만 볼 수 있습니다.');
-        else if (!state.sessionId) note('아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.');
+        if (!state.sessionId) note('아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.');
         else setStatsOpen(true);
         return true;
       case 'retry': await ctx.call('chat/retry', { id }); note('마지막 요청을 같은 세션으로 다시 보냈습니다.'); return true;
@@ -1621,7 +1620,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
-        {agent === 'claude' && view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" className={hint === 'stats' ? 'hint-anchor' : ''} onClick={() => { hintSeen('stats'); setStatsOpen(true); }} />}
+        {view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" className={hint === 'stats' ? 'hint-anchor' : ''} onClick={() => { hintSeen('stats'); setStatsOpen(true); }} />}
         {view.state.status === 'idle' && <IconButton icon="terminal" tip="header" label={view.state.sessionId ? '터미널로 전환 (같은 세션 이어가기)' : '터미널로 전환 (새 터미널 열기)'} className={hint === 'tocli' ? 'hint-anchor' : ''} onClick={() => { hintSeen('tocli'); ctx.toTerminal(id, !view.state.sessionId); }} />}
         {(view.state.status === 'idle' || (agent === 'claude' && view.state.sessionId)) && <i className="pane-sep" aria-hidden="true" />}
         <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
@@ -1657,6 +1656,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
+        {agent === 'cursor' && busy && <button type="button" onClick={() => interrupt(false)}>현재 응답을 중단하고 대기 메시지 보내기</button>}
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
       <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} /></div></div>
