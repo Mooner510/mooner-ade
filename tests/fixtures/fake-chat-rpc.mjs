@@ -49,6 +49,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const option = configOptions().find(item => item.id === p.configId);
     const choices = option?.type === 'boolean' ? ['false', 'true'] : option?.options?.map(item => item.value);
     if (!choices?.includes(p.value)) { send({ id: raw.id, error: { code: -32602, message: 'Unsupported config value' } }); return; }
+    if (process.env.HOLD_CONFIG === '1' && p.configId === 'model') {
+      fs.writeFileSync(path.join(process.cwd(), '.hold-config'), '1');
+      notify('session/update', { sessionId, update: { sessionUpdate: 'current_model_update', currentModelId: catalog[0].modelId } });
+      while (!fs.existsSync(path.join(process.cwd(), '.hold-config-go'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15);
+    }
     if (p.configId === 'model') { currentModel = p.value; values = {}; } else values[p.configId] = p.value;
     reply(raw.id, { configOptions: configOptions() });
   }
