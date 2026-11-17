@@ -15,6 +15,7 @@ import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-font
 import { useFeedback } from './feedback-store';
 import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
 import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
+import { graphColor, javaHash } from './git-graph';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -49,14 +50,14 @@ function AboutSettings() {
   </>;
 }
 
-export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'diff' | 'wakatime' | 'plugins' | 'feedback' | 'keys' | 'about';
+export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'git' | 'wakatime' | 'plugins' | 'feedback' | 'keys' | 'about';
 const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'appearance', label: '외관', icon: 'panelLeft' },
   { id: 'terminal', label: '터미널', icon: 'terminal' },
   { id: 'ai', label: 'AI 툴', icon: 'claude' },
   { id: 'chat', label: '채팅', icon: 'chat' },
   { id: 'status', label: '상태바', icon: 'statusBar' },
-  { id: 'diff', label: '변경사항', icon: 'diff' },
+  { id: 'git', label: 'Git', icon: 'graph' },
   { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
   { id: 'plugins', label: '플러그인', icon: 'plugin' },
   { id: 'feedback', label: '피드백', icon: 'feedback' },
@@ -274,6 +275,68 @@ function Row({ title, hint, preview, children }: { title: string; hint?: string;
 
 function Group({ title, children }: { title?: string; children: ReactNode }) {
   return <div className="setting-block">{title && <h4 className="setting-group">{title}</h4>}{children}</div>;
+}
+
+// The Git tool window: the same switches as its Graph Options / View Options menus and Branches pane gear, plus what has no menu there.
+function GitSettings({ settings, set }: { settings: Settings; set<K extends keyof Settings>(key: K, value: Settings[K]): void }) {
+  type Flag = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
+  const flag = (key: Flag, label: string) => <input type="checkbox" role="switch" aria-label={label} checked={settings[key] as boolean} onChange={event => set(key, event.target.checked as never)} />;
+  const num = (key: 'gitLogLimit' | 'gitLogHeight' | 'gitSaturation' | 'gitBrightness', min: number, max: number, step = 1) =>
+    <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= min && value <= max) set(key, value); }} />;
+  const column = (id: string) => settings.gitColumns.includes(id);
+  const setColumn = (id: string, on: boolean) => set('gitColumns', ['author', 'date', 'hash'].filter(item => item === id ? on : settings.gitColumns.includes(item)));
+  const sample = [10, 25, 40, 55, 70].map(id => graphColor(javaHash(`branch-${id}`), settings.gitSaturation / 100, settings.gitBrightness / 100) ?? 'var(--muted)');
+  return <>
+    <Group title="Git 패널">
+      <p className="setting-note">상단의 Git 버튼({'+/−'} 줄 수 표시)이나 단축키로 아래에서 올라오는 커밋 그래프를 엽니다. 그래프와 메뉴는 IntelliJ의 Git 로그와 같은 규칙을 따릅니다.</p>
+      <Row title="터미널 영역에 고정 (Dock)" hint="켜면 패널이 터미널을 밀어 올리고(IntelliJ의 Dock), 끄면 터미널 위에 떠서 크기를 바꾸지 않습니다.">{flag('gitLogDock', '터미널 영역에 고정')}</Row>
+      <Row title="패널 높이" hint="위쪽 경계를 끌어서도 바꿀 수 있고, 더블클릭하면 화면 절반으로 넓힙니다. (120–2000px)">{num('gitLogHeight', 120, 2000, 10)}</Row>
+      <Row title="불러올 커밋 수" hint="처음에 읽는 커밋 수입니다. 목록 끝의 ‘더 불러오기’로 늘릴 수 있습니다. (1000–50000)">{num('gitLogLimit', 1000, 50000, 1000)}</Row>
+    </Group>
+    <Group title="그래프">
+      <Row title="정렬" hint="커밋 날짜순: 위상 순서를 지키며 커밋 날짜로 정렬합니다(기본). 위상 정렬: 머지로 들어온 커밋을 머지 커밋 바로 아래에 먼저 보여 줍니다.">
+        <Dropdown label="정렬" value={settings.gitSort} options={[{ value: 'date', label: '커밋 날짜순' }, { value: 'topo', label: '위상 정렬' }]} onChange={value => set('gitSort', value as Settings['gitSort'])} /></Row>
+      <Row title="머지 선형화" hint="들어온 커밋을 리베이스한 것처럼 메인 브랜치 커밋 위에 보여 줍니다.">{flag('gitLinear', '머지 선형화')}</Row>
+      <Row title="첫 부모만" hint="머지 커밋에서 첫 번째 부모만 따라갑니다.">{flag('gitFirstParent', '첫 부모만')}</Row>
+      <Row title="머지 커밋 숨기기">{flag('gitNoMerges', '머지 커밋 숨기기')}</Row>
+      <Row title="긴 선" hint="끄면 30행 이상 이어지는 선을 양 끝의 화살표로 줄입니다. 화살표를 누르면 반대쪽 끝으로 이동합니다.">{flag('gitLongEdges', '긴 선')}</Row>
+      <Row title="선 색 채도" hint={`브랜치 색은 브랜치 이름으로 정해집니다. 채도 (0–100, 기본 40)`}>{num('gitSaturation', 0, 100)}<span className="git-swatches">{sample.map((color, index) => <i key={index} style={{ background: color }} />)}</span></Row>
+      <Row title="선 색 밝기" hint="밝기 (20–100, 기본 65)">{num('gitBrightness', 20, 100)}</Row>
+    </Group>
+    <Group title="표시">
+      <Row title="참조 간결하게 보기" hint="로컬 브랜치와 추적하는 원격 브랜치를 한 라벨로 묶어 첫 이름만 보여 줍니다.">{flag('gitCompactRefs', '참조 간결하게 보기')}</Row>
+      <Row title="태그 이름" hint="끄면 태그를 아이콘으로만 보여 줍니다.">{flag('gitTagNames', '태그 이름')}</Row>
+      <Row title="참조를 왼쪽에" hint="브랜치·태그 라벨을 커밋 메시지 앞에 둡니다.">{flag('gitRefsLeft', '참조를 왼쪽에')}</Row>
+      <Row title="커밋 시각 표시" hint="작성 시각 대신 커밋 시각을 보여 줍니다.">{flag('gitCommitTime', '커밋 시각 표시')}</Row>
+      <Row title="날짜를 짧게" hint="‘10분 전’, ‘오늘 14:20’, ‘어제 09:05’처럼 보여 줍니다. 끄면 항상 날짜와 시각을 씁니다.">{flag('gitPrettyDate', '날짜를 짧게')}</Row>
+      <Row title="열" hint="커밋 메시지 열은 항상 보입니다.">
+        {(['author', 'date', 'hash'] as const).map(id => <label key={id} className="check"><input type="checkbox" checked={column(id)} onChange={event => setColumn(id, event.target.checked)} /> {({ author: '작성자', date: '날짜', hash: '해시' })[id]}</label>)}</Row>
+    </Group>
+    <Group title="강조">
+      <Row title="내 커밋" hint="작성자가 여럿일 때 내 커밋을 굵게 보여 줍니다.">{flag('gitMine', '내 커밋 강조')}</Row>
+      <Row title="머지 커밋" hint="머지 커밋을 흐리게 보여 줍니다.">{flag('gitMerges', '머지 커밋 강조')}</Row>
+      <Row title="현재 브랜치" hint="현재 브랜치에 들어 있는 커밋에 배경색을 줍니다.">{flag('gitCurrent', '현재 브랜치 강조')}</Row>
+    </Group>
+    <Group title="패널">
+      <Row title="브랜치 패널">{flag('gitBranchesPane', '브랜치 패널')}</Row>
+      <Row title="브랜치를 한 번 클릭하면" hint="두 번 클릭은 항상 그 브랜치로 로그를 거릅니다.">
+        <Dropdown label="브랜치를 한 번 클릭하면" value={settings.gitBranchClick} options={[{ value: 'none', label: '선택만' }, { value: 'filter', label: '브랜치 필터 바꾸기' }, { value: 'navigate', label: '브랜치 헤드로 이동' }]} onChange={value => set('gitBranchClick', value as Settings['gitBranchClick'])} /></Row>
+      <Row title="브랜치를 폴더로 묶기" hint="feature/… 처럼 / 앞부분이 같은 브랜치를 묶습니다.">{flag('gitBranchDirs', '브랜치를 폴더로 묶기')}</Row>
+      <Row title="브랜치 패널에 태그 보기">{flag('gitBranchTags', '브랜치 패널에 태그 보기')}</Row>
+      <Row title="커밋 세부 정보">{flag('gitDetails', '커밋 세부 정보')}</Row>
+      <Row title="Diff 미리 보기" hint="변경된 파일을 고르면 옆에 diff를 보여 줍니다.">{flag('gitDiffPreview', 'Diff 미리 보기')}</Row>
+      <Row title="변경된 파일을 폴더로 묶기">{flag('gitFilesByDir', '변경된 파일을 폴더로 묶기')}</Row>
+    </Group>
+    <Group title="작업">
+      <Row title="업데이트 방식" hint="현재 브랜치를 업데이트할 때 원격 변경을 머지할지 리베이스할지 정합니다.">
+        <Dropdown label="업데이트 방식" value={settings.gitUpdateMethod} options={[{ value: 'merge', label: '머지' }, { value: 'rebase', label: '리베이스' }]} onChange={value => set('gitUpdateMethod', value as Settings['gitUpdateMethod'])} /></Row>
+      <Row title="Fetch할 때 사라진 원격 브랜치 정리 (--prune)">{flag('gitFetchPrune', 'Fetch할 때 정리')}</Row>
+      <Row title="보호된 브랜치" hint="이 브랜치들에 push된 커밋은 메시지 편집·삭제·스쿼시·대화형 리베이스를 막습니다. 쉼표로 구분합니다.">
+        <input type="text" value={settings.gitProtected} maxLength={500} aria-label="보호된 브랜치" onChange={event => set('gitProtected', event.target.value)} /></Row>
+      <Row title="즐겨찾기 브랜치" hint="브랜치 패널에서 별표로 표시하고 위쪽에 둡니다. 브랜치 메뉴에서도 바꿀 수 있습니다. 쉼표로 구분합니다.">
+        <input type="text" key={settings.gitFavorites.join(',')} defaultValue={settings.gitFavorites.join(', ')} aria-label="즐겨찾기 브랜치" onBlur={event => set('gitFavorites', event.target.value.split(',').map(item => item.trim()).filter(Boolean).slice(0, 64))} /></Row>
+    </Group>
+  </>;
 }
 
 function SectionFrame({ label, searching, children }: { label: string; searching: boolean; children: ReactNode }) {
@@ -510,7 +573,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               <Row title="부드러운 스트리밍" hint="응답을 글자 단위로 이어서 보여 줍니다. 끄면 받는 대로 바로 표시합니다. 시스템의 ‘동작 줄이기’가 켜져 있으면 적용되지 않습니다." preview="chatStream">{toggle('chatSmoothStream')}</Row>
             </Advanced>
           </Group>
-          <Group title="변경사항">
+          <Group title="Diff">
             <Row title="diff 글꼴 크기" preview="diffSize">{number('fontSize', 8, 40)}</Row>
             <Row title="diff 글꼴" hint="이 컴퓨터에 설치된 글꼴만 목록에 나옵니다. 비우면 터미널 글꼴을 따릅니다." preview="diffFont">
               <Dropdown label="diff 글꼴" value={settings.diffFont} options={diffFontOptions} onChange={value => set('diffFont', value)} /></Row>
@@ -519,9 +582,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Advanced>
               <Row title="diff 글꼴 이름 직접 입력" hint="목록에 없는 글꼴 이름을 입력할 때 씁니다." preview="diffName">
                 <input type="text" value={settings.diffFont} maxLength={200} placeholder={settings.terminalFont || 'JetBrains Mono'} aria-label="diff 글꼴 직접 입력" onChange={event => set('diffFont', event.target.value)} /></Row>
-              <Row title="변경 없는 구간 접기" hint="변경사항 목록에서 바뀌지 않은 줄을 접어 둡니다." preview="diffFold">{toggle('diffFoldUnchanged')}</Row>
+              <Row title="변경 없는 구간 접기" hint="채팅의 코드 변경 카드에서 바뀌지 않은 줄을 접어 둡니다." preview="diffFold">{toggle('diffFoldUnchanged')}</Row>
               {settings.diffFoldUnchanged && <Row title="변경 주변 표시 줄 수" hint="접힌 구간 둘레에 남기는 줄 수입니다. (1–20)" preview="diffContext">{number('diffContextLines', 1, 20)}</Row>}
-              <Row title="변경사항 패널 너비" hint="패널 왼쪽 경계를 끌어서도 바꿀 수 있고, 더블클릭하면 전체 너비로 넓힙니다. (320–1600px)" preview="diffWidth">{number('reviewWidth', 320, 1600, 10)}</Row>
+              <Row title="오른쪽 패널 너비" hint="오류·피드백·플러그인 패널의 너비입니다. 왼쪽 경계를 끌어서도 바꿀 수 있고, 더블클릭하면 전체 너비로 넓힙니다. (320–1600px)" preview="diffWidth">{number('reviewWidth', 320, 1600, 10)}</Row>
             </Advanced>
           </Group>
           <Group title="상태 표시">
@@ -623,13 +686,16 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="새 출력 따라가기" hint="맨 아래에 있을 때 새 출력을 따라 내려갑니다. 메시지를 보낼 때는 항상 맨 아래로 이동합니다.">{toggle('chatAutoScroll')}</Row>
           </Group>
         </SectionFrame>}
-        {(searching || section === 'diff') && <SectionFrame label="변경사항" searching={searching}>
-          <p className="setting-note">글꼴, 줄바꿈, 표시 방식, 구간 접기, 패널 너비는 외관에서 바꿉니다.</p>
-          <Row title="공백 변경 무시" hint="줄 앞뒤 공백만 바뀐 줄은 변경으로 표시하지 않습니다.">{toggle('diffIgnoreWhitespace')}</Row>
-          <Advanced>
-            <Row title="변경사항 새로고침 주기" hint="변경 파일 목록을 다시 읽는 간격입니다. 초 단위 (1–60)">{number('diffRefresh', 1, 60)}</Row>
-            <Row title="diff 계산 제한 시간" hint="큰 파일의 diff 계산을 기다리는 최대 시간입니다. 넘으면 단순 비교로 대체합니다. (1000–20000ms)">{number('diffComputeMs', 1000, 20000, 500)}</Row>
-          </Advanced>
+        {(searching || section === 'git') && <SectionFrame label="Git" searching={searching}>
+          <GitSettings settings={settings} set={set} />
+          <Group title="Diff">
+            <p className="setting-note">글꼴, 줄바꿈, 표시 방식, 구간 접기는 외관에서 바꿉니다.</p>
+            <Row title="공백 변경 무시" hint="줄 앞뒤 공백만 바뀐 줄은 변경으로 표시하지 않습니다.">{toggle('diffIgnoreWhitespace')}</Row>
+            <Advanced>
+              <Row title="Git 새로고침 주기" hint="상단 Git 버튼의 +/− 줄 수와 열려 있는 커밋 그래프를 다시 읽는 간격입니다. 초 단위 (1–60)">{number('diffRefresh', 1, 60)}</Row>
+              <Row title="diff 계산 제한 시간" hint="큰 파일의 diff 계산을 기다리는 최대 시간입니다. 넘으면 단순 비교로 대체합니다. (1000–20000ms)">{number('diffComputeMs', 1000, 20000, 500)}</Row>
+            </Advanced>
+          </Group>
         </SectionFrame>}
         {(searching || section === 'wakatime') && <SectionFrame label="WakaTime" searching={searching}><WakaTimeSettings settings={settings} set={set} onChange={onChange} /></SectionFrame>}
         {(searching || section === 'plugins') && <SectionFrame label="플러그인" searching={searching}><PluginSettings query={query} /></SectionFrame>}

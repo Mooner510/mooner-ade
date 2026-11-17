@@ -649,18 +649,24 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   </section>;
 }
 
+// `diff:<revision>:<path>[\t<old path>]`, opened from the Git tool window: a commit, `a..b` (two commits) or `a..` (against the working tree).
+const diffParts = (spec: string) => { const [, kind, ...rest] = spec.split(':'), [path, original] = rest.join(':').split('\t'); return { kind, path, original, full: rest.join(':') }; };
+const revisionLabel = (kind: string) => {
+  const [from, to] = kind.split('..');
+  return !kind.includes('..') ? kind.slice(0, 8) : to ? `${from.slice(0, 7)}..${to.slice(0, 7)}` : `${from.slice(0, 7)} ↔ 작업 트리`;
+};
 function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
-  const [, kind, ...rest] = spec.split(':'), path = rest.join(':');
+  const { kind, path, full } = diffParts(spec);
   const [value, setValue] = useState<{ original: string; modified: string } | null>(null), [error, setError] = useState('');
-  useEffect(() => { ctx.loadDiff(kind, path).then(setValue, cause => setError(String(cause.message || cause))); }, [kind, path, ctx.gitVersion]);
+  useEffect(() => { ctx.loadDiff(kind, full).then(setValue, cause => setError(String(cause.message || cause))); }, [kind, full, ctx.gitVersion]);
   if (error) return <div className="empty">{error}</div>;
   return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} /> : <div className="empty">불러오는 중…</div>;
 }
 
-// An editor pane holds diff tabs opened from the review panel (`diff:<kind>:<path>`).
+// An editor pane holds diff tabs opened from the Git tool window's changed files.
 function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Leaf; focused: boolean; zoomed: boolean; ctx: EditorCtx; onFocus(id: string): void; onZoom(id: string): void }) {
   const tabs = leaf.tabs || [], active = leaf.active && tabs.includes(leaf.active) ? leaf.active : tabs[0] || '';
-  const label = (path: string) => `${basename(path.split(':').slice(2).join(':'))} (${path.split(':')[1] === 'staged' ? '스테이지됨' : '변경'})`;
+  const label = (spec: string) => { const { kind, path } = diffParts(spec); return `${basename(path)} (${revisionLabel(kind)})`; };
   return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="diff 편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)}>
     <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(path =>
       <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''}`}
@@ -668,7 +674,7 @@ function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Le
         <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
       <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" tip="none" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
     {active ? <DiffTab key={active} spec={active} ctx={ctx} />
-      : <div className="empty"><h2>열린 diff가 없습니다</h2><p>오른쪽 변경사항 패널에서 파일을 선택하세요.</p></div>}
+      : <div className="empty"><h2>열린 diff가 없습니다</h2><p>Git 패널에서 커밋의 파일을 더블클릭하세요.</p></div>}
   </section>;
 }
 

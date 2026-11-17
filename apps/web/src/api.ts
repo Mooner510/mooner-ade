@@ -1,10 +1,10 @@
 export class ApiError extends Error {
-  constructor(public code: string, message: string) { super(message); }
+  constructor(public code: string, message: string, public files?: string[]) { super(message); }
 }
 export async function api<T = any>(action: string, input: object = {}): Promise<T> {
   const response = await fetch(`/api/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
   const value = await response.json();
-  if (!response.ok) throw new ApiError(value.error.code, value.error.message);
+  if (!response.ok) throw new ApiError(value.error.code, value.error.message, value.error.files);
   return value;
 }
 // A leaf is a terminal, an editor group, a chat (a headless Claude Code drawn as a conversation; its id names the server-side transcript) or a launcher (a fresh pane still choosing what to run); legacy saved layouts have `{ id }` only and mean terminal.
