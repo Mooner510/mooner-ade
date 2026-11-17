@@ -207,3 +207,13 @@ test('extra-usage credit: capped orgs get a ratio, uncapped ones only the amount
   assert.equal(parseClaudeCredit({ extra_usage: { is_enabled: false } }), null);
   assert.equal(parseClaudeCredit({}), null);
 });
+
+test('Codex workspace spend limit becomes a used/limit reading like Claude extra usage', () => {
+  const spend_control = { reached: false, individual_limit: { unit: 'credit', limit: '2500', used: '223.8', remaining: '2276.2', used_percent: 9, reset_at: 1796083200 } };
+  const credits = { has_credits: true, unlimited: false, balance: null };
+  const expected = { used: 223.8, limit: 2500, percent: 9, resetsAt: 1796083200000 };
+  assert.deepEqual(parseCodexCredits({ credits, spend_control }), { balance: null, unlimited: false, hasCredits: true, limit: expected });
+  assert.deepEqual(parseCodexCredits({ spend_control }).limit, expected);
+  assert.equal(parseCodexCredits({ credits, spend_control: { individual_limit: { limit: '0', used: '0' } } }).limit, undefined);
+  assert.deepEqual(parseCodexLogLine(JSON.stringify({ timestamp: '2026-11-17T00:00:00Z', payload: { rate_limits: { credits, individual_limit: spend_control.individual_limit } } })).codexCredits.limit, expected);
+});
