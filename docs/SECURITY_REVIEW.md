@@ -70,6 +70,7 @@
 | 모델 출력이 UI에 마크업 삽입 | Markdown은 React 요소로만 그리고(HTML 문자열 없음) http(s) 링크만 연결하며 열기 전 확인 창을 거칩니다. | 코드 검토 |
 | 승인 없이 도구 실행 | `--permission-prompts host`로 CLI가 묻는 승인을 GUI 카드에서 사용자가 직접 답합니다. `모두 허용` 모드는 사용자가 명시 선택해야 합니다. | `chat-claude.test.mjs`(변환), 실제 승인은 수동 |
 | 접근 폴더·워크트리 설정 | `--add-dir` 경로는 OS 폴더 선택창에서만 고르며 서버가 절대경로·실존 디렉터리·최대 8개를 다시 검증합니다. `--worktree`는 대화 시작 전에만 켤 수 있습니다. 인사에 쓰는 OS 사용자 이름은 로컬 UI에만 반환합니다. | 실제 claude로 수동 확인 |
+| 자동 모드가 막은 작업의 허용 | `chat/allow-blocked`는 도구 호출 ID만 받고, 서버가 자기 기록(`auto_denied`)에서 도구·입력·규칙을 읽어 `permissions.allow`로 넣습니다. 규칙은 정확히 그 호출에만 맞는 단순 명령·MCP 도구·호스트로 제한하고(`sessionRule`), 이 채팅의 CLI 프로세스에만 적용하며 설정 파일에는 쓰지 않습니다. 이미 처리됐거나 모르는 ID는 404입니다. | `auto-denial.test.mjs`, `chat-session.test.mjs`, `scripts/verify/t-auto-denial.mjs` |
 | 대화 분기·되돌리기·스티어링 | `chat/branch`·`chat/rewind`·`chat/cancel-steer`는 기존 인증된 `/api`를 거칩니다. 분기는 `seedChat`이 프로젝트 chat 폴더 아래에만 새 기록을 쓰고, 메시지 uuid는 형식을 검증한 뒤에만 `--resume-session-at`에 넘깁니다. 스티어링 취소는 CLI의 `cancel_async_message` 제어 요청만 보냅니다. 토큰·로그인 정보는 다루지 않습니다. | `chat-claude.test.mjs`(인자·uuid), 실제 동작은 수동 |
 | 모델 목록 조회 | `chat/models`는 별칭마다 `claude -p /cost`(로컬 명령, 모델 호출 없음)를 인자 배열로 실행하고 cwd는 임시 폴더입니다. `chat/model-catalog`는 CLI 캐시 파일 `~/.claude/cache/model-catalog/*-cc.json`에서 모델 ID(정규식 검증)·이름·계열·컨텍스트 창만 읽어 최대 64개를 돌려주며 그 밖의 필드와 로그인 정보는 읽지 않습니다. | `chat-claude.test.mjs`(probe), 캐시 파싱은 수동 |
 | 번들 글꼴 | Inter·Noto Sans KR·JetBrains Mono(SIL OFL 1.1)를 npm 패키지에서 빌드에 포함하며 외부 CDN을 쓰지 않습니다. 라이선스 전문은 빌드 결과 `licenses/`에 함께 배포합니다(pnpm `minimumReleaseAge` 7일 준수 버전). | 수동 |

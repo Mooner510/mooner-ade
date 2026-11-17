@@ -333,7 +333,7 @@ ipcMain.handle('ade:capture', async (event, rect) => {
 });
 
 // Asks the server what an app restart would cut off (running agent turns, background tasks, commands). The answer is
-// { busy, reasons }; a missing or silent server rejects, which the updater counts as busy instead of guessing idle.
+// { busy, reasons, keepsTerminals, keepsChats, live }; a missing or silent server rejects, which the updater counts as busy instead of guessing idle.
 let busyRequests = 0;
 function serverBusy() {
   const child = server;
@@ -342,7 +342,8 @@ function serverBusy() {
   return new Promise((resolve, reject) => {
     const id = ++busyRequests;
     const finish = result => { clearTimeout(timer); child.off('message', onMessage); result instanceof Error ? reject(result) : resolve(result); };
-    const onMessage = message => { if (message?.type === 'busy' && message.id === id) finish({ busy: message.busy, reasons: message.reasons }); };
+    // The whole report goes on (keepsTerminals, keepsChats, live too): without them every hosted chat turn read as work an update would cut off.
+    const onMessage = message => { if (message?.type === 'busy' && message.id === id) { const { type, id: _, ...report } = message; finish(report); } };
     const timer = setTimeout(() => finish(new Error('서버가 작업 상태에 응답하지 않습니다')), 10_000);
     child.on('message', onMessage);
     child.send({ type: 'busy?', id }, error => { if (error) finish(error); });
