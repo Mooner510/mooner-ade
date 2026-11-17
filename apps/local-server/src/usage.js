@@ -84,6 +84,15 @@ export function parseCodexUsage(body, now = Date.now()) {
   return windows;
 }
 
+// Codex credits are a remaining balance, not currency or a percentage of the plan limit.
+export function parseCodexCredits(body) {
+  const credits = body?.credits;
+  if (!credits || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return null;
+  const value = credits.balance;
+  const balance = (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  return { balance, unlimited: credits.unlimited, hasCredits: credits.has_credits };
+}
+
 // Codex also writes its rate limits into every session log, which works offline and for API-key logins once a session has run.
 export function parseCodexLogLine(line) {
   let entry;
@@ -97,7 +106,8 @@ export function parseCodexLogLine(line) {
     const resetsAt = value.resets_at ? Number(value.resets_at) * 1000 : value.resets_in_seconds !== undefined && at ? at + Number(value.resets_in_seconds) * 1000 : null;
     windows.push({ key, label: key === 'session' ? '5시간' : key === 'weekly' ? '주간' : `${Math.round(value.window_minutes / 60)}시간`, percent: percent(value.used_percent), resetsAt });
   }
-  return windows.length ? { at, windows } : null;
+  const codexCredits = parseCodexCredits(limits);
+  return windows.length || codexCredits ? { at, windows, ...(codexCredits && { codexCredits }) } : null;
 }
 
 // Newest rollout under sessions/YYYY/MM/DD, read from its tail.
@@ -261,11 +271,11 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
       try {
         if (!login) throw new UsageError('Codex ChatGPT 로그인 정보를 찾지 못했습니다.');
         const body = await getJson(fetchImpl, 'https://chatgpt.com/backend-api/wham/usage', { Authorization: `Bearer ${login.token}`, ...(login.account ? { 'ChatGPT-Account-Id': login.account } : {}), 'User-Agent': userAgent });
-        return { windows: parseCodexUsage(body, now()), plan: body?.plan_type || '', source: 'api', at: now() };
+        return { windows: parseCodexUsage(body, now()), codexCredits: parseCodexCredits(body), plan: body?.plan_type || '', source: 'api', at: now() };
       } catch (error) {
         const log = await codexLog({ env }).catch(() => null);
         if (!log) throw error;
-        return { windows: log.windows, plan: '', source: 'log', at: log.at, note: error.message };
+        return { windows: log.windows, codexCredits: log.codexCredits ?? null, plan: '', source: 'log', at: log.at, note: error.message };
       }
     },
     async cursor(env) {
