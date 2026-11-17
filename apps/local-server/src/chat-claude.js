@@ -215,8 +215,18 @@ const textOf = (content) =>
     .map((part) => part.text ?? "")
     .join("\n");
 
+// Window of the chat's own model from a result's modelUsage, which also lists helper models (Haiku 4.5 at 200k, ...) in any order.
+// `mainModel` is the model the chat runs (alias or id; a `[1m]` suffix is ignored). With no match the largest window stands, since helpers are the smaller ones.
+export function resultContextWindow(modelUsage, mainModel) {
+  const bare = (id) => String(id).replace(/\[1m\]$/i, "").toLowerCase();
+  const rows = Object.entries(modelUsage ?? {}).map(([id, item]) => [bare(id), item?.contextWindow]).filter(([, window]) => Number.isFinite(window) && window > 0);
+  const wanted = mainModel ? bare(mainModel) : "";
+  const own = wanted && rows.find(([id]) => id === wanted || id.includes(wanted) || wanted.includes(id));
+  return own ? own[1] : rows.length ? Math.max(...rows.map(([, window]) => window)) : null;
+}
+
 // raw JSON object from stdout -> list of events. `delta` events are live-only; the rest are stored in the transcript.
-export function normalizeClaude(raw) {
+export function normalizeClaude(raw, mainModel = null) {
   if (!raw || typeof raw !== "object") return [];
   if (raw.type === "custom-title" && raw.customTitle) return titleEvent("custom", raw.customTitle);
   if (raw.type === "ai-title" && raw.aiTitle) return titleEvent("ai", raw.aiTitle);
@@ -406,10 +416,7 @@ export function normalizeClaude(raw) {
         sessionId: raw.session_id,
         costUsd: raw.total_cost_usd ?? null,
         usage: usageOf(raw.usage),
-        contextWindow:
-          Object.values(raw.modelUsage ?? {})
-            .map((item) => item?.contextWindow)
-            .find(Number.isFinite) ?? null,
+        contextWindow: resultContextWindow(raw.modelUsage, mainModel),
         durationMs: raw.duration_ms ?? null,
         turns: raw.num_turns ?? null,
       },
