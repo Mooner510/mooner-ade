@@ -363,8 +363,10 @@ const chatProcHost = ptyHost?.procs ? {
   spawnProc: (file, args, { cwd, env, meta }) => ptyHostLost ? spawnAgent(file, args, { cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) : ptyHost.spawnProc(file, args, { cwd, env, meta }),
   attachProc: (key, after) => ptyHostLost ? Promise.reject(new Error('pty-host disconnected')) : ptyHost.attachProc(key, after)
 } : null;
-async function openChat(project, id, { cwd, agent, defaults }) {
-  const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
+// `auth` (chat/open from a plugin, Claude only) picks this chat's login: { apiKey } runs it on that key, {} on the CLI login whatever Settings > AI 툴 says.
+async function openChat(project, id, { cwd, agent, defaults, auth = null }) {
+  const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent,
+    env: auth ? () => ({ ...pluginEnv(), ...(auth.apiKey && { ANTHROPIC_API_KEY: auth.apiKey }) }) : chatEnv(agent), executableArgs: auth ? () => [] : chatArgs(agent), procHost: chatProcHost,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles, recover: () => checkAgents(), defaults,
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
@@ -968,12 +970,15 @@ async function route(action, input, project) {
         if (project.chats.size + project.openingChats >= 16) throw fault('CHAT_LIMIT', '프로젝트당 최대 16개 채팅을 지원합니다.');
         project.openingChats++;
         try {
-          const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
+          const cwd = input.path ? await workspace.resolve(text(input.path, '경로')).catch(async error => (await projectWorktree(project, input.path)) ?? Promise.reject(error)) : workspace.root;
           if (!(await fs.stat(cwd)).isDirectory()) throw fault('INVALID_INPUT', '폴더를 선택하세요.');
           const agent = input.agent === undefined ? 'claude' : input.agent, defaults = input.defaults && typeof input.defaults === 'object' ? input.defaults : {};
           // What was last picked in this project (mode, model, effort) wins over Settings' defaults; openChatSession only applies it to a new chat, and only what the agent supports.
           const last = (await readJson(path.join(project.directory, 'last-picks.json'), {}).catch(() => ({})))[agent];
-          chat = await openChat(project, id, { cwd, agent, defaults: { ...defaults, ...(last && typeof last === 'object' ? last : {}) } });
+          const auth = agent === 'claude' && input.auth === 'login' ? {} : agent === 'claude' && input.auth === 'key' ? { apiKey: /^sk-ant-[\x21-\x7e]{8,500}$/.test(input.apiKey ?? '') ? input.apiKey : (() => { throw fault('INVALID_INPUT', 'API 키 형식이 올바르지 않습니다.'); })() } : null;
+          chat = await openChat(project, id, { cwd, agent, auth, defaults: { ...defaults, ...(last && typeof last === 'object' ? last : {}) } });
+          // A plugin asks for the chat to be shown: windows with this project open add it as a tab.
+          if (input.show === true) broadcast(project, { type: 'plugin/chat', id, agent, cwd });
         } finally { project.openingChats--; }
       }
       if (input.agent !== undefined && chat.agent !== input.agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
@@ -1433,6 +1438,16 @@ function openPluginSession(plugin, session) {
     }
   };
   pluginSessions.set(key, client); clients.add(client);
+}
+// A git worktree of one of the project's repositories may host a chat although it lies outside the project folder (a plugin's work folder).
+async function projectWorktree(project, requested) {
+  const real = path.isAbsolute(String(requested)) ? await fs.realpath(requested).catch(() => null) : null;
+  if (!real) return null;
+  for (const repo of project.repositories) {
+    const listed = await new Promise(resolve => execFile('git', ['-C', repo.path, 'worktree', 'list', '--porcelain'], { windowsHide: true, timeout: 10_000 }, (error, stdout) => resolve(error ? '' : stdout)));
+    for (const line of listed.split('\n')) if (line.startsWith('worktree ') && await fs.realpath(line.slice(9)).catch(() => null) === real) return real;
+  }
+  return null;
 }
 async function pluginApi(plugin, action, input) {
   if (typeof action !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) throw fault('INVALID_INPUT', '잘못된 요청입니다.');

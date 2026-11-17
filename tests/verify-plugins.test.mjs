@@ -11,7 +11,7 @@ function setup(t) {
   fs.mkdirSync(dataRoot); fs.mkdirSync(verifyOut);
   const source = path.join(root, 'source'); fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, 'package.json'), '{"type":"module"}');
-  fs.writeFileSync(path.join(source, 'plugin.json'), JSON.stringify({ id: 'verify-example', name: 'Verify example', version: '1.0.0', apiVersion: 1, main: 'host.js', tab: true }));
+  fs.writeFileSync(path.join(source, 'plugin.json'), JSON.stringify({ id: 'verify-example', name: 'Verify example', version: '1.0.0', apiVersion: 1, main: 'host.js', header: true }));
   fs.writeFileSync(path.join(source, 'host.js'), `
 process.on('disconnect', () => process.exit(0));
 process.on('message', m => {
@@ -57,7 +57,7 @@ test('browser approval gates real IPC execution, secrets stay sealed, restart re
   host.close();
   const again = s.create();
   await wait(async () => (await example(again)).view?.status?.text === secret);
-  assert.equal((await example(again)).tab, true);
+  assert.equal((await example(again)).header, true);
   const poll = await again.route('poll', {});
   assert.equal((await again.route('poll', { revision: poll.revision })).state, undefined);
   await assert.rejects(again.route('__proto__', {}));

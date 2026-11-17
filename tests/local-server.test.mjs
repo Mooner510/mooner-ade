@@ -618,3 +618,17 @@ test('access token is per process, never stored, and can be exchanged again', as
   assert.equal((await second.exchange()).status, 200);
   await assert.rejects(stat(join(data, 'token')));
 });
+
+test('a plugin chat may run in a git worktree of the project, with its own login choice', async t => {
+  const { call, repo } = await boot(t);
+  const worktree = await realpath(await mkdtemp(join(tmpdir(), 'ade-wt-'))); await rm(worktree, { recursive: true });
+  t.after(() => rm(worktree, { recursive: true, force: true }));
+  await git(repo, 'worktree', 'add', '-q', '-b', 'feedback/t', worktree);
+  const stranger = await realpath(await mkdtemp(join(tmpdir(), 'ade-other-'))); t.after(() => rm(stranger, { recursive: true, force: true }));
+  await call('chat/open', { id: 'wt', agent: 'claude', path: worktree, auth: 'key', apiKey: 'sk-ant-test-12345678901234567890', show: true });
+  assert.equal((await call('chat/peers')).find(chat => chat.id === 'wt').cwd, worktree);
+  assert.equal((await call('chat/open', { id: 'wt', agent: 'claude' })).state.apiKey, true);
+  assert.equal((await call('chat/open', { id: 'login', agent: 'claude', auth: 'login' })).state.apiKey, false);
+  await call('chat/open', { id: 'bad', agent: 'claude', auth: 'key', apiKey: 'nope' }, 400);
+  await call('chat/open', { id: 'out', agent: 'claude', path: stranger }, 400);
+});

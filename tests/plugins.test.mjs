@@ -69,28 +69,31 @@ test('descriptions shown in the approval dialog are plain text', () => {
   assert.equal(validManifest(manifest({ description: 'one\r\ntwo\n\n\n\n\u202Ethree\u0007' })).description, 'one\ntwo\n\nthree');
 });
 
-test('tabs are a declared grant and secret fields never echo their reported value', () => {
-  assert.equal(validManifest(manifest({ tab: true })).tab, true);
-  assert.throws(() => validManifest(manifest({ tab: 'true' })));
-  assert.match(updateReview(manifest(), manifest({ tab: true })).join(' '), /상단.*탭/);
+test('header is a declared grant and secret fields never echo their reported value', () => {
+  assert.equal(validManifest(manifest({ header: true })).header, true);
+  assert.throws(() => validManifest(manifest({ header: 'true' })));
+  assert.match(updateReview(manifest(), manifest({ header: true })).join(' '), /상단 바/);
   const view = validView({ fields: [{ key: 'key', label: 'API key', type: 'password', value: 'secret' }, { key: 'path', label: 'Repository', type: 'folder' }, { key: 'body', label: 'Body', type: 'textarea' }], document: { title: 'Report', text: '<script>private text</script>' } });
   assert.equal(view.fields[0].value, '');
   assert.deepEqual(view.fields.map(field => field.type), ['password', 'folder', 'textarea']);
   assert.equal(view.document.text, '<script>private text</script>');
+  const split = validView({ fields: [{ key: 'a', label: 'A' }], panel: { status: { tone: 'ok', text: 'ready' }, lists: [{ id: 'issues', title: 'Issues', items: [] }], panel: { status: { tone: 'ok', text: 'nested' } } } });
+  assert.deepEqual(split.fields.map(field => field.key), ['a']); assert.equal(split.lists.length, 0);
+  assert.equal(split.panel.status.text, 'ready'); assert.equal(split.panel.lists.length, 1); assert.equal(split.panel.panel, null);
   assert.equal(validView({ document: { title: 'Too long', text: 'a'.repeat(65537) } }).document, null);
 });
 
-test('only a running approved plugin can expose a declared tab', async t => {
+test('only a running approved plugin can expose a declared header button', async t => {
   const s = setup(t, { answers: [0, 0] });
-  plugin(s.dir, 'example', manifest({ tab: true }));
+  plugin(s.dir, 'example', manifest({ header: true }));
   await s.manager.rescan();
-  assert.equal(s.manager.snapshot().plugins[0].tab, false);
+  assert.equal(s.manager.snapshot().plugins[0].header, false);
   await s.manager.setEnabled(true); await s.manager.approve('example');
   const host = s.hosts[0].child;
   host.emit('message', { type: 'ready' });
-  assert.equal(s.manager.snapshot().plugins[0].tab, true);
+  assert.equal(s.manager.snapshot().plugins[0].header, true);
   await s.manager.revoke('example');
-  assert.equal(s.manager.snapshot().plugins[0].tab, false);
+  assert.equal(s.manager.snapshot().plugins[0].header, false);
 });
 
 test('the tree hash covers names and bytes and refuses links', t => {

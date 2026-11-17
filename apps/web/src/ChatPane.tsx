@@ -1659,7 +1659,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'cursor' && busy && <button type="button" onClick={() => interrupt(false)}>현재 응답을 중단하고 대기 메시지 보내기</button>}
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
-      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} /></div></div>
+      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={ctx.onOpenSettings} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
       <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-feedback-region="채팅 입력창">
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>

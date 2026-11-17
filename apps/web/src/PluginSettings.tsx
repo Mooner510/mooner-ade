@@ -24,6 +24,8 @@ export type PluginView = {
   lists?: ViewList[];
   document?: { title: string; text: string } | null;
   formId?: string;
+  // The header panel's own content; without it the panel shows `view` itself.
+  panel?: PluginView | null;
 };
 // plugin.json `setup`: the guide shown even before the plugin runs.
 export type ManifestStep = { id: string; label: string; detail: string; optional?: boolean };
@@ -48,7 +50,7 @@ export type PluginInfo = {
   error: string | null; terminal: boolean; mcp: string | null; mcpChatOnly?: boolean; workspace?: boolean; view: PluginView | null; badge?: PluginBadge | null;
   // A plugin that ships with the app: no approval, no "plugins on" switch, only its own on/off (`builtinEnabled`).
   builtin?: boolean; builtinEnabled?: boolean;
-  tab?: boolean;
+  header?: boolean;
   commands?: string[]; envPrefix?: string | null; env?: string[]; tools?: PluginTools | null;
   setup?: ManifestStep[]; update?: PluginUpdate | null;
 };
@@ -90,8 +92,9 @@ export function usePluginsState() {
 // A plugin's notification was clicked: the app asks for the plugins page.
 export function onPluginsOpen(listener: () => void) { return pluginsBridge()?.onOpen?.(listener) ?? (() => {}); }
 
-export function PluginTabPanel({ plugin }: { plugin: PluginInfo }) {
-  const bridge = pluginsBridge(), view = plugin.view;
+// A header plugin's panel (opened from its top-bar button, in the right-panel slot): the plugin's view, drawn like its settings.
+export function PluginPanel({ plugin, wide, toggleWide, onSettings, onClose }: { plugin: PluginInfo; wide: boolean; toggleWide(): void; onSettings(): void; onClose(): void }) {
+  const bridge = pluginsBridge(), view = plugin.view?.panel ?? plugin.view;
   const [values, setValue] = useFieldValues(view), [busy, setBusy] = useState(''), [notice, setNotice] = useState('');
   if (!bridge || !view || !plugin.id) return null;
   const act = (action: string, item?: string) => {
@@ -101,14 +104,20 @@ export function PluginTabPanel({ plugin }: { plugin: PluginInfo }) {
     setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`); setNotice('');
     void bridge.action(plugin.id!, action, submitted, item).then(result => setNotice(result.message ?? ''), error => setNotice(errorText(error))).finally(() => setBusy(''));
   };
-  return <section className="plugins plugin-tab-page" role="tabpanel" aria-label={plugin.name}>
-    <h2>{plugin.name}</h2>
-    {window.adeVerifyPlugins && <p className="setting-note">브라우저 테스트 세션 · 키는 임시 폴더에 테스트 키와 함께 암호화 저장됩니다. OS Keychain 보호는 적용되지 않습니다.</p>}
-    {view.status && <p className="plugin-status" data-tone={view.status.tone} role="status">{view.status.text}</p>}
-    {notice && <p className="setting-note" role="status">{notice}</p>}
-    <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
-    {view.document && <section className="plugin-document"><h3>{view.document.title}</h3><pre>{view.document.text}</pre></section>}
-  </section>;
+  return <div className="review-panel plugin-panel plugins">
+    <header className="panel-head">
+      <Icon name="plugin" /><strong>{plugin.name}</strong><span className="spacer" />
+      <IconButton icon="settings" tip="header" label="플러그인 설정" onClick={onSettings} />
+      <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
+      <IconButton icon="x" tip="none" label={`${plugin.name} 닫기`} onClick={onClose} />
+    </header>
+    <div className="plugin-panel-body">
+      {view.status && <p className="plugin-status" data-tone={view.status.tone} role="status">{view.status.text}</p>}
+      {notice && <p className="setting-note" role="status">{notice}</p>}
+      <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
+      {view.document && <section className="plugin-document"><h3>{view.document.title}</h3><pre>{view.document.text}</pre></section>}
+    </div>
+  </div>;
 }
 
 // Status-bar items of running plugins. Always shown (not part of the status bar layout) so that a plugin cannot work unseen.
@@ -397,7 +406,7 @@ function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
 
 function Section({ title, hint, action, children }: { title: string; hint?: ReactNode; action?: ReactNode; children: ReactNode }) {
   return <section className="plugin-section">
-    <header><div><h4>{title}</h4>{hint && <p>{hint}</p>}</div>{action}</header>
+    {(title || hint || action) && <header><div><h4>{title}</h4>{hint && <p>{hint}</p>}</div>{action}</header>}
     {children}
   </section>;
 }
@@ -591,7 +600,7 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
         </label>;
         return <label key={field.key} className="plugin-field">
           {text}
-          {field.type === 'folder' ? <span className="plugin-folder"><input value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} /><button type="button" onClick={() => { void chooseFolder(field.label, value).then(path => { if (path) set(path); }).catch(() => {}); }}>폴더 선택</button></span>
+          {field.type === 'folder' ? <span className="plugin-folder"><input value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} /><button type="button" className="plugin-button" onClick={() => { void chooseFolder(field.label, value).then(path => { if (path) set(path); }).catch(() => {}); }}>폴더 선택</button></span>
             : field.type === 'textarea' ? <textarea rows={5} value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} />
             : field.type === 'select' && field.options
             ? <select value={value} onChange={event => set(event.target.value)}>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
@@ -612,7 +621,7 @@ function SettingsSection({ view, hide, values, setValue, busy, where, act, stand
   const rest = Boolean(hide ? view.fields.some(field => !hide.fields.has(field.key)) || view.actions.some(action => !hide.actions.has(action.id)) || view.info.some(item => !item.key || !hide.info.has(item.key)) || (view.qr && !hide.qr)
     : view.fields.length || view.actions.length || view.info.length || view.qr);
   if (!rest && !lists.length) return null;
-  return <Section title={standalone ? '작업' : '설정'} hint={standalone ? undefined : hide ? '설정 단계 밖에서 바꿀 수 있는 것입니다.' : '바꿀 수 있는 설정입니다. 바꾼 뒤 저장 버튼을 누르세요.'}>
+  return <Section title={standalone ? '' : '설정'} hint={standalone ? undefined : hide ? '설정 단계 밖에서 바꿀 수 있는 것입니다.' : '바꿀 수 있는 설정입니다. 바꾼 뒤 저장 버튼을 누르세요.'}>
     {rest && <div className="plugin-body">{parts}</div>}
     {lists.map(list => <div key={list.id} className="plugin-list-group">
       <h5>{list.title}{list.items.length > 0 && <span className="plugin-count">{list.items.length}</span>}</h5>
