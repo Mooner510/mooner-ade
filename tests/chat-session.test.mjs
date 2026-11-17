@@ -662,7 +662,7 @@ async function controlSession(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-control-'));
   const events = [], session = await openChatSession({ directory, id: 'control', cwd: directory, executable: process.execPath,
     executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: event => events.push(event) });
-  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { session, events };
 }
 
@@ -843,4 +843,32 @@ test('Claude: a chat switches between the CLI login and an API key; only the tur
   await assert.rejects(reopened.set({ auth: 'key' }), /API 키가 등록되어 있지 않습니다/);
   await assert.rejects(reopened.set({ auth: 'nope' }), /잘못된 로그인 방식/);
   await assert.rejects(reopened.set({ auth: 'login', model: 'haiku' }), /다른 설정과 함께/);
+});
+
+test('Claude: an action auto mode blocked is recorded with its call, can be allowed for the chat, and retried by message', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('blocked'); await until(() => session.state().status === 'idle');
+  const denied = events.find(event => event.kind === 'auto_denied');
+  assert.deepEqual({ kind: denied.kind, toolUseId: denied.toolUseId, tool: denied.tool, input: denied.input, reason: denied.reason, rule: denied.rule },
+    { kind: 'auto_denied', toolUseId: 'toolu_blk', tool: 'Bash', input: { command: 'git push origin main' }, reason: 'Merge Without Review', rule: 'Bash(git push origin main)' });
+  await assert.rejects(session.allowBlocked(['toolu_nope']), /찾을 수 없는 차단 기록/);
+  await session.allowBlocked(['toolu_blk'], { retry: true });
+  await until(() => session.state().status === 'idle' && events.some(event => event.kind === 'message' && event.blocks.some(block => /^allow=/.test(block.text ?? ''))));
+  const said = events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1);
+  assert.equal(said, 'allow=["Bash(git push origin main)"]', 'the CLI got the exact rule before the retry message');
+  assert.equal(events.find(event => event.kind === 'denial_allow').retry, true);
+  assert.match(events.filter(event => event.kind === 'user').at(-1).text, /직접 승인합니다[\s\S]*Bash: `git push origin main`/);
+  await assert.rejects(session.allowBlocked(['toolu_blk']), /찾을 수 없는 차단 기록/, 'a retried refusal is settled');
+});
+
+test('Claude: allowing without a retry keeps the refusal open, and a command that cannot be one exact rule is only retried by message', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('blocked'); await until(() => session.state().status === 'idle');
+  await session.allowBlocked(['toolu_blk'], { retry: false });
+  assert.equal(events.filter(event => event.kind === 'user').length, 1, 'no message was sent');
+  await session.allowBlocked(['toolu_blk'], { retry: true }); // still open: allowing alone is not an answer
+  await until(() => session.state().status === 'idle');
+  await session.send('blockedcompound'); await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'auto_denied').at(-1).rule, null, 'a compound command has no exact rule');
+  await assert.rejects(session.allowBlocked(['toolu_blk'], { retry: false }), /다시 시도"로만/);
 });

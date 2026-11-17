@@ -729,3 +729,17 @@ test('the thread says when the agent moved into or out of a worktree, a plan lim
   assert.match(line({ kind: 'settings', model: 'claude-sonnet-5-5', by: 'agent' }).text, /모델로 자동 전환되었습니다\.$/);
   assert.match(line({ kind: 'settings', model: 'gpt-5.5', by: 'agent', reason: 'highRiskCyberActivity' }).text, /보안 정책$/);
 });
+
+test('blocked actions: shown from the server record, kept when only allowed, dropped when retried or once the user speaks', () => {
+  const denied = (seq, id) => ({ seq, kind: 'auto_denied', toolUseId: id, tool: 'Bash', input: { command: 'git push' }, reason: 'Git Destructive', rule: 'Bash(git push)' });
+  let view = reduce(reduce(emptyView(), denied(1, 'a')), denied(2, 'b'));
+  assert.deepEqual(Object.keys(view.blocked), ['a', 'b']);
+  assert.equal(view.blocked.a.rule, 'Bash(git push)');
+  view = reduce(view, { seq: 3, kind: 'denial_allow', toolUseIds: ['a'], retry: false, rules: ['Bash(git push)'] });
+  assert.equal(view.blocked.a.allowed, true, 'allowed alone stays open for a retry');
+  view = reduce(view, { seq: 4, kind: 'denial_allow', toolUseIds: ['a', 'b'], retry: true, rules: [] });
+  assert.deepEqual(view.blocked, {});
+  assert.deepEqual(Object.keys(reduce(emptyView(), denied(1, 'c')).blocked), ['c']);
+  assert.deepEqual(reduce(reduce(emptyView(), denied(1, 'c')), { seq: 2, kind: 'user', text: 'hi', images: 0 }).blocked, {});
+  assert.equal(reduce(emptyView(), { seq: 1, kind: 'auto_denied' }).blocked, undefined, 'a record without a call is ignored');
+});

@@ -22,7 +22,8 @@ if (!stream) {
     process.exit(0);
   });
 } else {
-  log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog });
+  const promptAt = argv.indexOf('--append-system-prompt-file');
+  log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog, systemPrompt: promptAt >= 0 ? (() => { try { return fs.readFileSync(argv[promptAt + 1], 'utf8'); } catch { return null; } })() : undefined });
   const sid = 'fake-session-' + process.pid;
   const init = { type: 'system', subtype: 'init', session_id: sid, model: (argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null) ?? 'Model 1.0', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
   send(init);
@@ -31,6 +32,7 @@ if (!stream) {
   const asst = (content, parent) => send({ type: 'assistant', ...(parent && { parent_tool_use_id: parent }), message: { id: 'm' + Date.now() + Math.random(), content, usage: { input_tokens: 10, output_tokens: 5 } } });
   const toolResult = (id, content, is_error = false) => send({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(is_error && { is_error: true }) }] } });
   const task = (subtype, id, more = {}) => send({ type: 'system', subtype, session_id: sid, tool_use_id: id, ...more });
+  let allow = []; // permissions.allow the host put into the flag settings (apply_flag_settings)
   let asking = false; // a can_use_tool request (approval, question, plan) is waiting for its reply
   let slowRun = null; const heldSteers = new Map(); // `slow` turn in flight (ctl.json {"slowms":N}, default 4 s) and steering lines queued behind it: uuid -> line
   const bgTasks = new Map(); // task_id -> { toolUseId, timer }: `bgtask` jobs still running
@@ -41,7 +43,7 @@ if (!stream) {
       if (sub === 'set_permission_mode') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { permissionMode: m.request.mode } } });
       else if (sub === 'cancel_async_message') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { cancelled: heldSteers.delete(m.request.message_uuid) } } });
       else if (sub === 'interrupt') { send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); if (slowRun) { slowRun.abort(); setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } else if (asking) { asking = false; setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } } // a turn waiting on an approval/question ends with the interrupt's `result`, like the real CLI
-      else if (sub === 'apply_flag_settings') send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } });
+      else if (sub === 'apply_flag_settings') { allow = m.request.settings?.permissions?.allow ?? allow; send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } }); }
       else send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
       // stop_task: the CLI reports the stopped task itself, after its control reply
       if (sub === 'stop_task' && bgTasks.has(m.request.task_id)) { const t = bgTasks.get(m.request.task_id); clearTimeout(t.timer); bgTasks.delete(m.request.task_id); task('task_notification', t.toolUseId, { status: 'stopped' }); }
@@ -63,6 +65,8 @@ if (!stream) {
       send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
+    // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
+    if (text.includes('filechips')) { say(['고친 곳은 [[file:src/b.ts:2]] 와 [[file:README.md]] 이고, 폴더 [[file:src/]] 도 봤어요.', '', '- 링크 형태: [a.txt](a.txt)', '- 주소는 그대로: [문서](https://example.com/docs) 와 [[1, 2]]', '', '`[[file:code.ts]]`는 코드라 칩이 아니에요.'].join('\n')); result('chips'); return; }
     if (/\btables\b/.test(text)) { // markdown table samples: long prose cells, many columns, code/CJK, narrow, alignment
       const long = '이 문장은 일부러 아주 길게 써서 셀 안에서 자동 개행이 되는지 확인하기 위한 것입니다. 표가 좌우로 넓어지면 읽기 힘들기 때문에 컨테이너 폭에 맞춰 줄바꿈되어야 합니다.';
       say(['### 1. 긴 문장 셀', '', '| 항목 | 설명 | 비고 |', '|---|---|---|', `| 개행 | ${long} | 통과 |`, `| 영문 | ${'This is a very long English sentence that should wrap inside the cell instead of stretching the table sideways. '.repeat(2)} | ok |`, '',
@@ -123,6 +127,13 @@ if (!stream) {
     if (text.includes('uiframeform')) { say('폼입니다.\n\n```ade-ui\n' + '<div class="stack"><div class="card"><span class="label">이름</span><input id="n"><button class="primary" id="b-solo">적용</button></div><div class="row"><button id="b-cancel">취소</button><button class="primary" id="b-main">보내기</button><script>void 0</script></div></div>' + '\n```\n'); result(); return; }
     if (text.includes('adeui')) { say('UI입니다.\n\n```ade-ui\n' + "<div><h3>테스트 UI</h3><button id=\"b-send\" class=\"primary\" onclick=\"ade.send('UI에서 보낸 메시지')\">보내기</button> <button id=\"b-pre\" onclick=\"ade.prefill('UI가 채운 문장')\">입력창에 채우기</button> <button id=\"b-net\" onclick=\"fetch('https://example.com/x').then(()=>r.textContent='NET OK').catch(e=>r.textContent='NET BLOCKED')\">외부 요청</button> <button id=\"b-grow\" onclick=\"more.style.height='200px'\">키우기</button><p id=\"r\">대기</p><div id=\"more\"></div></div>" + '\n```\n'); result(); return; }
     if (text.includes('uiblock')) { say('결과입니다.\n\n```ui\n["stats",["가동률","99%","ok","30일"],["지연","24ms"]]\n```\n\n```ui\n["form","계획","보내기",["slider","seats","좌석",2,1],["radio","c","결제","월","년"]]\n```\n\n```ui\n{깨진 json\n```\n'); result(); return; }
+    if (text.includes('autoblock')) { // auto mode refuses two calls (a plain command with an exact rule, a compound one without) and says so only in the error result
+      const n = Date.now(), why = 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Merge Without Review]. If you have other tasks that do not depend on this action, continue working on those.';
+      asst([{ type: 'tool_use', id: 'toolu_ab1_' + n, name: 'Bash', input: { command: 'gh pr merge 13 --merge --delete-branch', description: 'PR 13 머지' } }]); toolResult('toolu_ab1_' + n, why, true);
+      asst([{ type: 'tool_use', id: 'toolu_ab2_' + n, name: 'Bash', input: { command: 'git push && echo done' } }]); toolResult('toolu_ab2_' + n, why.replace('Merge Without Review', 'Git Destructive'), true);
+      say('머지가 자동 모드에 막혔습니다.'); result(); return;
+    }
+    if (text.includes('다시 실행해')) { say('retry allow=' + JSON.stringify(allow)); result(); return; }
     if (text.includes('tools')) {
       asst([{ type: 'tool_use', id: 'toolu_m1', name: 'mcp__claude_ai_Claude_Docs__update', input: { title: '문서 제목', container: { kind: 'doc' } } }]);
       toolResult('toolu_m1', '{"ok":true,"url":"https://claude.ai/artifact/abc123-def"}');
