@@ -59,7 +59,7 @@ test('native terminal and composer keys preserve editing, completion and applica
       return <Panes pane={{id:'test',kind}} visible focus="test" zoom="" bus={bus} live={new Set(['test'])} cwds={{test:'/tmp'}} titles={{}}
         editor={{settings}} chat={{settings, onSettingsChange:setSettings, root:'/tmp', projectId:'fixture', call, subscribe, onTitle:noop, onState:noop, fail:console.error}} send={m => {if(m.type === 'terminal/input') inputs.push(m.data); return true;}}
         agentOf={noop} ssh={new Set()} working={new Set()} attention={{}} caches={{}}
-        onAgent={noop} onAgentEvent={noop} onAgentResolved={noop} onAgentWorking={noop} onFocus={noop} onSize={noop} onTitle={noop}
+        onAgent={noop} onAgentEvent={noop} onAgentResolved={noop} onAgentWorking={noop} onFocus={noop} onTitle={noop}
         onSplit={noop} onZoom={noop} onClose={noop} onModeChange={noop} />;
     }
     createRoot(document.getElementById('root')).render(<App />);

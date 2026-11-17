@@ -90,7 +90,7 @@ type Props = {
   // Asks whether to send anyway while the prompt cache is cold or about to be; resolves false unless the user accepts.
   confirmSend(message: string): Promise<boolean>;
   pane: Pane; visible: boolean; onLayout(pane: Pane): void; send(message: object): boolean; bus: TerminalBus; live: Set<string>; cwds: Record<string, string>; titles: Record<string, string>; agentOf(id: string): Agent | undefined; onAgent(id: string, agent: Agent): void; onAgentEvent(id: string, kind: AgentEventKind): void; onAgentResolved(id: string): void; onAgentWorking(id: string, working: boolean): void; ssh: Set<string>; working: Set<string>; attention: Record<string, AgentEventKind>; caches: Record<string, ClaudeCache>; focus: string; zoom: string;
-  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onSize(id: string, cols: number, rows: number): void; onLaunch(id: string, command: string): void; onToChat(id: string): void; onModeChange(mode: AgentMode): void; editor: EditorCtx; chat: ChatCtx;
+  onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void; onClose(id: string): void; onTitle(id: string, title: string): void; onLaunch(id: string, command: string): void; onToChat(id: string): void; onModeChange(mode: AgentMode): void; editor: EditorCtx; chat: ChatCtx;
 };
 
 export { launchers } from './launchers';
@@ -137,7 +137,7 @@ export const xtermOptions = (settings: Settings) => ({
 });
 const fontStack = (settings: Settings) => terminalFontStack(settings.terminalFont);
 
-function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, onSize, settings, chat }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'onSize' | 'chat'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
+function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live, cwds, titles, agentOf, onAgent, onAgentEvent, onAgentResolved, onAgentWorking, ssh: sshSet, working: workingSet, attention, caches, focused, zoomed, onFocus, onZoom, onSplit, onClose, onToChat, onTitle, settings, chat }: Pick<Props, 'send' | 'followUpInput' | 'confirmSend' | 'bus' | 'visible' | 'live' | 'cwds' | 'titles' | 'agentOf' | 'onAgent' | 'onAgentEvent' | 'onAgentResolved' | 'onAgentWorking' | 'ssh' | 'working' | 'attention' | 'caches' | 'onFocus' | 'onZoom' | 'onSplit' | 'onClose' | 'onToChat' | 'onTitle' | 'chat'> & { id: string; focused: boolean; zoomed: boolean; settings: Settings }) {
   const host = useRef<HTMLDivElement>(null), isSsh = sshSet.has(id), identity = agentOf(id);
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
@@ -163,7 +163,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
   const term = useRef<Terminal | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {}), layoutRef = useRef<() => void>(() => {});
-  const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onSize, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
+  const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
   const cachesRef = useRef(caches); cachesRef.current = caches;
@@ -352,7 +352,6 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       }
       const target = serverSize ?? wanted;
       if (target && (terminal.cols !== target.cols || terminal.rows !== target.rows)) terminal.resize(target.cols, target.rows);
-      callbacks.current.onSize(id, terminal.cols, terminal.rows);
       const differs = Boolean(serverSize && wanted && (serverSize.cols !== wanted.cols || serverSize.rows !== wanted.rows));
       const show = () => {
         otherTimer = 0;
