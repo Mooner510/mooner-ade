@@ -21,6 +21,7 @@ import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { ReviewPanel } from './Review';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
+import { byLastUsed, FILE_EVENT, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -34,7 +35,7 @@ export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' 
 export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
-export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
+export type WorkspaceHandle = { requestClose(): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
@@ -207,6 +208,32 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     return () => window.removeEventListener('ade:link', onLink);
   }, []);
 
+  // A file or folder clicked in a chat reply (or picked from the sidebar menu): ask how to open it (an installed editor, the file manager, or just copy the path), then do it.
+  // Like a link, only the visible project answers a click.
+  const askOpen = async (target: OpenTarget) => {
+    const { ides, fileManager } = await ideList().catch(() => ({ ides: [] as IdeInfo[], fileManager: '파일 관리자' }));
+    const last = lastIde(), where = target.line ? `${target.path}:${target.line}` : target.path, kind = target.folder ? '폴더를' : '파일을';
+    const choice = await pick(`${kind} 열까요?
+${where}`, [
+      ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, ...(ide.id === last && { detail: '마지막 사용' }) })),
+      { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기` }, { id: 'copy', label: '경로 복사' }, { id: 'cancel', label: '취소' }]);
+    if (choice === 'copy') copyText(target.path);
+    else if (choice === 'files' || choice?.startsWith('ide:')) {
+      const ide = choice === 'files' ? 'files' : choice.slice(4);
+      if (ide !== 'files') rememberIde(ide);
+      await call('ide/open', { ide, path: target.path, line: target.line, column: target.column, chatId: target.chatId });
+    }
+  };
+  const askOpenRef = useRef(askOpen); askOpenRef.current = askOpen;
+  useEffect(() => {
+    const onFile = (event: Event) => {
+      const target = (event as CustomEvent<OpenTarget>).detail;
+      if (refs.active.current && target && typeof target.path === 'string') void askOpenRef.current(target).catch(report);
+    };
+    window.addEventListener(FILE_EVENT, onFile);
+    return () => window.removeEventListener(FILE_EVENT, onFile);
+  }, [report]);
+
   // ---- tabs and pane trees ----
   const commitTabs = (next: PaneTab[]) => { refs.paneTabs.current = next; setPaneTabs(next); };
   const activePane = () => refs.paneTabs.current.find(tab => tab.id === refs.activeTab.current)?.pane ?? null;
@@ -306,6 +333,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const next = [...list]; [next[at], next[to]] = [next[to], next[at]]; commitTabs(next);
   }
   useImperativeHandle(handleRef, () => ({
+    // The sidebar's "파일 열기": pick one of the project's files by name, then choose how to open it.
+    pickFile: () => run(async () => {
+      const files = ((await call<{ files: string[] }>('files/list')).files ?? []).filter(file => !file.endsWith('/'));
+      if (!files.length) throw new Error('열 수 있는 파일이 없습니다.');
+      const chosen = await pick('열 파일을 고르세요', files.map(file => ({ id: file, label: file })));
+      if (chosen) await askOpen({ path: chosen });
+    }),
     selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
     // Reordering only changes the list order; the saved layout follows it.
     // Dropping a tab onto another folds its panes into it, side by side.

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { holdBack, INLINE, parse, stableSplit } from '../apps/web/src/markdown-parse.ts';
+import { fileHref, fileRef } from '../apps/web/src/file-ref.ts';
 
 test('a single newline inside a paragraph is kept as a line break', () => {
   assert.deepEqual(parse('첫 줄\n둘째 줄\n\n새 문단'), [{ t: 'p', text: '첫 줄\n둘째 줄' }, { t: 'p', text: '새 문단' }]);
@@ -57,4 +58,29 @@ test('a code fence indented under a list item is that item\'s code block, not te
   ] });
   assert.deepEqual(parse('1. a\n   ```sh\n   ls')[0].items[0].blocks, [{ t: 'code', lang: 'sh', code: 'ls', open: true }], 'still open while streaming');
   assert.deepEqual(parse('1. a\n2. b')[0].items.map(item => 'blocks' in item), [false, false], 'items without code carry no blocks');
+});
+
+test('[[file:…]] is an inline span, and its path, line and folder-ness are read from it', () => {
+  assert.deepEqual(spans('see [[file:src/a.ts:4]] and [x](y) and [[1,2]] and [[file:docs/a b.md]]'), ['[[file:src/a.ts:4]]', '[x](y)', '[[file:docs/a b.md]]']);
+  assert.deepEqual(fileRef('src/app.ts'), { path: 'src/app.ts', folder: false });
+  assert.deepEqual(fileRef('src/app.ts:42'), { path: 'src/app.ts', line: 42, folder: false });
+  assert.deepEqual(fileRef('src/app.ts:42:7'), { path: 'src/app.ts', line: 42, column: 7, folder: false });
+  assert.deepEqual(fileRef('./src/components/'), { path: 'src/components', folder: true });
+  assert.deepEqual(fileRef('src\\win\\a.ts'), { path: 'src/win/a.ts', folder: false });
+  assert.deepEqual(fileRef('C:\\p\\a.ts:3'), { path: 'C:/p/a.ts', line: 3, folder: false }, 'a drive colon is not a line separator');
+  assert.deepEqual(fileRef('C:12'), { path: 'C:12', folder: false }, 'one letter before the colon is a drive, not a file');
+  assert.deepEqual(fileRef('a b/c d.md#L5'), { path: 'a b/c d.md', line: 5, folder: false });
+  assert.equal(fileRef('   '), null);
+  assert.equal(fileRef('a\nb'), null);
+});
+
+test('a markdown link to a path counts as a file, a link to an address does not', () => {
+  for (const href of ['https://x.com/a.ts', 'mailto:a@b.c', '#top', '//cdn.x/a.js']) assert.equal(fileHref(href), null, href);
+  assert.deepEqual(fileHref('src/a.ts#L9'), { path: 'src/a.ts', line: 9, folder: false });
+  assert.deepEqual(fileHref('file:///C:/p/a%20b.ts'), { path: 'C:/p/a b.ts', folder: false });
+  assert.deepEqual(fileHref('C:/p/a.ts'), { path: 'C:/p/a.ts', folder: false });
+});
+
+test('a file chip still being typed is held back until its brackets close', () => {
+  for (const [text, shown] of [['a [[fi', 'a '], ['a [[file:src/a', 'a '], ['a [[file:x]', 'a '], ['a [[file:x]]', 'a [[file:x]]'], ['a [[', 'a '], ['a [[1,2', 'a [[1,2']]) assert.equal(holdBack(text), shown, text);
 });

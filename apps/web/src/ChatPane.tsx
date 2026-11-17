@@ -17,7 +17,7 @@ import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
 import { FileIcon } from './FileIcon';
-import { modeIcons as MODE_ICONS, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -30,7 +30,7 @@ export type ChatCtx = {
   call<T = any>(action: string, input?: object): Promise<T>;
   subscribe(id: string, handler: (message: any) => void): () => void;
   settings: Settings; root: string; projectId: string;
-  onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(): void;
+  onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(agent?: 'claude' | 'codex' | 'cursor'): void;
   pick(title: string, items: { id: string; label: string; detail?: string }[]): Promise<string | null>; fail(cause: unknown): void;
   // Branch: opens a copy of chat `id` up to one assistant message as a new tab.
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
@@ -346,7 +346,7 @@ const ToolCard = memo(function ToolCard({ block, result, settings, running }: { 
         : patches.length ? null : <ToolInput input={input} cwd={cwd} />}
       {patches.map((patch: any, index: number) => typeof patch.diff === 'string' ? <div className="chat-diff" key={index}><CodeBlock code={`${patch.path}\n${patch.diff}`} lang="diff" /></div> : <ChatDiff key={index} named from={patch.oldText ?? ''} to={patch.newText ?? ''} path={patch.path ?? 'edit'} settings={settings} />)}
       {plan ? null : refused && result ? (result.content.trim() === DENIED_DEFAULT ? null : <ToolResult label="거부하며 보낸 지시" isError={false} text={/the user said:\n([\s\S]*)$/.exec(result.content)?.[1].trim() ?? result.content} prose />)
-      : denial && result ? <div className="chat-tool-result blocked"><small>자동 모드가 차단함{denial.reason && ` · ${denial.reason}`}</small><p>분류기가 이 작업을 위험하다고 판단해 실행하지 않았습니다. 필요하면 권한 규칙을 추가하거나 직접 승인해 다시 요청하세요.</p><details><summary>원문</summary><pre>{clip(result.content)}</pre></details></div>
+      : denial && result ? <div className="chat-tool-result blocked"><small>자동 모드가 차단함{denial.reason && ` · ${denial.reason}`}</small><p>분류기가 이 작업을 위험하다고 판단해 실행하지 않았습니다. 허용하려면 입력창 위의 승인 카드를 쓰거나 직접 다시 요청하세요.</p><details><summary>원문</summary><pre>{clip(result.content)}</pre></details></div>
       : result && !result.isError && block.name === 'WebSearch' && webSearchResult(result.content) ? <WebResults raw={result.content} />
       : result && !result.isError && loaded(block, result.content) ? <ToolResult label="불러옴" isError={false} text={loaded(block, result.content)!} />
       : result && !(quietSuccess && !result.isError) && <ToolResult label={result.isError ? block.name === 'AskUserQuestion' ? '건너뜀' : '오류' : block.name === 'AskUserQuestion' ? '답변' : '결과'} isError={result.isError} text={mcpTool(block.name) ? prettyResult(result.content) : result.content} />}
@@ -869,6 +869,32 @@ const writeLabel = (file: string, content: string, exists?: boolean) => {
   const lines = content ? content.replace(/\n+$/, '').split('\n').length : 0;
   return [file, exists === true ? '덮어쓰기' : exists === false ? '새 파일' : '', `${lines.toLocaleString()}줄`].filter(Boolean).join(' · ');
 };
+// What auto mode refused since the user's last message, with the choice the CLI's /permissions "Recently blocked" tab gives: allow for this chat (Enter), or allow and
+// have the agent run it again (r). Rows are picked by checkbox (all by default); the server applies what it recorded for each refusal, the page only names them.
+function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: string[], retry: boolean): Promise<unknown> }) {
+  const cwd = useContext(CwdContext), [hidden, setHidden] = useState<ReadonlySet<string>>(new Set()), [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set()), [busy, setBusy] = useState(false);
+  const shown = items.filter(item => !hidden.has(item.toolUseId)), chosen = shown.filter(item => !skipped.has(item.toolUseId));
+  if (!shown.length) return null;
+  const toggle = (id: string) => setSkipped(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
+  const run = async (retry: boolean) => { setBusy(true); try { await onAllow(chosen.map(item => item.toolUseId), retry); } finally { setBusy(false); } };
+  const canRule = chosen.length > 0 && chosen.every(item => item.rule) && chosen.some(item => !item.allowed);
+  return <div className="chat-approval chat-blocked" role="region" aria-label="자동 모드가 차단한 작업">
+    <header><Icon name="block" size={15} /><strong>자동 모드가 작업 {shown.length}개를 차단했습니다</strong><span>분류기가 위험하다고 판단해 실행하지 않았습니다</span></header>
+    <div className="chat-approval-body">
+      <ul className="chat-blocked-list">{shown.map(item => <li key={item.toolUseId}>
+        <label><input type="checkbox" checked={!skipped.has(item.toolUseId)} disabled={busy} onChange={() => toggle(item.toolUseId)} />
+          <span className="chat-blocked-main"><b>{toolLabel(item.tool)}</b><code title={toolSummary(item.tool, item.input, cwd)}>{toolSummary(item.tool, item.input, cwd)}</code></span></label>
+        <small>{item.reason ? `사유 · ${item.reason}` : '분류기가 사유를 알려 주지 않았습니다'}{item.allowed ? ' · 허용됨, 아직 다시 시도하지 않음' : item.rule ? ` · 허용 규칙 ${item.rule}` : ' · 규칙으로 만들 수 없어 메시지로만 승인합니다'}</small>
+      </li>)}</ul>
+      <p className="chat-blocked-note">승인은 이 채팅에서만 적용되고 설정 파일에는 저장되지 않습니다.</p>
+    </div>
+    <footer>
+      <button type="button" className="secondary approval-explain" disabled={busy} onClick={() => setHidden(current => new Set([...current, ...shown.map(item => item.toolUseId)]))} title="이 카드를 닫습니다. 차단은 그대로입니다">무시</button>
+      <button type="button" disabled={busy || !canRule} onClick={() => void run(false)} title={canRule ? '이 채팅에서만 허용합니다. 다시 실행은 직접 요청하세요' : '규칙으로 만들 수 없는 작업이 있어 "승인하고 다시 시도"만 쓸 수 있습니다'}>승인만</button>
+      <button type="button" className="primary" disabled={busy || !chosen.length} onClick={() => void run(true)} title="이 채팅에서 허용하고, 에이전트에게 다시 실행하라고 알립니다">승인하고 다시 시도</button>
+    </footer>
+  </div>;
+}
 function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
   const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
   const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
@@ -1518,6 +1544,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
   const interrupt = (sendSteers = false) => void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail);
+  const allowBlocked = (toolUseIds: string[], retry: boolean) => ctx.call('chat/allow-blocked', { id, toolUseIds, retry }).catch(ctx.fail);
   const stopTask = (toolUseId: string) => void ctx.call('chat/stop-task', { id, toolUseId }).catch(ctx.fail);
   function resume() {
     if (resuming) return;
@@ -1662,11 +1689,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {away && <button type="button" className="chat-jump" title="맨 아래로" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
+      {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
       {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
         {agent === 'cursor' && busy && <button type="button" onClick={() => interrupt(false)}>현재 응답을 중단하고 대기 메시지 보내기</button>}
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
-      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={ctx.onOpenSettings} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
+      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
       <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-feedback-region="채팅 입력창">
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>

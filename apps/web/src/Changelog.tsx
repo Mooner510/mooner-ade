@@ -28,8 +28,22 @@ const ago = (date: string, time: string, now = Date.now()) => {
 };
 // Versions are plain x.y.z (beta releases have no entry), so a numeric compare is enough.
 const newer = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }) > 0;
-// Same rule as the red dots in the window: some version has never been opened (the sidebar button shows a dot for it).
-export const hasUnreadChangelog = () => { const seen = seenVersion(), viewed = readViewed(); return entries.some(item => !viewed.includes(item.version) && !(seen && !newer(item.version, seen))); };
+// Red dots mark only the versions this app picked up in its latest update: after the version it ran before, up to the version it runs now.
+// LAST is the version that ran last time; FROM is the version before the most recent update. A beta counts as just before its release (0.5.9-beta2 -> 0.5.9 is new).
+const LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
+const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch {} };
+const parse = (version: string) => { const [core, pre] = version.split(/-(.*)/); return { nums: core.split('.').map(part => parseInt(part, 10) || 0), pre: Boolean(pre) }; };
+const compare = (a: string, b: string) => { const x = parse(a), y = parse(b); for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; } return Number(y.pre) - Number(x.pre); };
+// Run once at startup with the real app version (the desktop app's; the bundle's newest entry in a plain browser). Records an update when it is newer than the last run.
+export const syncChangelogVersion = (current: string) => {
+  const last = read(LAST) ?? seenVersion();
+  if (!last) { write(LAST, current); write(FROM, current); return; }
+  if (compare(current, last) > 0) { write(FROM, last); write(LAST, current); } else if (read(LAST) === null) write(LAST, last);
+};
+const isFresh = (version: string) => { const from = read(FROM), last = read(LAST); return Boolean(from) && compare(version, from!) > 0 && (!last || compare(version, last) <= 0); };
+// Same rule as the red dots in the window: some version of the latest update has never been opened (the sidebar button shows a dot for it).
+export const hasUnreadChangelog = () => { const viewed = readViewed(); return entries.some(item => !viewed.includes(item.version) && isFresh(item.version)); };
 
 // The sidebar lists the versions; one version is shown at a time. A version never opened gets a red dot; opening it clears the dot. Closing the window still marks the latest version as seen for the 새 소식 tag.
 export function Changelog({ onClose }: { onClose(): void }) {
@@ -37,7 +51,7 @@ export function Changelog({ onClose }: { onClose(): void }) {
   const [selected, setSelected] = useState(entries[0]?.version);
   const [viewed, setViewed] = useState<string[]>(readViewed);
   const entry = entries.find(item => item.version === selected) ?? entries[0];
-  const isNew = (version: string) => !viewed.includes(version) && !(seen && !newer(version, seen));
+  const isNew = (version: string) => !viewed.includes(version) && isFresh(version);
   // Opening a version (including the one shown first) marks it viewed, so its red dot goes away.
   const view = (version: string) => {
     setSelected(version);
