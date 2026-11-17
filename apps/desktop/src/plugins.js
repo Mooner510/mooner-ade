@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createPluginManager, createPluginStore, probeMcpTools } from './plugin-core.js';
+import { createHubClient } from './hub-client.js';
 import { createGithub, githubClientId, machineAccounts, machineToken } from './plugin-updates.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
@@ -79,13 +80,16 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     ...(testApi && { api: testApi, web: testApi }),
     credential: async () => store.state.github ? { token: store.state.github.token, via: 'ade' } : testApi ? null : machineToken({ account: store.state.ghAccount })
   });
-  // Only GitHub's own pages are opened from here.
-  const openExternal = url => { if (/^https:\/\/github\.com\//.test(url)) void shell.openExternal(url); };
+  // MoonerADE Hub (hub-client.js): the plugin market and the updates of plugins whose plugin.json says `source.hub`. Its address is
+  // ADE_HUB_URL or the default Hub, never something a plugin names.
+  const hub = createHubClient({ store });
+  // Only GitHub's own pages and the Hub's sign-in page are opened from here.
+  const openExternal = url => { if (/^https:\/\/github\.com\//.test(url) || (hub.url && url.startsWith(`${hub.url}/enroll`))) void shell.openExternal(url); };
   const firstCheckMs = Number(process.env.ADE_PLUGIN_UPDATE_TEST_FIRST_MS);
   const manager = createPluginManager({
     dir, builtinDir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
     onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp,
-    github, clientId: githubClientId(), openExternal,
+    github, hub, clientId: githubClientId(), openExternal,
     probeCredential: async () => {
       if (testApi) return null;
       const accounts = await machineAccounts();
@@ -118,10 +122,16 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     cancelSignIn: () => manager.cancelSignIn(),
     probeGithub: () => manager.probeGithub(),
     selectGithubAccount: login => manager.selectGithubAccount(typeof login === 'string' ? login : ''),
-    // The plugin's releases page on GitHub (from its approved plugin.json, never from the page).
+    // MoonerADE Hub: sign in with the browser, the market list, installing from it.
+    signInHub: () => manager.signInHub(),
+    cancelHubSignIn: () => manager.cancelHubSignIn(),
+    signOutHub: () => manager.signOutHub(),
+    hubCatalog: options => manager.hubCatalog({ force: options?.force === true }),
+    hubInstall: id => manager.installFromHub(String(id)),
+    // The plugin's releases page on GitHub (from its approved plugin.json, never from the page). A Hub plugin has no page to open.
     openSource: async id => {
-      const repo = manager.snapshot().plugins.find(plugin => plugin.id === String(id))?.update?.source?.github;
-      if (repo) openExternal(`https://github.com/${repo}/releases`);
+      const source = manager.snapshot().plugins.find(plugin => plugin.id === String(id))?.update?.source;
+      if (source?.kind === 'github' && source.github) openExternal(`https://github.com/${source.github}/releases`);
       return manager.snapshot();
     },
     // Where a personal access token is made (read-only access to chosen repositories).

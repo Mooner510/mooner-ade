@@ -72,6 +72,23 @@ test('an update asking for more than the installed version is listed for review'
   assert.match(review[1], /github\.com\/o\/r → github\.com\/evil\/r/);
 });
 
+test('moving an update source between GitHub, the Hub and nowhere is listed for review, also with both named', () => {
+  const base = { id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'host.js' };
+  const github = validManifest({ ...base, source: { github: 'o/r' } }), hub = validManifest({ ...base, source: { hub: true } }), both = validManifest({ ...base, source: { github: 'o/r', hub: true } }), none = validManifest(base);
+  assert.deepEqual(updateReview(hub, { ...hub, version: '2.0.0' }), [], 'the same Hub');
+  assert.deepEqual(updateReview(both, { ...both, version: '2.0.0' }), []);
+  assert.match(updateReview(github, hub)[0], /github\.com\/o\/r → MoonerADE Hub/);
+  assert.match(updateReview(github, both)[0], /github\.com\/o\/r → MoonerADE Hub/, 'with the Hub named, it is the place updates come from');
+  assert.match(updateReview(hub, github)[0], /MoonerADE Hub → github\.com\/o\/r/);
+  assert.match(updateReview(hub, none)[0], /MoonerADE Hub → 없음/);
+  assert.match(updateReview(none, hub)[0], /없음 → MoonerADE Hub/);
+  assert.deepEqual(updateReview(both, hub), [], 'dropping the GitHub fallback keeps the place');
+  assert.deepEqual(validSource({ hub: true }, 'demo'), { hub: true });
+  assert.deepEqual(validSource({ github: 'o/r', asset: 'demo.zip', hub: true }, 'demo'), { github: 'o/r', asset: 'demo.zip', hub: true });
+  assert.throws(() => validSource({ hub: 1 }, 'demo'), /source\.hub/);
+  assert.throws(() => validSource({ hub: true, asset: 'demo.zip' }, 'demo'), /source\.github/);
+});
+
 test('saved update modes and the GitHub account are checked when read', () => {
   const state = validPluginState({ version: 1, updates: { demo: { mode: 'auto', notified: 'v1.2.0' }, bad: { mode: 'sometimes' }, 'Bad Id': { mode: 'auto' } }, github: { token: 'ghp_' + 'a'.repeat(36), login: 'someone', via: 'oauth', at: 5 } });
   assert.deepEqual(state.updates, { demo: { mode: 'auto', notified: '1.2.0' } });
@@ -344,7 +361,7 @@ test('plugins are told which features this MoonerADE has, and a list button send
   const env = setup(t, { latest: { version: '1.0.0' } });
   approve(env);
   const child = env.hosts[0].child;
-  assert.deepEqual(child.sent[0].features, ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates']);
+  assert.deepEqual(child.sent[0].features, ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub']);
   child.emit('message', { type: 'ready' });
   const pending = env.manager.action('demo', 'remove', { device: '1' }, 'dev-1');
   const sent = child.sent.at(-1);

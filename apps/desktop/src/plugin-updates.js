@@ -59,14 +59,26 @@ export const isNewer = (latest, current) => Boolean(parseVersion(latest)) && com
 const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 // The asset's file name; `{version}` stands for the version when every release names the zip after it.
 const ASSET = /^(?:[\w.+-]|\{version\}){1,100}$/;
+// `hub: true` says the plugin is also published on MoonerADE Hub (hub-client.js); the Hub then is where its updates come from.
+// The Hub's address is the app's own setting (ADE_HUB_URL), never something a manifest names, so a manifest cannot send the
+// Hub login anywhere else. `github` may stay next to it for an older MoonerADE, which ignores `hub` and keeps using GitHub.
 export function validSource(value, id) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('source 항목이 올바르지 않습니다.', 'PLUGIN_INVALID');
+  if (value.hub !== undefined && typeof value.hub !== 'boolean') throw fail('source.hub는 true 또는 false여야 합니다.', 'PLUGIN_INVALID');
+  const hub = value.hub === true;
+  if (hub && value.github === undefined && value.asset === undefined) return { hub: true };
   const repo = typeof value.github === 'string' ? value.github.trim() : '';
-  if (!REPO.test(repo) || /\/\.{1,2}$/.test(repo)) throw fail('source.github는 "소유자/저장소" 모양이어야 합니다.', 'PLUGIN_INVALID');
+  if (!REPO.test(repo) || /\/\.{1,2}$/.test(repo)) throw fail(hub ? 'source.github는 "소유자/저장소" 모양이어야 합니다(Hub만 쓰려면 github와 asset을 빼세요).' : 'source.github는 "소유자/저장소" 모양이어야 합니다.', 'PLUGIN_INVALID');
   const asset = value.asset === undefined ? `${id}.zip` : value.asset;
   if (typeof asset !== 'string' || !ASSET.test(asset) || !asset.endsWith('.zip') || asset.startsWith('.')) throw fail('source.asset은 .zip 파일 이름이어야 합니다.', 'PLUGIN_INVALID');
-  return { github: repo, asset };
+  return { github: repo, asset, ...(hub && { hub: true }) };
 }
+// Where a plugin's updates come from: the Hub wins when the manifest declares it, else the GitHub repository, else nowhere.
+export const sourceKind = source => source?.hub === true ? 'hub' : source?.github ? 'github' : null;
+// Two sources are the same place when this is equal (what the update review compares).
+export const sourceKey = source => { const kind = sourceKind(source); return kind === 'hub' ? 'hub' : kind === 'github' ? `github:${source.github}` : null; };
+// How a source reads in a dialog or on the page.
+export const sourceLabel = source => { const kind = sourceKind(source); return kind === 'hub' ? 'MoonerADE Hub' : kind === 'github' ? `github.com/${source.github}` : '없음'; };
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Which asset of a release is the plugin, and the version its name carries when the name has `{version}`.
 export function matchAsset(template, name) {
@@ -142,8 +154,22 @@ export function parseSums(text) {
 }
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 const digestOf = asset => (/^sha256:([a-f0-9]{64})$/.exec(String(asset?.digest ?? '')) ?? [])[1] ?? null;
-const VIA_LABEL = { ade: 'MoonerADE에 연결한 GitHub 계정', gh: '이 PC의 gh 로그인', git: '이 PC의 git 로그인' };
+const VIA_LABEL = { ade: 'MoonerADE에 연결한 GitHub 계정', gh: '이 PC의 gh 로그인', git: '이 PC의 git 로그인', hub: 'MoonerADE Hub 로그인' };
 export const credentialLabel = via => VIA_LABEL[via] ?? '로그인 없이';
+
+// A response body, refused as soon as it is (or turns out to be) larger than `max`.
+export async function readBody(response, name, max = MAX_ASSET) {
+  const length = Number(response.headers.get('content-length'));
+  if (Number.isFinite(length) && length > max) throw fail(`${name}이(가) 너무 큽니다.`, 'TOO_LARGE');
+  const parts = [];
+  let size = 0;
+  for await (const chunk of response.body ?? []) {
+    size += chunk.length;
+    if (size > max) throw fail(`${name}이(가) 너무 큽니다.`, 'TOO_LARGE');
+    parts.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(parts);
+}
 
 // credential() resolves { token, via } or null (then requests go without Authorization: public repositories only).
 // `api` and `web` are replaceable for tests (a fake GitHub on this machine).
@@ -168,18 +194,6 @@ export function createGithub({ api = GITHUB_API, web = GITHUB_WEB, credential = 
       ? fail(`${repo ?? '저장소'}를 찾지 못했습니다. ${credentialLabel(via)}에 이 저장소를 볼 권한이 있는지 확인하세요.`, 'NOT_FOUND')
       : fail(`${repo ?? '저장소'}를 찾지 못했습니다. 비공개 저장소라면 설정 → 플러그인 → GitHub 연결에서 계정을 연결하세요.`, 'NOT_FOUND');
     return fail(`GitHub에서 ${what}하지 못했습니다 (HTTP ${response.status}).`, 'HTTP');
-  }
-  async function readBody(response, name, max = MAX_ASSET) {
-    const length = Number(response.headers.get('content-length'));
-    if (Number.isFinite(length) && length > max) throw fail(`${name}이(가) 너무 큽니다.`, 'TOO_LARGE');
-    const parts = [];
-    let size = 0;
-    for await (const chunk of response.body ?? []) {
-      size += chunk.length;
-      if (size > max) throw fail(`${name}이(가) 너무 큽니다.`, 'TOO_LARGE');
-      parts.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(parts);
   }
   async function json(url, auth, what, via, repo) {
     const response = await request(url, { headers: { ...headers(auth), Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(timeoutMs) }, what);

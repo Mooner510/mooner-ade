@@ -20,7 +20,7 @@
 | `ADE_PTY_LINGER_MS` / `ADE_PTY_FIRST_OWNER_MS` | `120000` / `60000` | PTY 호스트가 서버 없이 터미널을 유지하는 시간, 첫 연결을 기다리는 시간. 테스트용 |
 | `ADE_PLUGIN_NODE` | 없음 | 플러그인 MCP 서버가 쓸 Node 경로. ADE가 넘김. 직접 설정하지 않음 |
 | `ADE_CHAT_ID` / `ADE_PROJECT_ID` / `ADE_CHAT_AGENT` | 없음 | 채팅 전용 내장 플러그인([에이전트 버스](docs/AGENT_BUS.md))이 자기 채팅을 식별하도록 ADE가 넣는 값. 터미널에는 주지 않음. 직접 설정하지 않음 |
-| `ADE_HUB_URL` | `https://ade-hub.mooner510.kr` | 로그인 없이 보내는 피드백([피드백 요청](docs/ARCHITECTURE.md#피드백-요청))이 가는 MoonerADE Hub 주소. 서버가 읽습니다 |
+| `ADE_HUB_URL` | `https://ade-hub.mooner510.kr` | 로그인 없이 보내는 피드백([피드백 요청](docs/ARCHITECTURE.md#피드백-요청))과 [플러그인 마켓·Hub 업데이트](docs/PLUGINS.md#hub-마켓)가 가는 MoonerADE Hub 주소. 서버와 앱 main이 읽습니다. 마켓은 https 주소(개발 중에는 이 PC의 http)만 받습니다 |
 | `ADE_FEEDBACK_ANONYMOUS` | 켜짐 | `0`이면 로그인 없는 피드백 제출을 끕니다. 제출 가능한 플러그인 계정이 없으면 피드백 제출을 할 수 없게 됩니다 |
 | `ADE_NVIDIA_CHECK` | 켜짐 | Windows에서 시작 후 GPU 프로세스에 NVIDIA RTX HDR 모듈(`nvppex.dll`)이 붙었는지 확인하고, 붙었으면 드라이버 설정으로 끄자고 묻습니다. `0`이면 확인하지 않습니다 |
 | `ELECTRON_NO_ATTACH_CONSOLE` | 없음 | Windows에서 Electron은 자신을 띄운 PowerShell·cmd 창의 콘솔에 붙어, 그 창을 닫으면 앱도 같이 종료됩니다. 이 변수가 있으면 붙지 않습니다. 업데이트 도우미와 `install-windows.ps1`이 새 앱을 띄울 때만 넣고, 콘솔에 붙은 채 시작한 앱은 이 변수를 넣은 복사본으로 다시 시작하며, 앱은 시작하자마자 환경에서 지워 터미널에는 전달되지 않습니다. 직접 설정하지 않습니다 |

@@ -99,20 +99,25 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
       <span className="icon material-symbols-outlined usage-caret" style={{ fontSize: 14 }} aria-hidden="true">expand_less</span>
     </button>
     <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="사용량 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
-      <strong>이 채팅은 무엇으로 실행할까요</strong>
+      <span className="usage-head"><strong>이 채팅은 무엇으로 실행할까요</strong><span className="usage-sub">요금·한도를 어디에 쓸지 고릅니다</span></span>
       {claude ? <>
         <span className="usage-options" role="radiogroup" aria-label="로그인 방식">
           <button type="button" role="radio" aria-checked={!key} className="usage-option plan" disabled={locked && key} onClick={() => choose('login')}>
-            <b>Plan Usage</b><small>CLI 로그인 플랜 · 5시간·주간 한도를 씁니다</small></button>
+            <span className="usage-radio" aria-hidden="true" />
+            <span className="usage-option-body"><b>Plan Usage</b><small>CLI 로그인 플랜 · 5시간·주간 한도를 씁니다</small></span>
+          </button>
           <button type="button" role="radio" aria-checked={key} className="usage-option api" disabled={(locked && !key) || (!key && keyReady === false)} onClick={() => choose('key')}>
-            <b>API Usage</b><small>API 키 · 토큰만큼 요금이 청구됩니다</small></button>
+            <span className="usage-radio" aria-hidden="true" />
+            <span className="usage-option-body"><b>API Usage</b><small>API 키 · 토큰만큼 요금이 청구됩니다</small></span>
+            {!key && keyReady === false && <span className="usage-badge">키 미등록</span>}
+          </button>
         </span>
-        {key && <span className="usage-spent">이 채팅에서 API로 보낸 턴의 요금 <b>${dollars(spent)}</b></span>}
-        {!key && keyReady === false && <span className="usage-note warn">API 키가 등록되어 있지 않습니다. 설정 → AI 툴에서 등록하세요.</span>}
-        {locked && <span className="usage-note">응답이 끝난 뒤 바꿀 수 있습니다.</span>}
-        <span className="usage-note">바꾼 뒤 메시지를 보낼 때, 이미 대화가 오간 채팅이면 한 번 확인합니다. 두 방식은 프롬프트 캐시를 공유하지 않아 대화 전체를 다시 처리하기 때문입니다.</span>
-      </> : <span className="usage-note">이 에이전트의 로그인 방식은 채팅을 시작할 때 정해집니다.</span>}
-      {onSettings && <button type="button" className="usage-panel-action" onClick={() => { pop.current?.hidePopover(); onSettings(); }}>설정 열기</button>}
+        {key && <span className="usage-spent"><span>이 채팅에서 API로 보낸 턴의 요금</span><b>${dollars(spent)}</b></span>}
+        {locked && <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">lock</span>응답이 끝난 뒤 바꿀 수 있습니다.</span>}
+        <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>전환하면 기존 캐시를 쓸 수 없어 비용이 더 발생할 수 있습니다.</span>
+      </> : <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>이 에이전트의 로그인 방식은 채팅을 시작할 때 정해집니다.</span>}
+      {onSettings && <button type="button" className={`usage-panel-action${!key && keyReady === false && claude ? ' primary' : ''}`} onClick={() => { pop.current?.hidePopover(); onSettings(); }}>
+        <span className="icon material-symbols-outlined" aria-hidden="true">{!key && keyReady === false && claude ? 'key' : 'settings'}</span>{!key && keyReady === false && claude ? 'API 키 등록하기' : '설정 열기'}</button>}
     </span>
   </>;
 }

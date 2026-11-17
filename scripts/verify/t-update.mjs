@@ -1,5 +1,5 @@
 // macOS: the whole self-update of a packaged build, isolated. Needs `pnpm package` first (apps/desktop/dist/MoonerADE.app).
-//   VERIFY_OUT=$(mktemp -d -t ade-verify-out) node scripts/verify/t-update.mjs [--old-progress-window] [--windowed]
+//   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update.mjs [--old-progress-window] [--windowed]
 // A copy of the build, renamed 0.0.1, runs from a temp folder with its own profile (ADE_USER_DATA_DIR), data, HOME and a fake release
 // (ADE_UPDATE_URL) offering 9.9.9 as GitHub would (app-only zip + manifest + full zip, sha256 digests). ADE_UPDATE_ANSWER takes
 // "지금 업데이트" for it. The main window goes full screen (unless --windowed) before the update quits the app.
@@ -7,12 +7,12 @@
 // becomes 9.9.9 and starts again under the same isolated profile, no new crash report names the temp folder, no Keychain prompt
 // (SecurityAgent) appeared, the real profile's lock was not touched. --old-progress-window puts back the separate progress window
 // (the code before the fix) in the old copy, to reproduce the crash.
-// Leaves env.json { temp } in VERIFY_OUT; the processes it started are stopped here, cleanup-ui.mjs removes the folders.
+// Works in VERIFY_OUT/update-* and leaves env.json { temp } there; the processes it started are stopped here, `session.mjs down <세션>` removes the folder.
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ROOT, S, WebSocket, sleep } from './lib.mjs';
 
@@ -22,7 +22,7 @@ const dist = join(ROOT, 'apps/desktop/dist/MoonerADE.app');
 if (!existsSync(dist)) { console.error('먼저 pnpm package를 실행하세요.'); process.exit(2); }
 if (existsSync(join(S, 'env.json'))) { console.error(`${S}에 이미 다른 세션이 있습니다. 새 VERIFY_OUT을 쓰세요.`); process.exit(2); }
 
-const temp = realpathSync(mkdtempSync(join(tmpdir(), 'ade-verify-update-')));
+const temp = realpathSync(mkdtempSync(join(S, 'update-')));
 writeFileSync(join(S, 'env.json'), JSON.stringify({ temp, startedAt: Date.now() }));
 const dirs = Object.fromEntries(['install', 'next', 'release', 'user', 'data', 'home'].map(name => [name, join(temp, name)]));
 for (const dir of Object.values(dirs)) mkdirSync(dir);
