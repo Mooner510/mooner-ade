@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { terminalAgentCommand, terminalSessionShell, readTerminalSession, recordClaudeSession, codexSession, syncClaudeSession, seedTerminalSession } from '../apps/local-server/src/terminal-sessions.js';
 
 const first = '11111111-1111-4111-8111-111111111111', second = '22222222-2222-4222-8222-222222222222';
@@ -161,4 +162,35 @@ test('PowerShell sessions bind Ctrl+D (PSReadLine leaves it unbound on Windows) 
     assert.match(init, /Set-PSReadLineKeyHandler -Chord 'Ctrl\+d' -Function DeleteCharOrExit/);
     assert.match(init, /Where-Object \{ \$_\.Key -eq 'Ctrl\+d' \}/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// `claude update` once failed in an ADE terminal: the session flags in front of it included the variadic --mcp-config, which took `update` as a config file name.
+test('claude subcommands run without the session flags, a prompt still gets them (bash)', { skip: process.platform === 'win32' ? false : !existsSync('/bin/bash') }, async t => {
+  const root = await directory(t), bin = path.join(root, 'bin');
+  await mkdir(bin);
+  for (const agent of ['claude', 'codex']) await writeFile(path.join(bin, agent), '#!/bin/sh\necho "$0 $*" | sed "s|.*/||"\n', { mode: 0o700 });
+  const shell = await terminalSessionShell(root, 'sub', 'bash');
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn('bash', [...shell.args, '-ic', 'claude update; claude mcp list; claude "fix it"'], { env: { ...process.env, ...shell.env, HOME: root, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+    let out = '', err = '';
+    child.stdout.on('data', chunk => out += chunk);
+    child.stderr.on('data', chunk => err += chunk);
+    child.on('error', reject);
+    child.on('exit', code => code ? reject(new Error(err)) : resolve(out));
+  });
+  const lines = output.trim().split('\n').map(line => line.trim());
+  assert.equal(lines[0], 'claude update');
+  assert.equal(lines[1], 'claude mcp list');
+  assert.match(lines[2], /^claude --settings .*claude-settings\.json fix it$/);
+});
+
+test('the PowerShell claude function skips the session flags for subcommands but codex keeps its own', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ade-ps-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const shell = await terminalSessionShell(root, 'ps2', '/usr/bin/pwsh');
+  const init = await readFile(shell.args.at(-1).match(/^\. ['"]?(.+?)['"]?$/)[1], 'utf8');
+  const claude = init.split('\n').find(line => line.startsWith('function global:claude'));
+  assert.match(claude, /\$args\[0\] -in @\('update','upgrade'/);
+  assert.match(claude, /\} else \{ & .*--settings .* @args \} \}$/);
+  assert.match(init.split('\n').find(line => line.startsWith('function global:codex')), /^function global:codex \{ & \(Get-Command codex .*--no-daemon/);
 });
