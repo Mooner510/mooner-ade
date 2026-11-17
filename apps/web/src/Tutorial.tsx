@@ -12,12 +12,13 @@ import { useShells, shellLabel } from './shells';
 import { launchersFor, type AgentMode } from './launchers';
 import { CacheTimer, Launchers, Splitter, chatAgent, terminalTheme, xtermOptions } from './Panes';
 import { QuickInput, type QuickRequest } from './QuickInput';
-import { ReviewPanel } from './Review';
+import { GitLog } from './GitLog';
+import { demoGit } from './git-demo';
 import { SettingsModal } from './Settings';
 import { Setup } from './Setup';
 import { Logo } from './Splash';
 import { playSound } from './sound';
-import { AppVersion, type GitState } from './views';
+import { AppVersion, type Ask } from './views';
 import { matches, showKeys as showDefaultKeys } from './Workspace';
 import { appKey, appKeyDefs, showAppKey } from './shortcuts';
 import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPrompt, stepDone, steps, type Action, type Agent, type Tour, type TourProject, type TourTab } from './onboarding-steps';
@@ -30,17 +31,15 @@ import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPr
 type Props = { settings: Settings; onSettings(next: Settings): void; setup: boolean; onDone(skipped?: boolean): void };
 
 const agentOf = (command: string): Agent | '' => command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : command === 'cursor-agent' ? 'cursor' : '';
-const before = "import express from 'express';\n\nconst app = express();\nconst port = 3000;\n\napp.get('/health', (_req, res) => res.send('ok'));\n\napp.listen(port, () => console.log(`listening on :${port}`));\n";
-const after = before.replace('const port = 3000;', 'const port = Number(process.env.PORT ?? 3000);');
 const summary: [string, string][] = [
   ['새 탭', 'mod+shift+t'], ['탭 번호로 이동', 'alt+1'], ['좌우 분할', 'mod+shift+backslash'], ['상하 분할', 'mod+alt+backslash'],
-  ['Pane 최대화', 'mod+shift+enter'], ['변경사항(Diff) 패널', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1']
+  ['Pane 최대화', 'mod+shift+enter'], ['Git 커밋 그래프', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1']
 ];
 const features: [Parameters<typeof Icon>[0]['name'], string, string][] = [
   ['chat', 'Chat과 CLI를 자유롭게', '같은 대화를 대화 화면과 터미널로 오가요'],
   ['folder', '프로젝트별 작업 공간', '프로젝트마다 에이전트가 멈추지 않고 돌아가요'],
   ['bell', '놓치지 않는 알림', '작업을 마치거나 승인을 기다리면 바로 알려 줘요'],
-  ['diff', '변경사항 한눈에', '에이전트가 고친 코드를 그 자리에서 비교해요']
+  ['graph', 'Git 그래프 한눈에', '브랜치·체크아웃·머지·리베이스를 그래프에서 바로 해요']
 ];
 // Coach text: **word** is emphasised and {token}s draw the app's own markers in their real colours, so a line reads at a glance.
 function Rich({ text }: { text: string }) {
@@ -74,7 +73,7 @@ const paletteItems = (mode: AgentMode): { id: string; label: string; keys?: stri
   { id: 'splitDown', label: '아래로 분할', action: { type: 'split', dir: 'column' } },
   { id: 'zoom', label: 'Pane 최대화 전환', keys: 'mod+shift+enter', action: { type: 'zoom' } },
   { id: 'focusNext', label: '다음 pane으로 이동', keys: 'alt+shift+]', action: { type: 'focusBy', step: 1 } },
-  { id: 'review', label: '변경사항(Diff) 패널 전환', keys: 'mod+shift+g', action: { type: 'diff' } },
+  { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', keys: 'mod+shift+g', action: { type: 'diff' } },
   { id: 'settings', label: '설정 열기', keys: 'mod+,', action: { type: 'settings', open: true } },
   { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', action: { type: 'projectCycle', step: 1 } },
   { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', action: { type: 'projectCycle', step: -1 } },
@@ -386,8 +385,9 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
   };
 
   // ---- one workspace per project, as in the app ----
-  const git = useMemo<GitState>(() => tour.changes ? { branch: 'main', changes: [{ path: 'src/server.ts', status: ' M', added: 1, deleted: 1 }], additions: 1, deletions: 1 } : { branch: 'main', changes: [], additions: 0, deletions: 0 }, [tour.changes]);
-  const loadDiff = useCallback(async () => ({ original: before, modified: tour.changes ? after : before }), [tour.changes]);
+  // The Git drawer runs on a sample history; its actions only explain what they would do.
+  const gitDemo = useMemo(() => ({ ...demoGit(), note }), []);
+  const gitAsk = useMemo<Ask>(() => ({ input: async () => { note('실제 앱에서는 여기서 값을 입력합니다.'); return null; }, confirm: async () => { note('실제 앱에서는 여기서 확인을 묻습니다.'); return false; } }), []);
   const request = useMemo<QuickRequest>(() => {
     const items = paletteItems(mode);
     return { kind: 'pick', title: '명령 팔레트', items: items.map(item => ({ id: item.id, label: item.label, keys: item.keys && showKeys(item.keys) })),
@@ -410,8 +410,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         <span className="drag-space" />
         <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
         <div className="bar-tools" role="group" aria-label="패널과 설정">
-          <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`변경사항 Diff (${showKeys('mod+shift+g')})`} aria-label="변경사항 Diff 패널" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
-            <Icon name="diff" />{changes > 0 && <span className="diffstat"><span>{changes}</span><ins>+1</ins><del>−1</del></span>}</button>
+          <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`Git 커밋 그래프 (${showKeys('mod+shift+g')})`} aria-label="Git 커밋 그래프" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
+            <Icon name="graph" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
           <button className="bar-button" title="피드백 요청" aria-label="피드백 요청" onClick={() => note('실제 앱에서는 여기서 화면을 캡처해 무너에이드 개발자에게 의견을 보낼 수 있어요.')}><Icon name="feedback" /></button>
           <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={() => dispatch({ type: 'settings', open: true })} />
         </div>
@@ -424,10 +424,10 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
               : <Launchers mode={mode} onModeChange={setMode} shell={settings.terminalShell} title="새 탭" autoFocus={on && tabItem.id === item.active} onLaunch={command => dispatch(launchOf(tabItem.id, command))} />}
           </div>;
         })}</div>
-        {on && tour.diff && <aside className="right-panel" aria-label="오른쪽 패널" style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
-          <ReviewPanel git={changes ? git : { ...git, changes: [], additions: 0, deletions: 0 }} gitVersion={tour.changes} settings={settings} controls={null} fail={() => {}} refresh={async () => {}} loadDiff={loadDiff}
-            openDiffTab={() => note('실제 앱에서는 큰 화면의 diff 탭으로 열립니다.')} switchBranch={() => {}} hasRepository selectionRequired={false} wide={false} toggleWide={() => {}} />
-        </aside>}
+        {on && tour.diff && <div className="git-drawer floating" style={{ '--git-h': `${Math.min(settings.gitLogHeight, 360)}px` } as CSSProperties}>
+          <GitLog call={async <T,>() => ({}) as T} settings={settings} setSettings={update => onSettings(typeof update === 'function' ? update(settings) : update)} visible ask={gitAsk} fail={() => {}}
+            onClose={() => dispatch({ type: 'diff' })} onChanged={() => {}} openDiff={() => note('실제 앱에서는 편집기 영역의 diff 탭으로 열립니다.')} repoKey="tour" demo={gitDemo} />
+        </div>}
       </div>
       <footer className="statusbar">
         <div className="status-left">

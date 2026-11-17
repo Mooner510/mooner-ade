@@ -13,6 +13,7 @@ import { codexAuthenticated } from './agents.js';
 import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
+import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
 import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
@@ -212,7 +213,8 @@ function send(socket, value) {
 }
 // Every outbound message carries its project so a socket subscribed to several projects can route it.
 function broadcast(project, value) { for (const socket of clients) if (socket.projects.has(project.id)) send(socket, { ...value, projectId: project.id }); }
-const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.' });
+// `files`: the paths a Git operation stopped on (local changes in the way), listed in the dialog that offers to work around them.
+const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.', ...(Array.isArray(error.files) && { files: error.files }) });
 
 // A live pid alone does not prove ownership: Windows reuses pids quickly, so a crashed server's lock can name an unrelated process.
 // Running servers refresh their locks' mtime; a lock left untouched past LOCK_STALE_MS is abandoned.
@@ -901,12 +903,14 @@ async function route(action, input, project) {
       if (stamp) project.gitStatus.set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
       return result;
     }
-    case 'git/show': {
-      text(input.path, '경로'); await workspace.resolve(input.path);
-      if (input.working) return { content: await readText(workspace, input.path).catch(() => '') };
-      const result = await runtime.processes.exec('git', ['--literal-pathspecs', 'show', `${input.staged ? '' : 'HEAD'}:${input.path}`]);
-      return { content: result.exitCode === 0 ? result.stdout : '' };
-    }
+    // The Git tool window: history graph, one commit, a file of a commit, and the operations its menus run.
+    case 'git/log': return readLog(runtime, input);
+    case 'git/paths': return pathCommits(runtime, input);
+    case 'git/commit-details': return commitDetails(runtime, input);
+    case 'git/commit-file': return commitFile(runtime, input);
+    case 'git/compare': return compareFiles(runtime, input);
+    case 'git/patch': return commitPatch(runtime, input);
+    case 'git/op': return project.mutation(() => runOperation(runtime, input));
     case 'git/branches': {
       const result = await runtime.processes.exec('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
       if (result.exitCode !== 0) throw new Error(result.stderr);

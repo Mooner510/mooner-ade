@@ -281,7 +281,7 @@ test('git: a repository hook never runs during ADE checkout', async t => {
   await assert.rejects(stat(marker));
 });
 
-test('git: repository-configured filter and diff commands never run during status, show or checkout', async t => {
+test('git: repository-configured filter and diff commands never run during status, log, commit diffs or checkout', async t => {
   const { call, repo } = await boot(t);
   const marker = join(repo, '..', `filter-ran-${process.pid}`);
   for (const key of ['filter.y.clean', 'filter.y.smudge', 'filter.y.process', 'diff.y.textconv', 'diff.y.command']) await git(repo, 'config', key, `touch ${marker}`);
@@ -289,26 +289,38 @@ test('git: repository-configured filter and diff commands never run during statu
   await git(repo, 'branch', 'other');
   await writeFile(join(repo, 'a.txt'), 'changed\n');
   await call('git/status');
-  await call('git/show', { path: 'a.txt' });
+  const log = await call('git/log');
+  await call('git/commit-details', { sha: log.head.sha });
+  await call('git/commit-file', { sha: log.head.sha, path: 'a.txt' });
+  await call('git/commit-file', { working: true, parent: log.head.sha, path: 'a.txt' });
   await writeFile(join(repo, 'a.txt'), 'hello world\nHello again\n');
   await call('git/checkout', { branch: 'other' });
   await assert.rejects(stat(marker));
 });
 
-test('git: status, show, branches, checkout', async t => {
+test('git: status, log, commit diffs, operations, branches, checkout', async t => {
   const { call, repo } = await boot(t);
   await writeFile(join(repo, 'a.txt'), 'changed\n');
   await writeFile(join(repo, 'new.txt'), 'brand new\n');
   const status = await call('git/status');
   assert.deepEqual(status.changes.map(change => change.status).sort(), [' M', '??']);
   assert.equal(status.additions, 2);
-  assert.equal((await call('git/show', { path: 'a.txt' })).content, 'hello world\nHello again\n');
-  assert.equal((await call('git/show', { path: 'a.txt', working: true })).content, 'changed\n');
-  await git(repo, 'add', 'a.txt');
-  assert.equal((await call('git/show', { path: 'a.txt', staged: true })).content, 'changed\n');
+  const log = await call('git/log');
+  assert.deepEqual(log.commits.map(commit => commit.s), ['files', 'init']);
+  assert.equal(log.head.branch, 'main');
+  assert.deepEqual((await call('git/log', { signature: log.signature })).unchanged, true);
+  const working = await call('git/commit-file', { working: true, parent: log.head.sha, path: 'a.txt' });
+  assert.equal(working.original, 'hello world\nHello again\n'); assert.equal(working.modified, 'changed\n');
+  assert.deepEqual((await call('git/compare', { from: log.head.sha })).files, [{ status: 'M', path: 'a.txt' }]);
+  assert.deepEqual((await call('git/commit-details', { sha: log.head.sha })).files.map(file => file.path).sort(), ['a.txt', 'src/b.ts']);
+  assert.match((await call('git/patch', { shas: [log.head.sha] })).patch, /Subject: \[PATCH\] files/);
+  await call('git/op', { op: 'branch-create', name: 'topic', from: log.head.sha, checkout: false });
+  await call('git/op', { op: 'nope' }, 400);
+  await call('git/op', { op: 'checkout', ref: 'refs/heads/../x' }, 400);
+  await call('git/commit-details', { sha: '--output=/tmp/x' }, 400);
   await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'change');
   await git(repo, 'branch', 'feature');
-  assert.deepEqual((await call('git/branches')).branches.sort(), ['feature', 'main']);
+  assert.deepEqual((await call('git/branches')).branches.sort(), ['feature', 'main', 'topic']);
   await call('git/checkout', { branch: 'feature' });
   assert.equal((await call('git/status')).branch, 'feature');
   await call('git/checkout', { branch: '--orphan' }, 400);

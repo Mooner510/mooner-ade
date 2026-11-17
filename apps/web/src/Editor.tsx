@@ -38,6 +38,18 @@ export type Settings = {
   terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
   // Feedback inbox: feedbackAgentTool lets chat agents put drafts in it; feedbackAiContext adds screen layout and recent errors to an AI draft request.
   feedbackAgentTool: boolean; feedbackAiContext: boolean; feedbackAiModel: '' | 'claude-haiku-5-5' | 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'sonnet' | 'opus'; feedbackAiEffort: '' | 'low' | 'medium' | 'high';
+  // Git tool window (the commit graph drawer), with IntelliJ's options and defaults. Drawer: height, docked (terminals shrink) or floating over them.
+  gitLogHeight: number; gitLogDock: boolean; gitLogLimit: number; gitBranchesWidth: number; gitDetailsWidth: number;
+  // Graph Options: sort and the merge options; View Options: labels, long edges, timestamp, columns, highlighters.
+  gitSort: 'date' | 'topo'; gitLinear: boolean; gitFirstParent: boolean; gitNoMerges: boolean;
+  gitCompactRefs: boolean; gitTagNames: boolean; gitLongEdges: boolean; gitCommitTime: boolean; gitRefsLeft: boolean; gitColumns: string[];
+  gitMine: boolean; gitMerges: boolean; gitCurrent: boolean; gitPrettyDate: boolean; gitSaturation: number; gitBrightness: number;
+  // Changed files and details pane; Branches pane (single click action, grouping, tags, favourites).
+  gitDetails: boolean; gitDiffPreview: boolean; gitFilesByDir: boolean; gitBranchesPane: boolean; gitBranchClick: 'none' | 'filter' | 'navigate'; gitBranchDirs: boolean; gitBranchTags: boolean; gitFavorites: string[];
+  // Operations: how Update pulls, prune on fetch, branches whose pushed commits may not be rewritten.
+  gitUpdateMethod: 'merge' | 'rebase'; gitFetchPrune: boolean; gitProtected: string;
+  // The changes panel was replaced by the Git graph: people who used the app before see a one-time card saying so (like the Chat tip).
+  gitTipPending: boolean;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -76,6 +88,10 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
   if (next.tourVersion < TOUR_VERSION) next.onboarded = false;
+  // Saved settings from before the Git graph belong to someone who knew the changes panel: they get the card once. New users meet it in the tutorial.
+  if (saved.gitTipPending === undefined && Object.keys(saved).length > 0) next.gitTipPending = true;
+  // The changes panel became the Git tool window: a shortcut chosen for it moves along.
+  if (saved.appKeys?.review && !saved.appKeys.gitLog) { const { review, ...rest } = saved.appKeys; next.appKeys = { ...rest, gitLog: review }; }
   if (saved.statusItems && !saved.statusLeft) next.statusItems = [...saved.statusItems.filter(id => !addedWithLayout.includes(id)), ...addedWithLayout];
   // Chat status line: model, mode and context moved into the composer's footer, so an untouched old default (ignoring ids that no longer exist) follows the new one.
   const known = (list?: string[]) => JSON.stringify((list ?? []).filter(id => chatStatusItemIds.includes(id)));
@@ -107,7 +123,13 @@ export const defaultSettings: Settings = {
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
-  feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low'
+  feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low',
+  gitLogHeight: 380, gitLogDock: false, gitLogLimit: 5000, gitBranchesWidth: 230, gitDetailsWidth: 400,
+  gitSort: 'date', gitLinear: false, gitFirstParent: false, gitNoMerges: false,
+  gitCompactRefs: true, gitTagNames: false, gitLongEdges: false, gitCommitTime: false, gitRefsLeft: false, gitColumns: ['author', 'date'],
+  gitMine: true, gitMerges: true, gitCurrent: true, gitPrettyDate: true, gitSaturation: 40, gitBrightness: 65,
+  gitDetails: true, gitDiffPreview: false, gitFilesByDir: true, gitBranchesPane: true, gitBranchClick: 'none', gitBranchDirs: true, gitBranchTags: false, gitFavorites: ['main', 'master', 'origin/main', 'origin/master'],
+  gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false
 };
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
 // Terminal default = the OS's own monospace font (Mac: Menlo, Windows: Cascadia Mono); a chosen font goes first and falls back to it.
