@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeCredit, parseClaudeUsage, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
+import { claudeKeychainServices, createAccountResolver, createUsage, envFromPs, parseClaudeCredit, parseClaudeUsage, parseCodexCredits, parseCodexLogLine, parseCodexUsage, readClaudeLogin, readCodexLogin, TTL } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -76,6 +76,31 @@ test('Codex falls back to its session log when the API is unavailable', async ()
   assert.equal(result.at, 7);
   assert.equal(result.error, null);
   assert.match(result.note, /로그인/);
+});
+
+test('Codex credits preserve zero and unlimited balances without inventing missing amounts', () => {
+  const credits = { has_credits: true, unlimited: false, balance: '1234.50' };
+  assert.deepEqual(parseCodexCredits({ credits }), { balance: 1234.5, unlimited: false, hasCredits: true });
+  assert.equal(parseCodexCredits({ credits: { ...credits, balance: '0' } }).balance, 0);
+  assert.equal(parseCodexCredits({ credits: { ...credits, unlimited: true, balance: null } }).unlimited, true);
+  for (const balance of [null, '', ' ', 'unknown', Infinity, -1, true, []]) assert.equal(parseCodexCredits({ credits: { ...credits, balance } }).balance, null);
+  for (const body of [{}, { credits: null }, { credits: {} }]) assert.equal(parseCodexCredits(body), null);
+});
+
+test('Codex credits reach usage/status through both the API and log fallback, even without windows', async () => {
+  const credits = { has_credits: true, unlimited: false, balance: '125.5' };
+  const expected = { balance: 125.5, unlimited: false, hasCredits: true };
+  const log = parseCodexLogLine(JSON.stringify({ timestamp: '2026-11-17T00:00:00Z', payload: { rate_limits: { credits } } }));
+  assert.deepEqual(log.windows, []);
+  assert.deepEqual(log.codexCredits, expected);
+  const api = createUsage({ now: () => 0, codexLogin: async () => ({ token: 'test' }), fetch: async () => json({ credits }) });
+  assert.deepEqual((await api.status('codex')).codexCredits, expected);
+  const fallback = createUsage({ now: () => 0, codexLogin: async () => null, codexLog: async () => log });
+  const result = await fallback.status('codex');
+  assert.equal(result.source, 'log');
+  assert.deepEqual(result.codexCredits, expected);
+  const absent = createUsage({ now: () => 0, codexLogin: async () => ({ token: 'test' }), fetch: async () => json({}) });
+  assert.equal((await absent.status('codex')).codexCredits, null);
 });
 
 test('ps -E output yields the last value of a variable, spaces included', () => {

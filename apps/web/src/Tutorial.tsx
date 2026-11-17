@@ -398,7 +398,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     {([['5h', session], ['주', week]] as const).map(([key, percent]) => <span key={key} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>)}
   </button>;
   const workspace = (item: TourProject) => {
-    const on = item.id === tour.current, changes = item.id === 'my-app' ? tour.changes : 0, terminals = item.tabs.reduce((sum, t) => sum + leafList(t.pane).filter(leaf => leaf.kind !== 'launcher').length, 0);
+    const on = item.id === tour.current, changes = item.id === 'my-app' ? tour.changes : 0;
     return <main key={item.id} className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!on}>
       <header className="tabbar">
         <div className="split-button">
@@ -435,7 +435,6 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           <button title="브랜치 전환" onClick={() => note('실제 앱에서는 여기서 브랜치를 바꿀 수 있습니다.')}><Icon name="branch" size={13} />main</button>
         </div>
         <div className="status-right">
-          <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{terminals}</span>
           {usage('claude', 23, 41)}{usage('codex', 8, 17)}
           <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: settings.clock12h })}</span>
           <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={() => note('둘러보기를 마치면 내 프로젝트를 열 수 있어요.')}><Icon name="folderPlus" size={14} /></button>

@@ -42,7 +42,7 @@ export type Settings = {
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
 // statusItems is the shown set; statusLeft/statusRight hold every item's side and order, shown or not, so hiding one keeps its place.
-const defaultLeft = ['connection', 'path', 'branch'], defaultRight = ['terminals', 'size', 'cpu', 'memory', 'claudeusage', 'codexusage', 'cursorusage', 'wakatime', 'clock', 'readiness', 'openproject'];
+const defaultLeft = ['connection', 'path', 'branch'], defaultRight = ['cpu', 'memory', 'claudeusage', 'codexusage', 'cursorusage', 'wakatime', 'clock', 'readiness', 'openproject'];
 export const statusItemIds = [...defaultLeft, ...defaultRight];
 // Items that were fixed or did not exist before the layout could be edited; saved settings from then get them shown.
 const addedWithLayout = ['connection', 'readiness', 'openproject', 'claudeusage', 'codexusage', 'cursorusage'];
