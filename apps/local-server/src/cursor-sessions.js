@@ -53,7 +53,7 @@ export async function backupCursorStore(source, destination, sessionId, snapshot
   } finally { db.close(); }
 }
 
-export async function snapshotCursorSession({ sessionId, configDir, destination }) {
+export async function snapshotCursorSession({ sessionId, configDir, destination, seen }) {
   const source = await cursorStorePath(sessionId, { env: { CURSOR_CONFIG_DIR: configDir } });
   if (!source) return false;
   const { DatabaseSync } = await import('node:sqlite');
@@ -70,7 +70,12 @@ export async function snapshotCursorSession({ sessionId, configDir, destination 
     copy.exec('CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT); BEGIN');
     const known = copy.prepare('SELECT 1 FROM blobs WHERE id=?'), read = db.prepare('SELECT data FROM blobs WHERE id=?'), insert = copy.prepare('INSERT INTO blobs (id,data) VALUES (?,?)');
     // Content-addressed blobs are immutable: retain each once, plus one small root metadata file per completed response.
-    for (const { id } of db.prepare('SELECT id FROM blobs').iterate()) if (!known.get(id)) insert.run(id, read.get(id).data);
+    // `seen` skips blobs this chat already archived, so a later turn does not read the whole store again.
+    for (const { id } of db.prepare('SELECT id FROM blobs').iterate()) {
+      if (seen?.has(id)) continue;
+      if (known.get(id)) { seen?.add(id); continue; }
+      const blob = read.get(id); if (blob) { insert.run(id, blob.data); seen?.add(id); }
+    }
     copy.prepare("INSERT OR REPLACE INTO meta (key,value) VALUES ('0',?)").run(row.value);
     copy.exec('COMMIT');
     await fs.writeFile(destination, JSON.stringify(meta), { flag: 'wx', mode: 0o600 });

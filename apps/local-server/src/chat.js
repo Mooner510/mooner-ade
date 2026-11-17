@@ -176,6 +176,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   });
   // Cursor setting changes run one after another on the ACP session (they never wait for the running turn); `configuring` is true while any is in flight.
   let configuring = false, configChain = Promise.resolve(), configCount = 0;
+  // While a picked model is still being applied, ACP echoes the model the process started with. Those echoes are dropped so the bar does not jump back.
+  // `cursorSurfaceLive` flips once that pick is echoed, and only then do the new model's Effort and options replace the ones on screen (one change, not two).
+  let cursorModelHold = null, cursorSurfaceLive = true, cursorModeHold = null, cursorAppliedModel = null;
+  const copiedBlobs = new Set(); // blob ids already archived for this chat; later checkpoints only copy what is new
   let child = null, protocol = null, closed = false, turnOpen = false, turnSeq = 0, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve(), publishTimer = null, lastCommandOutput = null;
   let reopened = false, activityTimer = null; // reopened: the turn is "open" only because background output arrived after a `result`
   if (agent === 'claude' && state.sessionId) void refreshCache(); // a reopened chat shows the cache clock it had
@@ -260,17 +264,22 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   }
   const setStatus = () => {
     state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; publish();
-    // An idle child holds a few hundred MB; the conversation resumes from its session id, so it can go.
+    // An idle Claude or Codex child holds a few hundred MB; the conversation resumes from its session id, so it can go.
+    // Cursor's process takes several seconds to start, so it stays for the life of the chat. Closing the chat still stops it.
     clearTimeout(idleTimer);
     // Background subagents live in the child: it is kept while any of them runs (a silent leak of `liveTasks` ends with the child's exit or the chat's close).
-    if (child && quiet()) { const proc = child; idleTimer = setTimeout(() => { if (child === proc && quiet()) proc.kill('SIGTERM'); }, IDLE_MS); idleTimer.unref(); }
+    if (child && quiet() && agent !== 'cursor') { const proc = child; idleTimer = setTimeout(() => { if (child === proc && quiet()) proc.kill('SIGTERM'); }, IDLE_MS); idleTimer.unref(); }
   };
   // The view of the world the status line shows, derived from events so that a replayed transcript gives the same numbers.
   function fold(event, replay = false) {
     if (event.kind === 'session') {
-      state.sessionId = event.sessionId ?? state.sessionId; state.model = event.model ?? state.model;
+      state.sessionId = event.sessionId ?? state.sessionId;
+      if (!(cursorModelHold !== null && event.model && event.model !== cursorModelHold)) {
+        state.model = event.model ?? state.model;
+        if (cursorModelHold !== null && event.model === cursorModelHold) cursorSurfaceLive = true;
+      }
       // Claude: a session event only reports the mode the child started with (replayed, or arriving after a later switch); a mode the user picked is in meta and wins.
-      if (event.permissionMode !== undefined && (agent !== 'claude' || meta.permissionMode === undefined)) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; if (agent !== 'claude') meta.permissionMode = mode; }
+      if (event.permissionMode !== undefined && (agent !== 'claude' || meta.permissionMode === undefined) && !(cursorModeHold && uiPermissionMode(event.permissionMode) !== cursorModeHold)) { const mode = uiPermissionMode(event.permissionMode); state.permissionMode = mode; if (agent !== 'claude') meta.permissionMode = mode; }
       if (event.slashCommands?.length) state.slashCommands = event.slashCommands.map(item => typeof item === 'string' ? item : item?.name).filter(name => typeof name === 'string');
       if (Array.isArray(event.commands)) state.commandInfo = event.commands.flatMap(item => {
         if (!item || typeof item.name !== 'string' || !/^[\w:.-]+$/.test(item.name)) return [];
@@ -281,10 +290,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     } else if (event.kind === 'cursor_checkpoint') {
       cursorCheckpoints.set(event.uuid, event.file);
       state.capabilities = { ...state.capabilities, branch: true, rewind: true };
-    } else if (event.kind === 'capabilities') state.capabilities = { ...event.capabilities, ...(cursorCheckpoints.size && { branch: true, rewind: true }),
+    } else if (event.kind === 'capabilities' && cursorModelHold !== null && !cursorSurfaceLive) { /* the model the process started with; the picked model's options follow */ }
+    else if (event.kind === 'capabilities') state.capabilities = { ...event.capabilities, ...(cursorCheckpoints.size && { branch: true, rewind: true }),
       ...(state.capabilities.tokens && { tokens: true }), ...(state.capabilities.cost && { cost: true }) };
     else if (event.kind === 'worktree') { if (typeof event.path === 'string') state.cwd = event.path; }
-    else if (event.kind === 'settings') { if (event.permissionMode !== undefined) state.permissionMode = event.permissionMode; if (event.effort !== undefined) state.effort = event.effort; }
+    else if (event.kind === 'settings') {
+      if (event.permissionMode !== undefined && !(cursorModeHold && event.permissionMode !== cursorModeHold)) state.permissionMode = event.permissionMode;
+      if (event.effort !== undefined && (cursorModelHold === null || cursorSurfaceLive)) state.effort = event.effort;
+    }
     else if (event.kind === 'usage') {
       if (event.tokens) state.tokens = event.tokens;
       state.contextTokens = event.contextTokens ?? state.contextTokens; state.contextWindow = event.contextWindow ?? state.contextWindow;
@@ -319,7 +332,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   if (agent === 'claude' && meta.permissionMode !== undefined) state.permissionMode = meta.permissionMode; // a mode picked since (or reported by the CLI) wins over older events
   refreshChatTitle();
   state.sessionId = meta.sessionId ?? null;
+  let surfaceSuppressed = false;
+  // A stale Cursor model echo must not reach the page: the client would paint it, then paint the pick again.
+  const suppressedCursorSurface = event => agent === 'cursor' && cursorModelHold !== null && !cursorSurfaceLive && (event.kind === 'capabilities' || (event.kind === 'settings' && event.effort !== undefined && event.permissionMode === undefined) || (event.kind === 'session' && event.model && event.model !== cursorModelHold));
   function emit(event, { store = true } = {}) {
+    surfaceSuppressed = suppressedCursorSurface(event);
+    if (surfaceSuppressed) { if (event.sessionId) state.sessionId = event.sessionId; return; }
     // total_cost_usd is the session total; this turn's own cost is the step from the total before it (not when the old total is unknown: a session carried over from the CLI).
     const turnCost = store && event.kind === 'result' && event.costUsd != null && (state.costUsd > 0 || state.turns === 0) ? event.costUsd - state.costUsd : 0;
     const stamped = store ? { ...event, ...(turnCost > 0 && { turnCostUsd: turnCost }), ...(event.kind === 'result' && { auth: state.apiKey ? 'key' : 'login' }), seq: ++seq, at: Date.now() } : event;
@@ -436,6 +454,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         meta.permissionMode = cliMode;
       }
       emit(event);
+      if (surfaceSuppressed) return;
       if (moved) { emit(moved); publish(); }
       if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
@@ -454,7 +473,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (last?.uuid && last.blocks?.some(block => block.type === 'text') && event.status === 'success') {
             const file = `cursor-checkpoints/${randomUUID()}.json`;
             cursorSnapshot = cursorSnapshot.then(async () => {
-              if (await snapshotCursorSession({ sessionId, configDir: cursorDirOf(), destination: path.join(root, file) })) {
+              if (await snapshotCursorSession({ sessionId, configDir: cursorDirOf(), destination: path.join(root, file), seen: copiedBlobs })) {
                 emit({ kind: 'cursor_checkpoint', uuid: last.uuid, file }); publish();
               }
             }).catch(error => { emit({ kind: 'error', message: `분기용 대화 저장 실패: ${error.message}` }); });
@@ -575,7 +594,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent === 'claude' && meta.sessionAllow?.length) await applySessionAllow(meta.sessionAllow);
     if (protocol) {
       try {
-        await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true));
+        const ready = await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true));
+        if (agent === 'cursor') cursorAppliedModel = ready?.modelApplied ?? null;
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -769,8 +789,6 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
     async send(text, images = [], { steer = false, artifact = false, previews = [] } = {}) {
       live();
-      if (agent === 'cursor') await cursorSnapshot;
-      if (configuring && !(turnOpen && steer)) await configChain;
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
@@ -783,9 +801,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
       const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
       if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
-      // The message is shown right away; starting the process (slow on the first turn) must not delay it.
+      // The message is shown right away; starting the process, a model change still in flight, or the previous turn's checkpoint must not delay it.
       emit({ kind: 'user', text, images: images.length, previews }); inflight = { text, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
+      setStatus();
       try {
+        if (agent === 'cursor') { await new Promise(resolve => setImmediate(resolve)); await cursorSnapshot; }
+        if (configuring) await configChain;
         if (agent === 'claude' && !meta.artifact && (artifact || wantsArtifact(text))) await enableArtifact();
         await start(); await saveMeta();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 600_000);
@@ -936,22 +957,43 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         }
         if (agent === 'cursor' && (model !== undefined || effort !== undefined || configOption !== undefined || permissionMode !== undefined)) {
           if ([model, effort, configOption, permissionMode].filter(value => value !== undefined).length > 1 || worktree !== undefined || addDirs !== undefined) throw fault('INVALID_INPUT', '모델 설정은 한 번에 하나씩 바꾸세요.');
+          const previous = { model: meta.model, effort: meta.effort, permissionMode: meta.permissionMode, configValues: { ...(meta.configValues ?? {}) }, stateModel: state.model, stateEffort: state.effort, stateMode: state.permissionMode, options: state.capabilities.configOptions };
+          const restore = () => {
+            meta.model = previous.model; meta.effort = previous.effort; meta.permissionMode = previous.permissionMode; meta.configValues = previous.configValues;
+            state.model = previous.stateModel; state.effort = previous.stateEffort; state.permissionMode = previous.stateMode;
+            if (state.capabilities.configOptions !== previous.options) state.capabilities = { ...state.capabilities, configOptions: previous.options };
+          };
+          configCount += 1; configuring = state.configuring = true;
+          if (model !== undefined) {
+            meta.model = model ?? undefined; meta.configValues = {}; meta.effort = undefined;
+            state.model = model ?? state.model; cursorModelHold = state.model; cursorSurfaceLive = false;
+          }
+          if (permissionMode !== undefined) { meta.permissionMode = state.permissionMode = permissionMode; cursorModeHold = permissionMode; }
+          if (model !== undefined || permissionMode !== undefined) publish();
           const apply = async () => {
             await start();
-            await protocol.configure({ model, permissionMode, configOption: effort !== undefined ? { configId: state.capabilities.effortConfigId, value: effort } : configOption });
-            if (model !== undefined) { meta.model = model ?? undefined; meta.configValues = {}; meta.effort = undefined; }
-            if (permissionMode !== undefined) meta.permissionMode = permissionMode;
-            if (configOption || effort !== undefined) {
-              meta.model = state.model ?? meta.model;
-              const option = configOption ?? { configId: state.capabilities.effortConfigId, value: effort };
-              meta.configValues = { ...meta.configValues, [option.configId]: option.value };
+            if (model !== undefined) {
+              // A cold start applies meta.model inside initialize. Configuring it again reloads the model twice.
+              if ((cursorAppliedModel ?? null) !== (meta.model ?? null)) { await protocol.configure({ model: meta.model ?? null }); cursorAppliedModel = meta.model ?? null; }
+              cursorSurfaceLive = true;
+            } else {
+              if (effort !== undefined) { meta.effort = effort ?? undefined; state.effort = effort; }
+              if (configOption) {
+                const option = state.capabilities.configOptions?.find(item => item.id === configOption.configId);
+                if (!option || ['model', 'mode'].includes(option.category) || !option.options?.some(item => item.value === configOption.value)) throw fault('INVALID_INPUT', '지원하지 않는 모델 옵션입니다.');
+                meta.configValues = { ...(meta.configValues ?? {}), [configOption.configId]: configOption.value };
+                state.capabilities = { ...state.capabilities, configOptions: state.capabilities.configOptions.map(item => item.id === configOption.configId ? { ...item, currentValue: configOption.value } : item) };
+              }
+              publish();
+              await protocol.configure({ permissionMode, configOption: effort !== undefined ? { configId: state.capabilities.effortConfigId, value: effort } : configOption });
+              if (configOption || effort !== undefined) meta.model = state.model ?? meta.model;
             }
             await saveMeta();
           };
-          configCount += 1; configuring = state.configuring = true; publish();
           const run = configChain.then(apply);
           configChain = run.catch(() => {});
-          try { await run; } finally { if (--configCount === 0) { configuring = false; state.configuring = false; } publish(); }
+          try { await run; } catch (error) { restore(); throw error; }
+          finally { cursorModelHold = null; cursorSurfaceLive = true; cursorModeHold = null; if (--configCount === 0) { configuring = false; state.configuring = false; } publish(); }
           return;
         }
         for (const [key, value] of Object.entries({ model, effort, worktree, addDirs, permissionMode, sandbox, network })) if (value !== undefined) { meta[key] = value ?? undefined; state[key] = value; }

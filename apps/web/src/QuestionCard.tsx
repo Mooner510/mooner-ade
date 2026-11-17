@@ -3,6 +3,14 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useHeightMorph } from './Collapse';
 import { emptyPick, pickOption, pickOther, questionAnswers, questionsAnswered, type Approval, type ChatQuestion, type QuestionPick } from './chat-model';
 
+// An entrance that must not replay when a hidden tab is shown again. display:none cancels the animation, so without this
+// the card would fade up from opacity 0 on every return. Once it has played (or was cancelled by hiding), it stays put.
+export function usePlayedEntrance() {
+  const [played, setPlayed] = useState(false);
+  const mark = (event: { currentTarget: EventTarget | null; target: EventTarget | null }) => { if (event.currentTarget === event.target) setPlayed(true); };
+  return played ? { 'data-played': '' as const } : { onAnimationEnd: mark, onAnimationCancel: mark };
+}
+
 // The agent's question, answered in the chat: Claude's AskUserQuestion, Codex's requestUserInput and Cursor's ask_question all arrive as `approval.questions`.
 // One card holds every question the agent asked, so they are answered and sent together. Several questions are tabs (an answered one is ticked)
 // and only one shows at a time, so the card stays low and its send button in view; picking a single-choice option moves on to the next
@@ -11,6 +19,7 @@ import { emptyPick, pickOption, pickOther, questionAnswers, questionsAnswered, t
 // Esc closes the question and stops the turn at once (the same as the stop button next to the skip one): from inside the card, from the message box
 // (its own Esc handling), or with focus nowhere (the document listener below, which leaves any key another control already took).
 export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Approval; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>): void; onInterrupt(): void }) {
+  const played = usePlayedEntrance();
   const questions = approval.questions ?? [], uid = useId();
   const [picks, setPicks] = useState<Record<string, QuestionPick>>({}), [active, setActive] = useState(0), [card, capture] = useHeightMorph<HTMLDivElement>();
   const answers = questionAnswers(questions, picks), ready = questionsAnswered(questions, answers), done = questions.filter(question => answers[question.id]?.length).length;
@@ -36,7 +45,7 @@ export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Ap
   };
   const submit = () => { if (ready) onAnswer(true, false, answers); };
   const title = approval.tool === 'AskUserQuestion' || approval.tool === '질문' ? '질문' : approval.tool;
-  return <div ref={card} className="chat-question" role="group" aria-label={`에이전트의 ${title}`} onKeyDown={event => {
+  return <div ref={card} className="chat-question" {...played} role="group" aria-label={`에이전트의 ${title}`} onKeyDown={event => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onInterrupt(); }
