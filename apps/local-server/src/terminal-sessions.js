@@ -154,8 +154,20 @@ export async function terminalSessionShell(directory, id, shell) {
   if (windows) {
     // PSReadLine 2.1+ can suggest from history, but Windows PowerShell leaves it off; respect any source the profile chose.
     const predictions = `$readLine = Get-Module PSReadLine | Select-Object -First 1\nif ($readLine -and $readLine.Version -ge [version]'2.1' -and (Get-PSReadLineOption).PredictionSource -eq 'None') { Set-PSReadLineOption -PredictionSource History }\nRemove-Variable readLine`;
-    // PSReadLine's default Windows mode leaves Ctrl+D unbound (^D does nothing); bind it like bash/zsh (delete a character, exit on an empty line) unless the profile already chose something.
-    const eof = `if (Get-Module PSReadLine) { if (-not (Get-PSReadLineKeyHandler -Bound | Where-Object { $_.Key -eq 'Ctrl+d' })) { Set-PSReadLineKeyHandler -Chord 'Ctrl+d' -Function DeleteCharOrExit } }`;
+    // PSReadLine's default Windows edit mode leaves Ctrl+D/E/K/U/B/F/N/P/T and Alt+B/F unbound and maps Ctrl+A to select-all, so the
+    // bash/zsh keys the terminal passes through do nothing. Switch a profile that kept the default to Emacs mode, then restore the
+    // Windows conveniences Emacs mode drops. A profile that chose its own mode, or its own Ctrl+D, is left alone.
+    const eof = [
+      `if (Get-Module PSReadLine) {`,
+      `  if ((Get-PSReadLineOption).EditMode -eq 'Windows') {`,
+      `    Set-PSReadLineOption -EditMode Emacs`,
+      `    Set-PSReadLineKeyHandler -Chord 'Ctrl+LeftArrow' -Function BackwardWord; Set-PSReadLineKeyHandler -Chord 'Ctrl+RightArrow' -Function NextWord`,
+      `    Set-PSReadLineKeyHandler -Chord 'Ctrl+Delete' -Function KillWord; Set-PSReadLineKeyHandler -Chord 'Ctrl+z' -Function Undo`,
+      `    Set-PSReadLineKeyHandler -Chord 'Tab' -Function TabCompleteNext; Set-PSReadLineKeyHandler -Chord 'Shift+Tab' -Function TabCompletePrevious`,
+      `  }`,
+      `  if (-not (Get-PSReadLineKeyHandler -Bound | Where-Object { $_.Key -eq 'Ctrl+d' })) { Set-PSReadLineKeyHandler -Chord 'Ctrl+d' -Function DeleteCharOrExit }`,
+      `}`
+    ].join('\n');
     await fs.writeFile(init, `${predictions}\n${eof}\n${functions}`);
     return { args: ['-NoExit', '-Command', `. ${quote(init, true)}`], env: {}, tracked: true };
   }
