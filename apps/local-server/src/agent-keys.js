@@ -57,13 +57,17 @@ export function createAgentKeys({ file }) {
       return this.status();
     },
     // What a chat of `agent` adds to its launch: { env, args } (args go before the subcommand). Empty when the login is used.
-    launch(agent) {
+    // `auth` is the chat's own choice ('key' | 'login'); without one the setting for new chats decides (chats from before the choice existed).
+    launch(agent, auth) {
       const entry = data[agent];
-      if (!entry?.use) return { env: {}, args: [] };
+      if (!(auth === 'key' ? Boolean(entry?.key) : auth === 'login' ? false : entry?.use === true)) return { env: {}, args: [] };
       if (agent === 'claude') return { env: { ANTHROPIC_API_KEY: entry.key }, args: [] };
       if (agent === 'codex') return { env: { [CODEX_KEY_ENV]: entry.key }, args: codexArgs };
       return { env: { CURSOR_API_KEY: entry.key }, args: [] };
     },
+    hasKey(agent) { return Boolean(data[agent]?.key); },
+    // What a new chat starts on: the setting under Settings > AI 툴. An open chat keeps its own choice.
+    defaultAuth(agent) { return data[agent]?.use === true ? 'key' : 'login'; },
     // Changes whenever what `launch` returns would change, without carrying the key itself (for cache keys).
     signature(agent) { return data[agent]?.use ? `key:${createHash('sha256').update(data[agent].key).digest('hex').slice(0, 12)}` : 'login'; },
   };

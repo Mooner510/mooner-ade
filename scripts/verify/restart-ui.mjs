@@ -6,7 +6,11 @@ import { S, ROOT, sleep } from './lib.mjs';
 const old = JSON.parse(await readFile(join(S, 'env.json'), 'utf8'));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 // SIGKILL so start-ui's stop handler (which would also close its Chrome) never runs; Chrome is not a descendant that dies with it.
-for (const pid of [old.pid, ...(old.serverPids ?? [])]) if (pid && alive(pid)) try { process.kill(pid, 'SIGKILL'); } catch {}
+if (old.pid && alive(old.pid)) process.kill(old.pid, 'SIGKILL');
+// Let the verification plugin manager shut its hosts down before replacing the servers.
+for (const pid of old.serverPids ?? []) if (pid && alive(pid)) try { process.kill(pid, 'SIGTERM'); } catch {}
+for (let i = 0; i < 50 && (old.serverPids ?? []).some(alive); i++) await sleep(100);
+for (const pid of old.serverPids ?? []) if (pid && alive(pid)) try { process.kill(pid, 'SIGKILL'); } catch {}
 // the killed start-ui never ran its exit hook, so the old second server's folder is removed here (the new start-ui makes a fresh one)
 if (old.temp2 && basename(old.temp2).startsWith('ade-verify-') && old.temp2.startsWith(realpathSync(tmpdir()) + sep)) rmSync(old.temp2, { recursive: true, force: true });
 if (!(await fetch(`${old.cdp}/json/version`).then(r => r.ok, () => false))) throw new Error(`Chrome at ${old.cdp} is gone: start a whole new session with start-ui.mjs instead.`);

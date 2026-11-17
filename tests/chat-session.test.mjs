@@ -797,3 +797,38 @@ test('a chat whose agent is gone when the next server opens it says the turn was
   assert.equal(session.state().status, 'idle');
   await assert.rejects(readFile(path.join(chatFolder(directory, 'lost'), 'live.json')), /ENOENT/, 'never taken over twice');
 });
+
+test('Claude: a chat switches between the CLI login and an API key; only the turns that ran on the key add to its API cost', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-auth-'));
+  const costFile = path.join(directory, 'turns');
+  let hasKey = true;
+  const options = {
+    directory, id: 'auth', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-cost-stream.mjs', import.meta.url))],
+    env: auth => ({ FAKE_COST_FILE: costFile, ...(auth === 'key' && { ANTHROPIC_API_KEY: 'sk-ant-test-12345678901234567890' }) }),
+    keyAvailable: () => hasKey, defaults: { auth: 'login' }
+  };
+  const session = await openChatSession(options);
+  let reopened;
+  t.after(async () => { await reopened?.close(); await session.close(); await rm(directory, { recursive: true, force: true }); });
+  const turn = async text => { await session.send(text); await until(() => session.state().status === 'idle'); };
+  assert.deepEqual([session.state().auth, session.state().apiKey, session.state().lastAuth, session.state().apiCostUsd], ['login', false, null, 0]);
+  await turn('one'); // a plan turn: it is not API money
+  assert.deepEqual([session.state().lastAuth, session.state().apiCostUsd, session.state().costUsd], ['login', 0, 0.1]);
+  await session.set({ auth: 'key' }); // nothing is asked or sent by switching
+  assert.deepEqual([session.state().auth, session.state().apiKey, session.state().lastAuth], ['key', true, 'login']);
+  await turn('two'); // on the key: 0.20 - 0.10 of the total is this turn's
+  assert.deepEqual([session.state().lastAuth, session.state().costUsd], ['key', 0.2]);
+  assert.ok(Math.abs(session.state().apiCostUsd - 0.1) < 1e-9);
+  await session.reset(); // /clear keeps the login and the money already spent
+  assert.deepEqual([session.state().auth, session.state().apiKey], ['key', true]);
+  assert.ok(Math.abs(session.state().apiCostUsd - 0.1) < 1e-9);
+  await session.close();
+  reopened = await openChatSession({ ...options, defaults: { auth: 'login' } }); // a saved chat keeps its own, not the new default
+  assert.deepEqual([reopened.state().auth, reopened.state().lastAuth, Math.round(reopened.state().apiCostUsd * 100)], ['key', 'key', 10]);
+  await reopened.set({ auth: 'login' });
+  assert.equal(reopened.state().apiKey, false);
+  hasKey = false;
+  await assert.rejects(reopened.set({ auth: 'key' }), /API 키가 등록되어 있지 않습니다/);
+  await assert.rejects(reopened.set({ auth: 'nope' }), /잘못된 로그인 방식/);
+  await assert.rejects(reopened.set({ auth: 'login', model: 'haiku' }), /다른 설정과 함께/);
+});
