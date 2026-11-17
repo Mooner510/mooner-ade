@@ -5,6 +5,7 @@ import http from 'node:http';
 import { join, dirname, delimiter, resolve } from 'node:path';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { agentDirs } from './agent-dirs.mjs';
+import { createHubRoutes } from './hub-fake.mjs';
 import { HERE, ROOT, MARKER, tmpRoot, mainDir, ensureSession } from './session-dirs.mjs';
 export { HERE, ROOT };
 // S: the session folder (env.json, screenshots, results). VERIFY_OUT picks an isolated one (tmp/ade-*); without it everything goes to the shared
@@ -16,9 +17,12 @@ export const sleep = ms => new Promise(r => setTimeout(r, ms));
 export const PNG1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 export const bigPng = bytes => Buffer.concat([PNG1.subarray(0, PNG1.length - 12), Buffer.alloc(bytes), PNG1.subarray(PNG1.length - 12)]); // valid header, padded body
 
+// The Hub as the app sees it: anonymous feedback (`mode`) and, on the same address, the plugin market (hub.plugins, scripts/verify/hub-fake.mjs;
+// a script in another process drives it through /__test/*).
 export async function fakeHub() {
-  const requests = [], hub = { requests, mode: 'ok', retryAfter: undefined };
+  const requests = [], hub = { requests, mode: 'ok', retryAfter: undefined, plugins: createHubRoutes() };
   const server = http.createServer(async (req, res) => {
+    if (await hub.plugins.handle(req, res)) return;
     const chunks = []; for await (const c of req) chunks.push(c);
     let meta = null, images = 0;
     try { const form = await new Request('http://x', { method: 'POST', headers: { 'content-type': req.headers['content-type'] }, body: Buffer.concat(chunks) }).formData(); meta = JSON.parse(form.get('meta')); images = form.getAll('image').length; } catch {}
@@ -27,7 +31,7 @@ export async function fakeHub() {
     res.writeHead(answer[0], { 'content-type': 'application/json', ...(hub.mode === '429' && hub.retryAfter && { 'retry-after': String(hub.retryAfter) }) }); res.end(JSON.stringify(answer[1]));
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  hub.url = `http://127.0.0.1:${server.address().port}`; hub.close = () => new Promise(r => server.close(r));
+  hub.url = hub.plugins.url = `http://127.0.0.1:${server.address().port}`; hub.close = () => new Promise(r => server.close(r));
   return hub;
 }
 
