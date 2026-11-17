@@ -48,6 +48,8 @@ const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
 // ADE_DEV=1 serves the web UI through an in-process Vite dev server (same origin, so cookie auth keeps working) instead of web/dist.
 const devWeb = process.env.ADE_DEV === '1', devTokenEnv = process.env.ADE_DEV_TOKEN ?? ''; // read here: both are removed from the environment below
+const verifyPluginsEnabled = devWeb && process.env.ADE_VERIFY_PLUGINS === '1' && !process.connected;
+let verifyPlugins = null;
 let vite = null;
 // HMR rides on the HTTP server so a leftover dev server from a crashed app cannot block the next run on a fixed port.
 async function startVite(httpServer) {
@@ -73,7 +75,7 @@ let ptyHostLost = false;
 ptyHost?.onClose(() => { ptyHostLost = true; });
 // Terminals inherit process.env: a server started from one (e.g. a test run) would otherwise take over the pty-host and orphan every live terminal.
 // ADE_DEV likewise: an app launched from such a terminal would start in dev mode and look for Vite.
-delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV; delete process.env.ADE_DEV_TOKEN;
+delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV; delete process.env.ADE_DEV_TOKEN; delete process.env.ADE_VERIFY_PLUGINS;
 // Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
 for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
 const localPty = ptyHost ? null : await import('node-pty').catch(() => null);
@@ -99,6 +101,7 @@ const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'accoun
 const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
 let feedbackRequestId = 0;
 function submitThroughApp(meta, images) {
+  if (verifyPlugins) return verifyPlugins.submitFeedback({ meta, images });
   if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: 'MoonerADE 앱이 아니어서 계정으로 제출할 수 없습니다.' } });
   const id = ++feedbackRequestId;
   return new Promise(resolve => {
@@ -754,6 +757,7 @@ async function feedbackRoute(action, input) {
   }
 }
 async function route(action, input, project) {
+  if (action.startsWith('verify/plugins/') && verifyPlugins) return verifyPlugins.route(action.slice('verify/plugins/'.length), input);
   if (action === 'system/info') return systemInfo();
   // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
   if (action === 'chat/peers') {
@@ -1236,7 +1240,7 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, origin);
     if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
-      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' ? 12 * 1024 * 1024 : undefined);
+      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' || (verifyPlugins && url.pathname === '/api/verify/plugins/uploadZip') ? 12 * 1024 * 1024 : undefined);
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
@@ -1244,7 +1248,7 @@ const server = http.createServer(async (request, response) => {
           const token = devSession || randomBytes(32).toString('hex'); sessions.add(token);
           response.setHeader('Set-Cookie', `ade_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
         }
-        value = {};
+        value = verifyPlugins ? { verifyPlugins: true } : {};
       } else {
         if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
         value = await route(url.pathname.slice(5), input, projects.get(input.projectId));
@@ -1405,7 +1409,7 @@ wss.on('connection', socket => {
 const PLUGIN_SESSIONS = 16, PLUGIN_TERMINALS = 8, PLUGIN_BUFFER = 8 * 1024 * 1024;
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{1,39}$/, SESSION_ID = /^[\w-]{1,64}$/;
 const pluginSessions = new Map(); // `${plugin}\0${session}` -> client
-const toApp = (value, done) => { if (process.connected) process.send(value, done); else done?.(); };
+const toApp = (value, done) => { if (verifyPlugins) { verifyPlugins.fromServer(value); done?.(); } else if (process.connected) process.send(value, done); else done?.(); };
 const pluginTerminals = plugin => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy === plugin && !terminal.exited).length, 0);
 function openPluginSession(plugin, session) {
   const key = `${plugin}\0${session}`;
@@ -1611,6 +1615,13 @@ async function busyReport() {
   }
   return report();
 }
+if (verifyPluginsEnabled) {
+  const { createVerifyPlugins } = await import('../../../scripts/verify/plugins.mjs');
+  verifyPlugins = createVerifyPlugins({ dataRoot, verifyOut: process.env.VERIFY_OUT, appVersion,
+    onTerminal: configurePlugins, onFeedback: status => fromApp({ type: 'feedback/status', status }),
+    toServer: message => { fromApp(message); return true; }
+  });
+}
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
 origin = `http://127.0.0.1:${server.address().port}`;
@@ -1630,6 +1641,7 @@ async function syncSessionsBeforeExit() {
 // `keep: false` (the user quit the app): chats end instead of being left to the next server. Anything else (update, dev reload, background) keeps them.
 async function shutdown({ keep = true } = {}) {
   if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
+  verifyPlugins?.close();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
   processTable.close();
@@ -1643,7 +1655,7 @@ process.on('SIGINT', () => void shutdown().finally(() => process.exit(0))); proc
 process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
 process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
-process.on('message', message => {
+function fromApp(message) {
   if (message?.type === 'shutdown') void shutdown({ keep: message.keep !== false }).finally(() => process.exit(0));
   else if (message?.type === 'busy?') {
     const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
@@ -1661,4 +1673,5 @@ process.on('message', message => {
   else if (message?.type === 'feedback/result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
   // A plugin host (in the main process) relays its workspace sessions to this process this way.
   else if (message?.type === 'plugin/workspace') pluginWorkspace(message);
-});
+}
+process.on('message', fromApp);

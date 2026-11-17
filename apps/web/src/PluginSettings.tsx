@@ -53,7 +53,7 @@ export type PluginInfo = {
   setup?: ManifestStep[]; update?: PluginUpdate | null;
 };
 export type PluginsState = { available: boolean; problem: 'unavailable' | 'unreadable' | null; error: string | null; enabled: boolean; dir: string; plugins: PluginInfo[]; github?: GithubAccount; message?: string | null };
-type PluginsBridge = {
+export type PluginsBridge = {
   state(): Promise<PluginsState>; onState(listener: (state: PluginsState) => void): () => void;
   setEnabled(on: boolean): Promise<PluginsState>; setBuiltin(id: string, on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
   revoke(id: string, options?: { forget?: boolean }): Promise<PluginsState>; restart(id: string): Promise<PluginsState>;
@@ -66,19 +66,24 @@ type PluginsBridge = {
   selectGithubAccount?(login: string): Promise<PluginsState>;
 };
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
-const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
+const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // The plugin state for components outside the settings page (status bar, notification clicks).
 export function usePluginsState() {
   const [state, setState] = useState<PluginsState | null>(null);
   useEffect(() => {
-    const bridge = pluginsBridge();
-    if (!bridge) return;
     let live = true;
-    void bridge.state().then(value => { if (live) setState(value); }, () => {});
-    const off = bridge.onState(value => setState(value));
-    return () => { live = false; off(); };
+    let off: (() => void) | undefined;
+    const attach = () => {
+      const bridge = pluginsBridge();
+      if (!bridge) return;
+      off?.();
+      void bridge.state().then(value => { if (live) setState(value); }, () => {});
+      off = bridge.onState(value => { if (live) setState(value); });
+    };
+    attach(); window.addEventListener('ade:verify-plugins-ready', attach);
+    return () => { live = false; off?.(); window.removeEventListener('ade:verify-plugins-ready', attach); };
   }, []);
   return state;
 }
@@ -98,6 +103,7 @@ export function PluginTabPanel({ plugin }: { plugin: PluginInfo }) {
   };
   return <section className="plugins plugin-tab-page" role="tabpanel" aria-label={plugin.name}>
     <h2>{plugin.name}</h2>
+    {window.adeVerifyPlugins && <p className="setting-note">브라우저 테스트 세션 · 키는 임시 폴더에 테스트 키와 함께 암호화 저장됩니다. OS Keychain 보호는 적용되지 않습니다.</p>}
     {view.status && <p className="plugin-status" data-tone={view.status.tone} role="status">{view.status.text}</p>}
     {notice && <p className="setting-note" role="status">{notice}</p>}
     <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
@@ -251,7 +257,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     scroller?.scrollTo({ top: 0 });
   }, [selected]);
   if (!bridge) {
-    const text = '플러그인은 데스크톱 앱에서만 쓸 수 있습니다.';
+    const text = '플러그인은 데스크톱 앱 또는 start-ui.mjs의 격리 브라우저 테스트 세션에서 쓸 수 있습니다.';
     return matches(text) ? <p className="setting-note setting-hit">{text}</p> : null;
   }
   if (!state) {
@@ -314,6 +320,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
 
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+    {window.adeVerifyPlugins && <p className="setting-note">브라우저 테스트 세션 · 키는 임시 폴더에 테스트 키와 함께 암호화 저장됩니다. OS Keychain 보호는 적용되지 않습니다.</p>}
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
     {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
     {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}

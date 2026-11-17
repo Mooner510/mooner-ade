@@ -24,6 +24,10 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); }
+.verify-plugin-confirm { max-width: min(760px, 90vw); max-height: 85vh; padding: 24px; background: var(--surface); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 12px; }
+.verify-plugin-confirm::backdrop { background: #0009; }
+.verify-plugin-confirm pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; font: inherit; }
+.verify-plugin-confirm button { margin: 8px 8px 0 0; }
 /* scrollbars: a slim rounded thumb on a clear track, no arrow buttons; it widens and brightens under the pointer */
 :root { --scroll-thumb: #ffffff1c; --scroll-thumb-hover: #ffffff38; --scroll-thumb-active: #ffffff52; }
 :root[data-theme=light] { --scroll-thumb: #0000001f; --scroll-thumb-hover: #0000003d; --scroll-thumb-active: #00000057; }

@@ -3,7 +3,7 @@
 import { boot, fakeHub, sleep, S, WebSocket } from './lib.mjs'; import { spawn } from 'node:child_process'; import { writeFile, readFile, mkdtemp } from 'node:fs/promises'; import { tmpdir } from 'node:os'; import { join } from 'node:path';
 // No web build at all: both servers run ADE_DEV=1, i.e. they serve apps/web/src through an in-process Vite dev server (HMR, so a source edit shows up in
 // the open page within a second; no apps/web/dist, nothing to rebuild or wipe). A production bundle (`pnpm --filter @mooner/ade-web build`) is only for the packaged app.
-const dev = { ADE_DEV: '1' };
+const dev = { ADE_DEV: '1', ADE_VERIFY_PLUGINS: '1' };
 // VERIFY_TEMP=<an earlier env.json's temp>: reopen that session's data, home and repo (saved API keys and chats) instead of a fresh one.
 const hub = await fakeHub(); const s = await boot({ env: { ADE_HUB_URL: hub.url, ...dev }, temp: process.env.VERIFY_TEMP, keep: true });
 const second = await boot({ env: { ADE_HUB_URL: hub.url, ...dev }, repoFiles: false }); // for the no-project welcome screen: forget the auto-opened project below

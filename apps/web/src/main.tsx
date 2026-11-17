@@ -281,7 +281,8 @@ function Shell() {
   useEffect(() => {
     const token = new URLSearchParams(location.hash.slice(1)).get('token');
     history.replaceState(null, '', location.pathname);
-    api('auth', { token }).then(async () => {
+    api('auth', { token }).then(async capabilities => {
+      if (import.meta.env.DEV && capabilities.verifyPlugins) (await import('./verify-plugins')).installVerifyPlugins();
       const [saved, list] = await Promise.all([api<{ openProjects: Entry[]; activeProjectId: string; settings: Settings | null }>('app/state'), api<Recent[]>('recent')]);
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
