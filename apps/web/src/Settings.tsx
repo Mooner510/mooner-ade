@@ -1,4 +1,4 @@
-import { appKey, appKeyDefs, combosOverlap, showAppKey } from './shortcuts';
+import { appKey, appKeyDefs, appKeyInTerminalByDefault, combosOverlap, showAppKey } from './shortcuts';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
@@ -660,14 +660,20 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
   const [editing, setEditing] = useState(''), [note, setNote] = useState('');
   const definitions = [...appKeyDefs.map(def => ({ ...def, scope: 'appKeys' as const })), ...chatKeyDefs.map(def => ({ ...def, group: '채팅 모드 (입력창에서)', scope: 'chatKeys' as const }))];
   const current = (def: typeof definitions[number]) => def.scope === 'appKeys' ? appKey(settings.appKeys, def.id)! : chatKey(settings.chatKeys, def.id as typeof chatKeyDefs[number]['id']);
-  const changed = definitions.some(def => !combosOverlap(current(def), def.keys));
+  const inTerminal = (def: typeof definitions[number]) => settings.termKeys?.[def.id] ?? appKeyInTerminalByDefault(settings, def.id);
+  const changed = definitions.some(def => !combosOverlap(current(def), def.keys)) || Object.keys(settings.termKeys ?? {}).length > 0;
   const bind = (def: typeof definitions[number], combo: string) => {
     if (settings.chatSendKey === 'mod-enter' && combosOverlap(combo, 'mod+enter')) { setNote('메시지 전송에서 이미 쓰는 단축키입니다.'); return; }
     const clash = definitions.find(other => (other.scope !== def.scope || other.id !== def.id) && combosOverlap(current(other), combo));
     if (clash) { setNote(`"${clash.label}"에서 이미 쓰는 단축키입니다.`); return; }
     const { [def.id]: _drop, ...rest } = settings[def.scope] ?? {};
-    onChange({ ...settings, [def.scope]: combosOverlap(combo, def.keys) ? rest : { ...rest, [def.id]: combo } });
+    const { [def.id]: _term, ...termRest } = settings.termKeys ?? {};
+    onChange({ ...settings, [def.scope]: combosOverlap(combo, def.keys) ? rest : { ...rest, [def.id]: combo }, ...(def.scope === 'appKeys' && combosOverlap(combo, def.keys) ? { termKeys: termRest } : {}) });
     setEditing(''); setNote('');
+  };
+  const setInTerminal = (def: typeof definitions[number], on: boolean) => {
+    const { [def.id]: _drop, ...rest } = settings.termKeys ?? {};
+    onChange({ ...settings, termKeys: on === appKeyInTerminalByDefault(settings, def.id) ? rest : { ...rest, [def.id]: on } });
   };
   const capture = (event: KeyboardEvent<HTMLButtonElement>, def: typeof definitions[number]) => {
     if (event.nativeEvent.isComposing) return;
@@ -678,7 +684,7 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
     bind(def, combo);
   };
   return <>
-    <Row title="단축키 초기화" hint="앱과 채팅의 단축키를 모두 기본값으로 되돌립니다."><button type="button" disabled={!changed} onClick={() => { onChange({ ...settings, appKeys: {}, chatKeys: {} }); setEditing(''); setNote(''); }}><Icon name="refresh" size={13} />단축키 초기화</button></Row>
+    <Row title="단축키 초기화" hint="앱과 채팅의 단축키를 모두 기본값으로 되돌립니다."><button type="button" disabled={!changed} onClick={() => { onChange({ ...settings, appKeys: {}, chatKeys: {}, termKeys: {} }); setEditing(''); setNote(''); }}><Icon name="refresh" size={13} />단축키 초기화</button></Row>
     <p className="setting-note">단축키를 클릭한 뒤 새 조합을 누르세요. Esc 또는 다른 곳을 클릭하면 취소합니다.</p>
     {note && <p className="hint" role="alert">{note}</p>}
     {[...new Set(definitions.map(def => def.group))].map(group => {
@@ -687,8 +693,9 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
       return <div className="shortcut-list setting-block" key={group}>
       <h3>{group}</h3>
       {items.map(def => {
-        const id = `${def.scope}:${def.id}`, custom = !combosOverlap(current(def), def.keys);
+        const id = `${def.scope}:${def.id}`, custom = !combosOverlap(current(def), def.keys) || (def.scope === 'appKeys' && settings.termKeys?.[def.id] !== undefined);
         return <div key={id} className="setting-hit"><span>{def.label}</span><span className="key-edit">
+          {def.scope === 'appKeys' && <label className="key-term" title="켜면 터미널에 포커스가 있어도 이 단축키가 ADE 동작으로 실행됩니다. 끄면 셸·CLI가 키를 받습니다."><input type="checkbox" checked={inTerminal(def)} onChange={event => setInTerminal(def, event.target.checked)} />터미널에서도</label>}
           <button type="button" className="kbd-edit" aria-label={`${def.label} 단축키 변경`} aria-pressed={editing === id} onClick={() => { setEditing(id); setNote(''); }} onKeyDown={event => editing === id && capture(event, def)} onBlur={() => setEditing('')}>
             {editing === id ? '키를 누르세요…' : <kbd>{def.scope === 'appKeys' ? showAppKey(settings.appKeys, def.id) : showCombo(current(def))}</kbd>}
           </button>

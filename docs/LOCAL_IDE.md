@@ -61,7 +61,7 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 | `mod+Alt+F` | 피드백 요청 패널 전환 |
 | `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 시작 |
 
-터미널에 포커스가 있을 때 일반 Ctrl 조합은 셸·CLI로 전달합니다. Ctrl+D는 문자 삭제/EOF, Alt+W는 CLI 입력으로 남겨 둡니다. (Windows PowerShell은 PSReadLine이 Ctrl+D를 기본으로 연결하지 않아, ADE 터미널이 시작할 때 `DeleteCharOrExit`로 연결합니다. 프로필이 이미 지정했다면 건드리지 않습니다.) 사용자가 설정에서 직접 지정한 단축키는 기본키보다 우선합니다.
+터미널에 포커스가 있을 때 일반 Ctrl 조합은 기본적으로 셸·CLI로 전달하지만, 분할(Ctrl+D·Ctrl+Shift+D)과 Ctrl+PageUp/PageDown은 터미널에서도 앱 동작으로 실행합니다. 터미널에 ^D(EOF)를 보내려면 `Ctrl+Alt+D`(설정에서 변경) 또는 명령 팔레트의 "터미널에 ^D(EOF) 보내기"를 씁니다. 설정 > 단축키의 "터미널에서도" 체크로 키마다 앱이 가져갈지 셸에 줄지 고를 수 있습니다(`settings.termKeys`). Alt+W는 CLI 입력으로 남겨 둡니다. (Windows PowerShell은 PSReadLine이 Ctrl+D를 기본으로 연결하지 않아, ADE 터미널이 시작할 때 `DeleteCharOrExit`로 연결합니다. 프로필이 이미 지정했다면 건드리지 않습니다.) 사용자가 설정에서 직접 지정한 단축키는 기본키보다 우선합니다.
 
 ### 글자 편집
 
