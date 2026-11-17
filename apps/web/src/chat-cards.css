@@ -1,0 +1,93 @@
+/* /usage and /btw cards in the chat thread. Client-only: neither is ever sent to the agent. */
+.usage-card > div, .btw-card > div { padding-top: 10px; }
+
+/* ── /usage ─────────────────────────────────────────────── */
+.uc { --uc-in: var(--info); --uc-out: var(--accent); --uc-cr: var(--add); --uc-cw: var(--warn);
+  display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 7%, var(--surface)), var(--surface) 55%); box-shadow: 0 1px 0 #ffffff08 inset; }
+.uc-head { display: flex; align-items: center; gap: 8px; }
+.uc-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: 13.5px; }
+.uc-badges { display: inline-flex; flex: 1; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.uc-badge { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 550; color: var(--muted); background: var(--hover); border: 1px solid var(--border); }
+.uc-badge.plan { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.uc-badge.key { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.uc-badge.compact { margin-left: 6px; color: var(--term-magenta, var(--ask)); background: color-mix(in srgb, var(--term-magenta, var(--ask)) 12%, transparent); border-color: transparent; }
+.uc-section { display: flex; flex-direction: column; gap: 10px; }
+.uc-section h4 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.uc-note { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.uc-note.warn { color: var(--warn); }
+
+.uc-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.uc-tile { position: relative; display: flex; align-items: center; gap: 14px; padding: 12px 14px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); overflow: hidden; }
+.uc-tile.skeleton { min-height: 100px; background: linear-gradient(100deg, var(--raised) 30%, var(--hover) 50%, var(--raised) 70%) 0 0 / 200% 100%; animation: uc-shimmer 1.2s linear infinite; }
+.uc-tile-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; }
+.uc-tile-body b { font-size: 13.5px; }
+.uc-tile-body span, .uc-tile-body small { color: var(--muted); }
+.uc-tile-body small { font-size: 11.5px; }
+.uc-pace { align-self: flex-start; margin-top: 4px; padding: 0 7px; border-radius: 8px; font-style: normal; font-size: 11px; font-weight: 550; }
+.uc-pace.fast { color: var(--error); background: color-mix(in srgb, var(--error) 13%, transparent); }
+.uc-pace.even { color: var(--info); background: color-mix(in srgb, var(--info) 13%, transparent); }
+.uc-pace.slow { color: var(--add); background: color-mix(in srgb, var(--add) 13%, transparent); }
+.uc-time { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--hover); }
+.uc-time i { display: block; height: 100%; background: color-mix(in srgb, var(--muted) 55%, transparent); }
+
+.uc-ring { flex: none; }
+.uc-ring .track { fill: none; stroke: var(--hover); stroke-width: 7; }
+.uc-ring .track { stroke: color-mix(in srgb, var(--muted) 22%, transparent); }
+.uc-ring .fill { fill: none; stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .6s var(--ease-out, ease-out); }
+.uc-ring .fill.graded { stroke: hsl(var(--usage-hue) 68% 52%); }
+.uc-ring text { fill: var(--fg); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.uc-ring text.graded { fill: hsl(var(--usage-hue) 72% 58%); }
+:root[data-theme=light] .uc-ring text.graded { fill: hsl(var(--usage-hue) 85% 32%); }
+.uc-ring .unit { font-size: 11px; font-weight: 600; }
+
+.uc-share { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; color: var(--muted); }
+.uc-share b { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.uc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.uc-stats > div { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); min-width: 0; }
+.uc-stats small { font-size: 11px; color: var(--muted); }
+.uc-stats b { font-size: 14px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uc-stats em { font-style: normal; font-size: 11px; color: var(--muted); }
+
+.uc-context { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+.uc-context > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.uc-context b { font-variant-numeric: tabular-nums; }
+.uc-context b.graded { color: hsl(var(--usage-hue) 72% 58%); }
+:root[data-theme=light] .uc-context b.graded { color: hsl(var(--usage-hue) 85% 32%); }
+.uc progress { width: 100%; height: 7px; border: 0; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--muted) 20%, transparent); appearance: none; }
+.uc progress::-webkit-progress-bar { background: transparent; }
+.uc progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; transition: width .5s var(--ease-out, ease-out); }
+.uc progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
+.uc progress.graded::-webkit-progress-value { background: hsl(var(--usage-hue) 72% 52%); }
+.uc progress.graded::-moz-progress-bar { background: hsl(var(--usage-hue) 72% 52%); }
+
+.uc-tokens { display: flex; flex-direction: column; gap: 7px; }
+.uc-stack { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; }
+.uc-stack i { min-width: 3px; }
+.uc-stack i, .uc-tokens li i { background: var(--tone); }
+.uc-stack .in, .uc-tokens li .in { --tone: var(--uc-in); }
+.uc-stack .out, .uc-tokens li .out { --tone: var(--uc-out); }
+.uc-stack .cr, .uc-tokens li .cr { --tone: var(--uc-cr); }
+.uc-stack .cw, .uc-tokens li .cw { --tone: var(--uc-cw); }
+.uc-tokens ul { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); }
+.uc-tokens li { display: inline-flex; align-items: center; gap: 6px; }
+.uc-tokens li i { width: 8px; height: 8px; border-radius: 50%; }
+.uc-tokens li b { color: var(--fg); font-variant-numeric: tabular-nums; }
+@keyframes uc-shimmer { to { background-position: -200% 0; } }
+
+/* ── /btw ───────────────────────────────────────────────── */
+.bc { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 9px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.btw-card.error .bc { border-color: color-mix(in srgb, var(--error) 50%, var(--border)); background: color-mix(in srgb, var(--error) 5%, var(--surface)); }
+.bc-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bc-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; letter-spacing: .05em; color: var(--accent-fg); background: var(--accent); }
+.bc-question { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13px; }
+.bc-wait { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.bc-answer { font-size: 13.5px; line-height: 1.6; }
+.bc-answer > :first-child { margin-top: 0; }
+.bc-answer > :last-child { margin-bottom: 0; }
+.bc-error { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--error); }
+.bc-error span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.bc-retry { flex: none; padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: 6px; font-size: 12px; color: var(--fg); }
+.bc-foot { font-size: 11px; color: var(--faint); }
+@media (prefers-reduced-motion: reduce) { .uc-tile.skeleton { animation: none; } .uc-ring .fill, .uc progress::-webkit-progress-value { transition: none; } }
