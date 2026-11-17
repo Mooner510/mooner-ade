@@ -363,10 +363,9 @@ const chatProcHost = ptyHost?.procs ? {
   spawnProc: (file, args, { cwd, env, meta }) => ptyHostLost ? spawnAgent(file, args, { cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) : ptyHost.spawnProc(file, args, { cwd, env, meta }),
   attachProc: (key, after) => ptyHostLost ? Promise.reject(new Error('pty-host disconnected')) : ptyHost.attachProc(key, after)
 } : null;
-// `auth` (chat/open from a plugin, Claude only) picks this chat's login: { apiKey } runs it on that key, {} on the CLI login whatever Settings > AI 툴 says.
-async function openChat(project, id, { cwd, agent, defaults, auth = null }) {
-  const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent,
-    env: auth ? () => ({ ...pluginEnv(), ...(auth.apiKey && { ANTHROPIC_API_KEY: auth.apiKey }) }) : chatEnv(agent), executableArgs: auth ? () => [] : chatArgs(agent), procHost: chatProcHost,
+async function openChat(project, id, { cwd, agent, defaults }) {
+  const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
+    keyAvailable: () => agentKeys.hasKey(agent),
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles, recover: () => checkAgents(), defaults,
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
@@ -471,8 +470,9 @@ function claudeInit(cwd, env, refresh = false) {
   return cached.promise;
 }
 // What a chat of `agent` launches with: the plugin environment plus the API key when the user chose one for that agent (Settings > AI 툴).
-const chatEnv = agent => () => ({ ...pluginEnv(), ...agentKeys.launch(agent).env });
-const chatArgs = agent => () => agentKeys.launch(agent).args;
+// `auth` is the chat's own login choice (its meta); the chat passes it at every start.
+const chatEnv = agent => auth => ({ ...pluginEnv(), ...agentKeys.launch(agent, auth).env });
+const chatArgs = agent => auth => agentKeys.launch(agent, auth).args;
 // Claude's model list: with an API key the CLI keeps no catalog of its own, so ask the Models API (cached an hour per key); otherwise the CLI's catalog.
 let apiCatalog = null; // { key, at, promise }
 async function claudeCatalog(refresh = false) {
@@ -975,8 +975,11 @@ async function route(action, input, project) {
           const agent = input.agent === undefined ? 'claude' : input.agent, defaults = input.defaults && typeof input.defaults === 'object' ? input.defaults : {};
           // What was last picked in this project (mode, model, effort) wins over Settings' defaults; openChatSession only applies it to a new chat, and only what the agent supports.
           const last = (await readJson(path.join(project.directory, 'last-picks.json'), {}).catch(() => ({})))[agent];
-          const auth = agent === 'claude' && input.auth === 'login' ? {} : agent === 'claude' && input.auth === 'key' ? { apiKey: /^sk-ant-[\x21-\x7e]{8,500}$/.test(input.apiKey ?? '') ? input.apiKey : (() => { throw fault('INVALID_INPUT', 'API 키 형식이 올바르지 않습니다.'); })() } : null;
-          chat = await openChat(project, id, { cwd, agent, auth, defaults: { ...defaults, ...(last && typeof last === 'object' ? last : {}) } });
+          // A new chat starts on the login named here (a plugin picks per job), else on Settings > AI 툴's choice for new chats; it keeps that choice from then on.
+          if (input.auth !== undefined && input.auth !== 'login' && input.auth !== 'key') throw fault('INVALID_INPUT', '잘못된 로그인 방식입니다.');
+          const auth = input.auth ?? agentKeys.defaultAuth(agent);
+          if (auth === 'key' && !agentKeys.hasKey(agent)) throw fault('API_KEY_MISSING', 'API 키가 등록되어 있지 않습니다. 설정 → AI 툴에서 등록하세요.', 409);
+          chat = await openChat(project, id, { cwd, agent, defaults: { ...defaults, ...(last && typeof last === 'object' ? last : {}), auth } });
           // A plugin asks for the chat to be shown: windows with this project open add it as a tab.
           if (input.show === true) broadcast(project, { type: 'plugin/chat', id, agent, cwd });
         } finally { project.openingChats--; }
@@ -1065,7 +1068,7 @@ async function route(action, input, project) {
     case 'chat/set': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.set({ configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
+      await chat.set({ auth: input.auth, configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
       // Remembered per project and agent for the next new chat: the mode, and the model with its effort as a pair (a new model drops the old effort,
       // like the chat itself does). bypassPermissions is never inherited. Cursor's model and effort are config options, not remembered.
       const pick = {}, ok = value => typeof value === 'string' && value.length <= 200;

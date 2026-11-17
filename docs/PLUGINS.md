@@ -289,8 +289,8 @@ MoonerADE → 플러그인
 `workspace` 권한이 있으면 `api`로 채팅도 열 수 있습니다(`chat/open` → `chat/send` → 이후 받는 `chat/event`). 플러그인용으로 더해진 입력은 이렇습니다.
 
 - `path`: 프로젝트 폴더 밖이어도 **그 프로젝트 저장소의 git worktree**이면 채팅의 작업 폴더로 쓸 수 있습니다(다른 폴더는 거절).
-- `auth`: Claude 채팅에서 그 채팅만의 로그인 방식. `'login'`은 설정 → AI 툴에 저장된 키와 상관없이 CLI 로그인, `'key'`는 `apiKey`(`sk-ant-…`)로 실행합니다.
-  키는 그 채팅 프로세스의 환경 변수로만 가고 저장되지 않습니다. 이 채팅을 앱이 다시 열 때(재시작 등)는 설정 → AI 툴의 선택을 따릅니다.
+- `auth`: 이 채팅이 시작할 로그인 방식. `'login'`은 CLI 로그인(플랜), `'key'`는 **설정 → AI 툴에 등록된 API 키**입니다. 플러그인이 키를 보내거나 저장하지 않습니다(키가 없으면 `409 API_KEY_MISSING`).
+  생략하면 설정 → AI 툴의 "새 채팅 인증 방식"을 따릅니다. 한 번 정해진 방식은 채팅이 갖고 있으며(앱 재시작·`/clear`에도 유지), 사용자가 채팅 상태 줄의 Plan/API Usage 버튼에서 바꿀 수 있습니다.
 - `show: true`: 그 프로젝트를 연 창에 채팅이 새 탭으로 나타납니다. 창이 그 프로젝트를 열고 있지 않으면 탭은 생기지 않고 채팅은 그대로 실행됩니다.
 - 턴이 끝나면 `{type:'chat/event', id, event:{kind:'result', status:'success'|'failed', text, costUsd, durationMs}}`가 옵니다(먼저 `subscribe`).
 
