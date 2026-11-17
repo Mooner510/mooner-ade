@@ -1,4 +1,5 @@
-import { showAppKey } from './shortcuts';
+import { AppKeysContext, showAppKey } from './shortcuts';
+import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
@@ -12,9 +13,11 @@ import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
-import { Changelog, hasUnreadChangelog } from './Changelog';
+import { Changelog, entries as changelogEntries, hasUnreadChangelog, syncChangelogVersion } from './Changelog';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { errorText, pushError } from './errors';
+import { byLastUsed, ideList, rememberIde, type IdeList } from './ide-open';
+import { copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -33,6 +36,7 @@ import './style.css';
 type Entry = { root: string; id: string };
 type Recent = { id?: string; root: string; pinned?: boolean };
 type TabDropMode = 'before' | 'after' | 'merge';
+type ProjectMenuTarget = { x: number; y: number; root: string; id: string };
 type TabMenuTarget = { x: number; y: number; root: string; tabId: string; paneId?: string };
 function tabDropMode(event: React.DragEvent<Element>, sourceId: string, targetId: string): TabDropMode {
   const box = event.currentTarget.getBoundingClientRect(), ratio = (event.clientY - box.top) / box.height;
@@ -195,6 +199,47 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
     </Modal>}</>;
 }
 
+// Arrow-key walk through a popup menu's enabled buttons, Escape closes it (shared by the tab and project menus).
+function menuKeys(ref: { current: HTMLDivElement | null }, onClose: () => void) {
+  return (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])], at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    buttons[(at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+  };
+}
+
+// Right-click menu for a sidebar project: show its folder in the file manager, pick a file to open, or open the whole project in an editor found on this computer.
+function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectMenuTarget; handle?: WorkspaceHandle; onPickFile(): void; onClose(): void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [list, setList] = useState<IdeList | null>(null);
+  useEffect(() => {
+    let live = true;
+    ideList().then(value => { if (live) setList(value); }, () => { if (live) setList({ ides: [], fileManager: '파일 관리자' }); });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, [Boolean(list)]);
+  const fail = (cause: unknown) => pushError(target.root, errorText(cause));
+  const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: '.' }).catch(fail); };
+  const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span></button>;
+  const ides = byLastUsed(list?.ides ?? []);
+  return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}
+      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.max(8, Math.min(target.y, innerHeight - 150 - 30 * Math.max(1, ides.length))) }}>
+      <small className="menu-title" title={target.root}>{shortName(target.root)}</small>
+      <button role="menuitem" onClick={() => open('files')}><Icon name="folderOpen" size={15} /><span className="menu-label">{list ? `${list.fileManager}에서 폴더 열기` : '폴더 열기'}</span></button>
+      {item('fileOpen', '파일 열기…', onPickFile)}
+      <hr />
+      <small className="menu-title">편집기로 프로젝트 열기</small>
+      {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><Icon name="code" size={15} /><span className="menu-label">{ide.label}</span></button>)}
+      {!list && <small className="menu-title">편집기를 찾는 중…</small>}
+      {list && !ides.length && <small className="menu-title">이 컴퓨터에서 감지된 편집기가 없습니다</small>}
+      <hr />
+      {item('copy', '경로 복사', () => copyText(target.root))}
+    </div></>;
+}
+
 // Right-click menu for a sidebar tab or split terminal: only the everyday actions (detach, rename, close); moving and merging are drag gestures and shortcuts.
 function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tabs: WorkspaceStatus['tabs']; handle?: WorkspaceHandle; onClose(): void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -204,13 +249,7 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
   const pane = tab.panes.find(item => item.id === target.paneId);
   const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
     <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span>{keys && <kbd>{keys}</kbd>}</button>;
-  const onKey = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    event.preventDefault();
-    const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])], at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    buttons[(at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
-  };
+  const onKey = menuKeys(ref, onClose);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
     <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
       style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 200 : 130)) }}>
@@ -248,13 +287,17 @@ function Shell() {
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog);
+  useEffect(() => {
+    const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
+    void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => { syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0'); setChangelogUnread(hasUnreadChangelog()); });
+  }, []);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
   const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ root: string; id: string; pane?: string } | null>(null), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
-  const [menu, setMenu] = useState<TabMenuTarget | null>(null);
+  const [menu, setMenu] = useState<TabMenuTarget | null>(null), [projectMenu, setProjectMenu] = useState<ProjectMenuTarget | null>(null);
   const [projectDrag, setProjectDrag] = useState(''), [projectDrop, setProjectDrop] = useState<{ root: string; after: boolean } | null>(null);
   const { hub, connection } = useHub(ready);
   const entriesRef = useRef(entries); entriesRef.current = entries;
@@ -399,7 +442,9 @@ function Shell() {
     ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
-  const onOpenSettings = useCallback(() => setSettingsOpen('default'), []);
+  // With an agent, Settings opens on that agent's AI 툴 tab (where its API key is).
+  // (Also used directly as a click handler, so anything that is not an agent name, such as the event, means the default page.)
+  const onOpenSettings = useCallback((agent?: unknown) => setSettingsOpen(agent === 'claude' || agent === 'codex' || agent === 'cursor' ? agent : 'default'), []);
   const onOpenPlugins = useCallback(() => setSettingsOpen('plugins'), []);
   useEffect(() => onPluginsOpen(onOpenPlugins), [onOpenPlugins]);
 
@@ -427,7 +472,7 @@ function Shell() {
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
-  return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
+  return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
@@ -466,14 +511,19 @@ function Shell() {
               setProjectDrag(''); setProjectDrop(null);
             }
           };
-          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectSource} {...projectTarget}
-            onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
+          const openProjectMenu = (event: React.MouseEvent | React.KeyboardEvent) => {
+            event.preventDefault(); event.stopPropagation(); setMenu(null);
+            const box = (event.currentTarget as HTMLElement).getBoundingClientRect(), mouse = 'clientX' in event && event.clientX ? event : null;
+            setProjectMenu({ x: mouse ? mouse.clientX : box.left + 24, y: mouse ? mouse.clientY : box.bottom, root: entry.root, id: entry.id });
+          };
+          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectSource} {...projectTarget} onContextMenu={openProjectMenu}
+            onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openProjectMenu(event); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
           </div>;
           return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} {...projectTarget}>
-            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={hint} {...projectSource}
-              onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
+            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={`${hint}\n우클릭: 폴더·파일·편집기로 열기`} {...projectSource} onContextMenu={openProjectMenu}
+              onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openProjectMenu(event); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name">{name}</span>
@@ -594,12 +644,14 @@ function Shell() {
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
+    {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
-    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
+    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
     {changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
-  </div>{tutorial}</>;
+  </div>{tutorial}</AppKeysContext.Provider>;
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
+installTooltips();
 void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<Shell />));

@@ -8,7 +8,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { createLocalRuntime, LocalProcesses } from './runtime.js';
+import { createLocalRuntime, LocalProcesses, LocalWorkspace } from './runtime.js';
+import { listIdes, openPath } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
@@ -18,13 +19,14 @@ import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
 import { uploadOverSsh } from './ssh-upload.js';
+import { createClaudeUpdater } from './claude-update.js';
 import { createRemoteAgent } from './remote-agent.js';
 import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remote-claude.js';
 import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { chatMcpServers, deniedMcpTools, readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
 import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
@@ -33,7 +35,7 @@ import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, 
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
-import { UI_PROMPT } from './chat-ui-prompt.js';
+import { chatLaunchFiles } from './chat-launch-files.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
@@ -372,7 +374,7 @@ async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
     keyAvailable: () => agentKeys.hasKey(agent),
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
-    prepare: chatLaunchFiles, recover: () => checkAgents(), defaults,
+    prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
   project.chats.set(id, chat);
   return chat;
@@ -538,6 +540,12 @@ async function readiness(root) {
 // is shared by all projects for a while; the "다시 확인" button forces a fresh one.
 const READINESS_TTL = 10 * 60_000;
 let agentReadiness = null;
+// The Claude Code CLI's own update (the chat's "새 버전" notice and its 업데이트 button). A new CLI changes the readiness reading and may change
+// the model catalog and slash commands, so those are asked again afterwards; running chats keep the binary they started with (see claude-update.js).
+const claudeUpdater = createClaudeUpdater({
+  exec: (file, args, options) => new LocalProcesses({ cwd: os.homedir() }).exec(file, args, options),
+  onUpdated: () => { agentReadiness = null; initProbes.clear(); modelsProbe = null; }
+});
 async function cachedReadiness(root, force) {
   if (force || !agentReadiness || (agentReadiness.done && Date.now() - agentReadiness.at > READINESS_TTL)) {
     const entry = { at: Date.now(), done: false, value: readiness(root) };
@@ -649,23 +657,6 @@ async function createProject(input) {
 function trimRecent(list) {
   let unpinned = 0;
   return list.filter(item => item.pinned || ++unpinned <= 30);
-}
-// The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript, and
-// the plugin tools the user turned off as deny rules in a --settings file.
-// A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
-async function chatLaunchFiles(root, context) {
-  const servers = chatMcpServers(context);
-  // The interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
-  const promptFile = context.interactiveUi ? path.join(root, 'ade-ui-prompt.md') : undefined;
-  if (promptFile) await fs.writeFile(promptFile, UI_PROMPT, { mode: 0o600 });
-  if (!servers.length) return { promptFile };
-  const mcpFile = path.join(root, 'claude-mcp.json');
-  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
-  const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-  if (!denied.length && !allowed.length) return { mcpFile, promptFile };
-  const settingsFile = path.join(root, 'claude-settings.json');
-  await fs.writeFile(settingsFile, JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }), { mode: 0o600 });
-  return { mcpFile, settingsFile, promptFile };
 }
 // Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
@@ -806,6 +797,7 @@ async function route(action, input, project) {
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
+  if (action === 'ide/list') return listIdes({ force: input.force === true });
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();
@@ -829,6 +821,8 @@ async function route(action, input, project) {
     await closeProject(project, { force: input.force === true });
     return {};
   }
+  if (action === 'agent/update-check') return claudeUpdater.check(input.force === true);
+  if (action === 'agent/update') return claudeUpdater.update();
   if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
@@ -876,7 +870,11 @@ async function route(action, input, project) {
           try {
             const content = await readText(workspace, change.path);
             untracked.set(change.path, content ? content.split('\n').length - Number(content.endsWith('\n')) : 0);
-          } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
+          } catch (error) {
+            // An atomic save (<file>.tmp.<pid>.<hash>, then rename) can leave a temp file git lists as untracked but that is gone (or locked on Windows) when read: null drops it below.
+            if (['ENOENT', 'EBUSY', 'EPERM', 'EACCES'].includes(error.code)) untracked.set(change.path, null);
+            else if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error;
+          }
         }
         project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats, untracked });
       }
@@ -897,9 +895,10 @@ async function route(action, input, project) {
       }
       for (const change of changes) {
         const lines = change.status === '??' ? untracked.get(change.path) : undefined;
-        if (lines !== undefined) { additions += lines; change.added = lines; change.deleted = 0; }
+        if (lines != null) { additions += lines; change.added = lines; change.deleted = 0; }
       }
-      const result = { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
+      const listed = changes.filter(change => change.status !== '??' || untracked.get(change.path) !== null);
+      const result = { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes: listed, clean: listed.length === 0, additions, deletions };
       if (stamp) project.gitStatus.set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
       return result;
     }
@@ -1029,6 +1028,13 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       await chat.retry();
+      return {};
+    }
+    // Allow what auto mode blocked (the CLI's /permissions "Recently blocked"): for this chat only; retry also tells the agent to run it again.
+    case 'chat/allow-blocked': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.allowBlocked(input.toolUseIds, { retry: input.retry !== false });
       return {};
     }
     case 'chat/send': {
@@ -1186,6 +1192,14 @@ async function route(action, input, project) {
       if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw fault('INVALID_INPUT', '파일은 비어 있지 않고 8MB 이하여야 합니다.');
       const name = path.basename(String(input.name ?? '')).replace(/[^\w.\-가-힣]+/g, '_').slice(-80) || 'file';
       return { path: await savePaste(bytes, `upload-${randomUUID()}-${name}`) };
+    }
+    case 'ide/open': {
+      // The editors installed here (ide/list) or the OS file manager ('files'); a chat's path is relative to the folder that chat works in (its worktree, if it has one).
+      const base = new LocalWorkspace(input.chatId ? project.chats.get(input.chatId)?.cwd || workspace.root : workspace.root);
+      let target;
+      try { target = await base.resolve(text(input.path ?? '.', '경로', 4096)); } catch (error) { if (error.code === 'INVALID_INPUT') throw error; throw fault('INVALID_INPUT', '프로젝트 밖의 경로는 열 수 없습니다.'); }
+      const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
+      return openPath({ ide: text(input.ide, '편집기', 100), root: base.root, target, line: whole(input.line), column: whole(input.column) });
     }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.

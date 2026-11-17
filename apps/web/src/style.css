@@ -939,7 +939,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-step[data-status=done] .plugin-step-state { color: var(--add); }
 .plugin-step-body { display: flex; flex-direction: column; gap: 12px; padding: 0 14px 14px 46px; }
 /* The sticky button bar is for a card's form; in a step it would be a darker box sticking out of the step's padding. */
-.plugin-step-body > .plugin-actions { position: static; margin: 0; padding: 0; border-top: 0; border-radius: 0; background: none; }
+.plugin-step-body .plugin-actions { position: static; margin: 0; padding: 0; border-top: 0; border-radius: 0; background: none; }
 .plugin-step-detail { margin: 0; color: var(--muted); line-height: 1.55; white-space: pre-line; }
 .plugin-parts { display: flex; flex-direction: column; gap: 12px; }
 .plugin-guide-done { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
@@ -1645,6 +1645,12 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-approval-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .chat-approval-agent b { font-weight: 600; color: var(--fg); }
 .chat-agents-done[data-outcome="approval"] { color: var(--warn); }
 .chat-agent-state[data-status="approval"] { gap: 3px; color: var(--warn); font-size: 11.5px; white-space: nowrap; }
+.chat-blocked-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; } /* auto mode's refusals: one row per blocked call */
+.chat-blocked-list label { flex-direction: row; align-items: center; gap: 8px; min-width: 0; cursor: pointer; } /* the app's base label is a column */
+.chat-blocked-list input { flex: none; width: auto; margin: 0; }
+.chat-blocked-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; } .chat-blocked-main code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.chat-blocked-list small { display: block; margin: 2px 0 0 24px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.chat-blocked-note { margin: 8px 0 0; color: var(--faint); font-size: 11.5px; }
 .chat-approval-body { padding: 0 12px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .chat-approval footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
@@ -1706,7 +1712,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-composer:focus-within { border-color: color-mix(in srgb, var(--fg) 38%, var(--border-strong)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent); }
 .chat-composer textarea { resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; line-height: 1.5; max-height: 220px; min-height: 24px; }
 .chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
-.chat-input-row textarea { flex: 1; min-width: 0; padding: 2px 0; font-size: var(--chat-font); }
+.chat-input-row textarea { flex: 1; min-width: 0; padding: 3px 0 1px; font-size: var(--chat-font); } /* 3px/1px, not 2px/2px: the ink of Hangul sits about a pixel above the middle of its line, so the text moves down to the controls' centre line */
 .chat-attach { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; padding: 0; color: var(--muted); cursor: pointer; }
 .chat-attach:hover { background: var(--hover); color: var(--fg); }
 .chat-send { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: 4px; padding: 0; border-radius: 50%; background: var(--agent); color: var(--bg); }
@@ -1717,10 +1723,10 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
    a transform animation on that element off the compositor for good (restyling the document every frame for the whole turn). */
 .chat-send.stop::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
-/* A wide screenshot keeps its 56px height but never grows past the composer: the thumbnail is cropped (object-fit) instead of overflowing. */
+/* Thumbnails are 80px tall and as wide as the picture (56-240px, never past the composer): an extreme shape is cropped (object-fit) instead of overflowing or shrinking to a sliver. */
 .chat-attachments > span { position: relative; display: inline-block; min-width: 0; max-width: 100%; }
 .chat-attachments .chat-attachment-open { display: block; max-width: 100%; padding: 0; border: 0; border-radius: 6px; cursor: zoom-in; }
-.chat-attachments img { height: 56px; max-width: 100%; object-fit: cover; box-sizing: border-box; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.chat-attachments img { height: 80px; min-width: 56px; max-width: min(100%, 240px); object-fit: cover; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .chat-attachments .chat-attachment-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; box-sizing: border-box; display: grid; place-items: center; padding: 0; border-radius: 50%; background: var(--overlay); color: var(--muted); border: 1px solid var(--border-strong); line-height: 0; }
 .chat-attachments .chat-attachment-remove:hover { background: var(--raised); color: var(--fg); }
 .chat-attachments .chat-attachment-remove .icon { font-size: 12px !important; line-height: 1; }
@@ -1758,19 +1764,35 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .usage-basis .usage-caret { opacity: .6; transition: transform .15s var(--ease); }
 .usage-basis[aria-expanded=true] .usage-caret { transform: rotate(180deg); }
 /* Only while open: a closed popover must stay display:none (the UA rule), or it covers the button and takes its clicks. */
-.chat-stat-tip.usage-panel { max-width: 330px; padding: 10px 12px; }
-.chat-stat-tip.usage-panel:popover-open { display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
-.usage-panel .usage-options { display: flex; flex-direction: column; gap: 4px; }
-.usage-panel .usage-option { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 9px; text-align: left; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
-.usage-panel .usage-option small { color: var(--muted); font-size: 11px; }
+.chat-stat-tip.usage-panel { width: 320px; max-width: min(320px, 92vw); padding: 12px; border-radius: 10px; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
+.chat-stat-tip.usage-panel:popover-open { display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
+.usage-panel .usage-head { display: flex; flex-direction: column; gap: 2px; }
+.usage-panel .usage-head strong { margin: 0; font-size: 13px; color: var(--fg); }
+.usage-panel .usage-sub { color: var(--muted); font-size: 11px; }
+.usage-panel .usage-options { display: flex; flex-direction: column; gap: 6px; }
+.usage-panel .usage-option { display: flex; flex-direction: row; align-items: center; gap: 10px; width: 100%; padding: 9px 11px; text-align: left; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: background .15s, border-color .15s; }
+.usage-panel .usage-option-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.usage-panel .usage-option b { font-size: 12.5px; font-weight: 600; }
+.usage-panel .usage-option small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.usage-panel .usage-radio { flex: none; width: 14px; height: 14px; box-sizing: border-box; border: 1.5px solid var(--border-strong); border-radius: 50%; transition: border-color .15s, box-shadow .15s, background .15s; }
 .usage-panel .usage-option:not(:disabled):hover { background: var(--hover); border-color: var(--border-strong); }
+.usage-panel .usage-option:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .usage-panel .usage-option[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); }
+.usage-panel .usage-option[aria-checked=true] .usage-radio { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2.5px var(--overlay); }
 .usage-panel .usage-option.api[aria-checked=true] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
-.usage-panel .usage-option:disabled { opacity: .5; cursor: default; }
-.usage-panel .usage-spent { color: var(--fg); } .usage-panel .usage-spent b { color: var(--warn); font-size: 13px; font-variant-numeric: tabular-nums; }
-.usage-panel .usage-note { color: var(--muted); } .usage-panel .usage-note.warn { color: var(--warn); }
-.usage-panel .usage-panel-action { align-self: flex-start; margin-top: 2px; padding: 3px 10px; font-size: 11.5px; color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; cursor: pointer; }
+.usage-panel .usage-option.api[aria-checked=true] .usage-radio { border-color: var(--warn); background: var(--warn); }
+.usage-panel .usage-option:disabled { cursor: default; }
+.usage-panel .usage-option:disabled:not([aria-checked=true]) :is(.usage-radio, .usage-option-body) { opacity: .45; }
+.usage-panel .usage-badge { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.usage-panel .usage-spent { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 11px; border-radius: 8px; color: var(--muted); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.usage-panel .usage-spent b { color: var(--warn); font-size: 14px; font-variant-numeric: tabular-nums; }
+.usage-panel .usage-note { display: flex; gap: 6px; align-items: flex-start; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.usage-panel .usage-note .icon { flex: none; font-size: 14px; line-height: 1.4; opacity: .75; }
+.usage-panel .usage-panel-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 100%; padding: 6px 10px; font-size: 12px; color: var(--fg); border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; cursor: pointer; transition: background .15s, border-color .15s; }
+.usage-panel .usage-panel-action .icon { font-size: 15px; }
 .usage-panel .usage-panel-action:hover { background: var(--hover); }
+.usage-panel .usage-panel-action.primary { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.usage-panel .usage-panel-action.primary:hover { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .chat-stat-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: 270px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--muted); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11px; line-height: 1.55; white-space: normal; word-break: keep-all; pointer-events: none; opacity: 0; transition: opacity .12s; }
 .chat-stat-tip:popover-open { opacity: 1; }
 @starting-style { .chat-stat-tip:popover-open { opacity: 0; } }
@@ -1787,6 +1809,11 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md li.nested { margin-left: 18px; }
 .md a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
 .md code { padding: 1px 5px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); font: 0.9em var(--mono); }
+/* A file or folder of the project in a reply: Material file icon + relative path, clickable (Markdown.tsx FileChip). */
+.md-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 0 7px 0 5px; margin: 0 1px; border-radius: 6px; vertical-align: baseline; background: var(--raised); border: 1px solid var(--border); color: var(--fg); font: 0.9em var(--mono); line-height: 1.55; text-align: left; cursor: pointer; }
+.md-file span { min-width: 0; overflow-wrap: anywhere; }
+.md-file:hover { border-color: var(--border-strong); background: var(--selected); }
+.md-file:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md blockquote { padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
 .md-table { display: block; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }
@@ -1969,10 +1996,10 @@ button.chat-chip:hover { background: var(--hover); }
 .chat-chip .chip-x { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: -4px; border-radius: 50%; background: transparent; color: var(--muted); }
 .chat-chip .chip-x:hover { background: var(--hover); color: var(--fg); }
 .chat-foot { display: flex; align-items: center; gap: 2px; margin-left: -6px; min-height: 28px; color: var(--muted); font-size: 12.5px; }
-.chat-foot .chat-attach { width: 26px; height: 26px; border-radius: 50%; }
+.chat-foot .chat-attach { width: 28px; height: 28px; border-radius: 50%; }
 .chat-foot { gap: 3px; margin-left: -6px; min-height: 32px; }
 .chat-model .dd-label, .chat-model > div .dd-label, .chat-effort .dd-label, .chat-effort > div .dd-label { font-weight: 600; }
-.chat-foot .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
+.chat-foot .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 0 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
 .chat-foot .dropdown summary:focus-visible { outline: none; background: var(--hover); color: var(--fg); }
 /* menus opened from the chat foot: a padded card with rounded rows, groups split by a hairline */
 .chat-mode > div, .chat-model > div, .chat-effort > div { padding: 6px; gap: 2px; border-radius: 12px; min-width: max(180px, var(--anchor-width, 0px)); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
@@ -2030,8 +2057,10 @@ button.chat-chip:hover { background: var(--hover); }
 .models-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--faint); font-size: 11.5px; font-family: var(--mono); }
 .models-modal footer { display: flex; justify-content: space-between; gap: 12px; flex: none; padding: 10px 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 /* Model (Latin, semibold) and Effort (Hangul) shared a line box of different heights, so the model label rode higher; one fixed box for all footer dropdowns. */
-.chat-foot .dropdown summary { line-height: 20px; min-height: 28px; box-sizing: border-box; }
-.chat-foot .dd-label { line-height: 20px; height: 20px; }
+:is(.chat-foot, .feedback-actions) .dropdown summary { line-height: 20px; height: 28px; min-height: 0; box-sizing: border-box; }
+:is(.chat-foot, .feedback-actions) .dd-label { line-height: 20px; height: 20px; position: relative; top: 1px; } /* text 1px down: its ink sits a half pixel above its line box's centre (a whole pixel at 100% zoom, where baselines snap), so the words read as high in a 28px button. A relative offset, not padding: it moves block labels (the ellipsis ones) and flex labels alike */
+/* The global .dd-label > .icon nudge (+.7px, for icons that sit beside text in menus) pushed an icon alone in its button below the button's centre; the footer's glyphs sit on the centre line. */
+:is(.chat-foot, .feedback-actions) .dd-label > .icon { transform: none; position: relative; top: -1px; } /* the glyph beside the text already sits on the button's centre line: undo the label's shift (and the global +.7px nudge made for icons next to text in menus) */
 
 /* Chat tabs: the provider's own mark with a small chat bubble at its lower right. */
 .folder-tab-mark { position: relative; }
@@ -2250,7 +2279,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-foot[data-fit="4"] > .chat-attach { order: 1; }
 .chat-foot[data-fit="4"] > .chat-ring, .chat-foot[data-fit="4"] > .chat-send, .chat-foot[data-fit="4"] .chat-tune { order: 2; }
 .chat-foot:not([data-fit="0"]) .fit-mode .chat-mode summary .dd-label, .chat-foot:not([data-fit="0"]) > .effort-wrap summary .dd-label { font-size: 0; gap: 0; }
-.chat-foot:not([data-fit="0"]) .fit-mode .chat-mode summary, .chat-foot:not([data-fit="0"]) > .effort-wrap summary { padding: 4px 6px; }
+.chat-foot:not([data-fit="0"]) .fit-mode .chat-mode summary, .chat-foot:not([data-fit="0"]) > .effort-wrap summary { padding: 0 6px; }
 .chat-foot[data-fit="2"] .fit-inline, .chat-foot[data-fit="3"] .fit-inline, .chat-foot[data-fit="4"] .fit-inline, .chat-foot[data-fit="3"] .fit-note, .chat-foot[data-fit="4"] .fit-note { display: none; }
 .chat-foot[data-fit="3"] > .chat-model, .chat-foot[data-fit="4"] > .chat-model { flex: 0 1 auto; min-width: 72px; overflow: hidden; }
 .chat-foot[data-fit="3"] > .chat-model summary, .chat-foot[data-fit="4"] > .chat-model summary, .chat-foot[data-fit="3"] > .chat-model .dd-label, .chat-foot[data-fit="4"] > .chat-model .dd-label { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -2572,7 +2601,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 @keyframes feedback-progress { from { translate: -100% 0; } to { translate: 250% 0; } }
 .feedback-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; padding: 8px 12px 10px; border-top: 1px solid var(--border); }
 .feedback-actions button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.feedback-actions .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
+.feedback-actions .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 0 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
 .feedback-actions .dropdown summary:hover, .feedback-actions .dropdown[open] summary { background: var(--hover); }
 .feedback-pick { display: inline-flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; }
 .feedback-pick .dropdown { min-width: 0; }
@@ -2663,10 +2692,11 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .welcome-feedback-button { position: fixed; top: 8px; right: 12px; z-index: 21; -webkit-app-region: no-drag; app-region: no-drag; }
 .welcome > .welcome-feedback { position: fixed; z-index: 20; top: 48px; bottom: 6px; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .welcome > .welcome-feedback.wide { width: calc(100% - 12px); }
-/* Tab-header icon buttons (IconButton tip="header"): a tooltip in the app's own style, instead of the slow native title; it shows at once (no hover delay). */
+/* The one tooltip (tooltip.ts): replaces the browser's title tooltip everywhere and the data-tip of IconButton. Top layer, so above dialogs and never clipped; :popover-open beats the default popover box. */
 .icon-btn { position: relative; }
-.icon-btn[data-tip]::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; width: max-content; max-width: 260px; padding: 4px 8px; word-break: keep-all; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; font-weight: 400; line-height: 1.4; text-align: left; white-space: normal; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .12s, transform .12s; }
-.icon-btn[data-tip]:is(:hover, :focus-visible)::after { opacity: 1; transform: none; transition-delay: 0s; }
+.app-tooltip:popover-open { position: fixed; inset: auto; margin: 0; z-index: 100; width: max-content; max-width: min(320px, calc(100vw - 12px)); padding: 4px 8px; overflow: visible; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; font-weight: 400; line-height: 1.4; text-align: left; white-space: pre-line; word-break: keep-all; overflow-wrap: anywhere; pointer-events: none; animation: tooltip-in .12s ease-out; }
+@keyframes tooltip-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .app-tooltip:popover-open { animation: none; } }
 /* Usage popover: never scroll sideways; long notes and reset times wrap inside the 280px box. */
 .usage-detail { box-sizing: border-box; overflow-x: hidden; }
 .usage-detail > *, .usage-detail .usage-row > * { min-width: 0; max-width: 100%; }
@@ -2681,13 +2711,13 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .chat-composer { justify-content: flex-end; }
 .chat-composer[data-compact] { flex-direction: row; align-items: flex-end; gap: 2px; padding: 7px 8px 7px 7px; border-radius: 22px; }
 .chat-composer[data-compact] > .chat-foot { display: contents; }
-.chat-composer[data-compact] .chat-attach { order: -1; margin-block: 1px; border-radius: 50%; }
+.chat-composer[data-compact] .chat-attach { order: -1; border-radius: 50%; }
 .chat-composer[data-compact] .fit-mode .chat-mode { order: -1; }
 .chat-composer[data-compact] > .chat-input-row { flex: 1 1 0; min-width: 64px; height: 28px; align-items: center; padding: 0 4px; }
 .chat-composer[data-compact] textarea { white-space: nowrap; overflow: hidden; }
 .chat-composer[data-compact] :is(.fit-note, .fit-inline, .drag-space), .chat-composer[data-compact] .tune-wrap:not(.forced) { display: none; }
 .chat-composer[data-compact] :is(.fit-mode .chat-mode, .effort-wrap) summary .dd-label { font-size: 0; gap: 0; }
-.chat-composer[data-compact] :is(.fit-mode .chat-mode, .effort-wrap) summary { padding: 4px 6px; }
+.chat-composer[data-compact] :is(.fit-mode .chat-mode, .effort-wrap) summary { padding: 0 6px; }
 .chat-composer[data-compact] .chat-model { flex: 0 1 auto; min-width: 0; }
 .chat-composer[data-compact] .chat-model summary, .chat-composer[data-compact] .chat-model .dd-label { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-composer[data-compact] .chat-model .dd-label { display: block; }
@@ -2785,6 +2815,20 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 @media (prefers-reduced-motion: reduce) { .chat-drop, .chat-drop::before, .chat-drop-card, .chat-drop-icon { transition: none !important; animation: none !important; } }
 
 .tc-val { position: absolute; transform: translateX(-50%); font-size: 10px; line-height: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; } .tc-val.on { color: var(--fg, var(--muted)); font-weight: 600; z-index: 1; }
+.key-term { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin-right: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
+.key-term input { margin: 0; width: auto; flex: none; }
+
+/* Claude Code CLI update notice under a chat's title (ClaudeUpdateNotice.tsx) */
+.chat-update { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); border-bottom: 1px solid var(--border); }
+.chat-update > .icon { flex: none; color: var(--accent); }
+.chat-update.done > .icon { color: var(--success, var(--accent)); }
+.chat-update.failed { background: color-mix(in srgb, var(--error) 10%, var(--surface)); }
+.chat-update.failed > .icon { color: var(--error); }
+.chat-update-text { flex: 1; min-width: 0; }
+.chat-update-text small { display: block; margin-top: 1px; color: var(--muted, var(--fg)); opacity: .75; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-update button { flex: none; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--raised); color: var(--fg); font: inherit; cursor: pointer; }
+.chat-update button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.chat-update button:hover { filter: brightness(1.1); }
 
 /* ---- Git tool window: the commit graph drawer (GitLog.tsx). Ref and row colours are IntelliJ's (VcsLogStandardColors, current-branch highlighter). ---- */
 :root { --git-ref-head: #e1c731; --git-ref-local: #3cb45c; --git-ref-remote: #9f79b5; --git-ref-tag: #999999; --git-current-row: #3f4749; --git-halo: #000; }

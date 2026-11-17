@@ -28,10 +28,10 @@
 
 ```sh
 pnpm --filter @mooner/ade-web build
-VERIFY_OUT=$(mktemp -d -t ade-verify-out) node scripts/perf/frame-cost.mjs                 # 전체 시나리오(약 9분)
-VERIFY_OUT=$(mktemp -d -t ade-verify-out) node scripts/perf/frame-cost.mjs ade-chat-turn   # 일부만
-PROBE=1 VERIFY_OUT=... node scripts/perf/frame-cost.mjs ade-chat-turn   # 진단 (아래 목록)
-CSS='.chat-statusbar { display: none !important; }' VERIFY_OUT=... node scripts/perf/frame-cost.mjs ade-chat-spinner   # 임의의 CSS를 넣고 재기 (원인 좁히기)
+node scripts/perf/frame-cost.mjs                 # 전체 시나리오(약 9분)
+node scripts/perf/frame-cost.mjs ade-chat-turn   # 일부만
+PROBE=1 node scripts/perf/frame-cost.mjs ade-chat-turn   # 진단 (아래 목록)
+CSS='.chat-statusbar { display: none !important; }' node scripts/perf/frame-cost.mjs ade-chat-spinner   # 임의의 CSS를 넣고 재기 (원인 좁히기)
 FLAGS='switch=value' ...   # Chromium 스위치를 넣고 재기
 SHOTS=12 ...               # 스크린샷 12장을 250ms 간격으로 더 남김 (<시나리오>-1.png ...), 움직임 확인용
 ```
@@ -48,7 +48,7 @@ SHOTS=12 ...               # 스크린샷 12장을 250ms 간격으로 더 남김
 - `INVALIDATIONS`: 스타일 재계산을 일으킨 원인
 - `ARGS='이벤트 이름,...'`: 그 트레이스 이벤트들의 인자 (예: `SkiaOutputDevice->ScheduleOverlays()`의 overlay 수)
 
-- 시나리오마다 스크린샷(`$VERIFY_OUT/<시나리오>.png`)이 남는다. 무엇을 쟀는지 그걸로 확인한다.
+- 시나리오마다 스크린샷(`tmp/main/<시나리오>.png`, `VERIFY_OUT`을 주면 그 폴더)이 남는다. 무엇을 쟀는지 그걸로 확인한다.
 - 측정 중 Mac을 써도 되지만, 무거운 작업(빌드, 영상 등)은 숫자에 섞인다.
 - 같은 시나리오를 반복하면 ±1~4%p 정도 흔들렸다. 아래 표에서 여러 번 잰 값은 범위로 적었다.
 

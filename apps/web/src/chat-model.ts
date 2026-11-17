@@ -24,6 +24,8 @@ export type ChatState = {
 // `partial` marks a block that is still streaming. `slot` is a streamed tool's content-block index, `partialJson` its input so far.
 type BlockBase = { key?: string; partial?: boolean };
 export type Block = BlockBase & ({ type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
+/** A tool call the auto-mode classifier refused, as the server recorded it. `rule` is the exact session allow rule it can offer (null: only "allow and retry" by message). `allowed`: the user allowed it without a retry. */
+export type BlockedAction = { toolUseId: string; tool: string; input: Record<string, unknown>; reason: string; rule: string | null; allowed?: boolean };
 export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[]; exists?: boolean };
 export type ChatQuestion = { id: string; prompt: string; header?: string; secret?: boolean; allowMultiple?: boolean; allowOther?: boolean; options?: { id: string; label: string; description?: string }[] };
 // `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
@@ -60,6 +62,7 @@ export type ChatView = {
   // `live`: message ids streaming in this turn and whether they belong to a subagent; `liveId` takes deltas that name no message.
   live: Record<string, { sub: boolean; parent?: string }>; liveId: string | null;
   tasks: Record<string, TaskInfo>; // what the CLI reported about each subagent, by its Agent call's tool_use id
+  blocked?: Record<string, BlockedAction>; // auto mode's refusals since the user's last message that they have not retried yet
   denied?: Record<string, true>; // tool calls the user refused at their approval card (their error result is a refusal, not a failure)
   thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number; previews?: string[] }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
@@ -295,7 +298,7 @@ export function reduce(view: ChatView, event: any): ChatView {
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0 }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
+    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -359,6 +362,13 @@ export function reduce(view: ChatView, event: any): ChatView {
       const items = [...view.items]; items[at] = item;
       return { ...view, items, liveId: messageId };
     }
+    case 'auto_denied': return typeof event.toolUseId === 'string' && typeof event.tool === 'string'
+      ? { ...view, blocked: { ...view.blocked, [event.toolUseId]: { toolUseId: event.toolUseId, tool: event.tool, input: event.input && typeof event.input === 'object' ? event.input : {}, reason: String(event.reason ?? ''), rule: typeof event.rule === 'string' ? event.rule : null } } } : view;
+    case 'denial_allow': {
+      const blocked = { ...view.blocked };
+      for (const id of Array.isArray(event.toolUseIds) ? event.toolUseIds : []) if (blocked[id]) { if (event.retry === false) blocked[id] = { ...blocked[id], allowed: true }; else delete blocked[id]; }
+      return { ...view, blocked };
+    }
     case 'approval': {
       if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [], ...(typeof event.exists === 'boolean' && { exists: event.exists }) }] };
       const answered = view.approvals.find(item => item.requestId === event.requestId);
@@ -406,7 +416,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
     }
     case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
-    case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
+    case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), blocked: {}, live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
     case 'steer': {
       const rest = view.steers.filter(item => item.uuid !== event.uuid);
@@ -435,10 +445,12 @@ export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatS
 // ---- numbers shown in the status line ----
 // The CLI reports the real window on each result's modelUsage. Until that arrives, the model catalog's max input
 // tokens is the window (Sonnet 5.5 is 1M with no [1m] suffix). A [1m] id is 1M when the catalog has no row; anything else is 200k.
-export const contextWindow = (model: string | null, reported?: number | null, catalog?: { id: string; window?: number }[]) =>
-  reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : catalog?.find(item => item.id === model)?.window) || 200_000;
+// An alias ("opus") has no catalog row of its own: the family's first (newest) row stands in, as on the server.
+type CatalogRow = { id: string; family?: string; window?: number };
+export const contextWindow = (model: string | null, reported?: number | null, catalog?: CatalogRow[]) =>
+  reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (catalog?.find(item => item.id === model) ?? catalog?.find(item => item.family === model))?.window) || 200_000;
 export type ContextGauge = { percent: number; used: number; basis: number; max: number; autoCompact: boolean };
-export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 'autoCompact'> & { contextWindow?: number | null; capabilities?: { catalog?: { id: string; window?: number }[] } }): ContextGauge => {
+export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 'autoCompact'> & { contextWindow?: number | null; capabilities?: { catalog?: CatalogRow[] } }): ContextGauge => {
   const max = contextWindow(state.model, state.contextWindow, state.capabilities?.catalog);
   const compact = state.autoCompact && state.autoCompact.window > 0 && state.autoCompact.window < max ? state.autoCompact : null;
   const basis = compact?.window ?? max;

@@ -86,7 +86,7 @@ export function FeedbackPanel(props: PanelProps) {
         {history ? <><Icon name="arrowLeft" size={13} />돌아가기</> : <><Icon name="clock" size={13} />내역{sent.length > 0 && <b>{sent.length}</b>}</>}
       </button>
       <IconButton icon={props.wide ? 'minimize' : 'maximize'} tip="header" label={props.wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={props.toggleWide} />
-      <IconButton icon="x" tip="none" label="피드백 요청 닫기" onClick={props.onClose} />
+      <IconButton icon="x" tip="none" label="피드백 요청 닫기" action="feedback" onClick={props.onClose} />
     </header>
     {error && <p className="feedback-note warn" role="alert">{error}</p>}
     {/* The AI screen stays mounted so a run in progress (and what was typed) survives a look at another screen. */}

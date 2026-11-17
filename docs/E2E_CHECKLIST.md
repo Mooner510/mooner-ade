@@ -3,7 +3,7 @@
 다음 Full E2E의 기준표입니다. 환경 구성은 [E2E_HANDOFF](E2E_HANDOFF.md) 4절, 테스트 규칙은 [TESTING_GUIDE](TESTING_GUIDE.md), 실제 AI가 필요한 항목은 [AI_AGENT_TEST_CHECKLIST](tests/261113_1021_실제AI체크리스트/GUIDE.md), 보류 중인 절차는 [docs/tests/](tests/)를 따릅니다.
 
 - 결과 표기: ✅ 통과 · ❌ 실패(수정 여부 병기) · 📖 코드 읽기로 판정(실행 생략) · ⏭ 이번에 안 함 · ⬜ 미실행
-- **번들 없음:** 서버는 `ADE_DEV=1`(Vite 개발 서버)로 `apps/web/src`를 직접 서빙하므로 웹 소스를 고쳐도 빌드하지 않습니다. 열린 페이지에 HMR로 바로 반영되고, 서버 코드를 고쳤을 때는 `scripts/verify/restart-ui.mjs`로 서버만 재시작합니다(Chrome은 그대로, 탭만 새 주소로 이동). 세션 운영 규칙 전체는 [E2E_HANDOFF](E2E_HANDOFF.md) 4.1절. 예전 문서의 `pnpm --filter @mooner/ade-web build` + `Page.reload(ignoreCache)` 절차는 더 쓰지 않습니다.
+- **번들 없음:** 서버는 `ADE_DEV=1`(Vite 개발 서버)로 `apps/web/src`를 직접 서빙하므로 웹 소스를 고쳐도 빌드하지 않습니다. 열린 페이지에 HMR로 바로 반영되고, 서버 코드를 고치면 세션이 서버만 자동으로 재시작합니다(Chrome·주소·로그인은 그대로, 탭은 스스로 새로고침). 세션 운영 규칙 전체는 [E2E_HANDOFF](E2E_HANDOFF.md) 4.1절. 예전 문서의 `pnpm --filter @mooner/ade-web build` + `Page.reload(ignoreCache)` 절차는 더 쓰지 않습니다.
 - **창 규칙:** 사용자가 배치한 Chrome 창의 위치·크기를 바꾸지 않습니다(`Browser.setWindowBounds` 금지). `Page.bringToFront`는 캡쳐처럼 꼭 필요할 때만.
 
 ## 2026-11-12 (feat/ui-frame 작업 트리, 격리 서버·가짜 claude·가짜 Hub·Chrome 157, 실제 AI 없음)
