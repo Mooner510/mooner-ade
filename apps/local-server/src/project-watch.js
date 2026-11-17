@@ -3,7 +3,7 @@ import path from 'node:path';
 
 // Events only hurry a Git refresh, which polling does anyway, so folders that are usually untracked output
 // (builds, caches, virtualenvs, logs) are dropped: an agent or a tool writing there would otherwise refresh Git nonstop.
-const IGNORED = /(^|[\\/])(\.git|node_modules|dist|\.idea|\.vscode|\.vs|build|out|target|coverage|\.next|\.nuxt|\.turbo|\.cache|\.parcel-cache|\.gradle|\.venv|venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|logs?|te?mp)([\\/]|$)|\.(log|tmp|swp|pyc|stackdump)$|~$/i;
+const IGNORED = /(^|[\\/])(\.git|node_modules|dist|\.idea|\.vscode|\.vs|build|out|target|coverage|\.next|\.nuxt|\.turbo|\.cache|\.parcel-cache|\.gradle|\.venv|venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|logs?|te?mp)([\\/]|$)|\.(log|tmp|swp|pyc|stackdump)$|\.tmp\.\d+\.[0-9a-f]+$|~$/i;
 
 // Watching is only an accelerator: the UI keeps polling Git status.
 export function watchProjectFiles(root, notify) {
