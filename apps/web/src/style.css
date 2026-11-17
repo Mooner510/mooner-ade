@@ -455,21 +455,6 @@ dialog.settings-modal.bar-live::backdrop { mask-image: linear-gradient(#000 0, #
 /* multi-project shell: a rail of open projects beside the stack of workspaces */
 .shell { display: flex; height: 100dvh; background: var(--bg); }
 .ws-stack { position: relative; flex: 1; min-width: 0; min-height: 0; }
-.plugin-panel-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 12px; }
-.plugin-panel .plugin-status { padding: 8px 12px; border-radius: 8px; font-weight: 500; line-height: 1.45; background: color-mix(in srgb, var(--tone) 9%, transparent); }
-.plugin-panel .plugin-body { padding: 0; border: 0; background: none; }
-.plugin-panel .plugin-field { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 0; border-bottom: 0; }
-.plugin-panel .plugin-field input:not([role=switch]), .plugin-panel .plugin-field select, .plugin-panel .plugin-field > textarea, .plugin-panel .plugin-field .plugin-folder { width: 100%; }
-.plugin-panel .plugin-field .plugin-folder input:not([role=switch]) { width: 0; }
-.plugin-panel .plugin-actions { position: static; justify-content: flex-start; margin: 0; padding: 4px 0 0; border: 0; border-radius: 0; background: none; }
-.plugin-panel .plugin-document { display: flex; flex-direction: column; gap: 6px; }
-.plugin-panel .plugin-document h3 { margin: 0; font-size: 12.5px; }
-.plugin-panel .plugin-document pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
-.plugin-field .plugin-folder { display: flex; flex: none; gap: 6px; width: 65%; }
-.plugin-field .plugin-folder input { flex: 1; width: 0; min-width: 0; }
-.plugin-folder button { flex: none; }
-.plugin-field > textarea { flex: none; width: 65%; min-height: 96px; }
-.plugin-document pre { padding: 12px; border: 1px solid var(--border); border-radius: 8px; max-height: 65vh; overflow: auto; }
 .app[hidden] { display: none; }
 .app.loading { display: grid; place-items: center; }
 .open-failed { display: grid; justify-items: center; gap: 8px; max-width: 480px; text-align: center; }
@@ -761,8 +746,10 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .statusbar .plugin-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 0 6px; color: var(--accent-fg); background: var(--accent); }
 .statusbar .plugin-badge.warn { color: #1b1300; background: var(--warn); }
 .statusbar .plugin-badge.error { color: #fff; background: var(--error); }
-/* plugins page */
-.plugins { --tone: var(--muted); }
+/* plugins: the settings list, a plugin's detail page and its header panel. They use the app's own parts (settings rows,
+   the feedback panel's cards and bottom bar) so a plugin looks like a part of MoonerADE, whatever it puts in its view.
+   Cards lift slightly off whatever they sit on (the settings dialog or a panel), so they never read as holes. */
+.plugins { --tone: var(--muted); --plugin-card: color-mix(in srgb, var(--fg) 3%, transparent); --plugin-line: color-mix(in srgb, var(--fg) 8%, transparent); }
 .plugins [data-tone=ok] { --tone: var(--add); } .plugins [data-tone=warn] { --tone: var(--warn); } .plugins [data-tone=error] { --tone: var(--error); } .plugins [data-tone=info] { --tone: var(--info); }
 .plugins.plugin-drop-target { border-radius: 10px; outline: 2px dashed var(--accent); outline-offset: 4px; background: var(--accent-soft); }
 .plugin-drop-hint { margin: 0 0 8px; padding: 8px 10px; text-align: center; font-size: 12px; font-weight: 600; color: var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -770,7 +757,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
 .plugin-tabs { display: flex; gap: 14px; }
 .plugin-tabs button { position: relative; display: inline-flex; align-items: center; gap: 5px; margin-bottom: -1px; padding: 6px 1px; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.plugin-tabs button:hover { color: var(--fg); }
+.plugin-tabs button:hover { color: var(--fg); background: none; }
 .plugin-tabs button[aria-selected=true] { color: var(--fg); border-bottom-color: var(--accent); }
 .plugin-tabs button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .plugin-tabs small { font-size: 11px; font-weight: 500; color: var(--faint); }
@@ -781,40 +768,54 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-list-head + .setting-row { padding-top: 0; border-bottom: 0; }
 .plugin-list-head .setting-group { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
 .plugin-toolbar { display: flex; align-items: center; gap: 4px; }
-.plugin-toolbar .plugin-button { min-height: 0; height: 28px; padding: 0 10px; gap: 4px; font-size: 12px; font-weight: 500; }
+.plugin-toolbar .plugin-button { min-height: 0; height: 28px; padding: 0 10px; gap: 5px; font-size: 12px; }
 .plugin-toolbar .icon-btn { width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; color: var(--muted); border-radius: 7px; }
-.plugin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 12px; white-space: nowrap; border-color: var(--border-strong); border-radius: 7px; transition: border-color .12s, background .12s; }
-.plugin-button:not(.primary):hover:not(:disabled) { background: var(--raised); }
+
+/* Buttons: a quiet fill by default (like the app's secondary buttons), the accent for the main one, red for one that takes something away.
+   A main button that also takes something away (봇 끄기) is filled red. */
+.plugin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 0 12px; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); border: 1px solid transparent; border-radius: 8px; transition: background .12s, color .12s, border-color .12s, scale .12s var(--ease-out); }
+.plugin-button:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.plugin-button:not(:disabled):active { scale: .97; }
+.plugin-button.primary { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.plugin-button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+.plugin-button.danger { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); }
+.plugin-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 18%, transparent); }
+.plugin-button.primary.danger { color: #fff; background: var(--error); border-color: var(--error); }
+.plugin-button.primary.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 85%, #000); border-color: transparent; }
 .plugin-button:focus-visible, .plugin-toolbar .icon-btn:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
 .plugin-button[aria-busy=true] { opacity: 1; }
 .plugin-spinner { flex: none; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: plugin-spin .7s linear infinite; }
 @keyframes plugin-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .plugin-spinner { animation-duration: 2s; } }
+@media (prefers-reduced-motion: reduce) { .plugin-spinner { animation-duration: 2s; } .plugin-button { transition: none; } }
+
+/* A plugin's icon (PluginIcon): its own SVG as a mask filled with the text colour, like the app's line icons wherever it sits
+   (top bar, panel head). The list and a plugin's page put it on an accent tile, like the app's other icon tiles. */
+.plugin-icon { display: inline-block; flex: none; background-color: currentColor; mask-size: contain; mask-repeat: no-repeat; mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; }
+.plugin-mark { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
+.plugin-mark.lg { width: 44px; height: 44px; border-radius: 12px; }
+.plugin-row[data-tone=error] .plugin-mark, .plugin-row[data-tone=info] .plugin-mark, .plugin-detail-head[data-tone=error] .plugin-mark, .plugin-detail-head[data-tone=info] .plugin-mark { color: var(--muted); background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.panel-head > .plugin-icon { color: var(--accent); }
 
 /* the list: one row per plugin, the rest is on its detail page */
-.plugin-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
-.plugin-list > li + li { border-top: 1px solid var(--border); }
-.plugin-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 12px 12px 14px; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 0; cursor: pointer; transition: background .12s; }
+.plugin-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); overflow: hidden; }
+.plugin-list > li + li { border-top: 1px solid var(--plugin-line); }
+.plugin-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 12px; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 0; cursor: pointer; transition: background .12s; }
 .plugin-row:hover { background: var(--hover); }
 .plugin-row:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
-.plugin-row > .icon:last-child { flex: none; color: var(--faint); }
-.plugin-row:hover > .icon:last-child { color: var(--muted); }
+.plugin-row > .icon:last-child { flex: none; color: var(--faint); transition: translate .18s var(--ease-out), color .12s; }
+.plugin-row:hover > .icon:last-child { color: var(--fg); translate: 2px 0; }
 .plugin-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-row-name strong { font-size: 13.5px; }
+.plugin-row-name strong { font-size: 13.5px; font-weight: 600; }
 .plugin-row-desc { color: var(--muted); font-size: 12px; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-mark { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--fg); background: var(--raised); border: 1px solid var(--border); }
-.plugin-mark[data-builtin] { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
-.plugin-mark.large { width: 44px; height: 44px; border-radius: 10px; }
-.plugin-row[data-tone=error] .plugin-mark, .plugin-row[data-tone=info] .plugin-mark, .plugin-detail-head[data-tone=error] .plugin-mark, .plugin-detail-head[data-tone=info] .plugin-mark { color: var(--muted); }
 .plugin-title { flex: 1; min-width: 0; }
 .plugin-title strong { font-size: 14px; }
 .plugin-title > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .plugin-title .plugin-version { margin-left: 0; }
-.plugin-title p { margin: 4px 0 0; color: var(--muted); line-height: 1.45; white-space: pre-line; }
+.plugin-title p { margin: 4px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-line; }
 .plugin-detail-head .plugin-master { margin-top: 4px; }
-.plugin-version { margin-left: 6px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.plugin-pill { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 12px; font-size: 12px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); white-space: nowrap; }
-.plugin-pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.plugin-version { margin-left: 6px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.plugin-pill { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; line-height: 18px; color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); white-space: nowrap; }
+.plugin-pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .plugin-pill .plugin-spinner { width: 9px; height: 9px; border-width: 1.5px; }
 
 /* a plugin's detail page */
@@ -823,9 +824,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-back { display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; padding: 4px 8px 4px 4px; color: var(--muted); background: none; border: 0; border-radius: 6px; font-weight: 600; cursor: pointer; }
 .plugin-back:hover { color: var(--fg); background: var(--hover); }
 .plugin-back:focus-visible { outline: 1px solid var(--focus); }
-.plugin-detail-head { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.plugin-detail-head { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .plugin-detail-head .plugin-title strong { font-size: 16px; }
-.plugin-section { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.plugin-section { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .plugin-section > header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .plugin-section h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 .plugin-section > header p { margin: 2px 0 0; color: var(--faint); font-size: 12px; line-height: 1.45; }
@@ -833,79 +834,92 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-muted b { color: var(--fg); font-weight: 600; }
 .plugin-muted code { margin-left: 4px; }
 .plugin-loading { display: flex; align-items: center; gap: 8px; }
-.plugin-caps { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-caps { display: flex; flex-direction: column; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
 .plugin-cap { display: flex; gap: 12px; padding: 12px 14px; }
-.plugin-cap + .plugin-cap { border-top: 1px solid var(--border); }
-.plugin-cap-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: var(--accent); background: var(--accent-soft); }
+.plugin-cap + .plugin-cap { border-top: 1px solid var(--plugin-line); }
+.plugin-cap-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
 .plugin-cap-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.plugin-cap-text > strong, .plugin-cap-head strong { font-size: 13px; }
+.plugin-cap-text > strong, .plugin-cap-head strong { font-size: 13px; font-weight: 600; }
 .plugin-cap-text p { margin: 0; color: var(--muted); line-height: 1.5; }
 .plugin-cap-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .plugin-cap-head p { margin-top: 2px; }
 .plugin-cap-controls { flex: none; display: flex; align-items: center; gap: 6px; }
 .plugin-cap-controls .icon-btn { width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; color: var(--muted); border-radius: 6px; }
 .plugin-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.plugin-chips code, .plugin-cap code, .plugin-tool code { padding: 1px 6px; border-radius: 5px; background: var(--raised); border: 1px solid var(--border); font-size: 11.5px; }
-.plugin-tools { display: flex; flex-direction: column; margin: 2px 0 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.plugin-chips code, .plugin-cap code, .plugin-tool code { padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 7%, transparent); font-size: 11.5px; }
+.plugin-tools { display: flex; flex-direction: column; margin: 2px 0 0; padding: 0; list-style: none; border: 1px solid var(--plugin-line); border-radius: 10px; overflow: hidden; }
 .plugin-tools.off { opacity: .55; }
-.plugin-tool { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; background: var(--bg); }
-.plugin-tool + .plugin-tool { border-top: 1px solid var(--border); }
+.plugin-tool { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; }
+.plugin-tool + .plugin-tool { border-top: 1px solid var(--plugin-line); }
 .plugin-tool > input { flex: none; margin-top: 2px; }
 .plugin-tool-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .plugin-tool-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .plugin-tool-name code { font-weight: 600; color: var(--fg); }
 .plugin-tool-name > span:not(.plugin-tag) { color: var(--fg); font-size: 12.5px; }
-.plugin-tag { padding: 0 6px; --tone: var(--muted); border-radius: 9px; font-size: 11px; line-height: 17px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.plugin-tag { padding: 0 6px; --tone: var(--muted); border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 17px; color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent); white-space: nowrap; }
 .plugin-row-name .plugin-tag { margin-left: 6px; }
 .plugin-tool-desc { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
 .plugin-tool-desc.folded { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; position: relative; padding-right: 52px; }
-.plugin-tool-desc.folded .plugin-link { position: absolute; right: 0; bottom: 0; }
-.plugin-link { margin-left: 6px; padding: 0; color: var(--accent); background: var(--bg); border: 0; font-size: 12px; cursor: pointer; }
-.plugin-link:hover { text-decoration: underline; }
+.plugin-tool-desc.folded .plugin-link { position: absolute; right: 0; bottom: 0; background: var(--overlay); }
+.plugin-link { margin-left: 6px; padding: 0; color: var(--accent); background: none; border: 0; font-size: 12px; cursor: pointer; }
+.plugin-link:hover { text-decoration: underline; background: none; }
 .plugin-tool-params { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; color: var(--faint); font-size: 11.5px; }
 .plugin-tool-params code { padding: 0 5px; font-size: 11px; color: var(--muted); }
-.plugin-button.danger { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
-.plugin-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 10%, transparent); }
 
-.plugin-callout { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 8px; line-height: 1.5; color: var(--fg); background: color-mix(in srgb, var(--tone) 10%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent); }
+.plugin-callout { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border-radius: 10px; line-height: 1.5; color: var(--fg); background: color-mix(in srgb, var(--tone) 8%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 28%, transparent); animation: rise-in .28s var(--ease-out); }
 .plugins > .plugin-callout { margin: 6px 0; }
 .plugins.plugin-page > .plugin-callout { margin: 0; }
-.plugin-callout > .icon { flex: none; margin-top: 1px; color: var(--tone); }
+.plugin-callout > .icon { flex: none; margin-top: 2px; color: var(--tone); }
 .plugin-callout-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .plugin-callout-text small { display: block; margin-top: 2px; }
 .plugin-callout-action { flex: none; align-self: center; }
 
-.plugin-body { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.plugin-status { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--tone); font-weight: 600; }
-.plugin-qr-row { display: flex; gap: 16px; align-items: center; }
+/* What the plugin reports about itself: a note like the feedback panel's, the colour only on its dot or icon. */
+.plugin-status { display: flex; align-items: flex-start; gap: 9px; margin: 0; padding: 10px 12px; color: var(--fg); line-height: 1.5; overflow-wrap: anywhere; border: 1px solid var(--plugin-line); border-radius: 10px; background: var(--plugin-card); }
+.plugin-status > .icon { flex: none; margin-top: 2px; color: var(--tone); }
+.plugin-status[data-tone=info] > .icon { color: var(--muted); }
+.plugin-status[data-tone=warn], .plugin-status[data-tone=error] { border-color: color-mix(in srgb, var(--tone) 35%, transparent); background: color-mix(in srgb, var(--tone) 7%, transparent); }
+.plugin-status-dot { flex: none; width: 8px; height: 8px; margin: 6px 3px 0; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
+
+/* The plugin's settings: rows like the app's settings (title and hint at the left, the control at the right). */
+.plugin-body { display: flex; flex-direction: column; gap: 12px; }
+.plugin-qr-row { display: flex; gap: 16px; align-items: center; padding: 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
 .plugin-qr-row p { margin: 0; color: var(--muted); line-height: 1.5; }
 .plugin-qr { flex: none; border-radius: 8px; }
-.plugin-info { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.plugin-info { display: grid; grid-template-columns: minmax(84px, max-content) minmax(0, 1fr); margin: 0; border: 1px solid var(--plugin-line); border-radius: 10px; background: var(--plugin-card); overflow: hidden; }
 .plugin-info > div { display: contents; }
-.plugin-info dt, .plugin-info dd { padding: 7px 10px; border-top: 1px solid var(--border); }
-.plugin-info > div:first-child dt, .plugin-info > div:first-child dd { border-top: 0; }
-.plugin-info dt { color: var(--muted); background: var(--raised); }
-.plugin-info dd { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; min-width: 0; }
-.plugin-info dd > span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.plugin-info .icon-btn { flex: none; margin: -4px -4px -4px 0; color: var(--muted); }
+.plugin-info dt, .plugin-info dd { min-height: 36px; padding: 7px 12px; border-top: 1px solid var(--plugin-line); }
+.plugin-info > div:first-child > * { border-top: 0; }
+.plugin-info dt { display: flex; align-items: center; padding-right: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.plugin-info dd { display: flex; align-items: center; gap: 8px; margin: 0; min-width: 0; }
+.plugin-info dd > span { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plugin-info dd > .mono { font: 12px/1.5 var(--mono); word-break: break-all; }
+.plugin-info .icon-btn { flex: none; margin: -6px -6px -6px 0; color: var(--faint); }
+.plugin-info .icon-btn:hover { color: var(--fg); }
 .plugin-form { display: flex; flex-direction: column; }
-.plugin-field { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.plugin-field { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); }
 .plugin-field:has(small) { align-items: flex-start; }
-.plugin-field:has(+ .plugin-actions) { border-bottom: 0; }
+.plugin-field:has(+ .plugin-actions), .plugin-field:last-child { border-bottom: 0; }
+.plugin-field.wide { flex-direction: column; align-items: stretch; gap: 8px; }
 .plugin-actions-note { flex: 1 1 200px; display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; color: var(--tone); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .plugin-actions-note .icon { flex: none; }
 .plugin-field-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-field-text > span { font-weight: 600; font-size: 12.5px; }
+.plugin-field-text > span { font-weight: 600; font-size: 13px; }
 .plugin-field small { line-height: 1.4; color: var(--muted); }
-.plugin-field input:not([role=switch]), .plugin-field select { flex: none; width: 220px; min-height: 30px; border-color: var(--border-strong); border-radius: 7px; }
-.plugin-field input[data-type=number] { width: 90px; }
+.plugin-field input:not([role=switch]), .plugin-field select { flex: none; width: 240px; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
+.plugin-field input[type=number] { width: 120px; }
+.plugin-field .plugin-folder { display: flex; flex: none; gap: 6px; }
+.plugin-field .plugin-folder input:not([role=switch]) { flex: 1; width: 0; min-width: 0; }
+.plugin-folder .plugin-button { flex: none; min-height: 32px; }
+.plugin-field > textarea { flex: none; min-height: 96px; border-color: var(--border-strong); border-radius: 7px; resize: vertical; }
 /* A switch field: the switch at the left edge, then the title with its hint under it, so every switch lines up in one column. */
 .plugin-field-switch { justify-content: flex-start; align-items: flex-start; cursor: pointer; }
 .plugin-field-switch > input { flex: none; margin-top: 1px; }
 /* stays in view while a long form scrolls, so Save is never a scroll away; -22px cancels .settings-body padding so nothing shows below it */
-.plugin-actions { position: sticky; bottom: -22px; z-index: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 0 -14px -14px; padding: 12px 14px 14px; border-top: 1px solid var(--border); border-radius: 0 0 10px 10px; background: var(--surface); }
+.plugin-actions { position: sticky; bottom: -22px; z-index: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 0; padding: 12px 0 14px; border-top: 1px solid var(--border); background: var(--overlay); }
+.plugin-form:not(:has(.plugin-field)) > .plugin-actions { position: static; padding-top: 0; border-top: 0; background: none; justify-content: flex-start; }
 
-.plugin-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 20px 24px; text-align: center; border: 1px dashed var(--border-strong); border-radius: 10px; color: var(--muted); }
+.plugin-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 24px; text-align: center; border: 1px dashed var(--border-strong); border-radius: 12px; color: var(--muted); }
 .plugin-empty .icon { color: var(--accent); }
 .plugin-empty strong { color: var(--fg); }
 .plugin-empty p { margin: 0; max-width: 420px; line-height: 1.5; }
@@ -918,28 +932,27 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-about ul { margin: 8px 0; padding-left: 20px; line-height: 1.55; }
 .plugin-about li + li { margin-top: 4px; }
 .plugin-about p { margin: 0; }
+.plugin-about > .plugin-info { margin-top: 8px; }
 .plugin-about b, .plugin-empty b, .plugin-callout b { color: var(--fg); font-weight: 600; }
-/* Setup guide ("시작하기"): every step from approval to the plugin's own setup, the one to do now open. */
-.plugin-status-line { padding: 8px 12px; border-radius: 8px; font-weight: 500; line-height: 1.45; background: color-mix(in srgb, var(--tone) 9%, transparent); }
-.plugin-status-line .icon { flex: none; align-self: flex-start; margin-top: 2px; }
-.plugin-guide { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 12px; background: var(--surface); overflow: hidden; }
-.plugin-guide > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; background: color-mix(in srgb, var(--accent) 7%, transparent); border-bottom: 1px solid var(--border); }
-.plugin-guide h4 { margin: 0; font-size: 13.5px; }
+/* Setup guide ("시작하기"): every step from approval to the plugin's own setup, the one to do now open and marked at its left edge. */
+.plugin-guide { border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); overflow: hidden; }
+.plugin-guide > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid var(--plugin-line); }
+.plugin-guide h4 { margin: 0; font-size: 13.5px; font-weight: 600; }
 .plugin-guide > header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .plugin-guide > header p b { color: var(--fg); font-weight: 600; }
 .plugin-guide-progress { flex: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.plugin-progress { display: block; width: 96px; height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
-.plugin-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--add); transition: width .25s; }
+.plugin-progress { display: block; width: 88px; height: 4px; border-radius: 2px; background: var(--plugin-line); overflow: hidden; }
+.plugin-progress > i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .25s var(--ease-out); }
 .plugin-steps { margin: 0; padding: 0; list-style: none; }
-.plugin-step + .plugin-step { border-top: 1px solid var(--border); }
-.plugin-step[data-current] { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.plugin-step + .plugin-step { border-top: 1px solid var(--plugin-line); }
+.plugin-step[data-current] { background: color-mix(in srgb, var(--accent) 5%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
 .plugin-step-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; color: var(--fg); text-align: left; background: none; border: 0; border-radius: 0; cursor: pointer; }
 .plugin-step-head:hover { background: var(--hover); }
 .plugin-step-head:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .plugin-step-head > .icon:last-child { flex: none; color: var(--faint); }
-.plugin-step-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--raised); border: 1px solid var(--border-strong); }
-.plugin-step-mark[data-status=done] { color: #fff; background: var(--add); border-color: var(--add); }
-.plugin-step-mark[data-status=error] { color: #fff; background: var(--error); border-color: var(--error); }
+.plugin-step-mark { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 11.5px; font-weight: 700; color: var(--muted); background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--plugin-line); }
+.plugin-step-mark[data-status=done] { color: var(--add); background: color-mix(in srgb, var(--add) 16%, transparent); border-color: transparent; }
+.plugin-step-mark[data-status=error] { color: var(--error); background: color-mix(in srgb, var(--error) 16%, transparent); border-color: transparent; }
 .plugin-step-mark[data-status=active] { color: var(--accent); border-color: var(--accent); }
 .plugin-step-mark .plugin-spinner { width: 10px; height: 10px; border-width: 1.5px; }
 .plugin-step[data-current] .plugin-step-mark[data-status=todo] { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
@@ -951,46 +964,52 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-step[data-status=error] .plugin-step-state { color: var(--error); font-weight: 600; }
 .plugin-step[data-status=done] .plugin-step-state { color: var(--add); }
 .plugin-step-body { display: flex; flex-direction: column; gap: 12px; padding: 0 14px 14px 46px; }
-/* The sticky button bar is for a card's form; in a step it would be a darker box sticking out of the step's padding. */
-.plugin-step-body .plugin-actions { position: static; margin: 0; padding: 0; border-top: 0; border-radius: 0; background: none; }
+/* The sticky button bar is for a settings form; inside a step the buttons simply follow the step's inputs. */
+.plugin-step-body .plugin-actions { position: static; justify-content: flex-start; padding: 0; border-top: 0; background: none; }
+.plugin-step-body .plugin-field { border-bottom: 0; padding: 4px 0; }
+.plugin-step-body .plugin-field:not(.plugin-field-switch) { flex-direction: column; align-items: stretch; gap: 6px; }
+.plugin-step-body .plugin-field input:not([role=switch]), .plugin-step-body .plugin-field select { width: 100%; }
+.plugin-step-body .plugin-form { gap: 8px; }
 .plugin-step-detail { margin: 0; color: var(--muted); line-height: 1.55; white-space: pre-line; }
 .plugin-parts { display: flex; flex-direction: column; gap: 12px; }
-.plugin-guide-done { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-guide-done { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
 .plugin-guide-done > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 1px; }
 .plugin-guide-done small { color: var(--muted); }
-.plugin-guide-done .plugin-link, .plugin-guide-progress .plugin-link { background: none; }
 .plugin-required { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-style: normal; font-size: 10.5px; font-weight: 600; color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 
 /* Lists a plugin manages item by item (paired phones, keys), each item with its own buttons. */
 .plugin-list-group { display: flex; flex-direction: column; gap: 6px; }
-.plugin-list-group h5 { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12.5px; }
-.plugin-list-empty { padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; }
-.plugin-items { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.plugin-list-group h5 { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.plugin-count { padding: 0 6px; border-radius: 999px; font-size: 11px; line-height: 16px; color: var(--muted); background: color-mix(in srgb, var(--fg) 7%, transparent); font-variant-numeric: tabular-nums; }
+.plugin-list-empty { padding: 10px 12px; border: 1px dashed var(--plugin-line); border-radius: 10px; }
+.plugin-items { margin: 0; padding: 0; list-style: none; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); overflow: hidden; }
 .plugin-items > li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
-.plugin-items > li + li { border-top: 1px solid var(--border); }
+.plugin-items > li + li { border-top: 1px solid var(--plugin-line); }
 .plugin-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .plugin-item-text > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.plugin-item-text strong { font-weight: 600; }
 .plugin-item-text small { color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
 .plugin-item-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.plugin-item-actions .plugin-button { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+.plugin-item-actions .plugin-button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 
 /* Updates from the plugin's GitHub releases. */
 .plugin-update { display: flex; flex-direction: column; gap: 10px; }
-.plugin-update-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.plugin-update[data-tone=info] .plugin-update-status:has(.primary) { border-color: color-mix(in srgb, var(--info) 45%, var(--border)); background: color-mix(in srgb, var(--info) 7%, var(--surface)); }
+.plugin-update-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
+.plugin-update[data-tone=info] .plugin-update-status:has(.primary) { border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 7%, transparent); }
 .plugin-update-status > .icon, .plugin-update-status > .plugin-spinner { flex: none; color: var(--tone); }
 .plugin-update-status > div:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plugin-update-status strong { font-weight: 600; }
 .plugin-update-status small { color: var(--muted); overflow-wrap: anywhere; }
 .plugin-update-actions { flex: none; display: flex; gap: 6px; }
 .plugin-review { margin: 4px 0 0; padding-left: 18px; }
 .plugin-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.plugin-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; transition: border-color .12s, background .12s; }
+.plugin-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); cursor: pointer; transition: border-color .12s, background .12s; }
 .plugin-mode:hover { border-color: var(--border-strong); }
-.plugin-mode[data-checked] { border-color: var(--accent); background: var(--accent-soft); }
+.plugin-mode[data-checked] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); }
 .plugin-mode input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
 .plugin-mode:has(input:focus-visible) { outline: 1px solid var(--focus); outline-offset: 2px; }
 .plugin-mode > span { display: flex; flex-direction: column; gap: 3px; }
-.plugin-mode strong { font-size: 12.5px; }
+.plugin-mode strong { font-size: 12.5px; font-weight: 600; }
 .plugin-mode small { color: var(--muted); line-height: 1.45; }
 .plugin-default { margin-left: 6px; font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--muted); }
 .plugin-source { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; background: none; font-size: 11.5px; }
@@ -1005,7 +1024,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-github-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .plugin-github-body { word-break: keep-all; overflow-wrap: break-word; display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; }
 .plugin-github-body > p { margin: 0; }
-.plugin-github-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-github-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
 .plugin-github-status > .icon { flex: none; color: var(--tone); }
 .plugin-github-status > span { flex: 1; min-width: 0; } /* a block, not a column: the <strong> and the text after it are one line of words */
 .plugin-github-status small { display: block; margin-top: 2px; color: var(--muted); line-height: 1.4; }
@@ -1016,7 +1035,28 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-token small { line-height: 1.5; color: var(--muted); }
 .plugin-token-row { display: flex; gap: 8px; }
 .plugin-token-row input, .plugin-token-row select { flex: 1; min-width: 0; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
-.plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; background: none; }
+.plugin-token-row .plugin-button { min-height: 32px; }
+.plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
+/* A header plugin's panel: the same parts as its settings, one column (titles above their inputs, an info row's label above a
+   long value when it gets narrow), its buttons in a bottom bar like the feedback panel's. */
+.plugin-panel { container-type: inline-size; }
+.plugin-panel-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.plugin-panel .plugin-section { margin-top: 0; }
+.plugin-panel .plugin-field:not(.plugin-field-switch) { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 0; border-bottom: 0; }
+.plugin-panel .plugin-field input:not([role=switch]), .plugin-panel .plugin-field select { width: 100%; }
+.plugin-panel .plugin-actions { position: static; justify-content: flex-start; padding: 4px 0 0; border: 0; background: none; }
+.plugin-panel .plugin-tool-desc.folded .plugin-link { background: var(--surface); }
+.plugin-panel-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.plugin-panel-foot > .primary { margin-left: auto; }
+.plugin-panel-foot > .primary ~ .primary { margin-left: 0; }
+@container (max-width: 380px) {
+  .plugin-panel .plugin-info { grid-template-columns: minmax(0, 1fr); }
+  .plugin-panel .plugin-info dt { min-height: 0; padding-bottom: 0; }
+  .plugin-panel .plugin-info dd { border-top: 0; }
+}
+.plugin-document { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.plugin-document h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.plugin-document pre { margin: 0; padding: 10px 12px; max-height: 65vh; overflow: auto; font: 11.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); border: 1px solid var(--plugin-line); border-radius: 10px; background: var(--bg); }
 .shortcut-list { margin-top: 16px; }
 .shortcut-list h3 { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
 .key-edit { display: inline-flex; align-items: center; gap: 6px; }
@@ -1196,15 +1236,16 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
   .error-toast.out:popover-open { animation: error-toast-fade .12s linear forwards; }
 }
 
-/* Transitions. Views swap via [hidden], so there is nothing to cross-fade from: they rise from partial opacity instead of 0, which would
-   flash the background between two screens. Only opacity and `scale`/`translate` animate (compositor-only, no layout), so xterm sizing
-   and the settings dialog's drag offset are untouched. Panes are not animated: a split re-parents existing terminals and would re-flash them. */
+/* Transitions. Settings sections still rise in. A project or a tab does not: both stay mounted and only toggle [hidden],
+   so a fade from partial opacity dimmed the whole frame on every sidebar click and restarted when clicking back and forth.
+   There is no outgoing frame to cross-fade against once [hidden] removes the previous view. Only opacity and `scale`/`translate`
+   animate elsewhere (compositor-only, no layout), so xterm sizing and the settings dialog's drag offset are untouched.
+   Panes are not animated: a split re-parents existing terminals and would re-flash them. */
 :root { --ease-out: cubic-bezier(.22, 1, .36, 1); }
 @keyframes view-in { from { opacity: .55; } to { opacity: 1; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pop-in { from { opacity: 0; scale: .985; } to { opacity: 1; scale: 1; } }
 @keyframes slide-in { from { opacity: 0; } to { opacity: 1; } }
-.app:not([hidden]), .tab-page:not([hidden]) { animation: view-in .22s var(--ease-out); }
 .settings-body > :not(header) { animation: view-in .2s var(--ease-out); }
 dialog[open], .quick { animation: pop-in .18s var(--ease-out); }
 dialog[open]::backdrop, .quick-backdrop { animation: fade-in .18s var(--ease-out); }
@@ -1215,7 +1256,7 @@ dialog.closing[open] { animation: pop-out .14s cubic-bezier(.4, 0, 1, 1) forward
 dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1, 1) forwards; }
 .workbench > .right-panel { animation: slide-in .14s linear; }
 @media (prefers-reduced-motion: reduce) {
-  .app:not([hidden]), .tab-page:not([hidden]), .settings-body > :not(header), dialog[open], .quick, dialog[open]::backdrop, .quick-backdrop, .workbench > .right-panel { animation: none; }
+  .settings-body > :not(header), dialog[open], .quick, dialog[open]::backdrop, .quick-backdrop, .workbench > .right-panel { animation: none; }
 }
 
 /* Tip: replaces the pane title in the header for a few seconds, so it never covers terminal output; click to dismiss, the full text is the tooltip. */
@@ -2106,6 +2147,7 @@ button.chat-chip:hover { background: var(--hover); }
 .chat-thread :is(.chat-row, .chat-msg.command-output, .chat-divider)[data-enter] { animation: chat-rise .4s var(--ease) backwards; }
 .chat-thread .chat-msg.error[data-enter] { animation: chat-shake .45s var(--ease) backwards; }
 .chat-approval, .chat-question { animation: chat-pop-up .45s var(--spring) both; transform-origin: 50% 100%; }
+.chat-approval[data-played], .chat-question[data-played] { animation: none; }
 .chat-queue li { animation: chat-rise .3s var(--ease) both; }
 .chat-commands { animation: chat-pop-up .26s var(--spring) both; transform-origin: 50% 100%; }
 .chat-jump { animation: chat-jump-in .38s var(--spring) both; transition: background .15s, box-shadow .2s; }
@@ -2203,6 +2245,8 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .empty-tab .launchers > button:nth-child(3) { animation-delay: .13s; }
 .empty-tab .launchers > button:nth-child(4) { animation-delay: .17s; }
 .tab-page[hidden] .empty-tab .launcher-heading, .tab-page[hidden] .empty-tab .launchers > button { animation: none; }
+/* Coming back to a tab must not replay the launcher entrance: [hidden] cancels it, and it would fade up from opacity 0 again. */
+.tab-page[data-shown] .empty-tab .launcher-heading, .tab-page[data-shown] .empty-tab .launchers > button { animation: none; }
 @media (prefers-reduced-motion: reduce) { .empty-tab .launcher-heading, .empty-tab .launchers > button { animation: none; } }
 
 .chat-resume { display: inline-flex; flex: none; align-items: center; align-self: center; margin: 0 auto; width: max-content; max-width: 100%; justify-content: center; text-align: center; gap: 7px; padding: 7px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }

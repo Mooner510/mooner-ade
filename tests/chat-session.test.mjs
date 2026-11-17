@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -511,6 +512,27 @@ test('Cursor advertised options apply without a turn, persist, restore and refre
   assert.deepEqual(restored.state().capabilities.efforts, []);
   assert.equal(restored.state().effort, null);
   assert.deepEqual(JSON.parse(await readFile(path.join(ctx.directory, 'chat/chat/meta.json'))).configValues, {});
+});
+
+test('Cursor: the picked model shows before the CLI answers, and the next message is not held behind that answer', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-cursor-model-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'chat', cwd: directory, agent: 'cursor', executable: process.execPath, executableArgs: [fixture, 'cursor'], env: { HOLD_CONFIG: '1' }, onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  await session.send('hello'); await until(() => session.state().status === 'idle');
+  const hold = path.join(directory, '.hold-config'), go = path.join(directory, '.hold-config-go');
+  const switching = session.set({ model: 'composer-test' });
+  await until(() => existsSync(hold) && session.state().model === 'composer-test');
+  const sent = session.send('next');
+  await until(() => events.some(event => event.kind === 'user' && event.text === 'next'));
+  assert.equal(existsSync(go), false);
+  assert.equal(session.state().status, 'working');
+  assert.equal(session.state().model, 'composer-test');
+  await writeFile(go, '1');
+  await switching;
+  await sent; await until(() => session.state().status === 'idle');
+  assert.equal(session.state().model, 'composer-test');
+  assert.deepEqual(session.state().capabilities.configOptions.map(option => option.id), ['model', 'fast']);
 });
 
 test('Cursor advertises agent/plan/ask and switches between them', async t => {

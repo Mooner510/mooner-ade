@@ -3,7 +3,7 @@ export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
-import { PluginBadges, PluginPanel, usePluginsState } from './PluginSettings';
+import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, CodexCreditRow, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
@@ -144,6 +144,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
   const [paneTabs, setPaneTabs] = useState<PaneTab[]>([]), [activeTab, setActiveTab] = useState('');
+  // The launcher entrance plays only the first time a tab is shown. Record a tab when we leave it (during render, so a
+  // fast click still counts) — coming back must not fade the launcher up from opacity 0 again.
+  const shownTabs = useRef(new Set<string>()), previousTab = useRef('');
+  if (activeTab !== previousTab.current) { if (previousTab.current) shownTabs.current.add(previousTab.current); previousTab.current = activeTab; }
   const [focus, setFocus] = useState(''), [zoom, setZoom] = useState('');
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [processAgents, setProcessAgents] = useState<Record<string, Agent | null>>({});
@@ -999,7 +1003,7 @@ ${where}`, [
     call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
-  const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab}>
+  const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab} data-shown={shownTabs.current.has(tab.id) ? '' : undefined}>
     {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} chat={chatCtx} zoom={tab.id === activeTab ? zoom : ''} />
       : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} nudge={settings.chatTipPending} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
@@ -1018,7 +1022,7 @@ ${where}`, [
       <button className={`bar-button ${reviewShown ? 'on' : ''}`} data-tip={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><span>{git.changes.length}</span><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
-      {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} title={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><Icon name="plugin" /></button>)}
+      {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
       </div>

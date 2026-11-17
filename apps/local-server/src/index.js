@@ -1115,6 +1115,21 @@ async function route(action, input, project) {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       if (agent !== 'claude') {
+        if (agent === 'cursor' && input.refresh !== true) {
+          const entries = [...project.chats.entries()].filter(([, chat]) => chat.agent === 'cursor');
+          const read = chat => {
+            const state = chat.state(), catalog = state.capabilities?.catalog ?? [];
+            return catalog.length ? { models: state.model ? { '': state.model } : {}, catalog, configOptions: state.capabilities.configOptions ?? [] } : null;
+          };
+          let live = entries.map(([, chat]) => read(chat)).find(Boolean);
+          if (!live && entries.length) {
+            const preferred = entries.find(([key]) => key === input.id)?.[1] ?? entries[0][1];
+            await preferred.warm().catch(() => {});
+            live = entries.map(([, chat]) => read(chat)).find(Boolean);
+          }
+          // The open chat already has the list. A second cursor-agent would only compete with it.
+          if (live) return live;
+        }
         const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '', agentKeys.signature(agent)]);
         let cached = agentModelProbes.get(key);
         if (!cached || input.refresh === true || Date.now() - cached.at > 3_600_000) {
