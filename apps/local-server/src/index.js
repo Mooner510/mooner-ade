@@ -874,7 +874,11 @@ async function route(action, input, project) {
           try {
             const content = await readText(workspace, change.path);
             untracked.set(change.path, content ? content.split('\n').length - Number(content.endsWith('\n')) : 0);
-          } catch (error) { if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error; }
+          } catch (error) {
+            // An atomic save (<file>.tmp.<pid>.<hash>, then rename) can leave a temp file git lists as untracked but that is gone (or locked on Windows) when read: null drops it below.
+            if (['ENOENT', 'EBUSY', 'EPERM', 'EACCES'].includes(error.code)) untracked.set(change.path, null);
+            else if (!['BINARY_FILE', 'UNSUPPORTED_FILE'].includes(error.code)) throw error;
+          }
         }
         project.gitStats.set(workspace.root, { status: output.stdout, fsVersion, at: Date.now(), stats, untracked });
       }
@@ -895,9 +899,10 @@ async function route(action, input, project) {
       }
       for (const change of changes) {
         const lines = change.status === '??' ? untracked.get(change.path) : undefined;
-        if (lines !== undefined) { additions += lines; change.added = lines; change.deleted = 0; }
+        if (lines != null) { additions += lines; change.added = lines; change.deleted = 0; }
       }
-      const result = { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes, clean: changes.length === 0, additions, deletions };
+      const listed = changes.filter(change => change.status !== '??' || untracked.get(change.path) !== null);
+      const result = { branch: branchFromHeader(header) ?? await currentBranch(runtime), changes: listed, clean: listed.length === 0, additions, deletions };
       if (stamp) project.gitStatus.set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
       return result;
     }
