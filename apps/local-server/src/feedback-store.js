@@ -50,6 +50,23 @@ export function checkImage(bytes, mime) {
   return info;
 }
 
+// Request types ("유형"): the id is what the Hub turns into an issue label (`type:<id>`), the tag is put in front of the issue title ("[버그] …"),
+// the help text is what the AI draft is told each one means. The web UI has the same ids and tags (feedback-model.ts; a test keeps them equal).
+export const FEEDBACK_TYPES = {
+  bug: ['버그', '동작이 잘못되거나 오류가 남'], feature: ['제안', '없는 기능이나 새 동작을 바람'], pain: ['불편', '쓰기 불편하거나 헷갈림'],
+  perf: ['성능', '느리거나 버벅이거나 자원을 많이 씀'], design: ['디자인', '화면 모양·배치·문구'], question: ['질문', '사용법이나 동작이 궁금함'], praise: ['칭찬', '좋았던 점']
+};
+// Known ids only, each once, in the table's order (the title prefix and the labels come out the same whatever order they were picked in).
+export const cleanTypes = value => { const picked = new Set(Array.isArray(value) ? value : []); return Object.keys(FEEDBACK_TYPES).filter(id => picked.has(id)); };
+// What the issue is titled: the title behind its type tags. A person may type "[…]" in a title themselves (the UI warns it can double up); the AI and agents are told never to.
+export const issueTitle = ({ title, types = [] }) => {
+  const tags = cleanTypes(types).map(id => `[${FEEDBACK_TYPES[id][0]}]`).join('');
+  return tags ? `${tags} ${title}`.slice(0, MAX_TITLE) : title;
+};
+// For titles an AI or agent wrote: the app adds the type tags, so no [ ] of their own. Tags at the front go whole ("[버그] 제목"); a bracket
+// further in only loses the bracket itself, so "탭 [Chat 모드] 오류" keeps its words.
+export const withoutBrackets = value => String(value ?? '').replace(/^(?:\s*\[[^\]]*\])+/, '').replace(/[\[\]]/g, '').replace(/\s+/g, ' ').trim();
+
 const cleanTitle = value => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE);
 function cleanBody(value) {
   const body = String(value ?? '').replace(/\r\n?/g, '\n').replace(/\0/g, '');
@@ -85,7 +102,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
     try { meta = JSON.parse(await fs.readFile(path.join(dir, 'feedback.json'), 'utf8')); }
     catch (error) { if (error.code === 'ENOENT') throw fault('NOT_FOUND', '피드백을 찾을 수 없습니다.', 404); throw error; }
     const body = await fs.readFile(path.join(dir, 'body.md'), 'utf8').catch(() => '');
-    return { ...meta, id, body };
+    return { ...meta, types: cleanTypes(meta.types), id, body };
   }
   async function write(item) {
     const dir = folder(item.id);
@@ -107,10 +124,10 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
     });
   }
 
-  async function create({ title = '', body = '', source = 'human', status } = {}) {
+  async function create({ title = '', body = '', source = 'human', status, types } = {}) {
     if (!SOURCES.has(source)) throw fault('INVALID_INPUT', '잘못된 출처입니다.');
     const at = now(), id = newFeedbackId(at);
-    const item = { id, title: cleanTitle(title), body: cleanBody(body), source, status: status ?? (source === 'human' ? 'draft' : 'review'), reviewed: source === 'human', images: [], createdAt: at, updatedAt: at };
+    const item = { id, title: cleanTitle(title), body: cleanBody(body), source, status: status ?? (source === 'human' ? 'draft' : 'review'), reviewed: source === 'human', types: cleanTypes(types), images: [], createdAt: at, updatedAt: at };
     return changed(id, await write(item));
   }
   async function list() {
@@ -124,11 +141,12 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
       const next = { ...item };
       if (input.title !== undefined) next.title = cleanTitle(input.title);
       if (input.body !== undefined) next.body = cleanBody(input.body);
+      if (input.types !== undefined) next.types = cleanTypes(input.types);
       if (input.reviewed === true) next.reviewed = true;
       // Editing a failed submission makes it a draft again (the next submit is a new attempt with the same key).
-      if (next.status === 'failed' && (input.title !== undefined || input.body !== undefined)) { next.status = item.source === 'human' ? 'draft' : 'review'; delete next.error; }
+      if (next.status === 'failed' && (input.title !== undefined || input.body !== undefined || input.types !== undefined)) { next.status = item.source === 'human' ? 'draft' : 'review'; delete next.error; }
       return next;
-    }, { allow: input.title === undefined && input.body === undefined ? ['submitted'] : [] });
+    }, { allow: input.title === undefined && input.body === undefined && input.types === undefined ? ['submitted'] : [] });
   }
   async function remove(id) {
     return locked(id, async () => {
@@ -217,6 +235,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
       const next = { ...item, ...fields, status, updatedAt: now() };
       if (fields.title !== undefined) next.title = cleanTitle(fields.title);
       if (fields.body !== undefined) next.body = cleanBody(fields.body);
+      if (fields.types !== undefined) next.types = cleanTypes(fields.types);
       for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
       return changed(id, await write(next));
     });
@@ -230,7 +249,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
   // because the Hub answers the same key with the same issue.
   async function recover() {
     for (const item of await list()) {
-      if (item.status === 'drafting') await setStatus(item.id, item.source === 'human' ? 'draft' : 'review', { error: 'AI 정리 중에 앱이 종료되었습니다.' });
+      if (item.status === 'drafting') await setStatus(item.id, item.source === 'human' ? 'draft' : 'review', { error: 'AI 작성 중에 앱이 종료되었습니다.' });
       // Sent again from the queue: the Hub answers the same key with the same issue, so nothing is doubled.
       else if (item.status === 'submitting') await setStatus(item.id, 'queued', { nextAttemptAt: now(), error: '전송 결과를 확인하지 못해 다시 보냅니다.' });
     }
@@ -245,7 +264,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
       try { draft = JSON.parse(await fs.readFile(file, 'utf8')); } catch { await fs.rm(file, { force: true }); continue; }
       const images = Array.isArray(draft?.images) ? draft.images.filter(name => typeof name === 'string' && /^[\w-]{8,64}-\d{1,2}\.(png|jpg)$/.test(name)).slice(0, MAX_IMAGES) : [];
       try {
-        const item = await create({ title: draft?.title, body: typeof draft?.body === 'string' ? draft.body.slice(0, MAX_BODY) : '', source: 'agent' });
+        const item = await create({ title: withoutBrackets(draft?.title), body: typeof draft?.body === 'string' ? draft.body.slice(0, MAX_BODY) : '', types: draft?.types, source: 'agent' });
         for (const name of images) {
           const bytes = await fs.readFile(path.join(incomingDir, name)).catch(() => null);
           if (bytes && imageInfo(bytes)) await addImage(item.id, bytes).catch(() => {});

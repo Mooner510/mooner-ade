@@ -5,7 +5,7 @@ export type FeedbackSource = 'human' | 'ai' | 'agent';
 export type FeedbackStatus = 'draft' | 'review' | 'drafting' | 'queued' | 'submitting' | 'submitted' | 'failed';
 export interface FeedbackImage { name: string; w: number; h: number; annotated: boolean }
 export interface Feedback {
-  id: string; title: string; body: string; source: FeedbackSource; status: FeedbackStatus;
+  id: string; title: string; body: string; types: string[]; source: FeedbackSource; status: FeedbackStatus;
   reviewed: boolean; images: FeedbackImage[]; createdAt: number; updatedAt: number;
   issueUrl?: string; issueNumber?: number;
   // While queued, `error` is the last refused attempt's message; after `failed`, why it ended.
@@ -30,13 +30,37 @@ export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const statusLabels: Record<FeedbackStatus, string> = {
   draft: '작성 중', review: '검토 필요', drafting: 'AI 작성 중', queued: '전송 대기', submitting: '전송 중', submitted: '제출됨', failed: '제출 실패'
 };
-export const sourceLabels: Record<FeedbackSource, string> = { human: '직접 작성', ai: 'AI 정리', agent: '에이전트 초안' };
+export const sourceLabels: Record<FeedbackSource, string> = { human: '직접 작성', ai: 'AI 작성', agent: '에이전트 초안' };
+
+// The list's filter chips: what still needs the user, what is on its way, what is done.
+export type FeedbackGroup = 'todo' | 'sending' | 'done';
+export const groupLabels: Record<FeedbackGroup, string> = { todo: '처리 필요', sending: '진행 중', done: '제출됨' };
+export const feedbackGroup = (item: Pick<Feedback, 'status'>): FeedbackGroup =>
+  item.status === 'submitted' ? 'done' : item.status === 'drafting' || item.status === 'queued' || item.status === 'submitting' ? 'sending' : 'todo';
+// "방금 · 5분 전 · 3시간 전 · 어제 · 11월 3일" for the list rows.
+export function ago(at: number, now: number): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return '방금';
+  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전`;
+  if (minutes < 2880) return '어제';
+  return new Date(at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+}
 
 // Title, body and images can only change in these states (the server refuses edits while drafting, queued, submitting and after submit).
 export const isEditable = (item: Pick<Feedback, 'status'>) => item.status === 'draft' || item.status === 'review' || item.status === 'failed';
 // An AI or agent draft that no human has opened yet.
 export const needsReview = (item: Pick<Feedback, 'source' | 'reviewed'>) => item.source !== 'human' && !item.reviewed;
-// A human draft with no title, text or images is nothing worth keeping: leaving it removes it instead of saving it.
+// Request types ("유형"): several can be picked. They are stored on the item (`types`); on submit the Hub labels the issue `type:<id>` and the title gets
+// the tags in front ("[버그][성능] 제목"). Same ids and tags as FEEDBACK_TYPES in the server's feedback-store.js (tests/feedback-model.test.mjs keeps them equal).
+export const feedbackTypes = [
+  { id: 'bug', tag: '버그', icon: 'alert' }, { id: 'feature', tag: '제안', icon: 'sparkles' }, { id: 'pain', tag: '불편', icon: 'tune' }, { id: 'perf', tag: '성능', icon: 'clock' },
+  { id: 'design', tag: '디자인', icon: 'palette' }, { id: 'question', tag: '질문', icon: 'chat' }, { id: 'praise', tag: '칭찬', icon: 'check' }
+] as const;
+// `types` with `id` switched on or off, in the table's order.
+export const toggleType = (types: string[], id: string) => feedbackTypes.map(type => type.id).filter(known => known === id ? !types.includes(id) : types.includes(known));
+export const typeTag = (id: string) => feedbackTypes.find(type => type.id === id)?.tag ?? '';
+// A human draft with no title, text or images is nothing worth keeping: leaving it removes it instead of saving it (types alone are not content).
 export const isEmptyDraft = (item: Pick<Feedback, 'status' | 'source' | 'title' | 'body' | 'images'>) => item.status === 'draft' && item.source === 'human' && !item.title.trim() && !item.body.trim() && !item.images.length;
 // Agent-injected drafts waiting in the inbox: the status-bar badge counts these.
 export const pendingReviewCount = (items: Pick<Feedback, 'status' | 'reviewed'>[]) => items.filter(item => item.status === 'review' && !item.reviewed).length;

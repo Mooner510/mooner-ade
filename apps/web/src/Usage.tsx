@@ -6,8 +6,9 @@ import { usageHue } from './Editor';
 export type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
 // Extra-usage credit (Claude): a null limit means no cap is set, so only the amount spent is known.
 export type UsageCredit = { used: number; limit: number | null; percent: number | null; currency: string };
-export type CodexCredits = { balance: number | null; unlimited: boolean; hasCredits: boolean };
-export const codexCreditsLabel = (credits: CodexCredits) => credits.unlimited ? '무제한' : credits.balance !== null ? credits.balance.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : credits.hasCredits ? '잔액 있음' : '0';
+export type CodexCredits = { balance: number | null; unlimited: boolean; hasCredits: boolean; limit?: { used: number; limit: number; percent: number; resetsAt: number | null } };
+const credits = (value: number) => value.toLocaleString('ko-KR', { maximumFractionDigits: 1 });
+export const codexCreditsLabel = (value: CodexCredits) => value.limit ? `${value.limit.percent}%` : value.unlimited ? '무제한' : value.balance !== null ? credits(value.balance) : value.hasCredits ? '잔액 있음' : '0';
 export type Usage = { provider: 'claude' | 'codex' | 'cursor'; windows: UsageWindow[]; credit?: UsageCredit | null; codexCredits?: CodexCredits | null; plan: string; source: 'api' | 'log' | null; at: number; error: string | null; note?: string; account: { dir: string; from: 'process' | 'direnv' | 'server' } };
 export const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
 export const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex', cursor: 'Cursor 로그인(기기)' };
@@ -76,4 +77,15 @@ export function placeAbove(event: { newState: string; currentTarget: HTMLElement
   const left = align === 'right' ? anchor.right - width : anchor.left;
   menu.style.left = `${Math.max(8, Math.min(left, innerWidth - width - 8))}px`;
   menu.style.bottom = `${innerHeight - anchor.top + gap}px`;
+}
+
+// Codex credits like Claude's extra usage: a bar with used / limit when a spend limit exists, else the balance.
+export function CodexCreditRow({ value, colors }: { value: CodexCredits; colors: boolean }) {
+  const { limit } = value;
+  if (!limit) return <div className="usage-row"><div><span>남은 크레딧</span><b>{codexCreditsLabel(value)}</b></div></div>;
+  return <div className="usage-row">
+    <div><span>크레딧</span><b className={colors ? 'graded' : ''} style={colors ? usageHueStyle(limit.percent) : undefined}>{limit.percent}%</b></div>
+    <progress className={colors ? 'graded' : ''} style={colors ? usageHueStyle(limit.percent) : undefined} value={limit.percent} max={100} aria-label="크레딧 사용률" />
+    <small>{credits(limit.used)} / {credits(limit.limit)} 크레딧 · 남은 {credits(Math.max(0, limit.limit - limit.used))}{limit.resetsAt ? ` · ${untilReset(limit.resetsAt)} 후 초기화` : ''}</small>
+  </div>;
 }

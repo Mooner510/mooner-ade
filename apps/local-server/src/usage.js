@@ -84,13 +84,16 @@ export function parseCodexUsage(body, now = Date.now()) {
   return windows;
 }
 
-// Codex credits are a remaining balance, not currency or a percentage of the plan limit.
+// Codex credits: a workspace spend limit (`spend_control.individual_limit`, used/limit like Claude's extra usage) when the plan has one,
+// else a remaining balance (null on Team plans, which only report that credits exist).
 export function parseCodexCredits(body) {
-  const credits = body?.credits;
-  if (!credits || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return null;
-  const value = credits.balance;
-  const balance = (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
-  return { balance, unlimited: credits.unlimited, hasCredits: credits.has_credits };
+  const credits = body?.credits, spend = body?.spend_control?.individual_limit ?? body?.individual_limit;
+  const amount = value => (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  const used = amount(spend?.used), max = amount(spend?.limit);
+  const limit = used !== null && max ? { used, limit: max, percent: percent(spend.used_percent ?? used / max * 100), resetsAt: spend.reset_at ? Number(spend.reset_at) * 1000 : null } : null;
+  const valid = credits && typeof credits.has_credits === 'boolean' && typeof credits.unlimited === 'boolean';
+  if (!valid && !limit) return null;
+  return { balance: valid ? amount(credits.balance) : null, unlimited: valid && credits.unlimited, hasCredits: valid ? credits.has_credits : true, ...(limit && { limit }) };
 }
 
 // Codex also writes its rate limits into every session log, which works offline and for API-key logins once a session has run.

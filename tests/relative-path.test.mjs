@@ -15,9 +15,10 @@ test('anything outside the folder (or a sibling with the same prefix) keeps its 
   assert.equal(relativePath('src/b.ts', ''), 'src/b.ts');
 });
 
-test('file tools summarise with the relative path; the plan row names the step, not a possibly stale plan', () => {
+test('file tools summarise with the relative path; the plan row shows its input', () => {
   assert.equal(toolSummary('Edit', { file_path: 'C:\\AI\\repo\\untracked.md' }, 'C:\\AI\\repo'), 'untracked.md');
-  assert.equal(toolSummary('ExitPlanMode', { plan: '# old plan\nold text' }), '계획 승인 요청');
+  assert.equal(toolSummary('ExitPlanMode', { plan: '# old plan\nold text' }), '# old plan old text');
+  assert.equal(toolSummary('ExitPlanMode', {}), '계획 승인 요청');
 });
 
 test('an opened tool card lists its input as labelled fields with relative paths instead of raw JSON', () => {

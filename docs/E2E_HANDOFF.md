@@ -113,7 +113,7 @@ ONLY=F4 node scripts/verify/t-feedback.mjs                            # id가 F4
 ```js
 import { connect, env } from './scripts/verify/cdp.mjs';
 const c = await connect(p => p.url.includes('127.0.0.1'));  // 창을 앞으로 가져오지 않는다. 피드백 캡쳐만 connect(…, { focus: true }) 후 Page.bringToFront
-await c.clickSel('button', '새 피드백');               // 보이는 요소의 텍스트/aria-label 일치 → 가운데 클릭
+await c.clickSel('button', '내역');                 // 보이는 요소의 텍스트/aria-label 일치 → 가운데 클릭
 await c.click(...await c.centre('textarea')); await c.type('본문');
 await c.key('Enter', 'Enter');                         // key(키, 코드, modifiers) — Alt=1 Ctrl=2 Meta=4 Shift=8
 await c.shot('이름');                                  // VERIFY_OUT/shots/이름.png
