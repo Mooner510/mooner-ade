@@ -30,7 +30,7 @@ export type ChatCtx = {
   call<T = any>(action: string, input?: object): Promise<T>;
   subscribe(id: string, handler: (message: any) => void): () => void;
   settings: Settings; root: string; projectId: string;
-  onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(): void;
+  onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(agent?: 'claude' | 'codex' | 'cursor'): void;
   pick(title: string, items: { id: string; label: string; detail?: string }[]): Promise<string | null>; fail(cause: unknown): void;
   // Branch: opens a copy of chat `id` up to one assistant message as a new tab.
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
@@ -1666,7 +1666,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'cursor' && busy && <button type="button" onClick={() => interrupt(false)}>현재 응답을 중단하고 대기 메시지 보내기</button>}
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
-      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={ctx.onOpenSettings} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
+      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
       <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-feedback-region="채팅 입력창">
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>

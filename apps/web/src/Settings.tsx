@@ -372,8 +372,8 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
   </aside>;
 }
 
-export function SettingsModal({ settings, onChange, onClose, initialSection = 'appearance' }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; initialSection?: Section }) {
-  const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>('common'), [statusTab, setStatusTab] = useState<'bar' | 'chat'>('bar'), [query, setQuery] = useState(''), [look, setLook] = useState('');
+export function SettingsModal({ settings, onChange, onClose, initialSection = 'appearance', initialAiTab = 'common' }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; initialSection?: Section; initialAiTab?: AiTab }) {
+  const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>(initialAiTab), [statusTab, setStatusTab] = useState<'bar' | 'chat'>('bar'), [query, setQuery] = useState(''), [look, setLook] = useState('');
   const searching = query.trim() !== '';
   const missing = useMissingAgents();
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
