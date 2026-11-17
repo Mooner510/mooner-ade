@@ -4,7 +4,7 @@ import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativ
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { PluginBadges } from './PluginSettings';
-import { accountSources, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
+import { accountSources, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
@@ -98,7 +98,8 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   // Not installed or not signed in here (no login found) and a failed first reading both leave no windows: show nothing instead of a dead "—".
   // The hook keeps polling, so the item appears by itself once a reading succeeds.
   const credit = provider === 'claude' ? usage?.credit : null;
-  if (!usage || (!windows.length && !credit)) return null;
+  const codexCredits = provider === 'codex' ? usage?.codexCredits : null;
+  if (!usage || (!windows.length && !credit && !codexCredits)) return null;
   const preferred = usageStatusKeys[provider];
   const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
   const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
@@ -110,7 +111,8 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   return <>
     <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
-      {compact.length || credit ? compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>) : '—'}
+      {compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>)}
+      {codexCredits && <span className="usage-window"><small>크레딧</small>{codexCreditsLabel(codexCredits)}</span>}
       {credit && <span className={`usage-window ${colors && credit.percent !== null ? 'graded' : ''}`} style={colors && credit.percent !== null ? hue(credit.percent) : undefined}><small>크레딧</small>{credit.percent !== null ? `${credit.percent}%` : money(credit.used, credit.currency)}{credit.percent !== null && <i style={{ width: `${credit.percent}%` }} />}</span>}
     </button>
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
@@ -118,6 +120,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
         <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
       {windows.length > 0 && <UsageRows windows={windows} colors={colors} />}
       {credit && <CreditRow credit={credit} colors={colors} />}
+      {codexCredits && <div className="usage-row"><div><span>남은 크레딧</span><b>{codexCreditsLabel(codexCredits)}</b></div></div>}
       <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
