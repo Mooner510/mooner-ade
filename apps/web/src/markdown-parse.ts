@@ -78,14 +78,17 @@ export function stableSplit(text: string): [string, string] {
 // While text streams, a line still being typed that is only a block marker so far ("1", "-", "#", "**") or a table/fence line would render as a
 // paragraph and jump to its real shape a moment later; it is held back until it can no longer change shape. So is a table head still waiting for its |---| row.
 const PENDING_LINE = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)]?|>|[-*_]{2,}|`{1,2}|~{1,2})\s*$|\||```|~~~)/;
+const PENDING_FILE = /\[\[(?:f(?:i(?:l(?:e(?::[^\]\n]*)?)?)?)?)?\]?$/;
 export function holdBack(tail: string): string {
   const all = tail.split('\n');
   if (all.length && PENDING_LINE.test(all[all.length - 1])) all.pop();
+  // A file chip still being typed ("[[fi", "[[file:src/a") waits for its closing brackets instead of flashing as text.
+  else if (all.length) all[all.length - 1] = all[all.length - 1].replace(PENDING_FILE, '');
   let last = all.length - 1; while (last >= 0 && !all[last].trim()) last -= 1;
   if (last >= 0 && /^\s*\|/.test(all[last]) && !all.some(line => /^\s*\|?\s*:?-{2,}:?\s*\|/.test(line))) all.splice(last, 1);
   return all.join('\n');
 }
 
-// Inline spans, one capture group each: code, **bold**, __bold__, *italic*, _italic_, [label](url), bare URL. Like CommonMark, `__` and `_` only open and close
+// Inline spans, one capture group each: code, **bold**, __bold__, *italic*, _italic_, [label](url), bare URL, [[file:path:line]] (file-ref.ts). Like CommonMark, `__` and `_` only open and close
 // at a word edge, so identifiers such as `mcp__server__tool` or `snake_case_name` stay plain text.
-export const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\b__[^_\n]+__\b)|(\*[^*\s][^*\n]*\*)|(\b_[^_\s][^_\n]*_\b)|(\[(?:[^\[\]\n]|\[[^\]\n]*\])+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)/g;
+export const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\b__[^_\n]+__\b)|(\*[^*\s][^*\n]*\*)|(\b_[^_\s][^_\n]*_\b)|(\[(?:[^\[\]\n]|\[[^\]\n]*\])+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)|(\[\[file:[^\]\n]+\]\])/g;

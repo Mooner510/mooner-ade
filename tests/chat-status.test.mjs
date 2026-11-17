@@ -30,10 +30,10 @@ test('the chat status line always shows the usage button; API Usage shows what i
   assert.deepEqual(basis, ['API Usage', 'Plan Usage', '12%p']); // the measured share replaces the words
   assert.match(plan, /<button[^>]*usage-basis plan[^>]*popoverTarget/); assert.match(plan, />Plan Usage</); // shown although the item is switched off in the settings
   assert.match(measured, />12\.3%p</); assert.doesNotMatch(measured, /chat-stat-swap">Plan Usage/);
-  assert.match(api, /usage-basis api/); assert.match(api, /API Usage <b class="usage-money"[^>]*>\$0\.4231</); assert.match(api, /API로 보낸 턴의 요금 <b>\$0\.4231/);
+  assert.match(api, /usage-basis api/); assert.match(api, /API Usage <b class="usage-money"[^>]*>\$0\.4231</); assert.match(api, /API로 보낸 턴의 요금<\/span><b>\$0\.4231</);
   assert.match(plan, /role="radio" aria-checked="true" class="usage-option plan"/); assert.match(plan, /role="radio" aria-checked="false" class="usage-option api"/);
   assert.match(api, /role="radio" aria-checked="true" class="usage-option api"/);
-  assert.match(plan, /바꾼 뒤 메시지를 보낼 때, 이미 대화가 오간 채팅이면 한 번 확인합니다/);
+  assert.match(plan, /전환하면 기존 캐시를 쓸 수 없어 비용이 더 발생할 수 있습니다/);
   assert.match(busy, /응답이 끝난 뒤 바꿀 수 있습니다/); assert.match(busy, /usage-option plan"[^>]*disabled/);
   assert.match(other, /채팅을 시작할 때 정해집니다/); assert.doesNotMatch(other, /role="radio"/);
   delete globalThis.innerWidth; delete globalThis.innerHeight; delete globalThis.document;

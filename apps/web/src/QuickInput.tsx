@@ -31,7 +31,8 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
   const items = useMemo<QuickItem[]>(() => {
     if (request.kind === 'input') return [];
     const query = searchable ? value.trim() : '';
-    if (!query) return request.items;
+    // A project's whole file list is thousands long: show the first screenfuls until a search narrows it down.
+    if (!query) return request.items.length > 300 ? request.items.slice(0, 300) : request.items;
     return request.items.map(item => ({ item, score: fuzzy(query, item.label) })).filter(entry => entry.score >= 0).sort((a, b) => b.score - a.score).slice(0, 80).map(entry => entry.item);
   }, [request, value, searchable]);
   useEffect(() => setIndex(0), [value]);
