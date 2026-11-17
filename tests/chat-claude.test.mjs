@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { alwaysSuggestions, ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
+import { alwaysSuggestions, ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, resultContextWindow, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
 
 const askInput = { questions: [
   { question: 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.', header: '웹 서비스', multiSelect: true, options: [{ label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { label: 'DONGPO', description: '' }] },
@@ -239,4 +239,16 @@ test('plan limit: only a warning or a hit is kept; worktree moves and picked mod
   assert.equal(isPickedModel('opus[1m]', 'claude-opus-5-5'), true);
   assert.equal(isPickedModel('haiku', 'claude-sonnet-5-5'), false);
   assert.equal(isPickedModel(undefined, 'claude-sonnet-5-5'), false);
+});
+
+test('a result\'s context window is the chat\'s own model, not a helper model listed first', () => {
+  const usage = { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 }, 'claude-opus-5-5': { contextWindow: 1_000_000 } };
+  assert.equal(resultContextWindow(usage, 'claude-opus-5-5'), 1_000_000);
+  assert.equal(resultContextWindow(usage, 'opus'), 1_000_000);
+  assert.equal(resultContextWindow(usage, 'claude-opus-5-5[1m]'), 1_000_000);
+  assert.equal(resultContextWindow(usage, null), 1_000_000);
+  assert.equal(resultContextWindow(usage, 'claude-haiku-4-5-20251001'), 200_000);
+  assert.equal(resultContextWindow({}, 'opus'), null);
+  const [result] = normalizeClaude({ type: 'result', subtype: 'success', modelUsage: usage }, 'claude-opus-5-5');
+  assert.equal(result.contextWindow, 1_000_000);
 });

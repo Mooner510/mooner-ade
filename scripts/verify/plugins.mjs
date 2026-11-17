@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { createPluginManager, createPluginStore, validManifest } from '../../apps/desktop/src/plugin-core.js';
+import { createHubClient } from '../../apps/desktop/src/hub-client.js';
 import { createGithub, githubClientId, machineAccounts, machineToken } from '../../apps/desktop/src/plugin-updates.js';
 
 export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = process.env, onTerminal, onFeedback, toServer }) {
@@ -40,9 +41,11 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
     });
   }
   const github = createGithub({ credential: async () => store.state.github ? { token: store.state.github.token, via: 'ade' } : machineToken({ account: store.state.ghAccount }) });
+  // The Hub is the fake one of the session (ADE_HUB_URL, scripts/verify/hub-fake.mjs); its sign-in page is never opened in a browser here.
+  const hub = createHubClient({ store, ...(env.ADE_HUB_URL && { baseUrl: env.ADE_HUB_URL }) });
   const manager = createPluginManager({
     dir, builtinDir: path.resolve(import.meta.dirname, '../../apps/desktop/builtin-plugins'), dataRoot: path.join(root, 'plugin-data'), store, ask, nodeBinary: process.execPath, appVersion,
-    onChange: () => { revision++; }, onTerminal, onFeedback, toServer, github, clientId: githubClientId(),
+    onChange: () => { revision++; }, onTerminal, onFeedback, toServer, github, hub, clientId: githubClientId(),
     probeCredential: async () => { const accounts = await machineAccounts(); const found = accounts.ghAvailable ? null : await machineToken(); return { ...accounts, via: found?.via ?? null }; },
     spawnHost({ dir: cwd, main }) {
       const hostEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !/^(ADE_|VERIFY_|ELECTRON_)/.test(name)));
@@ -74,8 +77,11 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
     connectGithub: input => manager.connectGithub(String(input.args?.[0] ?? '')),
     disconnectGithub: () => manager.disconnectGithub(), signInGithub: () => manager.signInGithub(), cancelSignIn: () => manager.cancelSignIn(), probeGithub: () => manager.probeGithub(),
     selectGithubAccount: input => manager.selectGithubAccount(String(input.args?.[0] ?? '')),
+    signInHub: () => manager.signInHub(), cancelHubSignIn: () => manager.cancelHubSignIn(), signOutHub: () => manager.signOutHub(),
+    hubCatalog: input => manager.hubCatalog({ force: input.args?.[0]?.force === true }),
+    hubInstall: input => manager.installFromHub(String(input.args?.[0] ?? '')),
     openFolder: () => ({ ...handlers.state(), message: `테스트 플러그인 폴더: ${dir}` }),
-    openSource: input => { const repo = manager.snapshot().plugins.find(plugin => plugin.id === String(input.args?.[0]))?.update?.source?.github; return { ...handlers.state(), ...(repo && { openUrl: `https://github.com/${repo}/releases` }) }; },
+    openSource: input => { const source = manager.snapshot().plugins.find(plugin => plugin.id === String(input.args?.[0]))?.update?.source; return { ...handlers.state(), ...(source?.kind === 'github' && source.github && { openUrl: `https://github.com/${source.github}/releases` }) }; },
     openTokenPage: () => ({ ...handlers.state(), openUrl: 'https://github.com/settings/personal-access-tokens/new' }),
     uploadZip: async input => {
       if (typeof input.zip !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.zip) || input.zip.length > 12 * 1024 * 1024) throw new Error('8MB 이하의 플러그인 zip을 선택하세요.');

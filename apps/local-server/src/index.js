@@ -18,6 +18,7 @@ import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
 import { uploadOverSsh } from './ssh-upload.js';
+import { createClaudeUpdater } from './claude-update.js';
 import { createRemoteAgent } from './remote-agent.js';
 import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remote-claude.js';
 import { createTerminalStatus } from './terminal-status.js';
@@ -537,6 +538,12 @@ async function readiness(root) {
 // is shared by all projects for a while; the "다시 확인" button forces a fresh one.
 const READINESS_TTL = 10 * 60_000;
 let agentReadiness = null;
+// The Claude Code CLI's own update (the chat's "새 버전" notice and its 업데이트 button). A new CLI changes the readiness reading and may change
+// the model catalog and slash commands, so those are asked again afterwards; running chats keep the binary they started with (see claude-update.js).
+const claudeUpdater = createClaudeUpdater({
+  exec: (file, args, options) => new LocalProcesses({ cwd: os.homedir() }).exec(file, args, options),
+  onUpdated: () => { agentReadiness = null; initProbes.clear(); modelsProbe = null; }
+});
 async function cachedReadiness(root, force) {
   if (force || !agentReadiness || (agentReadiness.done && Date.now() - agentReadiness.at > READINESS_TTL)) {
     const entry = { at: Date.now(), done: false, value: readiness(root) };
@@ -812,6 +819,8 @@ async function route(action, input, project) {
     await closeProject(project, { force: input.force === true });
     return {};
   }
+  if (action === 'agent/update-check') return claudeUpdater.check(input.force === true);
+  if (action === 'agent/update') return claudeUpdater.update();
   if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
