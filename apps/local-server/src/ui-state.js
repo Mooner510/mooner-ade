@@ -33,6 +33,8 @@ function validateSettings(settings, invalid) {
   for (const name of ['agentsOff', 'agentsMuted']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 8 && settings[name].every(item => ['claude', 'codex', 'cursor'].includes(item)))) invalid();
   for (const name of ['chatKeys', 'appKeys']) if (settings[name] !== undefined && !(settings[name] && typeof settings[name] === 'object' && !Array.isArray(settings[name]) && Object.entries(settings[name]).length <= (name === 'appKeys' ? 64 : 16)
     && Object.entries(settings[name]).every(([id, combo]) => /^[a-zA-Z][a-zA-Z0-9]{0,23}$/.test(id) && typeof combo === 'string' && /^[a-z0-9+\[\]\\,.;'`=/-]{1,48}$/.test(combo)))) invalid();
+  if (settings.termKeys !== undefined && !(settings.termKeys && typeof settings.termKeys === 'object' && !Array.isArray(settings.termKeys) && Object.entries(settings.termKeys).length <= 64
+    && Object.entries(settings.termKeys).every(([id, on]) => /^[a-zA-Z][a-zA-Z0-9]{0,23}$/.test(id) && typeof on === 'boolean'))) invalid();
   for (const name of ['statusItems', 'statusLeft', 'statusRight', 'chatStatusItems', 'chatStatusLeft', 'chatStatusRight', 'hintsSeen']) if (settings[name] !== undefined && !(Array.isArray(settings[name]) && settings[name].length <= 32 && settings[name].every(item => typeof item === 'string' && /^[a-z]{1,16}$/.test(item)))) invalid();
   if (settings.chatStatusSeparator !== undefined && !(typeof settings.chatStatusSeparator === 'string' && settings.chatStatusSeparator.length <= 8)) invalid();
   // bypassPermissions is deliberately not a valid default: it must be chosen per chat, never inherited.
