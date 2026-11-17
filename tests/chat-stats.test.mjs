@@ -3,7 +3,28 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readSessionStats, sessionFiles } from '../apps/local-server/src/chat-stats.js';
+import { chatEventStats, readSessionStats, sessionFiles } from '../apps/local-server/src/chat-stats.js';
+
+test('ADE statistics difference cumulative tokens once per response and leave missing usage unavailable', () => {
+  const stats = chatEventStats([
+    { kind: 'session', model: 'codex', at: 1 }, { kind: 'user', at: 2 },
+    { kind: 'usage', at: 3, tokens: { input: 10, output: 2, cacheRead: 100 }, contextTokens: 110 },
+    { kind: 'message', at: 4, blocks: [{ type: 'tool_use', id: 't', name: 'Bash' }] },
+    { kind: 'tool_result', at: 5, toolUseId: 't', isError: true },
+    { kind: 'usage', at: 6, tokens: { input: 20, output: 4, cacheRead: 200 }, contextTokens: 220 },
+    { kind: 'result', at: 7, durationMs: 50 }, { kind: 'user', at: 8 },
+    { kind: 'usage', at: 9, tokens: { input: 30, output: 10, cacheRead: 300 }, contextTokens: 330 },
+    { kind: 'result', at: 10, durationMs: 100 },
+  ]);
+  assert.equal(stats.turns, 2); assert.equal(stats.requests, 2); assert.equal(stats.activeMs, 150);
+  assert.deepEqual(stats.turnSeries.map(row => row.output), [4, 6]);
+  assert.equal(stats.tokens.input, 30); assert.equal(stats.tokens.read, 300); assert.equal(stats.tokens.output, 10);
+  assert.equal(stats.cost, null); assert.equal(stats.tokensAvailable, true); assert.equal(stats.contextAvailable, true);
+  assert.deepEqual(stats.tools, [{ name: 'Bash', count: 1, errors: 1 }]);
+  const cursor = chatEventStats([{ kind: 'user', at: 1 }, { kind: 'result', at: 2 }]);
+  assert.equal(cursor.tokensAvailable, false); assert.equal(cursor.contextAvailable, false); assert.equal(cursor.cacheHitRate, null); assert.equal(cursor.cost, null);
+  assert.equal(chatEventStats([{ kind: 'result' }, { kind: 'divider' }]).requests, 0);
+});
 
 const at = minutes => new Date(Date.UTC(2026, 10, 12, 0, minutes)).toISOString();
 const usage = (input, output, read, w1) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: w1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });

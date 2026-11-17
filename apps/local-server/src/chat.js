@@ -9,12 +9,14 @@ import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
-import { readCursorStoreUsage } from './cursor-context.js';
+import { cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
+import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
 import { readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
 import { readSessionCache } from './claude-cache.js';
+import { chatEventStats } from './chat-stats.js';
 import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
@@ -56,7 +58,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, quietMs = BACKGROUND_QUIET_MS }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -67,6 +69,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const saved = await fs.readFile(metaFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   // Claude: meta holds only what the user picked in this chat. Unset model/effort/permissionMode mean "whatever a plain `claude` would use" (settings.json), so no flag is passed.
   const meta = { sessionId: undefined, configDir: undefined, model: undefined, effort: undefined, worktree: false, addDirs: [], permissionMode: agent === 'claude' ? undefined : 'default', sandbox: null, network: false, runEverything: false, costBase: 0, resumeAt: undefined, fork: false, ...JSON.parse(saved ?? '{}') };
+  const cursorCheckpoints = new Map();
+  let cursorSnapshot = Promise.resolve();
+  const cursorDirOf = () => meta.configDir || cursorConfigDir({ ...process.env, ...(typeof env === 'function' ? env() : env) });
   // Settings' defaults for a brand-new chat; a saved chat keeps what it has. Only modes this agent can apply, and never bypassPermissions.
   if (saved === null && defaults) {
     const caps = chatCapabilities(agent);
@@ -106,7 +111,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (retainedCache) return retainedCache;
     let kept = [];
     for (const event of events) {
-      if (event.kind === 'rewind') { const at = kept.findIndex(item => item.kind === 'message' && item.uuid === event.uuid); if (at >= 0) kept = kept.slice(0, at + 1); }
+      if (event.kind === 'rewind') {
+        const at = kept.findIndex(item => item.kind === 'message' && item.uuid === event.uuid);
+        const checkpoint = agent === 'cursor' ? kept.findIndex(item => item.kind === 'cursor_checkpoint' && item.uuid === event.uuid) : -1;
+        if (at >= 0) kept = kept.slice(0, Math.max(at, checkpoint) + 1);
+      }
       else kept.push(event);
     }
     return retainedCache = kept;
@@ -173,7 +182,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const sessionId = state.sessionId ?? meta.sessionId;
     if (!sessionId) return;
     if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 5_000) return;
-    const reading = await readCursorStoreUsage(sessionId).catch(() => null);
+    const reading = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
     if (!reading) return;
     if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
     if (reading.contextTokens === state.contextTokens && (reading.contextWindow ?? state.contextWindow) === state.contextWindow) return;
@@ -254,7 +263,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         return [{ name: item.name, description: typeof item.description === 'string' ? item.description.slice(0, 200) : '', ...(hint ? { hint } : {}) }];
       });
       if (event.tools?.length) state.tools = event.tools;
-    } else if (event.kind === 'capabilities') state.capabilities = event.capabilities;
+    } else if (event.kind === 'cursor_checkpoint') {
+      cursorCheckpoints.set(event.uuid, event.file);
+      state.capabilities = { ...state.capabilities, branch: true, rewind: true };
+    } else if (event.kind === 'capabilities') state.capabilities = { ...event.capabilities, ...(cursorCheckpoints.size && { branch: true, rewind: true }),
+      ...(state.capabilities.tokens && { tokens: true }), ...(state.capabilities.cost && { cost: true }) };
     else if (event.kind === 'worktree') { if (typeof event.path === 'string') state.cwd = event.path; }
     else if (event.kind === 'settings') { if (event.permissionMode !== undefined) state.permissionMode = event.permissionMode; if (event.effort !== undefined) state.effort = event.effort; }
     else if (event.kind === 'usage') {
@@ -262,6 +275,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.contextTokens = event.contextTokens ?? state.contextTokens; state.contextWindow = event.contextWindow ?? state.contextWindow;
       if (event.contextSource === 'acp' || event.contextSource === 'store') state.contextUsageSource = event.contextSource;
       state.capabilities = { ...state.capabilities, context: true, tokens: Boolean(event.tokens) || state.capabilities.tokens };
+      if (Number.isFinite(event.costUsd) && event.costUsd >= 0) { state.costUsd = event.costUsd; state.capabilities.cost = true; }
     } else if (event.kind === 'message' && event.usage && !event.parentToolUseId) {
       state.contextTokens = event.usage.input + event.usage.cacheRead + event.usage.cacheCreate + event.usage.output;
     } else if (event.kind === 'result') {
@@ -403,6 +417,22 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'compact' && agent === 'claude') refreshCacheSoon();
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
+        if (agent === 'cursor' && state.sessionId) {
+          const sessionId = state.sessionId, last = retainedEvents().findLast(item => item.kind === 'message');
+          if (last?.uuid && last.blocks?.some(block => block.type === 'text') && event.status === 'success') {
+            const file = `cursor-checkpoints/${randomUUID()}.json`;
+            cursorSnapshot = cursorSnapshot.then(async () => {
+              if (await snapshotCursorSession({ sessionId, configDir: cursorDirOf(), destination: path.join(root, file) })) {
+                emit({ kind: 'cursor_checkpoint', uuid: last.uuid, file }); publish();
+              }
+            }).catch(error => { emit({ kind: 'error', message: `분기용 대화 저장 실패: ${error.message}` }); });
+          }
+          const launch = { ...process.env, ...(typeof env === 'function' ? env() : env) };
+          void readCursorBilledUsage(sessionId, launch.CURSOR_API_KEY).then(value => {
+            if (!value || closed || state.sessionId !== sessionId) return;
+            emit({ kind: 'usage', ...value }); void saveMeta().catch(reportStorage); publish();
+          }).catch(() => {});
+        }
         clearTimeout(activityTimer); reopened = false;
         streamIds.clear(); toolInputSize.clear(); resetLive(); turnOpen = steers.size > 0; setStatus();
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
@@ -467,6 +497,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function start() { if (starting) return starting; if (child) return Promise.resolve(); return starting = startNow().finally(() => { starting = null; }); }
   async function startNow() {
     if (closed) throw fault('NOT_FOUND', '닫힌 채팅입니다.', 404);
+    // A new Claude chat runs on the account the project's allowed .envrc names (what its terminals use) and keeps it; an old chat keeps the folder its history is in.
+    if (agent === 'claude' && account && !meta.configDir && !meta.sessionId) { const dir = await account().catch(() => ''); if (dir) { meta.configDir = dir; await saveMeta(); } }
     if (agent !== 'claude' && meta.worktree && !meta.worktreePath) {
       const target = path.join(directory, 'worktrees', `chat-${id}`);
       await fs.mkdir(path.dirname(target), { recursive: true });
@@ -490,6 +522,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       state.apiKey = usesApiKey(launchEnv);
       if (agent === 'codex') { meta.configDir ??= launchEnv.CODEX_HOME || path.join(os.homedir(), '.codex'); launchEnv.CODEX_HOME = meta.configDir; }
       if (agent === 'claude' && meta.configDir) launchEnv.CLAUDE_CONFIG_DIR = meta.configDir;
+      if (agent === 'cursor' && meta.configDir) launchEnv.CURSOR_CONFIG_DIR = meta.configDir;
       // Once a chat has used Artifact every restart and resume keeps it on, so the tools do not vanish (the CLI cannot take them back mid-session anyway).
       if (agent === 'claude' && meta.artifact) launchEnv.CLAUDE_CODE_ARTIFACT = '1';
       // With --mcp-config (the agent bus) the CLI holds its init event until every MCP server of the user has connected, up to ~30s when one is slow or
@@ -509,7 +542,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     attach(proc);
     if (protocol) {
       try {
-        await protocol.initialize(meta, cwd, chatMcpServers({ chatId: id, projectId, agent }), meta.interactiveUi === true ? UI_PROMPT : undefined);
+        await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), meta.interactiveUi === true ? UI_PROMPT : undefined);
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -678,6 +711,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
     async send(text, images = [], { steer = false, artifact = false, previews = [] } = {}) {
       live();
+      if (agent === 'cursor') await cursorSnapshot;
       if (configuring && !(turnOpen && steer)) await configChain;
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
@@ -703,7 +737,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           restart();
           try {
             const output = await runCursorSummarize({ executable, executableArgs: argsOf(executableArgs), sessionId, cwd, env, spawnProcess });
-            const after = await readCursorStoreUsage(sessionId).catch(() => null);
+            const after = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
             emit({ kind: 'delta', phase: 'compacting', active: false });
             emit({ kind: 'compact', trigger: 'manual', preTokens: preTokens || null, postTokens: after?.contextTokens ?? null });
             const cleaned = cleanCursorSummarizeOutput(output);
@@ -905,20 +939,33 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       const at = events.findIndex(event => event.kind === 'message' && event.uuid === uuid);
       const kept = retainedEvents(), selected = kept.findIndex(event => event.kind === 'message' && event.uuid === uuid);
       if ((agent === 'claude' && !validMessageUuid(uuid)) || !meta.sessionId || at < 0 || selected < 0 || (agent === 'codex' && (!events[at].turnId || kept.slice(selected + 1).some(event => event.kind === 'message' && event.turnId === events[at].turnId)))) throw fault('INVALID_INPUT', '이 지점에서는 분기할 수 없습니다.');
+      if (agent === 'cursor') {
+        const checkpoint = cursorCheckpoints.get(uuid);
+        if (!checkpoint || !/^cursor-checkpoints\/[a-f0-9-]{36}\.json$/.test(checkpoint)) throw fault('CHAT_UNSUPPORTED', '완료된 응답의 분기 기록이 없습니다. 새 응답이 끝난 뒤 다시 시도하세요.', 409);
+        const end = kept.findIndex(item => item.kind === 'cursor_checkpoint' && item.uuid === uuid);
+        return { events: kept.slice(0, end + 1), meta: { agent, cwd, configDir: cursorDirOf(), cursorCheckpoint: path.join(root, checkpoint), model: meta.model, effort: meta.effort, configValues: meta.configValues, sandbox: meta.sandbox, permissionMode: meta.permissionMode, runEverything: meta.runEverything, addDirs: [] } };
+      }
       return { events: kept.slice(0, selected + 1), meta: { agent, cwd, worktree: meta.worktree, worktreePath: meta.worktreePath, configDir: meta.configDir, sessionId: meta.sessionId, resumeAt: agent === 'codex' ? events[at].turnId : uuid, fork: true, model: meta.model, effort: meta.effort, addDirs: meta.addDirs, permissionMode: meta.permissionMode } };
     },
     // Rewind: drop everything after one assistant message. The next message starts a fork of the session at that point (conversation only; files Claude already changed stay).
     async rewind(uuid) {
       live();
+      if (agent === 'cursor') await cursorSnapshot;
       if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 되돌릴 수 있습니다.', 409);
       const snapshot = this.branchSnapshot(uuid);
       restart();
+      if (agent === 'cursor') {
+        const sessionId = await forkCursorSession({ checkpoint: snapshot.meta.cursorCheckpoint, cwd, configDir: cursorDirOf() });
+        meta.sessionId = state.sessionId = sessionId;
+        emit({ kind: 'rewind', uuid }); await saveMeta(); setStatus(); return;
+      }
       meta.resumeAt = snapshot.meta.resumeAt; meta.fork = true;
       emit({ kind: 'rewind', uuid }); await saveMeta(); setStatus();
     },
     // Chat -> terminal: only while nothing runs. The child is ended (and waited for), so the session has a single writer again when the terminal resumes it.
     async handoff({ force = false } = {}) {
       live();
+      if (agent === 'cursor') await cursorSnapshot;
       if (turnOpen || approvals.size || steers.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 전환할 수 있습니다.', 409);
       if (state.liveTasks.length && !force) throw fault('CHAT_BACKGROUND', '백그라운드 작업이 실행 중입니다. 전환하면 종료됩니다.', 409);
       if (!meta.sessionId) throw fault('INVALID_INPUT', '아직 시작하지 않은 대화입니다. 새 터미널을 여세요.', 409);
@@ -929,7 +976,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (proc.exitCode === null && !proc.signalCode) throw fault('CHAT_SWITCH_FAILED', 'Claude를 종료하지 못해 전환을 중단했습니다.', 500);
       }
       setStatus();
-      return { agent, sessionId: meta.sessionId, configDir: meta.configDir };
+      const sessionId = agent === 'cursor' ? await exportCursorSession({ sessionId: meta.sessionId, cwd, configDir: cursorDirOf() }) : meta.sessionId;
+      return { agent, sessionId, configDir: agent === 'cursor' ? cursorDirOf() : meta.configDir };
     },
     // /btw: a side question answered from a fork of this conversation (see chat-btw.js). Needs no idle state: it runs beside a working turn and never touches the chat's events.
     // It runs on the agent's cheap default model (BTW_DEFAULTS), not the chat's own; `pick` ({ model, effort }) overrides that.
@@ -945,6 +993,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.
+    stats() { return { sessionId: state.sessionId ?? '', ...chatEventStats(retainedEvents()) }; },
     sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath, costUsd: typeof state.costUsd === 'number' ? state.costUsd : null }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
     async cancelSteer() {
@@ -973,6 +1022,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (closed) return;
       closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
       if (child) { const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
+      await cursorSnapshot;
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
@@ -1002,6 +1052,16 @@ export async function seedChat({ directory, id, events, meta }) {
   const root = chatFolder(directory, id);
   if (await fs.stat(path.join(root, 'meta.json')).then(() => true, () => false)) throw fault('INVALID_INPUT', '이미 있는 채팅입니다.');
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  if (meta.agent === 'cursor' && meta.cursorCheckpoint) {
+    const { cursorCheckpoint, ...rest } = meta;
+    const source = path.dirname(path.dirname(cursorCheckpoint));
+    await backupCursorStore(path.join(source, 'cursor-checkpoints/store.db'), path.join(root, 'cursor-checkpoints/store.db'));
+    for (const event of events) if (event.kind === 'cursor_checkpoint') {
+      if (!/^cursor-checkpoints\/[a-f0-9-]{36}\.json$/.test(event.file)) throw fault('INVALID_INPUT', '분기 기록 경로가 올바르지 않습니다.');
+      await fs.copyFile(path.join(source, event.file), path.join(root, event.file), fs.constants.COPYFILE_EXCL);
+    }
+    meta = { ...rest, sessionId: await forkCursorSession({ checkpoint: cursorCheckpoint, cwd: meta.cwd, configDir: meta.configDir }) };
+  }
   await fs.writeFile(path.join(root, 'events.jsonl'), events.map(event => JSON.stringify(event) + '\n').join(''), { mode: 0o600 });
   await fs.writeFile(path.join(root, 'meta.json'), JSON.stringify({ ...meta, costBase: 0 }), { mode: 0o600 });
 }

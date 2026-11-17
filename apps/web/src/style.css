@@ -996,7 +996,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-token > label { font-weight: 600; font-size: 12.5px; }
 .plugin-token small { line-height: 1.5; color: var(--muted); }
 .plugin-token-row { display: flex; gap: 8px; }
-.plugin-token-row input { flex: 1; min-width: 0; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
+.plugin-token-row input, .plugin-token-row select { flex: 1; min-width: 0; min-height: 32px; border-color: var(--border-strong); border-radius: 7px; }
 .plugin-token small .plugin-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; background: none; }
 .shortcut-list { margin-top: 16px; }
 .shortcut-list h3 { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }

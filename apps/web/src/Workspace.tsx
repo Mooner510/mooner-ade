@@ -566,8 +566,17 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     try { await terminalToChatNow(id); } finally { switching.current.delete(id); }
   }
   async function terminalToChatNow(id: string) {
-    const leaf = chatLeaf(), { cwd } = await call<{ cwd: string }>('terminal/to-chat', { id, newId: leaf.id }), tree = treeOf(id);
-    if (tree) commitFor(id, mapLeaf(tree, id, () => ({ ...leaf, cwd })));
+    const chosen = agentOf(id), stop = chosen !== 'claude';
+    let sessionId: string | undefined;
+    if (chosen === 'cursor') {
+      const sessions = await call<{ sessionId: string; title: string; updatedAt: number }[]>('terminal/chat-sessions', { id });
+      if (!sessions.length) throw new Error('이 폴더의 Cursor 대화 기록이 없습니다. Cursor에서 응답을 완료한 뒤 다시 시도하세요.');
+      sessionId = (await pick('Chat으로 이어갈 Cursor 대화를 선택하세요. 원본은 보존하고 복사본으로 이어갑니다.', sessions.map(item => ({ id: item.sessionId, label: item.title, detail: new Date(item.updatedAt).toLocaleString('ko-KR') })))) ?? undefined;
+      if (!sessionId) return;
+    }
+    if (!(await ask.confirm(stop ? '진행 중인 작업과 터미널의 미전송 입력을 중단하고 같은 대화를 Chat으로 이어갈까요?' : '터미널의 미전송 입력은 사라집니다. 같은 대화를 Chat으로 이어갈까요?'))) return;
+    const leaf = chatLeaf(), { cwd, agent } = await call<{ cwd: string; agent: Agent }>('terminal/to-chat', { id, newId: leaf.id, stop, ...(sessionId && { sessionId }) }), tree = treeOf(id);
+    if (tree) commitFor(id, mapLeaf(tree, id, () => ({ ...leaf, cwd, agent })));
     refs.pending.current.delete(id); bus.current.buffers.delete(id); bus.current.listeners.delete(id); bus.current.sizes.delete(id); bus.current.sizeListeners.delete(id);
     clearAttention(id); setWorking(previous => { const next = new Set(previous); next.delete(id); return next; });
     setFocusLeaf(leaf.id); await refresh();

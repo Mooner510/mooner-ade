@@ -612,7 +612,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   useEffect(() => { if (focused) term.current?.focus(); }, [focused]);
   const label = titles[id] || (cwds[id] ? basename(cwds[id]) : id.slice(0, 6));
   const exited = cwds[id] !== undefined && !live.has(id);
-  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = agent === 'claude' && !isSsh && attention[id] !== 'attention' && !workingSet.has(id); // hidden, not dimmed, while the switch cannot work
+  const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = !isSsh && (agent === 'codex' || agent === 'cursor' || agent === 'claude' && attention[id] !== 'attention' && !workingSet.has(id));
   // Points at the Chat switch once; held back while the "try Chat" card (chatTipPending) is up so only one thing asks for attention.
   const hint = focused && visible && canChat && !settings.chatTipPending ? nextHint(settings, [['tochat', true]]) : undefined;
   const hintSeen = () => { if (!settings.hintsSeen.includes('tochat')) chat.onSettingsChange({ ...settings, hintsSeen: [...settings.hintsSeen, 'tochat'] }); };

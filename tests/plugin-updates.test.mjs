@@ -7,7 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createPluginManager, createPluginStore, updateReview, validManifest, validPluginState, validView } from '../apps/desktop/src/plugin-core.js';
-import { compareVersions, createGithub, machineToken, matchAsset, parseVersion, validSource } from '../apps/desktop/src/plugin-updates.js';
+import { compareVersions, createGithub, machineAccounts, machineToken, matchAsset, parseVersion, validSource } from '../apps/desktop/src/plugin-updates.js';
 
 const sha = data => createHash('sha256').update(data).digest('hex');
 const sealer = () => ({
@@ -79,13 +79,41 @@ test('saved update modes and the GitHub account are checked when read', () => {
   assert.equal(validPluginState({ version: 1, github: { token: 'short', login: 'x' } }).github, null);
 });
 
-test("this PC's login comes from gh, then git's credential helper, and never prompts", async () => {
+test('system Git credentials are used only when gh is absent, without prompting', async () => {
   const calls = [];
-  const run = async (command, args, options) => { calls.push({ command, args, env: options.env }); return command === 'gh' ? { code: 1, stdout: '' } : { code: 0, stdout: `protocol=https\nhost=github.com\nusername=x\npassword=${'g'.repeat(40)}\n` }; };
+  const run = async (command, args, options) => { calls.push({ command, args, env: options.env }); return command === 'gh' ? { code: -1, stdout: '', missing: true } : { code: 0, stdout: `protocol=https\nhost=github.com\nusername=x\npassword=${'g'.repeat(40)}\n` }; };
+  assert.deepEqual(await machineAccounts({ run, env: {} }), { ghAvailable: false, accounts: [] });
+  calls.length = 0;
   assert.deepEqual(await machineToken({ run, env: {} }), { token: 'g'.repeat(40), via: 'git' });
   assert.equal(calls[1].env.GIT_TERMINAL_PROMPT, '0');
   assert.equal(calls[1].env.GCM_INTERACTIVE, 'never');
-  assert.equal(await machineToken({ run: async () => ({ code: 1, stdout: '' }), env: {} }), null);
+  assert.equal(await machineToken({ run: async command => ({ code: -1, stdout: '', missing: command === 'gh' }), env: {} }), null);
+});
+
+test('gh lists saved accounts and reads only the selected account without environment token overrides', async () => {
+  const calls = [], token = 's'.repeat(40);
+  const run = async (command, args, options) => {
+    calls.push({ command, args, env: options.env });
+    if (args[1] === 'status') return { code: 0, stdout: JSON.stringify({ hosts: { 'github.com': [
+      { login: 'alice', active: true, state: 'success', token: 'must-not-leak' },
+      { login: 'bob', active: false, state: 'success' }, { login: 'expired', state: 'error' }
+    ] } }) };
+    return { code: 0, stdout: args[1] === 'token' ? token : 'gh version' };
+  };
+  const env = { GH_TOKEN: 'override', GITHUB_TOKEN: 'override', PATH: '/bin' };
+  assert.deepEqual(await machineAccounts({ run, env }), { ghAvailable: true, accounts: [
+    { login: 'alice', active: true, valid: true }, { login: 'bob', active: false, valid: true }, { login: 'expired', active: false, valid: false }
+  ] });
+  assert.equal(await machineToken({ run, env }), null, 'no implicit active account');
+  assert.deepEqual(await machineToken({ run, env, account: 'bob' }), { token, via: 'gh' });
+  assert.deepEqual(calls.at(-1).args, ['auth', 'token', '--hostname', 'github.com', '--user', 'bob']);
+  assert.deepEqual(calls.at(-1).env, { PATH: '/bin' });
+  assert.ok(calls.every(call => call.command === 'gh' && !call.args.includes('switch')));
+  await assert.rejects(machineToken({ run, env, account: '../bad' }), { code: 'GH_AUTH_FAILED' });
+  await assert.rejects(machineToken({ run: async () => ({ code: 1, stdout: '' }), account: 'bob' }), { code: 'GH_AUTH_FAILED' });
+  await assert.rejects(machineToken({ run: async (_command, args) => ({ code: 0, stdout: args[0] === '--version' ? 'gh version' : '' }), account: 'bob' }), { code: 'GH_AUTH_FAILED' });
+  await assert.rejects(machineAccounts({ run: async () => ({ code: 1, stdout: '' }) }), { code: 'GH_AUTH_FAILED' });
+  await assert.rejects(machineAccounts({ run: async () => ({ code: 0, stdout: '{}' }) }), { code: 'GH_AUTH_FAILED' });
 });
 
 // ---- the release client against a fake GitHub ---------------------------------------------------------------------------
@@ -178,7 +206,7 @@ function fakeHost() {
   return child;
 }
 // latest: what the fake release holds ({ version, extra }); answers: the dialog buttons pressed, in order.
-function setup(t, { latest, answers = [] }) {
+function setup(t, { latest, answers = [], probeCredential }) {
   const root = temp(t), dir = path.join(root, 'plugins'), asked = [], notices = [], hosts = [];
   fs.mkdirSync(path.join(dir, 'demo'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'demo', 'plugin.json'), JSON.stringify(manifestOf('1.0.0')));
@@ -192,7 +220,7 @@ function setup(t, { latest, answers = [] }) {
     whoami: async token => { if (token !== 'good'.repeat(10)) throw Object.assign(new Error('bad token'), { code: 'UNAUTHORIZED' }); return { login: 'me' }; }
   };
   const manager = createPluginManager({
-    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, github,
+    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, github, probeCredential,
     log: { log() {}, warn() {}, error() {} }, notify: notice => notices.push(notice),
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; }
@@ -324,4 +352,25 @@ test('plugins are told which features this MoonerADE has, and a list button send
   child.emit('message', { type: 'action-result', id: sent.id, ok: true, message: 'done' });
   assert.equal((await pending).message, 'done');
   await assert.rejects(env.manager.action('demo', 'remove', {}, '../x'), /잘못된 항목/);
+});
+
+test('gh account selection is validated, persisted across restarts, and never exposes tokens', async t => {
+  let accounts = [{ login: 'alice', active: true, valid: true }, { login: 'bob', active: false, valid: true }, { login: 'expired', active: false, valid: false }];
+  const env = setup(t, { latest: { version: '1.0.0' }, answers: [0], probeCredential: async () => ({ ghAvailable: true, accounts }) });
+  await env.manager.connectGithub('good'.repeat(10));
+  await assert.rejects(env.manager.selectGithubAccount('unknown'), { code: 'GH_AUTH_FAILED' });
+  await assert.rejects(env.manager.selectGithubAccount('expired'), { code: 'GH_AUTH_FAILED' });
+  assert.equal(env.store.state.github.login, 'me', 'invalid selection preserves existing connection');
+  const selected = await env.manager.selectGithubAccount('bob');
+  assert.equal(selected.github.ghAccount, 'bob');
+  assert.equal(selected.github.login, null);
+  assert.equal(env.store.state.github, null);
+  assert.ok(!JSON.stringify(selected).includes('good'.repeat(10)));
+  const reopened = createPluginStore({ file: path.join(env.root, 'plugins.bin'), crypto: sealer() });
+  reopened.load();
+  assert.equal(reopened.state.ghAccount, 'bob');
+  assert.equal(validPluginState({ version: 1, ghAccount: '../bad' }).ghAccount, null);
+  accounts = [];
+  await assert.rejects(env.manager.selectGithubAccount('bob'), { code: 'GH_AUTH_FAILED' });
+  assert.equal(env.store.state.ghAccount, 'bob', 'no silent account change');
 });

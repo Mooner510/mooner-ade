@@ -4,7 +4,7 @@
 // digest GitHub reports for the asset. Only GitHub releases: a plain download link is not a source.
 //
 // Credentials, in this order: the GitHub account connected in MoonerADE (a token sealed in plugins.bin, from a personal
-// access token or a device-flow sign-in), then this PC's own `gh auth token` / `git credential fill` (never prompting), then
+// access token or a device-flow sign-in), then the selected gh account / git credential helper when gh is absent, then
 // none (public repositories). A token is only ever sent to the GitHub API, never to the signed storage link an asset
 // redirects to, never logged, never shown and never handed to a plugin.
 //
@@ -84,11 +84,11 @@ export function runCommand(command, args, { input = null, env = process.env, tim
     let child;
     try { child = spawn(command, args, { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }); } catch { resolve({ code: -1, stdout: '' }); return; }
     let stdout = '', done = false;
-    const finish = code => { if (done) return; done = true; clearTimeout(timer); resolve({ code, stdout }); };
+    const finish = (code, missing = false) => { if (done) return; done = true; clearTimeout(timer); resolve({ code, stdout, ...(missing && { missing }) }); };
     const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } finish(-1); }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => { if (stdout.length < 64 * 1024) stdout += chunk; });
-    child.on('error', () => finish(-1));
+    child.on('error', error => finish(-1, error.code === 'ENOENT'));
     child.on('close', code => finish(code ?? -1));
     child.stdin.on('error', () => {});
     child.stdin.end(input ?? undefined);
@@ -96,12 +96,32 @@ export function runCommand(command, args, { input = null, env = process.env, tim
 }
 export const plausibleToken = value => typeof value === 'string' && /^[\x21-\x7e]{20,255}$/.test(value);
 
-// This PC's own GitHub login: `gh auth token`, else what git's credential helper has for github.com. Never prompts (no
-// terminal prompt, no credential manager window, no askpass). Resolves { token, via: 'gh'|'git' } or null.
-export async function machineToken({ run = runCommand, env = process.env } = {}) {
-  const gh = await run('gh', ['auth', 'token', '-h', 'github.com'], { timeoutMs: 5000 });
-  const fromGh = gh.code === 0 ? gh.stdout.trim() : '';
-  if (plausibleToken(fromGh)) return { token: fromGh, via: 'gh' };
+// Environment tokens override gh's saved accounts; account selection must use the saved credentials instead.
+const ghEnv = env => Object.fromEntries(Object.entries(env).filter(([key]) => !['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'].includes(key)));
+export async function machineAccounts({ run = runCommand, env = process.env } = {}) {
+  const result = await run('gh', ['auth', 'status', '--hostname', 'github.com', '--json', 'hosts'], { env: ghEnv(env), timeoutMs: 15_000 });
+  if (result.missing) return { ghAvailable: false, accounts: [] };
+  if (result.code !== 0) throw fail('gh 계정 목록을 확인하지 못했습니다. gh auth login 상태와 gh 버전을 확인하세요.', 'GH_AUTH_FAILED');
+  try {
+    const hosts = JSON.parse(result.stdout).hosts;
+    if (!hosts || typeof hosts !== 'object') throw new Error();
+    const accounts = (hosts['github.com'] ?? []).filter(account => /^[A-Za-z0-9-]{1,39}$/.test(account.login)).map(account => ({ login: account.login, active: account.active === true, valid: account.state === 'success' }));
+    return { ghAvailable: true, accounts };
+  } catch { throw fail('gh 계정 목록을 읽지 못했습니다. gh를 업데이트하고 다시 시도하세요.', 'GH_AUTH_FAILED'); }
+}
+
+// Never switches gh's global active account or falls back to a different account on authentication failure.
+export async function machineToken({ run = runCommand, env = process.env, account = null } = {}) {
+  const installed = await run('gh', ['--version'], { env: ghEnv(env), timeoutMs: 5000 });
+  if (!installed.missing) {
+    if (installed.code !== 0) throw fail('gh를 실행하지 못했습니다.', 'GH_AUTH_FAILED');
+    if (!account) return null;
+    if (typeof account !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(account)) throw fail('GitHub 계정이 올바르지 않습니다.', 'GH_AUTH_FAILED');
+    const gh = await run('gh', ['auth', 'token', '--hostname', 'github.com', '--user', account], { env: ghEnv(env), timeoutMs: 5000 });
+    const token = gh.code === 0 ? gh.stdout.trim() : '';
+    if (!plausibleToken(token)) throw fail(`선택한 gh 계정 ${account}의 인증을 가져오지 못했습니다. GitHub 연결에서 계정을 다시 선택하세요.`, 'GH_AUTH_FAILED');
+    return { token, via: 'gh' };
+  }
   const quiet = { ...env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '' };
   const git = await run('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n', env: quiet, timeoutMs: 10_000 });
   if (git.code === 0) {
