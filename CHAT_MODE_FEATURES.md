@@ -166,7 +166,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - 넣지 않은 ChatGPT 컴포넌트: 지도·이미지 갤러리·캐러셀·Mermaid·외부 연동 카드(네트워크/라이브러리가 필요). 필요해지면 `ui-spec.ts`에 컴포넌트를 하나씩 추가합니다.
 - iframe은 `sandbox="allow-scripts"`(origin 없음)이고 `/ade-ui-frame.html`(`ui-frame.js`)을 전용 CSP(`default-src 'none'`, 네트워크·프레임·폼 차단)로 불러옵니다. 앱 쿠키·저장소·DOM에는 접근할 수 없습니다.
 - UI 안에서는 `ade.send(text)`(다음 채팅 메시지로 즉시 전송, 에이전트 작업 중에는 follow-up 대기열)와 `ade.prefill(text)`(입력창에만 채움)을 쓸 수 있습니다. `ade.send`는 프레임 안에서 실제 클릭/키 입력(사용자 활성화)이 있을 때만 동작하고, 앱 쪽에서 1.5초에 한 번으로 제한합니다. 활성화 검사는 모델이 쓴 코드와 같은 프레임 안에 있어 앱이 보증하지는 못합니다([보안 검토](docs/SECURITY_REVIEW.md) 4-4).
-- 에이전트에게는 사용 기준과 API를 설정 "인터랙티브 UI"(기본 켜짐)가 켜진 동안 시스템 프롬프트로 알립니다(`chat-ui-prompt.js`; Claude는 `--append-system-prompt-file`, Codex는 `developerInstructions`). 지침(약 300토큰)은 채팅의 첫 메시지 때의 설정값으로 한 번 정해져 `meta`에 저장되고 이후 바뀌지 않습니다(시스템 프롬프트가 바뀌면 대화 전체가 프롬프트 캐시를 놓치기 때문). 이미 세션이 있던 채팅은 받지 않으며, 켜고 끄는 설정은 새 채팅부터 적용됩니다. Cursor는 지침 채널이 없어 안내하지 않습니다(펜스를 내면 렌더링은 됩니다).
+- 에이전트에게는 사용 기준과 API를 설정 "인터랙티브 UI"(기본 켜짐)가 켜진 동안 시스템 프롬프트로 알립니다(`chat-ui-prompt.js`; 같은 시점·같은 규칙으로 새 채팅에는 파일 경로를 `[[file:src/a.ts:42]]` 칩으로 쓰라는 지침 `chat-prompt.js`도 함께 들어갑니다, [LOCAL_IDE](docs/LOCAL_IDE.md) 참고; Claude는 `--append-system-prompt-file`, Codex는 `developerInstructions`). 지침(약 300토큰)은 채팅의 첫 메시지 때의 설정값으로 한 번 정해져 `meta`에 저장되고 이후 바뀌지 않습니다(시스템 프롬프트가 바뀌면 대화 전체가 프롬프트 캐시를 놓치기 때문). 이미 세션이 있던 채팅은 받지 않으며, 켜고 끄는 설정은 새 채팅부터 적용됩니다. Cursor는 지침 채널이 없어 안내하지 않습니다(펜스를 내면 렌더링은 됩니다).
 - 한계: UI 내부 상태는 저장되지 않아 새로고침하면 처음 상태로 돌아갑니다. 외부 라이브러리·네트워크는 쓸 수 없습니다(바닐라 JS/SVG/canvas).
 
 ### 메시지 구성

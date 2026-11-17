@@ -8,7 +8,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { createLocalRuntime, LocalProcesses } from './runtime.js';
+import { createLocalRuntime, LocalProcesses, LocalWorkspace } from './runtime.js';
+import { listIdes, openPath } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
@@ -32,7 +33,7 @@ import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, 
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
-import { UI_PROMPT } from './chat-ui-prompt.js';
+import { chatPrompt } from './chat-prompt.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
@@ -653,9 +654,9 @@ function trimRecent(list) {
 // A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
 async function chatLaunchFiles(root, context) {
   const servers = chatMcpServers(context);
-  // The interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
-  const promptFile = context.interactiveUi ? path.join(root, 'ade-ui-prompt.md') : undefined;
-  if (promptFile) await fs.writeFile(promptFile, UI_PROMPT, { mode: 0o600 });
+  // The file-path and interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
+  const promptFile = context.interactiveUi || context.fileLinks ? path.join(root, 'ade-ui-prompt.md') : undefined;
+  if (promptFile) await fs.writeFile(promptFile, chatPrompt(context.interactiveUi, context.fileLinks), { mode: 0o600 });
   if (!servers.length) return { promptFile };
   const mcpFile = path.join(root, 'claude-mcp.json');
   await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
@@ -804,6 +805,7 @@ async function route(action, input, project) {
   if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
+  if (action === 'ide/list') return listIdes({ force: input.force === true });
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();
@@ -1182,6 +1184,14 @@ async function route(action, input, project) {
       if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw fault('INVALID_INPUT', '파일은 비어 있지 않고 8MB 이하여야 합니다.');
       const name = path.basename(String(input.name ?? '')).replace(/[^\w.\-가-힣]+/g, '_').slice(-80) || 'file';
       return { path: await savePaste(bytes, `upload-${randomUUID()}-${name}`) };
+    }
+    case 'ide/open': {
+      // The editors installed here (ide/list) or the OS file manager ('files'); a chat's path is relative to the folder that chat works in (its worktree, if it has one).
+      const base = new LocalWorkspace(input.chatId ? project.chats.get(input.chatId)?.cwd || workspace.root : workspace.root);
+      let target;
+      try { target = await base.resolve(text(input.path ?? '.', '경로', 4096)); } catch (error) { if (error.code === 'INVALID_INPUT') throw error; throw fault('INVALID_INPUT', '프로젝트 밖의 경로는 열 수 없습니다.'); }
+      const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
+      return openPath({ ide: text(input.ide, '편집기', 100), root: base.root, target, line: whole(input.line), column: whole(input.column) });
     }
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
