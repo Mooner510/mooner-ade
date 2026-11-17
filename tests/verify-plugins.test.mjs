@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createVerifyPlugins } from '../scripts/verify/plugins.mjs';
+import { MARKER } from '../scripts/verify/session-dirs.mjs';
 
 const wait = async check => { for (let i = 0; i < 100; i++) { const value = await check(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('plugin timeout'); };
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-verify-plugins-')), dataRoot = path.join(root, 'data'), verifyOut = path.join(root, 'out');
-  fs.mkdirSync(dataRoot); fs.mkdirSync(verifyOut);
+  fs.mkdirSync(dataRoot); fs.mkdirSync(verifyOut); fs.writeFileSync(path.join(root, MARKER), '{}');
   const source = path.join(root, 'source'); fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(source, 'plugin.json'), JSON.stringify({ id: 'verify-example', name: 'Verify example', version: '1.0.0', apiVersion: 1, main: 'host.js', header: true }));
@@ -31,10 +32,14 @@ async function answer(host, pending, accept) {
   return pending;
 }
 
-test('plugin verification requires an isolated OS-temp session', t => {
+test('plugin verification requires a marked session folder holding both the data dir and VERIFY_OUT', t => {
   const s = setup(t);
   assert.throws(() => createVerifyPlugins({ ...s.options, verifyOut: undefined }), /격리/);
   assert.throws(() => createVerifyPlugins({ ...s.options, dataRoot: process.cwd() }), /격리/);
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-verify-other-')); t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  assert.throws(() => createVerifyPlugins({ ...s.options, verifyOut: other }), /격리/); // VERIFY_OUT outside the session
+  fs.rmSync(path.join(s.root, MARKER));
+  assert.throws(() => createVerifyPlugins(s.options), /격리/); // no marker: not a session folder
 });
 
 test('browser approval gates real IPC execution, secrets stay sealed, restart restores settings', async t => {
@@ -85,7 +90,7 @@ test('verification API is absent normally and enforces the existing session and 
   if (previous === undefined) delete process.env.VERIFY_OUT; else process.env.VERIFY_OUT = previous;
   const normal = await boot(); t.after(() => normal.stop());
   assert.equal((await normal.status('verify/plugins/state')).status, 404);
-  const active = await boot({ env: { ADE_DEV: '1', ADE_VERIFY_PLUGINS: '1', VERIFY_OUT: s.options.verifyOut } }); t.after(() => active.stop());
+  const active = await boot({ dir: s.root, env: { ADE_DEV: '1', ADE_VERIFY_PLUGINS: '1', VERIFY_OUT: s.options.verifyOut } }); t.after(() => active.stop());
   const state = await active.api('verify/plugins/state');
   assert.equal(state.testSession, true); assert.equal(state.enabled, false);
   for (const [headers, status] of [

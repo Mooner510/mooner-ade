@@ -11,3 +11,5 @@ coverage/
 wakatime.txt
 *.stackdump
 scripts/verify/bin/claude.exe
+# verify sessions (scripts/verify/session.mjs): tmp/main and tmp/ade-*
+/tmp/
