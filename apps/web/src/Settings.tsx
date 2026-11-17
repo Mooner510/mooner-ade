@@ -225,12 +225,12 @@ function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
   const entry = status?.[agent], source = keySources[agent];
   return <>
     <h4 className="setting-group">채팅 인증</h4>
-    <Row title="채팅 인증 방식" hint={`채팅 모드에서 ${agentNames[agent]}를 실행할 계정입니다. API 키를 고르면 ${source.billing}으로 과금되며, 터미널(CLI)과 상태바 사용량은 CLI 로그인 기준 그대로입니다. 새 채팅부터 적용됩니다.`}>
+    <Row title="새 채팅 인증 방식" hint={`새 채팅을 열 때 ${agentNames[agent]}를 어떤 계정으로 실행할지입니다. API 키를 고르면 ${source.billing}으로 과금됩니다. 이미 열린 채팅은 그대로이고(/clear도 유지), Claude 채팅은 상태바의 Plan/API Usage 버튼에서 바꿉니다. 터미널(CLI)은 CLI 로그인 그대로입니다.`}>
       {status && <Dropdown label={`${agentNames[agent]} 채팅 인증 방식`} value={entry?.use ? 'key' : 'login'}
         options={[{ value: 'login', label: 'CLI 로그인' }, { value: 'key', label: 'API 키', ...(!entry?.key && { hint: '먼저 키를 저장하세요' }) }]}
         onChange={value => void save({ use: value === 'key' }, value === 'key' ? 'API 키로 실행합니다.' : 'CLI 로그인으로 실행합니다.')} />}
     </Row>
-    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ' · 사용 중' : ' · 저장만 됨'} · 이 컴퓨터에만 저장되고 끝 4자리만 표시합니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
+    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ' · 새 채팅에 사용' : ' · 저장만 됨'} · 이 컴퓨터에만 저장되고 끝 4자리만 표시합니다. 플러그인과 채팅 상태바도 이 키를 씁니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
       <input type="password" value={key} placeholder={source.placeholder} autoComplete="off" spellCheck={false} aria-label={`${agentNames[agent]} API 키`}
         onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && key.trim()) void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.'); }} />
       <button disabled={!key.trim()} onClick={() => void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.')}>저장</button>

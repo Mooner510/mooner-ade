@@ -1,4 +1,5 @@
-import { Fragment, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { api } from './api';
 import { placeAbove } from './Usage';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
 import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
@@ -53,8 +54,8 @@ export const chatStatusDefs: Record<string, Def> = {
     tip: ({ state }) => `세션 ID\nCLI가 이 대화에 붙인 ID입니다.${state.sessionId ? `\n${state.sessionId}` : ''}` },
 };
 // What a chat's usage is counted against: an API key's tokens, or the CLI login's plan (its measured share once there is one).
-// The words stay on screen; a measured share only follows them.
-export const usageBasis = (state: ChatState, share?: string | null) => state.apiKey ? 'API Usage' : share ? `Plan Usage · ${share}` : 'Plan Usage';
+// Until a turn has been measured the item names what the chat is billed against; the measured share (of the 5h / weekly limits) replaces it.
+export const usageBasis = (state: ChatState, share?: string | null) => state.apiKey ? 'API Usage' : share || 'Plan Usage';
 export const chatStatusLabels: Record<string, string> = Object.fromEntries(Object.entries(chatStatusDefs).map(([id, def]) => [id, def.label]));
 
 export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string; tip: string; extra?: { text: string; icon: string; tip: string } } | null => {
@@ -83,46 +84,53 @@ function StatBox({ cls, icon, text, tip, color, align, swap }: { cls: string; ic
   </>;
 }
 
-// The usage item is a button: it names what this chat is billed against and, pressed, says whether that can be changed from here and why not.
-// A chat's login (CLI plan or API key) is fixed when its process starts. Changing it mid-chat would restart the process with `--resume`, which works,
-// but the two logins are separate organizations for the prompt cache, so the whole conversation would be written to the cache again.
-function UsageButton({ state, text, align, onSettings }: { state: ChatState; text: string; align: 'left' | 'right'; onSettings?(): void }) {
-  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), api = state.apiKey === true, claude = state.agent === 'claude';
+// The usage item is a button and the switch: it names what this chat is billed against (Plan Usage, or API Usage with the money it has cost) and,
+// pressed, lets a Claude chat go on with the CLI plan or the API key. Switching is silent; the composer asks before the first message that would
+// change the login of a chat that has had a turn (the two logins do not share a prompt cache). The key itself is registered in Settings > AI 툴.
+function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
+  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null);
+  const key = state.apiKey === true, claude = state.agent === 'claude', locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
+  useEffect(() => { if (open && claude) void api<{ claude?: { key: string } }>('agent-keys/status').then(status => setKeyReady(Boolean(status.claude?.key)), () => setKeyReady(null)); }, [open, claude]);
+  const choose = (auth: 'login' | 'key') => { if (!locked && onAuth && (auth === 'login') === key) onAuth(auth); };
   return <>
-    <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${api ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId} title="이 채팅이 어느 쪽 한도·요금을 쓰는지 보기">
-      <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{api ? 'key' : 'speed'}</span>
-      <span key={text} className="chat-stat-swap">{text}</span>
+    <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId} title={claude ? '이 채팅이 어느 쪽 한도·요금을 쓰는지 보고 바꾸기' : '이 채팅이 어느 쪽 한도·요금을 쓰는지 보기'}>
+      <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{key ? 'key' : 'speed'}</span>
+      {key ? <span className="chat-stat-swap">API Usage <b className="usage-money" title="API 키로 보낸 턴에 든 비용(실제로 청구됩니다)">${dollars(spent)}</b></span> : <span key={share ?? ''} className="chat-stat-swap">{share || 'Plan Usage'}</span>}
       <span className="icon material-symbols-outlined usage-caret" style={{ fontSize: 14 }} aria-hidden="true">expand_less</span>
     </button>
     <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="사용량 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
-      <strong>{api ? 'API Usage' : 'Plan Usage'}</strong>
-      <span>{api ? '이 채팅은 API 키로 실행 중입니다. 토큰만큼 API 요금이 청구되고 플랜 한도는 쓰지 않습니다.' : '이 채팅은 CLI 로그인 플랜으로 실행 중입니다. 플랜 한도(5시간·주간)를 쓰고 API 요금은 청구되지 않습니다.'}</span>
-      <b className="usage-fixed">이 채팅에서는 {api ? 'CLI 플랜' : 'API 키'}로 바꿔 이어갈 수 없습니다</b>
-      {claude ? <ul>
-        <li>프롬프트 캐시는 조직·워크스페이스별로 격리됩니다. 플랜 로그인(claude.ai)과 API 키(Console)가 같은 캐시를 쓴다는 근거가 없어, 바꾸면 쌓인 캐시를 못 쓰고 대화 전체를 다시 캐시에 씁니다.</li>
-        <li>기본 캐시 유지 시간도 다릅니다(플랜 로그인은 1시간, API 키는 5분이 기본).</li>
-        <li>같은 사람의 계정이어도 플랜과 API 키는 소속이 달라, 같은 계정인지 앱이 확인할 수 없습니다.</li>
-      </ul> : <ul><li>이 에이전트의 로그인 방식은 채팅을 시작할 때 정해지고 이어서 바꿀 수 없습니다.</li></ul>}
-      <span>다른 방식이 필요하면 새 채팅을 시작할 때 고르세요(설정 → AI 툴에서 키 사용을 정합니다).</span>
+      <strong>이 채팅은 무엇으로 실행할까요</strong>
+      {claude ? <>
+        <span className="usage-options" role="radiogroup" aria-label="로그인 방식">
+          <button type="button" role="radio" aria-checked={!key} className="usage-option plan" disabled={locked && key} onClick={() => choose('login')}>
+            <b>Plan Usage</b><small>CLI 로그인 플랜 · 5시간·주간 한도를 씁니다</small></button>
+          <button type="button" role="radio" aria-checked={key} className="usage-option api" disabled={(locked && !key) || (!key && keyReady === false)} onClick={() => choose('key')}>
+            <b>API Usage</b><small>API 키 · 토큰만큼 요금이 청구됩니다</small></button>
+        </span>
+        {key && <span className="usage-spent">이 채팅에서 API로 보낸 턴의 요금 <b>${dollars(spent)}</b></span>}
+        {!key && keyReady === false && <span className="usage-note warn">API 키가 등록되어 있지 않습니다. 설정 → AI 툴에서 등록하세요.</span>}
+        {locked && <span className="usage-note">응답이 끝난 뒤 바꿀 수 있습니다.</span>}
+        <span className="usage-note">바꾼 뒤 메시지를 보낼 때, 이미 대화가 오간 채팅이면 한 번 확인합니다. 두 방식은 프롬프트 캐시를 공유하지 않아 대화 전체를 다시 처리하기 때문입니다.</span>
+      </> : <span className="usage-note">이 에이전트의 로그인 방식은 채팅을 시작할 때 정해집니다.</span>}
       {onSettings && <button type="button" className="usage-panel-action" onClick={() => { pop.current?.hidePopover(); onSettings(); }}>설정 열기</button>}
     </span>
   </>;
 }
 
-function ChatItem({ id, view, align, state, onSettings }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>>; align: 'left' | 'right'; state: ChatState; onSettings?(): void }) {
+function ChatItem({ id, view, align, state, share, onSettings, onAuth }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>>; align: 'left' | 'right'; state: ChatState; share?: string | null; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
   return <>
-    {id === 'share' ? <UsageButton state={state} text={view.text} align={align} onSettings={onSettings} />
+    {id === 'share' ? <UsageButton state={state} share={share} align={align} onSettings={onSettings} onAuth={onAuth} />
       : <StatBox cls={`chat-stat-${id}`} icon={view.icon} text={view.text} tip={view.tip} color={view.color} align={align} />}
     {view.extra && <StatBox cls={`chat-stat-${id}-extra`} icon={view.extra.icon} text={view.extra.text} tip={view.extra.tip} color={view.color} align={align} />}
   </>;
 }
 
 // `only`: show just these items (the start screen keeps only the usage item, in its usual place).
-export function ChatStatusLine({ settings, context, only, onSettings }: { settings: Settings; context: ChatStatusContext; only?: string[]; onSettings?(): void }) {
+export function ChatStatusLine({ settings, context, only, onSettings, onAuth }: { settings: Settings; context: ChatStatusContext; only?: string[]; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
   // The usage item cannot be switched off: a chat always shows which login pays for it.
   const layout = chatStatusLayout(settings), shown = new Set([...settings.chatStatusItems, 'share'].filter(id => !only || only.includes(id))), separator = settings.chatStatusSeparator;
   // Each item's view is computed once (it was computed again inside the item).
-  const nodes = (ids: string[], align: 'left' | 'right') => ids.filter(id => shown.has(id)).flatMap(id => { const view = chatItemView(id, context); return view ? [{ id, node: <ChatItem id={id} view={view} align={align} state={context.state} onSettings={onSettings} /> }] : []; });
+  const nodes = (ids: string[], align: 'left' | 'right') => ids.filter(id => shown.has(id)).flatMap(id => { const view = chatItemView(id, context); return view ? [{ id, node: <ChatItem id={id} view={view} align={align} state={context.state} share={context.share} onSettings={onSettings} onAuth={onAuth} /> }] : []; });
   const render = (list: { id: string; node: ReactNode }[]) => list.map((item, index) => <Fragment key={item.id}>{index > 0 && separator && <span className="chat-sep" aria-hidden="true">{separator}</span>}{item.node}</Fragment>);
   return <footer className="statusbar chat-statusbar" aria-label="채팅 상태 표시줄">
     <div className="status-left">{render(nodes(layout.left, 'left'))}</div>

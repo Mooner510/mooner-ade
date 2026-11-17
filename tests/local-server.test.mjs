@@ -619,16 +619,40 @@ test('access token is per process, never stored, and can be exchanged again', as
   await assert.rejects(stat(join(data, 'token')));
 });
 
-test('a plugin chat may run in a git worktree of the project, with its own login choice', async t => {
+test('a plugin chat may run in a git worktree of the project', async t => {
   const { call, repo } = await boot(t);
   const worktree = await realpath(await mkdtemp(join(tmpdir(), 'ade-wt-'))); await rm(worktree, { recursive: true });
   t.after(() => rm(worktree, { recursive: true, force: true }));
   await git(repo, 'worktree', 'add', '-q', '-b', 'feedback/t', worktree);
   const stranger = await realpath(await mkdtemp(join(tmpdir(), 'ade-other-'))); t.after(() => rm(stranger, { recursive: true, force: true }));
-  await call('chat/open', { id: 'wt', agent: 'claude', path: worktree, auth: 'key', apiKey: 'sk-ant-test-12345678901234567890', show: true });
+  await call('chat/open', { id: 'wt', agent: 'claude', path: worktree, show: true });
   assert.equal((await call('chat/peers')).find(chat => chat.id === 'wt').cwd, worktree);
-  assert.equal((await call('chat/open', { id: 'wt', agent: 'claude' })).state.apiKey, true);
-  assert.equal((await call('chat/open', { id: 'login', agent: 'claude', auth: 'login' })).state.apiKey, false);
-  await call('chat/open', { id: 'bad', agent: 'claude', auth: 'key', apiKey: 'nope' }, 400);
   await call('chat/open', { id: 'out', agent: 'claude', path: stranger }, 400);
+});
+
+test('a chat keeps the login it started on; the setting only decides where new chats start; Claude chats can switch', async t => {
+  const { call, api } = await boot(t);
+  const key = 'sk-ant-test-12345678901234567890', open = (id, extra = {}) => call('chat/open', { id, agent: 'claude', ...extra });
+  await call('chat/open', { id: 'no-key', agent: 'claude', auth: 'key' }, 409); // no key is registered yet
+  await call('chat/open', { id: 'bad', agent: 'claude', auth: 'nope' }, 400);
+  const before = (await open('before')).state; assert.deepEqual([before.auth, before.apiKey], ['login', false]);
+  await api('agent-keys/config', { agent: 'claude', key }); // saving a key turns "new chats on the API key" on
+  const first = (await open('first')).state;
+  assert.deepEqual([first.auth, first.apiKey, first.lastAuth, first.apiCostUsd], ['key', true, null, 0]);
+  await api('agent-keys/config', { agent: 'claude', use: false });
+  const second = (await open('second')).state;
+  assert.deepEqual([second.auth, second.apiKey], ['login', false]); // the new setting
+  assert.deepEqual([(await open('first')).state.auth, (await open('first')).state.apiKey], ['key', true]); // the open chat keeps its own
+  assert.equal((await open('before')).state.auth, 'login');
+  // switching: only the login changes, and the same chat answers on the other one
+  await call('chat/set', { id: 'second', auth: 'key' });
+  assert.deepEqual([(await open('second')).state.auth, (await open('second')).state.apiKey], ['key', true]);
+  await call('chat/set', { id: 'second', auth: 'login' });
+  assert.deepEqual([(await open('second')).state.auth, (await open('second')).state.apiKey], ['login', false]);
+  await call('chat/set', { id: 'second', auth: 'key', model: 'haiku' }, 400); // alone, like the model
+  await call('chat/set', { id: 'second', auth: 'nope' }, 400);
+  await call('chat/open', { id: 'cx', agent: 'codex' });
+  await call('chat/set', { id: 'cx', auth: 'key' }, 409); // Claude only
+  await api('agent-keys/config', { agent: 'claude', key: '' });
+  await call('chat/set', { id: 'second', auth: 'key' }, 409); // the key is gone
 });

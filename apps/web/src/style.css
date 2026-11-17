@@ -1767,13 +1767,21 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-statusbar .chat-stat.usage-basis:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .chat-statusbar .chat-stat.usage-basis.api { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
 .chat-statusbar .chat-stat.usage-basis.api:is(:hover, :focus-visible), .chat-statusbar .chat-stat.usage-basis.api[aria-expanded=true] { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: var(--warn); }
+.usage-basis .usage-money { margin-left: 2px; padding: 0 5px; border-radius: 4px; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--warn); background: color-mix(in srgb, var(--warn) 22%, transparent); }
 .usage-basis .usage-caret { opacity: .6; transition: transform .15s var(--ease); }
 .usage-basis[aria-expanded=true] .usage-caret { transform: rotate(180deg); }
 /* Only while open: a closed popover must stay display:none (the UA rule), or it covers the button and takes its clicks. */
 .chat-stat-tip.usage-panel { max-width: 330px; padding: 10px 12px; }
 .chat-stat-tip.usage-panel:popover-open { display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
-.usage-panel .usage-fixed { margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--border); font-weight: 600; color: color-mix(in srgb, var(--fg) 85%, var(--muted)); }
-.usage-panel ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
+.usage-panel .usage-options { display: flex; flex-direction: column; gap: 4px; }
+.usage-panel .usage-option { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 9px; text-align: left; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.usage-panel .usage-option small { color: var(--muted); font-size: 11px; }
+.usage-panel .usage-option:not(:disabled):hover { background: var(--hover); border-color: var(--border-strong); }
+.usage-panel .usage-option[aria-checked=true] { border-color: var(--accent); background: var(--accent-soft); }
+.usage-panel .usage-option.api[aria-checked=true] { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.usage-panel .usage-option:disabled { opacity: .5; cursor: default; }
+.usage-panel .usage-spent { color: var(--fg); } .usage-panel .usage-spent b { color: var(--warn); font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-panel .usage-note { color: var(--muted); } .usage-panel .usage-note.warn { color: var(--warn); }
 .usage-panel .usage-panel-action { align-self: flex-start; margin-top: 2px; padding: 3px 10px; font-size: 11.5px; color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; cursor: pointer; }
 .usage-panel .usage-panel-action:hover { background: var(--hover); }
 .chat-stat-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: 270px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--muted); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11px; line-height: 1.55; white-space: normal; word-break: keep-all; pointer-events: none; opacity: 0; transition: opacity .12s; }

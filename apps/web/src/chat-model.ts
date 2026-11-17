@@ -14,6 +14,9 @@ export type ChatState = {
   liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
   cwd?: string; // the folder the CLI runs in (file paths under it are shown relative)
   apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
+  auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button (Claude)
+  lastAuth?: 'login' | 'key' | null; // the login its last turn ran on: a message that would change it asks first
+  apiCostUsd?: number; // what the turns that ran on the API key cost: real money (a plan's turns are not)
   // Claude: the prompt cache clock read from the session's transcript (same shape as the terminal's ClaudeCache); null before the first reply.
   cache?: { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } } | null;
 };
