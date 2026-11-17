@@ -51,6 +51,14 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
   - Hub는 GitHub의 최신 정식 ADE 릴리스를 확인해 같은 정식 버전 또는 기본 버전이 더 높은 `beta`만 신규 등록을 허용합니다(정식 `0.5.10` 기준 `0.5.10`, `0.5.11-beta3` 허용; `0.5.9`, `0.5.10-beta2` 거부). 거부는 426 `update_required`로 자동 재시도를 멈추고, 최신 버전 조회 실패는 503 `version_check_failed`로 재시도합니다. 이미 생성한 이슈의 동일 키 재조회는 허용합니다.
   - 거절되면 기다렸다 다시 보냅니다: 한도 초과는 `Retry-After`만큼, 네트워크·Hub·GitHub 문제는 30초부터 30분까지 늘려 가며. 잘못된 요청·너무 큰 이미지처럼 기다려도 안 되는 것만 `failed`가 됩니다. 대기 중인 항목은 취소(`feedback/unqueue`)하거나 지울 수 있습니다.
 
+## Git 커밋 그래프
+
+상단 Git 버튼이 여는 하단 drawer(`GitLog.tsx`)는 IntelliJ Git 로그를 따릅니다. 예전 변경사항(Diff) 패널을 대신하며, 상단 버튼에는 `git/status`의 `+/−` 줄 수만 남았습니다.
+
+- **서버** (`apps/local-server/src/git-log.js`): `git/log`는 브랜치·원격·태그·HEAD에서 닿는 커밋(기본 5,000개)과 ref, 진행 중 작업(머지·리베이스·체리픽·되돌리기)과 충돌 파일을 돌려줍니다. ref와 HEAD로 만든 서명이 같으면 `unchanged`만 보내 열린 동안의 주기 갱신이 가볍습니다. `git/commit-details`·`git/commit-file`·`git/compare`·`git/patch`·`git/paths`는 세부 정보와 diff 탭 내용을, `git/op`(프로젝트 `mutation` 직렬화)는 체크아웃·브랜치·태그·머지·리베이스·체리픽·되돌리기·리셋·히스토리 편집·push·업데이트·fetch·계속/건너뛰기/중단·충돌 해결을 실행합니다. 모든 호출은 argv 배열이고 이름은 `check-ref-format`, 해시는 16진수, ref는 `refs/(heads|remotes|tags)/` 전체 이름으로만 받습니다. 프롬프트와 편집기는 끄고(`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`), 대화형 리베이스는 미리 만든 todo를 `GIT_SEQUENCE_EDITOR`로 덮어쓰고 메시지는 `exec git commit --amend -F`로 넣습니다. 저장소 훅·필터를 끄는 기존 규칙(runtime.js)이 그대로 적용됩니다.
+- **그래프** (`apps/web/src/git-graph.ts`, 순수 함수·Node 테스트): head 우선순위(HeadCommitsComparator) 순서의 깊이 우선 탐색으로 layout index를 주고, 각 행에서 노드와 지나가는 선을 layout index로 정렬한 순서가 열입니다. 색은 head 브랜치 이름의 Java `hashCode`를 IntelliJ `DefaultColorGenerator`에 넣어 만들고(채도·밝기는 설정), 30행 이상 선은 양 끝 화살표로 줄입니다. 정렬은 커밋 날짜순(기본)·위상 정렬·머지 선형화, 필터는 숨긴 커밋 너머 가장 가까운 조상으로 점선을 잇습니다.
+- **diff 탭**: `diff:<커밋>:<경로>[<TAB><옛 경로>]`(부모 대비), `diff:<a>..<b>:…`(두 커밋), `diff:<a>..:…`(작업 트리 대비). 예전 작업 트리 diff 탭(`diff:all:` 등)은 레이아웃을 불러올 때 버립니다.
+
 ## 로컬 경계
 
 경로 검사는 traversal·symlink를 막지만 악성 프로세스에 대한 OS sandbox가 아닙니다. PTY는 사용자 셸과 같은 권한입니다. 로컬 서버가 실행하는 Git은 저장소의 fsmonitor와 hooks를 끄며, 터미널에서 실행한 Git에는 적용하지 않습니다.

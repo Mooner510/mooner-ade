@@ -177,10 +177,10 @@ async function main() {
     await until(`!document.querySelector(${JSON.stringify(pane)})`, `${agent} cleared on process exit`);
   }
   console.log('e2e: Claude/Codex explicit status, idle redraws, long work, approvals and process exit passed');
-  await evaluate(`${visible('[aria-label="변경사항 Diff 패널"]')}.click()`);
-  await until(`Boolean(${visible('.review-file')}) && ${visible('.review-file')}.innerText.includes('hello-e2e.txt')`, 'Git changes panel');
-  await until(`Boolean(${visible('.monaco-diff-editor')})`, 'read-only diff');
-  console.log('e2e: read-only Git diff passed');
+  await evaluate(`${visible('[aria-label="Git 커밋 그래프"]')}.click()`);
+  await until(`Boolean(${visible('.git-row')})`, 'Git commit graph');
+  await evaluate(`${visible('[aria-label="Git 커밋 그래프"]')}.click()`);
+  console.log('e2e: Git commit graph passed');
   await evaluate(`${visible('button[aria-label="새 터미널 탭"]')}.click()`);
   await until(`document.querySelector('main.app:not([hidden])').querySelectorAll('.tab-page').length === 2`, 'second terminal tab');
   // A new tab first shows the launcher; its first entry opens a plain shell.
