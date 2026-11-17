@@ -53,6 +53,7 @@ VERIFY_OUT=<경로> node scripts/verify/start-ui.mjs      # 계속 실행되는 
 - `<경로>`는 `mktemp -d -t ade-verify-out`으로 만든 임시 폴더입니다. `/tmp`는 macOS의 임시 폴더(`$TMPDIR`)가 아니어서 `cleanup-ui.mjs`가 지우지 않습니다. 명령마다 같은 `VERIFY_OUT`을 붙입니다(없으면 스크립트가 멈춥니다).
 
 - 임시 HOME·`ADE_DATA_DIR`·`ADE_PORT=0`·`ADE_PTY_ENDPOINT=`의 서버, 가짜 Hub(`ADE_HUB_URL`), 별도 프로필의 보이는 Chrome(`--remote-debugging-port=0`)을 띄우고 `VERIFY_OUT/env.json`에 `origin`·`token`·`cookie`·`projectId`·`repo`·`data`·`temp`·`hub`·`cdp`·`pid`·`serverPids`(두 서버의 PID)·`chromePid`를 적습니다.
+- 플러그인도 기본 지원합니다. 설치·승인·상단 탭은 실제 플러그인 코어를 쓰며, 브라우저 확인창·테스트 암호화 저장소를 사용합니다. 로컬 소스는 `VERIFY_PLUGIN_DIR=<폴더>`로 지정합니다. 보호 수준과 한계는 [TESTING_GUIDE 7절](TESTING_GUIDE.md#7-브라우저에서-플러그인-검증)을 먼저 읽습니다.
 - Chrome 경로는 macOS 기본값이며 `CHROME=<경로>`로 바꿉니다. 검증은 Chrome 157로 했습니다.
 - Chrome은 **이 탭만 공유**하도록(`--auto-accept-this-tab-capture`) 뜹니다. `--auto-select-desktop-capture-source=Entire screen`을 붙이면 캡쳐가 화면 크기로 나와 결과가 어긋나 보이니 쓰지 마세요.
 - 첫 화면은 프로젝트 선택 화면입니다(최근 프로젝트에 `repo`). `repo`를 눌러 워크스페이스를 엽니다. 새 데이터의 첫 실행에는 화면 설정과 튜토리얼이 뜨고, 첫 1회는 건너뛸 수 없어 끝까지 진행해야 합니다(마지막 "시작하기").

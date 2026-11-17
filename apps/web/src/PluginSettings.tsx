@@ -3,6 +3,7 @@ import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
 import { Modal } from './views';
+import { chooseFolder } from './api';
 
 // Mirrors snapshot() in apps/desktop/src/plugin-core.js. Turning plugins on, approving one and installing a zip are
 // confirmed by the desktop app in native dialogs; these calls only start them. What a plugin shows here is plain text, never markup.
@@ -16,11 +17,15 @@ export type PluginView = {
   status: { tone: Tone; text: string } | null;
   info: { label: string; value: string; mono: boolean; copy: boolean; key?: string }[];
   // `type` is how the input is drawn; the value is always a string ('true' / 'false' for a switch).
-  fields: { key: string; label: string; type?: 'text' | 'select' | 'switch' | 'number'; value: string; placeholder: string; hint: string; required?: boolean; options?: { value: string; label: string }[] }[];
+  fields: { key: string; label: string; type?: 'text' | 'select' | 'switch' | 'number' | 'password' | 'folder' | 'textarea'; value: string; placeholder: string; hint: string; required?: boolean; options?: { value: string; label: string }[] }[];
   actions: ViewAction[];
   qr?: { label: string; value: string } | null;
   setup?: ViewStep[];
   lists?: ViewList[];
+  document?: { title: string; text: string } | null;
+  formId?: string;
+  // The header panel's own content; without it the panel shows `view` itself.
+  panel?: PluginView | null;
 };
 // plugin.json `setup`: the guide shown even before the plugin runs.
 export type ManifestStep = { id: string; label: string; detail: string; optional?: boolean };
@@ -45,11 +50,12 @@ export type PluginInfo = {
   error: string | null; terminal: boolean; mcp: string | null; mcpChatOnly?: boolean; workspace?: boolean; view: PluginView | null; badge?: PluginBadge | null;
   // A plugin that ships with the app: no approval, no "plugins on" switch, only its own on/off (`builtinEnabled`).
   builtin?: boolean; builtinEnabled?: boolean;
+  header?: boolean;
   commands?: string[]; envPrefix?: string | null; env?: string[]; tools?: PluginTools | null;
   setup?: ManifestStep[]; update?: PluginUpdate | null;
 };
 export type PluginsState = { available: boolean; problem: 'unavailable' | 'unreadable' | null; error: string | null; enabled: boolean; dir: string; plugins: PluginInfo[]; github?: GithubAccount; message?: string | null };
-type PluginsBridge = {
+export type PluginsBridge = {
   state(): Promise<PluginsState>; onState(listener: (state: PluginsState) => void): () => void;
   setEnabled(on: boolean): Promise<PluginsState>; setBuiltin(id: string, on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
   revoke(id: string, options?: { forget?: boolean }): Promise<PluginsState>; restart(id: string): Promise<PluginsState>;
@@ -62,24 +68,57 @@ type PluginsBridge = {
   selectGithubAccount?(login: string): Promise<PluginsState>;
 };
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
-const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
+const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // The plugin state for components outside the settings page (status bar, notification clicks).
 export function usePluginsState() {
   const [state, setState] = useState<PluginsState | null>(null);
   useEffect(() => {
-    const bridge = pluginsBridge();
-    if (!bridge) return;
     let live = true;
-    void bridge.state().then(value => { if (live) setState(value); }, () => {});
-    const off = bridge.onState(value => setState(value));
-    return () => { live = false; off(); };
+    let off: (() => void) | undefined;
+    const attach = () => {
+      const bridge = pluginsBridge();
+      if (!bridge) return;
+      off?.();
+      void bridge.state().then(value => { if (live) setState(value); }, () => {});
+      off = bridge.onState(value => { if (live) setState(value); });
+    };
+    attach(); window.addEventListener('ade:verify-plugins-ready', attach);
+    return () => { live = false; off?.(); window.removeEventListener('ade:verify-plugins-ready', attach); };
   }, []);
   return state;
 }
 // A plugin's notification was clicked: the app asks for the plugins page.
 export function onPluginsOpen(listener: () => void) { return pluginsBridge()?.onOpen?.(listener) ?? (() => {}); }
+
+// A header plugin's panel (opened from its top-bar button, in the right-panel slot): the plugin's view, drawn like its settings.
+export function PluginPanel({ plugin, wide, toggleWide, onSettings, onClose }: { plugin: PluginInfo; wide: boolean; toggleWide(): void; onSettings(): void; onClose(): void }) {
+  const bridge = pluginsBridge(), view = plugin.view?.panel ?? plugin.view;
+  const [values, setValue] = useFieldValues(view), [busy, setBusy] = useState(''), [notice, setNotice] = useState('');
+  if (!bridge || !view || !plugin.id) return null;
+  const act = (action: string, item?: string) => {
+    if (busy) return;
+    const submitted = { ...values };
+    for (const field of view.fields) if (field.type === 'password') setValue(field.key, '');
+    setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`); setNotice('');
+    void bridge.action(plugin.id!, action, submitted, item).then(result => setNotice(result.message ?? ''), error => setNotice(errorText(error))).finally(() => setBusy(''));
+  };
+  return <div className="review-panel plugin-panel plugins">
+    <header className="panel-head">
+      <Icon name="plugin" /><strong>{plugin.name}</strong><span className="spacer" />
+      <IconButton icon="settings" tip="header" label="플러그인 설정" onClick={onSettings} />
+      <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
+      <IconButton icon="x" tip="none" label={`${plugin.name} 닫기`} onClick={onClose} />
+    </header>
+    <div className="plugin-panel-body">
+      {view.status && <p className="plugin-status" data-tone={view.status.tone} role="status">{view.status.text}</p>}
+      {notice && <p className="setting-note" role="status">{notice}</p>}
+      <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
+      {view.document && <section className="plugin-document"><h3>{view.document.title}</h3><pre>{view.document.text}</pre></section>}
+    </div>
+  </div>;
+}
 
 // Status-bar items of running plugins. Always shown (not part of the status bar layout) so that a plugin cannot work unseen.
 export function PluginBadges({ onOpen }: { onOpen(): void }) {
@@ -227,7 +266,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     scroller?.scrollTo({ top: 0 });
   }, [selected]);
   if (!bridge) {
-    const text = '플러그인은 데스크톱 앱에서만 쓸 수 있습니다.';
+    const text = '플러그인은 데스크톱 앱 또는 start-ui.mjs의 격리 브라우저 테스트 세션에서 쓸 수 있습니다.';
     return matches(text) ? <p className="setting-note setting-hit">{text}</p> : null;
   }
   if (!state) {
@@ -290,6 +329,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
 
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+    {window.adeVerifyPlugins && <p className="setting-note">브라우저 테스트 세션 · 키는 임시 폴더에 테스트 키와 함께 암호화 저장됩니다. OS Keychain 보호는 적용되지 않습니다.</p>}
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
     {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
     {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
@@ -366,7 +406,7 @@ function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
 
 function Section({ title, hint, action, children }: { title: string; hint?: ReactNode; action?: ReactNode; children: ReactNode }) {
   return <section className="plugin-section">
-    <header><div><h4>{title}</h4>{hint && <p>{hint}</p>}</div>{action}</header>
+    {(title || hint || action) && <header><div><h4>{title}</h4>{hint && <p>{hint}</p>}</div>{action}</header>}
     {children}
   </section>;
 }
@@ -404,7 +444,11 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
 
   const view = plugin.view && id && hasContent(plugin.view) ? plugin.view : null;
   const [values, setValue] = useFieldValues(view);
-  const act = (action: string, item?: string) => { if (id) run(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`, () => bridge.action(id, action, values, item)); };
+  const act = (action: string, item?: string) => {
+    const submitted = { ...values };
+    for (const field of view?.fields ?? []) if (field.type === 'password') setValue(field.key, '');
+    if (id) run(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`, () => bridge.action(id, action, submitted, item));
+  };
   const steps = plugin.state === 'invalid' ? [] : guideSteps(plugin);
   const complete = steps.every(step => step.optional || step.status === 'done');
   // While setting up, what a step names is drawn inside that step; once everything is done it is all ordinary settings.
@@ -465,7 +509,7 @@ function stepParts(steps: GuideStep[]): Parts {
 // Field values start from what the plugin reports and keep the user's edits until the plugin sends a new value.
 function useFieldValues(view: PluginView | null): [Record<string, string>, (key: string, value: string) => void] {
   const [values, setValues] = useState<Record<string, string>>({});
-  const reported = JSON.stringify((view?.fields ?? []).map(field => [field.key, field.value]));
+  const reported = JSON.stringify([view?.formId, (view?.fields ?? []).map(field => [field.key, field.value])]);
   useEffect(() => { setValues(Object.fromEntries((view?.fields ?? []).map(field => [field.key, field.value]))); }, [reported]);
   return [values, (key, value) => setValues(current => ({ ...current, [key]: value }))];
 }
@@ -556,9 +600,11 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
         </label>;
         return <label key={field.key} className="plugin-field">
           {text}
-          {field.type === 'select' && field.options
+          {field.type === 'folder' ? <span className="plugin-folder"><input value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} /><button type="button" className="plugin-button" onClick={() => { void chooseFolder(field.label, value).then(path => { if (path) set(path); }).catch(() => {}); }}>폴더 선택</button></span>
+            : field.type === 'textarea' ? <textarea rows={5} value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} />
+            : field.type === 'select' && field.options
             ? <select value={value} onChange={event => set(event.target.value)}>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-            : <input type={field.type === 'number' ? 'number' : 'text'} inputMode={field.type === 'number' ? 'numeric' : undefined} value={value} placeholder={field.placeholder} spellCheck={false} aria-required={field.required || undefined} onChange={event => set(event.target.value)} />}
+            : <input type={field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text'} autoComplete={field.type === 'password' ? 'new-password' : undefined} inputMode={field.type === 'number' ? 'numeric' : undefined} value={value} placeholder={field.placeholder} spellCheck={false} aria-required={field.required || undefined} onChange={event => set(event.target.value)} />}
         </label>;
       })}
       {actions.length > 0 && <div className="plugin-actions">
@@ -569,13 +615,13 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
 }
 
 // What can be changed while the plugin runs: what the setup steps do not show, and the plugin's lists.
-function SettingsSection({ view, hide, values, setValue, busy, where, act }: { view: PluginView; hide: Parts | null; values: Record<string, string>; setValue(key: string, value: string): void; busy: string; where: string; act(action: string, item?: string): void }) {
+function SettingsSection({ view, hide, values, setValue, busy, where, act, standalone = false }: { view: PluginView; hide: Parts | null; values: Record<string, string>; setValue(key: string, value: string): void; busy: string; where: string; act(action: string, item?: string): void; standalone?: boolean }) {
   const parts = <ViewParts view={view} hide={hide} values={values} setValue={setValue} busy={busy} where={where} act={act} />;
   const lists = view.lists ?? [];
   const rest = Boolean(hide ? view.fields.some(field => !hide.fields.has(field.key)) || view.actions.some(action => !hide.actions.has(action.id)) || view.info.some(item => !item.key || !hide.info.has(item.key)) || (view.qr && !hide.qr)
     : view.fields.length || view.actions.length || view.info.length || view.qr);
   if (!rest && !lists.length) return null;
-  return <Section title="설정" hint={hide ? '설정 단계 밖에서 바꿀 수 있는 것입니다.' : '바꿀 수 있는 설정입니다. 바꾼 뒤 저장 버튼을 누르세요.'}>
+  return <Section title={standalone ? '' : '설정'} hint={standalone ? undefined : hide ? '설정 단계 밖에서 바꿀 수 있는 것입니다.' : '바꿀 수 있는 설정입니다. 바꾼 뒤 저장 버튼을 누르세요.'}>
     {rest && <div className="plugin-body">{parts}</div>}
     {lists.map(list => <div key={list.id} className="plugin-list-group">
       <h5>{list.title}{list.items.length > 0 && <span className="plugin-count">{list.items.length}</span>}</h5>
