@@ -723,6 +723,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
+      const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
+      if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
       // The message is shown right away; starting the process (slow on the first turn) must not delay it.
       emit({ kind: 'user', text, images: images.length, previews }); inflight = { text, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
       try {
@@ -760,7 +762,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (protocol) await protocol.send(text, images);
         else await write(userLine(text, images, inflight.uuid));
       }
-      catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
+      catch (error) { turnOpen = false; if (codexCompact) emit({ kind: 'delta', phase: 'compacting', active: false }); if (protocol) restart(); setStatus(); throw error; }
       setStatus();
     },
     async approve(requestId, answer) {

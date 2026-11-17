@@ -379,7 +379,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -474,6 +474,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
             {typeof desktop()?.setZoom === 'function' && <Row title="화면 배율" hint="앱 전체 크기를 바꿉니다. (80–150%) 터미널 글꼴 크기는 아래 터미널에서 정합니다." preview="zoom">{number('uiZoom', 80, 150, 5)}</Row>}
             <Row title="사이드바 접기" hint="프로젝트 사이드바를 아이콘만 보이는 좁은 막대로 줄입니다. 단축키로도 바꿀 수 있습니다." preview="sidebar">{toggle('sidebarCompact')}</Row>
+            <Row title="백그라운드에서도 애니메이션 유지" hint="끄면 창이 포커스를 잃었을 때 반복 애니메이션(로딩 표시 등)을 멈춰 CPU·GPU 사용을 줄입니다. 켜면 다른 앱을 보는 동안에도 계속 움직입니다.">{toggle('animateInBackground')}</Row>
             <Advanced>
               <Row title="프로젝트 사이드바 너비" hint="사이드바 경계를 끌어서도 바꿀 수 있습니다. (160–480px)" preview="sidebarWidth">{number('sidebarWidth', 160, 480)}</Row>
             </Advanced>
@@ -635,9 +636,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {(searching || section === 'feedback') && <SectionFrame label="피드백" searching={searching}>
           <FeedbackAvailabilityRow />
           <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
-          <Row title="AI 정리에 화면 정보 포함" hint="'AI로 정리'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
-          <Row title="AI 정리 모델" hint="'AI로 정리'에 쓸 Claude 모델입니다. 피드백 작성 화면 하단에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 정리 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
-          <Row title="AI 정리 Effort" hint="높을수록 정교하지만 느립니다. 보통(Medium)까지만 고를 수 있습니다. (기본 Low)"><Dropdown label="AI 정리 Effort" className={`chat-effort effort-${feedbackEffort(settings.feedbackAiEffort)}`} value={feedbackEffort(settings.feedbackAiEffort)} options={AI_EFFORTS} onChange={value => set('feedbackAiEffort', value as Settings['feedbackAiEffort'])} /></Row>
+          <Row title="AI 작성에 화면 정보 포함" hint="'AI로 작성'·'AI로 다듬기'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+          <Row title="AI 작성 모델" hint="'AI로 작성'·'AI로 다듬기'에 쓸 Claude 모델입니다. 피드백 화면에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 작성 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
+          <Row title="AI 작성 Effort" hint="높을수록 정교하지만 느립니다. 보통(Medium)까지만 고를 수 있습니다. (기본 Low)"><Dropdown label="AI 작성 Effort" className={`chat-effort effort-${feedbackEffort(settings.feedbackAiEffort)}`} value={feedbackEffort(settings.feedbackAiEffort)} options={AI_EFFORTS} onChange={value => set('feedbackAiEffort', value as Settings['feedbackAiEffort'])} /></Row>
         </SectionFrame>}
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>

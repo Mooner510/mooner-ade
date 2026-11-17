@@ -18,7 +18,7 @@ async function load(t) {
   return require(outfile);
 }
 
-const item = (patch = {}) => ({ id: 'f1', title: '버튼이 안 눌림', body: '설정 창에서 저장 버튼이 반응하지 않습니다.', source: 'human', status: 'draft', reviewed: true, images: [], createdAt: 1, updatedAt: 1, ...patch });
+const item = (patch = {}) => ({ id: 'f1', title: '버튼이 안 눌림', body: '설정 창에서 저장 버튼이 반응하지 않습니다.', types: [], source: 'human', status: 'draft', reviewed: true, images: [], createdAt: 1, updatedAt: 1, ...patch });
 const image = n => ({ name: `img-${n}.png`, w: 10, h: 10, annotated: false });
 
 test('canSubmit: title, body, images, review, status and availability', async t => {
@@ -117,4 +117,27 @@ test('isEmptyDraft: only a human draft with no title, text or images is dropped'
   assert.equal(isEmptyDraft(item({ ...empty, images: [image(1)] })), false);
   assert.equal(isEmptyDraft(item({ ...empty, source: 'agent' })), false);
   assert.equal(isEmptyDraft(item({ ...empty, status: 'review' })), false);
+});
+
+test('feedbackGroup and ago: list filter chips and relative times', async t => {
+  const { feedbackGroup, groupLabels, ago } = await load(t);
+  const group = status => feedbackGroup({ status });
+  assert.deepEqual(['draft', 'review', 'failed'].map(group), ['todo', 'todo', 'todo']);
+  assert.deepEqual(['drafting', 'queued', 'submitting'].map(group), ['sending', 'sending', 'sending']);
+  assert.equal(group('submitted'), 'done');
+  assert.deepEqual(Object.keys(groupLabels), ['todo', 'sending', 'done']);
+  const now = 1_000_000_000_000, min = 60_000;
+  assert.deepEqual([30_000, 5 * min, 3 * 60 * min, 30 * 60 * min].map(ms => ago(now - ms, now)), ['방금', '5분 전', '3시간 전', '어제']);
+  assert.match(ago(now - 5 * 24 * 60 * min, now), /^\d+월 \d+일$/);
+});
+
+test('request types: several, in table order; same ids and tags as the server', async t => {
+  const { feedbackTypes, toggleType, typeTag } = await load(t);
+  const server = await import('../apps/local-server/src/feedback-store.js');
+  assert.deepEqual(feedbackTypes.map(type => [type.id, type.tag]), Object.entries(server.FEEDBACK_TYPES).map(([id, [tag]]) => [id, tag]));
+  assert.deepEqual(toggleType([], 'perf'), ['perf']);
+  assert.deepEqual(toggleType(['perf'], 'bug'), ['bug', 'perf']);
+  assert.deepEqual(toggleType(['bug', 'perf'], 'bug'), ['perf']);
+  assert.deepEqual(toggleType(['perf'], 'nope'), ['perf']);
+  assert.equal(typeTag('bug'), '버그'); assert.equal(typeTag('nope'), '');
 });

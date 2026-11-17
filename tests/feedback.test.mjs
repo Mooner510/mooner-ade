@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFeedbackStore, imageInfo, MAX_IMAGES } from '../apps/local-server/src/feedback-store.js';
+import { cleanTypes, createFeedbackStore, FEEDBACK_TYPES, imageInfo, issueTitle, MAX_IMAGES, withoutBrackets } from '../apps/local-server/src/feedback-store.js';
 import { feedbackPrompt, LOGIN_HINT, parseFeedbackDraft, runFeedbackDraft } from '../apps/local-server/src/feedback-agent.js';
 import { createFeedbackMcp, writeDraft } from '../apps/local-server/src/feedback-mcp.js';
 import { backoffMs, createFeedbackQueue, nextStep, surelyNotCreated } from '../apps/local-server/src/feedback-queue.js';
@@ -101,6 +101,9 @@ test('recover settles work the app was doing when it stopped', async t => {
 test('the queue backs off by error kind and gives up only on answers that waiting cannot change', () => {
   assert.deepEqual(nextStep({ code: 'bad_request' }, 1, 0), { fail: true });
   assert.deepEqual(nextStep({ code: 'too_large' }, 1, 0), { fail: true });
+  assert.deepEqual(nextStep({ code: 'update_required' }, 1, 0), { fail: true });
+  assert.deepEqual(nextStep({ code: 'version_check_failed' }, 1, 0), { retryAt: 30_000 });
+  assert.equal(surelyNotCreated({ code: 'version_check_failed' }), true);
   assert.deepEqual(nextStep({ code: 'rate_limited', retryAfter: 120 }, 1, 0), { retryAt: 120_000 });
   assert.deepEqual(nextStep({ code: 'rate_limited' }, 1, 0), { retryAt: ANONYMOUS_INTERVAL_MS });
   assert.deepEqual(nextStep({ code: 'not_logged_in' }, 1, 0), { retryAt: 5_000 });
@@ -212,13 +215,20 @@ test('the MCP tool drops a draft that the store imports as an unreviewed agent d
 });
 
 test('the AI draft parses JSON answers, fenced ones, and falls back to the raw text', () => {
-  assert.deepEqual(parseFeedbackDraft('{"title":"제목","body":"## 문제"}'), { title: '제목', body: '## 문제' });
-  assert.deepEqual(parseFeedbackDraft('설명\n```json\n{"title":"t","body":"b"}\n```'), { title: 't', body: 'b' });
-  assert.deepEqual(parseFeedbackDraft('그냥 글'), { title: '', body: '그냥 글' });
+  assert.deepEqual(parseFeedbackDraft('{"title":"제목","body":"## 문제"}'), { title: '제목', body: '## 문제', types: [] });
+  assert.deepEqual(parseFeedbackDraft('설명\n```json\n{"title":"t","body":"b"}\n```'), { title: 't', body: 'b', types: [] });
+  assert.deepEqual(parseFeedbackDraft('그냥 글'), { title: '', body: '그냥 글', types: [] });
+  // Types: known ids only, once each, in the table's order. A title with [ ] (the app adds the tags itself) comes out without them.
+  assert.deepEqual(parseFeedbackDraft('{"title":"[버그] 저장이 안 돼요","body":"b","types":["perf","zzz","bug","bug"]}'), { title: '저장이 안 돼요', body: 'b', types: ['bug', 'perf'] });
   assert.throws(() => parseFeedbackDraft('  '), /빈 답/);
   const prompt = feedbackPrompt({ images: ['/a/img-1.png'], note: '메모', context: 'ADE 0.5' });
   assert.match(prompt, /1\. \/a\/img-1\.png/); assert.match(prompt, /사용자 메모:\n메모/); assert.match(prompt, /ADE 0\.5/);
   assert.match(prompt, /MoonerADE 개요[\s\S]*채팅 탭[\s\S]*개요의 표기를 따르세요/); // names the features the app has, before the user's note
+  // The AI is told never to put [ ] in the title and which type ids it may answer with; a person's own pick is passed along.
+  assert.match(prompt, /대괄호 \[ \]는 절대 쓰지 마세요/);
+  for (const id of Object.keys(FEEDBACK_TYPES)) assert.match(prompt, new RegExp(`· ${id} \\(`));
+  assert.match(feedbackPrompt({ body: 'x', types: ['perf', 'bug'] }), /사용자가 이미 고른 유형: bug, perf/);
+  assert.doesNotMatch(prompt, /사용자가 이미 고른 유형/);
 });
 
 test('runFeedbackDraft runs claude -p with only Read and the prompt on stdin', async () => {
@@ -234,7 +244,7 @@ test('runFeedbackDraft runs claude -p with only Read and the prompt on stdin', a
       return proc;
     }
   });
-  assert.deepEqual(draft, { title: 't', body: 'b' });
+  assert.deepEqual(draft, { title: 't', body: 'b', types: [] });
   assert.equal(call.executable, 'claude');
   assert.deepEqual(call.args.slice(0, 5), ['-p', '--output-format', 'json', '--allowedTools', 'Read']);
   assert.ok(!call.args.includes('--danger'));
@@ -275,13 +285,19 @@ test('anonymous posts carry the install id and the multipart body, and map refus
   assert.deepEqual(await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: {}, images: [] }), { ok: false, error: { code: 'rate_limited', message: '천천히', retryAfter: 170 } });
   hub.answers.push({ status: 503, body: { error: { code: 'auth-unavailable', message: 'x' } } });
   assert.equal((await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: {}, images: [] })).error.code, 'feedback_disabled');
+  for (const [status, code] of [[426, 'update_required'], [503, 'version_check_failed']]) {
+    hub.answers.push({ status, body: { error: { code, message: '버전 확인' } } });
+    assert.equal((await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: {}, images: [] })).error.code, code);
+  }
   assert.equal((await postAnonymousFeedback({ hubUrl: 'http://127.0.0.1:9', deviceId, meta: {}, images: [] })).error.code, 'network_error');
 });
 
 // ---- the server: API routes and both submit ways ---------------------------------------------------------------------
 async function boot(t, env = {}) {
   const data = await mkdtemp(join(tmpdir(), 'ade-data-'));
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env }, stdio: ['ignore', 'pipe', 'inherit', 'ipc'] });
+  const gitConfig = join(data, 'gitconfig');
+  await writeFile(gitConfig, '[user]\nname = Test Git\nemail = test-prefix@example.com\n');
+  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, GH_CONFIG_DIR: join(data, 'gh'), GH_TOKEN: '', GITHUB_TOKEN: '', GIT_CONFIG_GLOBAL: gitConfig, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env }, stdio: ['ignore', 'pipe', 'inherit', 'ipc'] });
   const messages = [];
   child.on('message', message => messages.push(message));
   t.after(async () => {
@@ -322,6 +338,11 @@ test('signed in, the queue submits through the app and records the issue; a rate
   assert.equal((await api('feedback/submit', { id: item.id })).status, 'queued');
   const request = await until(message => message.type === 'feedback/submit');
   assert.equal(request.meta.clientKey, item.id); assert.equal(request.meta.source, 'human');
+  assert.equal(request.meta.ghLogin, '');
+  assert.equal(request.meta.gitName, 'Test Git');
+  assert.equal(request.meta.gitEmailPrefix, 'test-prefix');
+  assert.equal(request.meta.deviceUUID, JSON.parse(await readFile(join(data, 'device.json'), 'utf8')).uuid);
+  assert.ok(!JSON.stringify(request.meta).includes('@example.com'));
   assert.equal(request.images[0].path, join(data, 'feedback', item.id, 'img-1.png'));
   assert.deepEqual(await readFile(request.images[0].path), png());
   child.send({ type: 'feedback/result', id: request.id, ok: false, error: { code: 'rate_limited', message: '잠시 뒤에', retryAfter: 1 } });
@@ -344,6 +365,9 @@ test('without an account, feedback goes to the Hub anonymously, one per 5 minute
   const sent = await eventually('feedback/get', { id: a.id }, value => value.status === 'submitted');
   assert.equal(sent.via, 'anonymous'); assert.equal(sent.issueNumber, 1);
   assert.equal(hub.requests.length, 1); assert.equal(hub.requests[0].meta.clientKey, a.id);
+  assert.equal(hub.requests[0].meta.gitName, 'Test Git');
+  assert.equal(hub.requests[0].meta.gitEmailPrefix, 'test-prefix');
+  assert.match(hub.requests[0].meta.deviceUUID, /^[a-f0-9-]{36}$/);
   const listed = await api('feedback/list');
   assert.equal(listed.queue.size, 1); assert.ok(listed.queue.nextAt > Date.now() + 4 * 60_000);
   assert.equal(listed.items.find(item => item.id === b.id).status, 'queued');
@@ -414,4 +438,62 @@ test('a Claude Code login failure in the AI draft is explained, and says that su
   assert.match(failure.message, /로그인 없이/);
   const other = await runFeedbackDraft({ cwd: process.cwd(), images: [], spawnProcess: fake('rate limited') }).catch(error => error);
   assert.equal(other.code, 'AGENT_PROTOCOL');
+});
+
+test('request types are kept on the item, normalised, and locked with it; the issue title carries their tags', async t => {
+  const { store } = await tempStore(t);
+  assert.deepEqual(cleanTypes(['perf', 'x', 'bug', 'bug', 5]), ['bug', 'perf']); assert.deepEqual(cleanTypes('bug'), []); assert.deepEqual(cleanTypes(undefined), []);
+  const item = await store.create({ title: '저장이 안 돼요', body: '본문', types: ['perf', 'nope'] });
+  assert.deepEqual(item.types, ['perf']);
+  assert.deepEqual((await store.update(item.id, { types: ['design', 'bug'] })).types, ['bug', 'design']);
+  assert.deepEqual((await store.update(item.id, { title: '새 제목' })).types, ['bug', 'design']); // other edits leave them alone
+  assert.deepEqual((await store.get(item.id)).types, ['bug', 'design']);
+  assert.equal(issueTitle({ title: '저장이 안 돼요', types: ['perf', 'bug'] }), '[버그][성능] 저장이 안 돼요');
+  assert.equal(issueTitle({ title: '저장이 안 돼요', types: [] }), '저장이 안 돼요');
+  assert.equal(issueTitle({ title: 'x'.repeat(120), types: ['bug', 'perf'] }).length, 120);
+  // A title the person wrote with its own [ ] is kept as written (the UI warns that it can double up); only AI and agent titles are stripped.
+  assert.equal(issueTitle({ title: '[버그] 직접 씀', types: ['bug'] }), '[버그] [버그] 직접 씀');
+  assert.equal(withoutBrackets('[버그] [x]  저장 [ 안 돼요]'), '저장 안 돼요');
+  assert.equal(withoutBrackets('탭 [Chat 모드] 오류'), '탭 Chat 모드 오류');
+  // Types are part of what a submit locks, like the text.
+  await store.setStatus(item.id, 'queued', {}, {});
+  await assert.rejects(store.update(item.id, { types: ['praise'] }), /전송 대기 중/);
+  await store.setStatus(item.id, 'submitted', {}, {});
+  await assert.rejects(store.update(item.id, { types: ['praise'] }), /제출한 피드백은 고칠 수 없습니다/);
+  assert.equal((await store.update(item.id, { reviewed: true })).reviewed, true); // only a review mark may still change
+  // An AI result sets them through setStatus; an old item without the field reads as none.
+  const other = await store.create({ body: 'b' });
+  assert.deepEqual((await store.setStatus(other.id, 'review', { types: ['question', 'bug'] })).types, ['bug', 'question']);
+});
+
+test('the agent tool takes types and drops [ ] from the title; the import keeps both', async t => {
+  const { store } = await tempStore(t);
+  const out = [];
+  const handle = createFeedbackMcp({ incoming: store.incomingDir, write: line => out.push(JSON.parse(line)) });
+  await handle(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }));
+  const tool = out[0].result.tools[0];
+  assert.deepEqual(tool.inputSchema.properties.types.items.enum, Object.keys(FEEDBACK_TYPES));
+  assert.match(tool.inputSchema.properties.title.description, /대괄호 \[ \]는 쓰지 마세요/);
+  await handle(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ade_feedback_draft', arguments: { title: '[버그] 탭이 잘림', body: '본문', types: ['perf', 'zzz', 'bug'] } } }));
+  assert.equal(out[1].result.isError, undefined);
+  const item = await store.get((await store.importIncoming())[0]);
+  assert.equal(item.title, '탭이 잘림'); assert.deepEqual(item.types, ['bug', 'perf']);
+  await assert.rejects(writeDraft(store.incomingDir, { title: '[버그]', body: 'b' }), /title이 필요/);
+});
+
+test('the submit meta carries the composed title and the types (the Hub turns them into labels)', async t => {
+  const { store } = await tempStore(t);
+  const sent = [];
+  const queue = createFeedbackQueue({
+    store, stateFile: join(store.root, 'queue.json'), availability: () => ({ ok: true, mode: 'account' }),
+    metaOf: item => ({ clientKey: item.id, title: issueTitle(item), types: item.types }),
+    sendAccount: async meta => { sent.push(meta); return { ok: true, issueUrl: 'https://example.com/1', issueNumber: 1 }; }, sendAnonymous: async () => ({ ok: false, error: { code: 'x', message: 'x' } })
+  });
+  const item = await store.create({ title: '저장이 안 돼요', body: '본문', types: ['perf', 'bug'] });
+  await queue.enqueue(item.id);
+  // Until the queue has written the result too, or the temp folder goes while it is still saving.
+  for (let i = 0; i < 100 && (await store.get(item.id)).status !== 'submitted'; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal((await store.get(item.id)).status, 'submitted');
+  assert.equal(sent[0].title, '[버그][성능] 저장이 안 돼요'); assert.deepEqual(sent[0].types, ['bug', 'perf']);
+  assert.equal((await store.get(item.id)).title, '저장이 안 돼요'); // the stored title stays what the person wrote
 });

@@ -323,7 +323,8 @@ export function reduce(view: ChatView, event: any): ChatView {
       // A shell/Monitor that ends by itself makes the CLI start a turn on its own: a rule says why that reply appears (one the user stopped stays quiet).
       if (phase === 'end' && isJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
         const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
-        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${next.description || '백그라운드 작업'} ${status}`, fresh });
+        const message = `${next.description || '백그라운드 작업'} ${status}`;
+        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });
       }
       if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
       return { ...view, tasks };
@@ -401,7 +402,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`;
       return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
     }
-    case 'compact': return { ...append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh }), compacting: false };
+    case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
     case 'steer': {
@@ -822,8 +823,7 @@ export function toolSummary(name: string, input: any, root = ''): string {
     case 'ToolSearch': { const query = text(input?.query); return query.startsWith('select:') ? `${query.slice(7).split(',').map(name => name.trim()).filter(Boolean).join(', ')} 불러오기` : line(query); }
     case 'Task': case 'Agent': return line(text(input?.description) || text(input?.prompt));
     case 'AskUserQuestion': { const asked = Array.isArray(input?.questions) ? input.questions : []; return line(text(asked[0]?.question)) + (asked.length > 1 ? ` 외 ${asked.length - 1}개` : ''); }
-    // The plan in the tool input can be a stale copy (the CLI reads the plan file when it asks), so the row names the step; the card shows the plan.
-    case 'ExitPlanMode': return '계획 승인 요청';
+    case 'ExitPlanMode': return line(text(input?.plan)) || '계획 승인 요청';
     case 'SubagentHandback': return line(text(input?.message));
     case 'TodoWrite': return `${Array.isArray(input?.todos) ? input.todos.length : 0}개 항목`;
     // Scheduling: the cron line and what it will say ("57 8 * * * · 테스트 알림 · 반복"); a job is named by its id.

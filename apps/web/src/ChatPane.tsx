@@ -91,23 +91,22 @@ const sizeOf = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.roun
 // with the plain `claude` CLI. Where the source is does not matter to the user; a CLI conversation that already became a chat is listed once.
 function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude' | 'codex' | 'cursor'; exclude: string; call: ChatCtx['call']; onPick(choice: ResumeChoice): void; onClose(): void }) {
   const search = useRef<HTMLInputElement>(null), [query, setQuery] = useState('');
-  const [entries, setEntries] = useState<ResumeEntry[] | null>(null), [failed, setFailed] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedChat[] | null>(null), [cli, setCli] = useState<CliChat[] | null>(null), [failed, setFailed] = useState<string | null>(null);
   useEffect(() => { search.current?.focus(); }, []);
   useEffect(() => {
     let live = true;
-    void Promise.allSettled([call<SavedChat[]>('chat/sessions', { agent, exclude }), agent === 'claude' ? call<CliChat[]>('chat/cli-sessions', {}) : Promise.resolve<CliChat[]>([])]).then(([saved, cli]) => {
-      if (!live) return;
-      if (saved.status === 'rejected' && cli.status === 'rejected') setFailed(String(saved.reason?.message ?? saved.reason));
-      const chats = saved.status === 'fulfilled' ? saved.value : [], known = new Set(chats.flatMap(chat => chat.sessionId ? [chat.sessionId] : []));
-      setEntries([
-        ...chats.map(chat => ({ key: `chat:${chat.id}`, title: chat.title, updatedAt: chat.updatedAt, detail: chat.model ? shortModel(chat.model) : undefined, code: (chat.sessionId ?? chat.id).slice(0, 8), choice: { kind: 'chat', id: chat.id } as ResumeChoice })),
-        ...(cli.status === 'fulfilled' ? cli.value : []).filter(item => item.chatId !== exclude && !known.has(item.sessionId) && !(item.chatId && chats.some(chat => chat.id === item.chatId)))
-          .map(item => ({ key: `cli:${item.sessionId}`, title: item.title, updatedAt: item.updatedAt, detail: sizeOf(item.size), code: item.sessionId.slice(0, 8), running: item.running,
-            choice: (item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId }) as ResumeChoice }))
-      ].sort((a, b) => b.updatedAt - a.updatedAt));
-    });
+    setSaved(null); setCli(null); setFailed(null);
+    void call<SavedChat[]>('chat/sessions', { agent, exclude }).then(value => { if (live) setSaved(value); }, error => { if (live) { setSaved([]); setFailed(String(error?.message ?? error)); } });
+    void (agent === 'claude' ? call<CliChat[]>('chat/cli-sessions', {}) : Promise.resolve<CliChat[]>([])).then(value => { if (live) setCli(value); }, error => { if (live) { setCli([]); setFailed(String(error?.message ?? error)); } });
     return () => { live = false; };
   }, [call, agent, exclude]);
+  const chats = saved ?? [], known = new Set(chats.flatMap(chat => chat.sessionId ? [chat.sessionId] : [])), loading = saved === null || cli === null;
+  const entries: ResumeEntry[] = [
+    ...chats.map(chat => ({ key: `chat:${chat.id}`, title: chat.title, updatedAt: chat.updatedAt, detail: chat.model ? shortModel(chat.model) : undefined, code: (chat.sessionId ?? chat.id).slice(0, 8), choice: { kind: 'chat', id: chat.id } as ResumeChoice })),
+    ...(cli ?? []).filter(item => item.chatId !== exclude && !known.has(item.sessionId) && !(item.chatId && chats.some(chat => chat.id === item.chatId)))
+      .map(item => ({ key: `cli:${item.sessionId}`, title: item.title, updatedAt: item.updatedAt, detail: sizeOf(item.size), code: item.sessionId.slice(0, 8), running: item.running,
+        choice: (item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId }) as ResumeChoice }))
+  ].sort((a, b) => b.updatedAt - a.updatedAt);
   const needle = query.trim().toLowerCase(), rows = entries?.filter(item => !needle || item.title.toLowerCase().includes(needle));
   return <Modal className="models-modal resume-modal" labelledBy="resume-title" onClose={onClose}>
     <header><h2 id="resume-title">이전 대화 불러오기</h2><button type="button" className="models-close" aria-label="닫기" onClick={onClose}><Icon name="x" size={16} /></button></header>
@@ -119,7 +118,8 @@ function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude
         <span className="resume-name">{item.title}</span>
         <span className="resume-info"><span>{when(item.updatedAt)}</span>{item.detail && <span>{item.detail}</span>}{item.running && <span className="resume-badge">터미널에서 실행 중</span>}<span className="resume-code">{item.code}</span></span>
       </button>)}
-      {!rows?.length && <p className="models-empty">{entries === null ? '대화를 불러오는 중…' : failed ? `목록을 불러오지 못했습니다: ${failed}` : query ? '검색 결과가 없습니다.' : '이 프로젝트에서 불러올 수 있는 이전 대화가 없습니다.'}</p>}
+      {loading && <p className="models-empty" role="status">대화를 불러오는 중…</p>}
+      {!loading && !rows?.length && <p className="models-empty">{failed ? `목록을 불러오지 못했습니다: ${failed}` : query ? '검색 결과가 없습니다.' : '이 프로젝트에서 불러올 수 있는 이전 대화가 없습니다.'}</p>}
     </div>
     <footer><span>{rows ? `${rows.length}개 대화` : ''}</span><span>선택하면 새 탭에서 이어집니다.</span></footer>
   </Modal>;
@@ -1480,7 +1480,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }]) !== 'yes') return;
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
-    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
+    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !(agent === 'codex' && view.compacting) && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
     else await transmit(body, attachments);
   }
@@ -1677,7 +1677,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></Modal>}
         <div className="chat-input-row">
-        <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+        <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' || (agent === 'codex' && view.compacting) ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' || (agent === 'codex' && view.compacting) ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}

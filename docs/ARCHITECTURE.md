@@ -39,13 +39,16 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 
 - **저장**: 서버의 `feedback-store.js`가 `<dataRoot>/feedback/<id>/`에 `feedback.json`, `body.md`, `img-<n>.png|jpg`로 둡니다. 주석을 그린 이미지는 원본을 한 번 `img-<n>.orig.*`로 남깁니다. 화면은 `feedback/*` API와 `GET /feedback-file/<id>/<name>`(세션 쿠키 필요)을 쓰고, 바뀌면 WebSocket `feedback/changed`를 받습니다.
 - **캡쳐**: Electron main의 `ade:capture`가 앱 창(또는 그 안의 사각형)을 `webContents.capturePage`로 찍습니다. 앱 창 밖은 찍지 않으므로 OS 화면 기록 권한이 필요 없습니다.
-- **AI 정리**: 작성 화면의 `AI로 정리`를 누르면 `feedback-agent.js`가 피드백 폴더에서 `claude -p --output-format json`을 Read 도구만 허용해 실행합니다. 적어 둔 요건과 스크린샷을 문제·기대 동작·개선 제안으로 정리하고, 결과를 `review` 상태의 `ai` 초안으로 저장합니다. 제목은 선택이며, 비우고 제출하면 본문 첫 줄이 이슈 제목이 됩니다. 모델은 Haiku 5.5·Sonnet 5.5·Opus 5.5, Effort는 low·medium만 쓸 수 있고(기본 Haiku 5.5 + low) 서버도 그 밖의 값은 기본값으로 바꿉니다.
-- **ADE 개요**: `ade-overview.js`의 손으로 쓴 요약(화면 구성·채팅/터미널 기능·설정 섹션·피드백 흐름, 약 1,000자)을 `AI로 정리` 프롬프트와 `ade_feedback_draft` 도구 설명에 넣어, AI가 앱이 이미 가진 기능을 없다고 쓰거나 다른 이름으로 부르지 않게 합니다. 기능을 더하거나 이름을 바꾸면 이 파일도 고칩니다. 도구 설명은 에이전트 세션마다 컨텍스트에 실립니다.
+- **AI 작성·다듬기**: `AI로 작성`(한 칸 입력)이나 직접 작성 화면의 `AI로 다듬기`를 누르면 `feedback-agent.js`가 피드백 폴더에서 `claude -p --output-format json`을 Read 도구만 허용해 실행합니다. 적어 둔 요건과 스크린샷을 문제·기대 동작·개선 제안과 유형으로 정리하고(제목에는 `[ ]`를 쓰지 못하게 프롬프트로 막고, 결과에서도 지웁니다), 결과를 `review` 상태의 `ai` 초안으로 저장합니다. 제목은 선택이며, 비우고 제출하면 본문 첫 줄이 이슈 제목이 됩니다. 모델은 Haiku 5.5·Sonnet 5.5·Opus 5.5, Effort는 low·medium만 쓸 수 있고(기본 Haiku 5.5 + low) 서버도 그 밖의 값은 기본값으로 바꿉니다.
+- **유형**: 항목의 `types`(bug·feature·pain·perf·design·question·praise, 여러 개)는 서버 `feedback-store.js`의 `FEEDBACK_TYPES`가 기준이고 웹 `feedback-model.ts`의 목록과 같아야 합니다(테스트가 비교). 제출할 때 서버가 이슈 제목 앞에 `[버그][성능]`처럼 태그를 붙이고(`issueTitle`; 저장된 제목은 그대로), meta의 `types`를 Hub가 `type:<id>` 라벨로 바꿉니다. Hub가 아직 업데이트되지 않았으면 라벨만 빠지고 제출은 됩니다. 사람이 제목에 `[ ]`를 직접 쓰면 중복될 수 있어 화면이 안내하고, AI·에이전트가 쓴 제목은 앞쪽 `[…]`를 지웁니다.
+- **ADE 개요**: `ade-overview.js`의 손으로 쓴 요약(화면 구성·채팅/터미널 기능·설정 섹션·피드백 흐름, 약 1,000자)을 AI 작성·다듬기 프롬프트와 `ade_feedback_draft` 도구 설명에 넣어, AI가 앱이 이미 가진 기능을 없다고 쓰거나 다른 이름으로 부르지 않게 합니다. 기능을 더하거나 이름을 바꾸면 이 파일도 고칩니다. 도구 설명은 에이전트 세션마다 컨텍스트에 실립니다.
 - **에이전트 MCP 도구**: 서버가 ADE에서 실행한 Claude Code·Codex(터미널과 채팅)에 `ade_feedback` MCP 서버(`feedback-mcp.js`)를 더합니다. 도구 `ade_feedback_draft`는 `feedback/incoming`에 초안 파일만 남기고, 서버가 이것을 `agent` 초안으로 가져옵니다. 설정에서 끌 수 있습니다.
 - **검토 후 제출**: `ai`·`agent` 초안은 사람이 연 뒤(`reviewed`)에만 제출할 수 있습니다. 결과는 비공개 저장소 `Mooner510/mooner-ade-feedback`의 이슈가 됩니다. 피드백 id가 Hub의 중복 방지 키라서 결과를 못 받아 다시 보내도 이슈는 하나입니다.
 - **전송 큐**: 제출은 피드백을 `queued` 상태로 큐에 넣을 뿐이고(`feedback.json`에 남아 재시작해도 이어짐), `feedback-queue.js`가 오래된 것부터 하나씩 보냅니다.
   - 로그인한 경우: 서버 → main(IPC `feedback/submit`) → `feedback`을 선언하고 로그인한 플러그인(원격 접속 플러그인) → Hub `POST /v1/feedback`.
   - 로그인하지 않은 경우(UI에는 "로그인 없이 제출"): 서버가 직접 Hub `POST /v1/feedback/anonymous`로 보냅니다(`feedback-hub.js`). 설치마다 임의 id(`feedback/device.json`)를 `X-ADE-Device`로 보내고, 이 기기에서 5분에 1건만 보냅니다(마지막 전송 시각은 `feedback/queue.json`). `ADE_FEEDBACK_ANONYMOUS=0`이면 끕니다. Hub 주소는 `ADE_HUB_URL`(기본 `https://ade-hub.mooner510.kr`).
+  - 두 경로 모두 기기 UUID(`dataRoot/device.json`, 최초 1회 발급), `gh` 활성 GitHub 로그인 이름, 전역 Git `user.name`과 이메일의 `@` 앞부분을 전송합니다. 이름도 이메일 형태이면 도메인을 제외하며, 전체 이메일은 전송하지 않습니다. UUID는 피드백 삭제와 앱 업데이트로 바뀌지 않고 해당 파일을 삭제하면 재발급합니다. Hub는 수집 안 된 항목에 `수집 안됨`을 표시하고, `gh` → Git 이름 → 이메일 앞부분 순으로 `reporter:<이름>` 라벨 하나를 붙입니다. 모두 없으면 `anonymous`입니다.
+  - Hub는 GitHub의 최신 정식 ADE 릴리스를 확인해 같은 정식 버전 또는 기본 버전이 더 높은 `beta`만 신규 등록을 허용합니다(정식 `0.5.10` 기준 `0.5.10`, `0.5.11-beta3` 허용; `0.5.9`, `0.5.10-beta2` 거부). 거부는 426 `update_required`로 자동 재시도를 멈추고, 최신 버전 조회 실패는 503 `version_check_failed`로 재시도합니다. 이미 생성한 이슈의 동일 키 재조회는 허용합니다.
   - 거절되면 기다렸다 다시 보냅니다: 한도 초과는 `Retry-After`만큼, 네트워크·Hub·GitHub 문제는 30초부터 30분까지 늘려 가며. 잘못된 요청·너무 큰 이미지처럼 기다려도 안 되는 것만 `failed`가 됩니다. 대기 중인 항목은 취소(`feedback/unqueue`)하거나 지울 수 있습니다.
 
 ## 로컬 경계
