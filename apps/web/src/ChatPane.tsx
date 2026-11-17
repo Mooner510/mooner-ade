@@ -3,7 +3,7 @@ import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type Settings } from './Editor';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
-import { QuestionCard, QuestionList } from './QuestionCard';
+import { QuestionCard, QuestionList, usePlayedEntrance } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
@@ -148,6 +148,15 @@ function dropOptimistic(current: Optimistic, keys: string[]): Optimistic {
   if (next.options && !Object.keys(next.options).length) delete next.options;
   return next;
 }
+function optimisticSettled(state: ChatState, current: Optimistic, key: string) {
+  if (key.startsWith('opt:')) { const id = key.slice(4); return state.capabilities?.configOptions?.find(option => option.id === id)?.currentValue === current.options?.[id]; }
+  if (key === 'model') return state.model === current.model;
+  if (key === 'effort') return state.effort === current.effort;
+  if (key === 'permissionMode') return state.permissionMode === current.permissionMode;
+  if (key === 'runEverything') return state.runEverything === current.runEverything;
+  if (key === 'sandbox') return (state.sandbox ?? null) === (current.sandbox ?? null);
+  return false;
+}
 function withOptimistic(state: ChatState, o: Optimistic): ChatState {
   if (!Object.keys(o).length) return state;
   const caps = state.capabilities;
@@ -155,13 +164,13 @@ function withOptimistic(state: ChatState, o: Optimistic): ChatState {
     ...(o.runEverything !== undefined && { runEverything: o.runEverything }), ...(o.sandbox !== undefined && { sandbox: o.sandbox }),
     ...(caps && o.options && { capabilities: { ...caps, configOptions: caps.configOptions?.map((option: any) => o.options![option.id] !== undefined ? { ...option, currentValue: o.options![option.id] } : option) } }) };
 }
-function ModelsModal({ current, call, agent, fallback, aliases, settings, onSettingsChange, onPick, onClose }: { current: string; agent: 'claude' | 'codex' | 'cursor'; fallback: CatalogModel[]; aliases: Record<string, string>; settings: Settings; onSettingsChange: ChatCtx['onSettingsChange']; call: ChatCtx['call']; onPick(value: string): void; onClose(): void }) {
+function ModelsModal({ current, call, agent, fallback, aliases, settings, onSettingsChange, onPick, onClose, id }: { current: string; agent: 'claude' | 'codex' | 'cursor'; fallback: CatalogModel[]; aliases: Record<string, string>; settings: Settings; onSettingsChange: ChatCtx['onSettingsChange']; call: ChatCtx['call']; onPick(value: string): void; onClose(): void; id?: string }) {
   const [catalog, setCatalog] = useState<CatalogModel[] | null>(null);
   const [party, setParty] = useState(modelProvider(current)?.party ?? 'First Party');
   const panelId = useId(), list = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   useEffect(() => { search.current?.focus(); }, []);
-  useEffect(() => { void call('chat/model-catalog', { agent }).then((result: any) => setCatalog(result?.catalog ?? []), () => setCatalog([])); }, [call, agent]);
+  useEffect(() => { void call('chat/model-catalog', { agent, ...(id ? { id } : {}) }).then((result: any) => setCatalog(result?.catalog ?? []), () => setCatalog([])); }, [call, agent, id]);
   const rows = useMemo(() => modelRows(catalog?.length ? catalog : fallback, aliases), [catalog, fallback, aliases]);
   const defaultQuick = useMemo(() => new Set(modelQuickDefaults(rows, agent).map(row => row.value)), [rows, agent]);
   const pins = settings.chatModelPins[agent] ?? [];
@@ -838,13 +847,14 @@ function usePlanSpy(count: number) {
 }
 // The plan reads top to bottom as written (no folding, no section chips); the title sits in the header and the decision stays under the body.
 function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: string[]; choices?: boolean; onAnswer(allow: boolean, always: boolean, answers?: undefined, extra?: PlanAnswer): void }) {
+  const played = usePlayedEntrance();
   const [open, setOpen] = useState(false), lines = plan.split('\n').length;
   const { title, sections } = useMemo(() => planSections(plan), [plan]);
   const body = useMemo(() => sections.map(section => section.title ? `## ${section.title}\n\n${section.body}` : section.body).join('\n\n'), [sections]);
   const titledAt = sections.flatMap((section, index) => section.title ? [index] : []), outline = titledAt.length > 2 && lines > 40;
   const dialog = usePlanSpy(sections.length);
   const decide = (allow: boolean, extra?: PlanAnswer) => onAnswer(allow, false, undefined, extra);
-  return <div className="chat-approval chat-plan" role="alertdialog" aria-label="계획 검토">
+  return <div className="chat-approval chat-plan" {...played} role="alertdialog" aria-label="계획 검토">
     <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong></span><span className="plan-title" title={title.replaceAll('`', '') || undefined}>{title ? inline(title) : '이 계획대로 진행할까요?'}</span>
       <span className="plan-head-end"><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="maximize" label="크게 보기" onClick={() => setOpen(true)} /></span></header>
     <div className="chat-plan-body"><Markdown text={body} /></div>
@@ -873,13 +883,14 @@ const writeLabel = (file: string, content: string, exists?: boolean) => {
 // What auto mode refused since the user's last message, with the choice the CLI's /permissions "Recently blocked" tab gives: allow for this chat (Enter), or allow and
 // have the agent run it again (r). Rows are picked by checkbox (all by default); the server applies what it recorded for each refusal, the page only names them.
 function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: string[], retry: boolean): Promise<unknown> }) {
+  const played = usePlayedEntrance();
   const cwd = useContext(CwdContext), [hidden, setHidden] = useState<ReadonlySet<string>>(new Set()), [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set()), [busy, setBusy] = useState(false);
   const shown = items.filter(item => !hidden.has(item.toolUseId)), chosen = shown.filter(item => !skipped.has(item.toolUseId));
   if (!shown.length) return null;
   const toggle = (id: string) => setSkipped(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
   const run = async (retry: boolean) => { setBusy(true); try { await onAllow(chosen.map(item => item.toolUseId), retry); } finally { setBusy(false); } };
   const canRule = chosen.length > 0 && chosen.every(item => item.rule) && chosen.some(item => !item.allowed);
-  return <div className="chat-approval chat-blocked" role="region" aria-label="자동 모드가 차단한 작업">
+  return <div className="chat-approval chat-blocked" {...played} role="region" aria-label="자동 모드가 차단한 작업">
     <header><Icon name="block" size={15} /><strong>자동 모드가 작업 {shown.length}개를 차단했습니다</strong><span>분류기가 위험하다고 판단해 실행하지 않았습니다</span></header>
     <div className="chat-approval-body">
       <ul className="chat-blocked-list">{shown.map(item => <li key={item.toolUseId}>
@@ -897,6 +908,7 @@ function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: 
   </div>;
 }
 function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
+  const played = usePlayedEntrance();
   const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
   const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
   if (approval.questions?.length) return <QuestionCard approval={approval} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
@@ -906,7 +918,7 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
   const written = approval.tool === 'Write' && typeof input.content === 'string' ? input.content : null;
   // The same diff view as the Edit tool card (only what changes, coloured), not the whole old text as removed and the new as added.
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
-  return <div ref={card} className="chat-approval" role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
+  return <div ref={card} className="chat-approval" {...played} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
     <header><Icon name="alert" size={15} /><strong>{approval.tool}</strong><span>실행하려면 허용이 필요합니다</span>
       {asker && <span className="chat-approval-agent" style={dotStyle(askerColor)} title="이 서브에이전트가 요청했습니다"><i className="chat-agent-dot" /><span className="chat-agent-type">{asker.type}</span><span className="chat-approval-agent-name"><b>{asker.description || '서브에이전트'}</b>의 요청</span></span>}</header>
     <div className="chat-approval-body">{SHELLS[approval.tool] ? <>{typeof input.description === 'string' && input.description && <p className="chat-approval-desc">{input.description}</p>}<CodeBlock code={String(input.command ?? '')} lang={SHELLS[approval.tool]} /></> : written === null && changed === null && <p className="chat-approval-line">{summary}</p>}
@@ -996,6 +1008,17 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const id = leaf.id, cwd = leaf.cwd || ctx.root, agent = leaf.agent ?? 'claude', agentLabel = agent === 'claude' ? 'Claude Code' : agent === 'codex' ? 'Codex' : 'Cursor Agent';
   const [agentModels, setAgentModels] = useState<{ models: Record<string, string>; catalog: CatalogModel[] }>({ models: {}, catalog: [] });
   const [view, setView] = useState<ChatView>(emptyView), viewRef = useRef(view); viewRef.current = view;
+  // `fresh` plays an entrance once. A hidden tab is display:none, which cancels that animation, so returning would fade
+  // the whole thread in again. Clear the flag before paint on a later visit; the first time this chat is shown it still plays.
+  const chatShown = useRef(false);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    if (!chatShown.current) { chatShown.current = true; return; }
+    const current = viewRef.current;
+    if (!current.items.some(item => item.fresh)) return;
+    const next = { ...current, items: current.items.map(item => item.fresh ? { ...item, fresh: false } : item) };
+    viewRef.current = next; setView(next);
+  }, [visible]);
   // Sidebar and header: rename → AI/agent title → first non-slash prompt since the last /clear.
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
@@ -1134,8 +1157,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // The pane handing focus to the input is not the user choosing it: the composer stays folded until they click, type or tab into it.
   const autoFocus = useRef(false);
   useEffect(() => { if (focused && visible) { autoFocus.current = true; box.current?.focus(); autoFocus.current = false; } }, [focused, visible]);
-  // Cursor's process starts in about six seconds; starting it while the tab is in use means the first setting change or message does not wait for it.
-  useEffect(() => { if (agent === 'cursor' && view.ready && focused && visible) void ctxRef.current.call('chat/warm', { id }).catch(() => {}); }, [agent, id, view.ready, focused, visible]);
+  // Cursor's process takes several seconds to start. Warm it as soon as the pane is on screen, not only once it has focus.
+  useEffect(() => { if (agent === 'cursor' && view.ready && visible) void ctxRef.current.call('chat/warm', { id }).catch(() => {}); }, [agent, id, view.ready, visible]);
   const [recovering, setRecovering] = useState(false);
   // Cursor changes are applied through its ACP session while it answers too, so nothing is locked: the choice shows at once (`optimistic`) and is taken
   // back if the server refuses it.
@@ -1178,12 +1201,22 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     for (const key of keys) latest.current[key] = token;
     setOptimistic(current => mergeOptimistic(current, patch));
     try { return await ctx.call('chat/set', input); }
-    finally {
+    catch (error) {
       const done = keys.filter(key => latest.current[key] === token);
       for (const key of done) delete latest.current[key];
       if (done.length) setOptimistic(current => dropOptimistic(current, done));
+      throw error;
     }
   }
+  // Drop the optimistic label only once the server state shows the same value, so a late reply cannot flash the previous model.
+  useEffect(() => {
+    setOptimistic(current => {
+      const keys = optimisticKeys(current).filter(key => latest.current[key] !== undefined && optimisticSettled(view.state, current, key));
+      if (!keys.length) return current;
+      for (const key of keys) delete latest.current[key];
+      return dropOptimistic(current, keys);
+    });
+  }, [view.state]);
   const [statsOpen, setStatsOpen] = useState(false), [modelsOpen, setModelsOpen] = useState(false), [resuming, setResuming] = useState(false), [resumeOpen, setResumeOpen] = useState(false);
   // Opening any chat counts as having tried Chat: the "try Chat" card in CLI terminals stops.
   useEffect(() => { if (ctxRef.current.settings.chatTipPending) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, chatTipPending: false }); }, []);
@@ -1670,7 +1703,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
-        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label} thought={activity.thought} />}
+        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label || (state.configuring ? '설정을 적용하는 중' : '')} thought={activity.thought} />}
         {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에서 수정하거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · ↑ 수정 · Esc 바로 보내기</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
@@ -1683,7 +1716,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰·비용·도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
     {statsOpen && <ChatStatsModal id={id} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
     {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
-    {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void setChat({ id, model: value }).catch(ctx.fail); }} />}
+    {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} id={id} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void setChat({ id, model: value }).catch(ctx.fail); }} />}
     <div className="chat-start-slot chat-greeting" inert={!startScreen} aria-hidden={!startScreen}>
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span>{greeting}</h2></div></div>
     </div>
