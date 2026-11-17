@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, dialog } from 'electron';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -56,27 +56,9 @@ if [ -n "$7" ]; then "$3/Contents/MacOS/$7" >/dev/null 2>&1 & else /usr/bin/open
 rm -rf "$5" "$6"
 `;
 
-const PROGRESS_PAGE = `<!doctype html><meta charset="utf-8"><style>
-:root{color-scheme:dark light}body{margin:0;padding:20px;font:14px system-ui,'Malgun Gothic',sans-serif;background:#1e1f22;color:#e6e6e6}
-#text{margin-bottom:12px}.bar{height:8px;border-radius:4px;background:#3a3c40;overflow:hidden}
-#fill{height:100%;width:0;background:#4c8bf5;transition:width .15s}#fill.wait{width:35%;animation:slide 1.1s ease-in-out infinite alternate}
-@keyframes slide{from{margin-left:0}to{margin-left:65%}}</style>
-<div id="text">준비 중…</div><div class="bar"><div id="fill" class="wait"></div></div>
-<script>function set(text,fraction){document.getElementById('text').textContent=text;const f=document.getElementById('fill');
-f.classList.toggle('wait',fraction==null);f.style.width=fraction==null?'':Math.round(fraction*100)+'%'}</script>`;
-
-// A small window plus the taskbar bar: the download and install take a while, and the app otherwise looks frozen.
-// macOS draws the progress inside the main window instead (preload.cjs): a separate window looked out of place, and as a child of a
-// full-screen main window it crashed AppKit's exit-full-screen transition on quit, so the update restart reported an unexpected quit.
+// Progress stays in the main window on every platform, including macOS full-screen spaces.
 function progressWindow(parent) {
   const main = () => parent && !parent.isDestroyed() ? parent : null;
-  const inline = process.platform === 'darwin' && main();
-  const win = inline ? null : new BrowserWindow({ width: 380, height: 120, parent: parent ?? undefined, resizable: false, minimizable: false, maximizable: false, closable: false, show: false, autoHideMenuBar: true, title: '업데이트', webPreferences: { sandbox: true, contextIsolation: true } });
-  if (win) {
-    win.setMenu(null);
-    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PROGRESS_PAGE)}`);
-    win.once('ready-to-show', () => win.show());
-  }
   let last = 0;
   return {
     // fraction === null shows an indeterminate bar.
@@ -84,15 +66,15 @@ function progressWindow(parent) {
       const now = Date.now();
       if (!force && now - last < 100) return;
       last = now;
-      if (win && !win.isDestroyed()) void win.webContents.executeJavaScript(`set(${JSON.stringify(text)}, ${fraction})`).catch(() => {});
       const target = main();
-      if (inline && target) target.webContents.send('ade:update-progress', { text, fraction });
-      if (target) fraction === null ? target.setProgressBar(2, { mode: 'indeterminate' }) : target.setProgressBar(fraction);
+      if (target) {
+        target.webContents.send('ade:update-progress', { text, fraction });
+        fraction === null ? target.setProgressBar(2, { mode: 'indeterminate' }) : target.setProgressBar(fraction);
+      }
     },
     close() {
       const target = main();
-      if (target) { target.setProgressBar(-1); if (inline) target.webContents.send('ade:update-progress', null); }
-      if (win && !win.isDestroyed()) win.destroy();
+      if (target) { target.setProgressBar(-1); target.webContents.send('ade:update-progress', null); }
     }
   };
 }
@@ -299,7 +281,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
     applying = true;
     // Tells the app to have its terminals kept for the new version instead of ended with this one.
     beforeRestart?.();
-    // The progress window stays up until the app exits, so the restart does not look like a crash.
+    // The progress overlay stays up until the app exits, so the restart does not look like a crash.
     app.quit();
     return 'updating';
   } catch (error) {
