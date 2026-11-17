@@ -135,7 +135,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [gitVersion, setGitVersion] = useState(0);
   const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [reviewWide, setReviewWide] = useState(false);
   const feedback = useFeedback();
-  const [menuOpen, setMenuOpen] = useState(false), [termSizes, setTermSizes] = useState<Record<string, string>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
   const launcherButton = useRef<HTMLButtonElement>(null);
   const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
   const [git, setGit] = useState<GitState>(emptyGit), [gitRepositoryId, setGitRepositoryId] = useState('');
@@ -912,7 +912,6 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       if (!looking || kind === 'attention') onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
     }, focus, zoom, onFocus: (id: string) => { setFocusLeaf(id); if (attention[id] === 'done') clearAttention(id); }, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
     onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)), onToChat: (id: string) => run(() => terminalToChat(id)),
-    onSize: (id: string, cols: number, rows: number) => setTermSizes(previous => previous[id] === `${cols}×${rows}` ? previous : { ...previous, [id]: `${cols}×${rows}` }),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
   // Dragging only moves a CSS variable on the panel; the width is saved to the settings once the pointer is released.
@@ -937,15 +936,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   </aside>;
   const shown = (id: string) => settings.statusItems.includes(id);
   const reviewCount = pendingReviewCount(feedback.items);
-  const liveTerminals = project.terminals.filter(terminal => !terminal.exited).length;
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
     connection: connection !== '연결됨' && <span className="conn" role="status" title="로컬 서버와 연결이 끊겼습니다. 자동으로 다시 연결합니다."><Icon name="wifi" size={13} />{connection}</span>,
     path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
-    terminals: <span className="stat" title="실행 중인 터미널"><Icon name="terminal" size={13} />{liveTerminals}</span>,
-    size: termSizes[focus] && <span className="stat" title="포커스된 터미널 크기 (열 × 행)">{termSizes[focus]}</span>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
     memory: <SystemStat kind="memory" />,
