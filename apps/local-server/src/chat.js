@@ -8,6 +8,7 @@ import { fault } from './files.js';
 import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
+import { autoDenialReason, pendingBlocked, retryText, sessionRule } from './auto-denial.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
@@ -213,7 +214,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -355,9 +356,21 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (protocol) { protocol.handle(raw); return; }
     for (const event of normalizeClaude(raw)) handleEvent(event);
   }
+  // The CLI says only in the result text that auto mode refused a call. The refusal is recorded next to the call it was for (its input, the reason and the exact allow rule
+  // that would let it through), so the screen and a later "allow and retry" work from what the CLI really ran, never from what the page sends.
+  function noteAutoDenied(result) {
+    const reason = autoDenialReason(result.content);
+    if (reason === null) return;
+    let call = null;
+    for (let at = events.length - 1; at >= 0 && !call; at--) if (events[at].kind === 'message') call = events[at].blocks?.find(block => block.type === 'tool_use' && block.id === result.toolUseId) ?? null;
+    if (!call) return;
+    const slim = Object.fromEntries(Object.entries(call.input ?? {}).slice(0, 12).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 1200) : typeof value === 'number' || typeof value === 'boolean' ? value : undefined]));
+    emit({ kind: 'auto_denied', toolUseId: result.toolUseId, tool: call.name, input: slim, reason, rule: sessionRule(call.name, call.input) });
+  }
   function handleEvent(event) {
       eventCount += 1;
       if (event.kind === 'usage') noteCursorAcpUsage(event);
+      if (agent === 'claude' && event.kind === 'tool_result' && event.isError) noteAutoDenied(event);
       if (event.kind === 'approval') {
         // A Write request says whether it creates the file or replaces one, so its card can read "새 파일" or "덮어쓰기".
         if (event.phase === 'request' && event.tool === 'Write' && typeof event.input?.file_path === 'string') event.exists = existsSync(path.resolve(cwd, event.input.file_path));
@@ -553,6 +566,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       else throw fault('AGENT_UNAVAILABLE', `${executable} 명령을 시작하지 못했습니다. 설치와 로그인을 확인하세요.`, 503);
     }
     attach(proc);
+    if (agent === 'claude' && meta.sessionAllow?.length) await applySessionAllow(meta.sessionAllow);
     if (protocol) {
       try {
         await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true));
@@ -623,6 +637,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     controls.set(requestId, response => { clearTimeout(timer); resolve(response); });
     void write(controlLine(requestId, request)).catch(() => { clearTimeout(timer); controls.delete(requestId); resolve(null); });
   });
+  // Allow rules the user granted to actions the auto-mode classifier had blocked. They live in the CLI's flag settings (this process only, never written to a settings file),
+  // so every new child gets them again; an update replaces the list, hence the whole list is always sent.
+  async function applySessionAllow(rules) {
+    const response = await control({ subtype: 'apply_flag_settings', settings: { permissions: { allow: rules } } });
+    return response?.subtype === 'success';
+  }
   // Turns the Artifact tools on for this chat. A running CLI takes it as a flag-settings update (no restart); one that is not started yet gets it as env at launch.
   // If the update is refused nothing is remembered, so the next message tries again.
   async function enableArtifact() {
@@ -705,6 +725,25 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (agent === 'claude') void refreshAutoCompact();
     },
     retry: () => resendLastUser(),
+    // What the CLI's /permissions "Recently blocked" does: allow actions auto mode refused, for this chat only (and, with retry, tell the agent to run them again).
+    async allowBlocked(toolUseIds, { retry = true } = {}) {
+      live();
+      if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', 'Claude 채팅에서만 쓸 수 있습니다.', 409);
+      if (!Array.isArray(toolUseIds) || !toolUseIds.length || toolUseIds.length > 16 || toolUseIds.some(value => typeof value !== 'string')) throw fault('INVALID_INPUT', '승인할 작업을 확인하세요.');
+      const open = new Map(pendingBlocked(retainedEvents()).map(event => [event.toolUseId, event]));
+      const picked = [...new Set(toolUseIds)].map(id => open.get(id));
+      if (picked.some(item => !item)) throw fault('NOT_FOUND', '이미 처리됐거나 찾을 수 없는 차단 기록입니다.', 404);
+      const rules = [...new Set(picked.map(item => item.rule).filter(Boolean))];
+      if (!retry && rules.length !== picked.length) throw fault('INVALID_INPUT', '허용 규칙으로 만들 수 없는 작업은 "승인하고 다시 시도"로만 허용할 수 있습니다.');
+      if (rules.length) {
+        const next = [...new Set([...(meta.sessionAllow ?? []), ...rules])].slice(-100);
+        await start();
+        if (!await applySessionAllow(next)) throw fault('AGENT_UNAVAILABLE', '허용 규칙을 적용하지 못했습니다. 잠시 뒤 다시 시도하세요.', 504);
+        meta.sessionAllow = next; await saveMeta();
+      }
+      emit({ kind: 'denial_allow', toolUseIds: picked.map(item => item.toolUseId), retry, rules });
+      if (retry) await this.send(retryText(picked), [], { steer: turnOpen });
+    },
     state: shown,
     // The latest thing the user typed in this chat (not a message from another agent). The agent bus quotes it to the chat it messages, so the receiver
     // sees what the user actually asked for instead of taking the sender's word for it.
@@ -1043,7 +1082,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
-      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
+      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.sessionAllow = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
     async close({ forget = false, archiveAs } = {}) {
