@@ -1,4 +1,5 @@
 import { fault } from './files.js';
+import { randomUUID } from 'node:crypto';
 import { cleanChatTitle } from './chat-title.js';
 import { mergeCursorCommands } from './slash-commands.js';
 
@@ -6,10 +7,10 @@ export const chatAgents = ['claude', 'codex', 'cursor'];
 export function chatCapabilities(agent) {
   const cursor = agent === 'cursor';
   return { images: true, steer: !cursor, cancelSteer: agent === 'claude', branch: !cursor, rewind: !cursor, worktree: true, addDirs: !cursor,
-    terminal: true, terminalToChat: agent === 'claude', cost: agent === 'claude', tokens: !cursor, context: true,
+    terminal: true, terminalToChat: true, cost: agent === 'claude', tokens: !cursor, context: true,
     permissionModes: cursor ? ['default', 'plan', 'ask'] : ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
     sandboxes: agent === 'codex' ? SANDBOXES : cursor ? CURSOR_SANDBOXES : [], runEverything: cursor, efforts: agent === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : [], catalog: [], configOptions: [],
-    limitations: { branch: 'Cursor ACP는 과거 지점 분기를 제공하지 않습니다.', rewind: 'Cursor ACP는 과거 지점 복원을 제공하지 않습니다.',
+    limitations: { branch: '완료된 응답의 분기 기록을 저장한 뒤 사용할 수 있습니다.', rewind: '완료된 응답의 복원 기록을 저장한 뒤 사용할 수 있습니다.',
       steer: 'Cursor ACP는 실행 중 추가 지시를 제공하지 않습니다. 응답 후 순서대로 전송합니다.', cancelSteer: 'CLI가 받은 지시는 개별 취소할 수 없습니다.',
       addDirs: 'Cursor ACP는 추가 작업 폴더를 제공하지 않습니다.', terminalToChat: '세션과 완전한 대기 상태를 확인할 수 없어 전환할 수 없습니다.' } };
 }
@@ -50,6 +51,7 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
 export function createChatProtocol(agent, { write, emit, fail }) {
+  let cursorTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
@@ -121,7 +123,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     let stored = false;
     for (const phase of ['thinking', 'text']) {
       const id = cursorTextId(phase), content = chunks.get(id);
-      if (typeof content === 'string' && content.trim()) { message(id, [{ type: phase, text: content }]); stored = true; if (phase === 'text') said = true; }
+      if (typeof content === 'string' && content.trim()) { message(id, [{ type: phase, text: content }], phase === 'text' ? { uuid: id } : {}); stored = true; if (phase === 'text') said = true; }
       chunks.delete(id);
     }
     return stored;
@@ -178,7 +180,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     else if (type === 'config_option_update') cursorInfo({ configOptions: update.configOptions });
     else if (type === 'current_model_update') emit({ kind: 'session', sessionId, model: update.currentModelId });
     else if (type === 'current_mode_update') emit({ kind: 'settings', permissionMode: update.currentModeId === 'agent' ? 'default' : update.currentModeId });
-    else if (type === 'usage_update') emit({ kind: 'usage', contextTokens: update.used, contextWindow: update.size, contextSource: 'acp' });
+    else if (type === 'usage_update') emit({ kind: 'usage', contextTokens: update.used, contextWindow: update.size, contextSource: 'acp',
+      ...(update.cost?.currency === 'USD' && Number.isFinite(update.cost.amount) && update.cost.amount >= 0 && { costUsd: update.cost.amount }) });
     else if (type === 'session_info_update') { const event = agentTitle(update.title); if (event) emit(event); }
   }
   // Bypass answers command, file-change and permission requests itself. Questions (requestUserInput) are never answered for the user.
@@ -202,6 +205,13 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     promptId = null; cursorFlush();
     const hasOutput = said || [...chunks.values()].some(value => typeof value === 'object');
     const status = response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'end_turn' && hasOutput ? 'success' : 'failed';
+    const u = response.usage;
+    if (u && ['inputTokens', 'outputTokens'].every(key => Number.isSafeInteger(u[key]) && u[key] >= 0)
+      && ['cachedReadTokens', 'cachedWriteTokens'].every(key => Number.isSafeInteger(u[key] ?? 0) && (u[key] ?? 0) >= 0)) {
+      const tokens = { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cachedReadTokens ?? 0, cacheCreate: u.cachedWriteTokens ?? 0 };
+      for (const key of Object.keys(tokens)) cursorTokens[key] += Math.max(0, tokens[key]);
+      emit({ kind: 'usage', tokens: { ...cursorTokens } });
+    }
     result(status, status === 'failed' ? `${hasOutput ? 'Cursor 응답이 완료되지 않았습니다' : 'Cursor가 표시할 응답 없이 종료되었습니다'} (${response.stopReason}). 다시 시도하세요.` : '');
   }
   function promptFailed(error) { if (disposed) return; promptId = null; result('failed', error.message); fail?.(error); }
@@ -227,6 +237,27 @@ export function createChatProtocol(agent, { write, emit, fail }) {
   }
   return {
     request,
+    replayCodex(thread) {
+      emit({ kind: 'session', sessionId: thread.id, model: thread.model });
+      for (const turn of thread.turns ?? []) {
+        for (const item of turn.items ?? []) {
+          if (item.type === 'userMessage') emit({ kind: 'user', text: (item.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n'), images: (item.content ?? []).filter(part => /image/i.test(part.type)).length });
+          else codexItem(item, true, turn.id);
+        }
+        if (turn.status !== 'inProgress') emit({ kind: 'result', status: turn.status === 'completed' ? 'success' : turn.status === 'interrupted' ? 'interrupted' : 'failed', costUsd: null, durationMs: turn.durationMs ?? 0 });
+      }
+    },
+    replayCursor(id, updates) {
+      sessionId = id; turnId = `history-${id}`; textSerial = 0;
+      for (const params of updates) {
+        if (params.sessionId !== id) continue;
+        if (params.update?.sessionUpdate === 'user_message_chunk') {
+          if (cursorFlush()) textSerial++;
+          emit({ kind: 'user', text: params.update.content?.text ?? '', images: params.update.content?.type === 'image' ? 1 : 0 });
+        } else notification('session/update', params);
+      }
+      cursorFlush();
+    },
     handle(raw) {
       if (raw.method) { if (raw.id !== undefined) serverRequest(raw); else notification(raw.method, raw.params ?? {}); }
       else if (raw.id !== undefined) {
@@ -238,9 +269,10 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     // What a server that stops hands to the next one, which goes on with the same running agent (chat.js `detach`). Answers to our own
     // requests other than the running Cursor prompt are dropped: the next server never waits for them.
     snapshot: () => ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers,
-      approvals: [...approvals], chunks: [...chunks], skills: [...skills], promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
+      approvals: [...approvals], chunks: [...chunks], skills: [...skills], cursorTokens, promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
     restore(saved) {
       ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers } = saved);
+      cursorTokens = saved.cursorTokens ?? cursorTokens;
       for (const [map, entries] of [[approvals, saved.approvals], [chunks, saved.chunks], [skills, saved.skills]]) { map.clear(); for (const [key, value] of entries ?? []) map.set(key, value); }
       promptId = saved.promptId ?? null;
       if (promptId !== null) pending.set(promptId, { resolve: promptDone, reject: promptFailed, timer: null });
@@ -248,6 +280,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     dispose() { disposed = true; for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
     async initialize(meta, cwd, servers = [], instructions) {
       config = { ...meta, cwd };
+      if (agent === 'cursor' && meta.tokens) cursorTokens = { ...cursorTokens, ...meta.tokens };
       if (agent === 'codex') {
         await request('initialize', { clientInfo: { name: 'mooner_ade', title: 'Mooner ADE', version: '0.5.1' }, capabilities: { experimentalApi: true } });
         await send({ method: 'initialized' });
@@ -342,7 +375,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         else { startedAt = Date.now(); const response = await request('turn/start', { threadId: sessionId, input, ...codexPermissions(config.permissionMode, config.cwd, config.addDirs, config.sandbox, config.network), ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }) }); turnId = response.turn.id; }
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
-        startedAt = Date.now(); turnId = `cursor-${startedAt}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
+        startedAt = Date.now(); turnId = `cursor-${randomUUID()}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
         promptId = nextId + 1; // the id request() is about to use
         void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(promptDone, promptFailed);
       }

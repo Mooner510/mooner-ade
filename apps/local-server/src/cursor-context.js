@@ -85,9 +85,10 @@ function tokenField(chunk) {
 export async function cursorStorePath(sessionId, { home = os.homedir(), env = process.env } = {}) {
   if (!sessionId || typeof sessionId !== 'string' || !/^[\w-]{8,128}$/.test(sessionId)) return null;
   if (env.CURSOR_STORE_CONTEXT === '0') return null;
-  const acp = path.join(home, '.cursor', 'acp-sessions', sessionId, 'store.db');
+  const config = env.CURSOR_CONFIG_DIR || path.join(home, '.cursor');
+  const acp = path.join(config, 'acp-sessions', sessionId, 'store.db');
   try { await fs.access(acp); return acp; } catch {}
-  const chatsRoot = path.join(home, '.cursor', 'chats');
+  const chatsRoot = path.join(config, 'chats');
   let folders = [];
   try { folders = await fs.readdir(chatsRoot); } catch { return null; }
   for (const folder of folders) {

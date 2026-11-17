@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createPluginManager, createPluginStore, probeMcpTools } from './plugin-core.js';
-import { createGithub, githubClientId, machineToken } from './plugin-updates.js';
+import { createGithub, githubClientId, machineAccounts, machineToken } from './plugin-updates.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
@@ -71,13 +71,13 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   // The plugin's MCP server is listed with what an agent in an ADE terminal would run it with: the terminal's Node and the
   // plugin's terminal variables on top of the user's environment.
   const probeMcp = ({ command, args, cwd, env }) => probeMcpTools({ command, args, cwd, env: { ...hostEnv(), ...env, ADE_PLUGIN_NODE: terminalNode }, clientVersion: version });
-  // Plugin updates from GitHub releases. The account connected in MoonerADE comes first, then this PC's gh / git login, then
+  // Plugin updates from GitHub releases. The connected account comes first, then the selected gh account (git if gh is absent), then
   // none (public repositories). ADE_PLUGIN_UPDATE_TEST_API points it at a fake GitHub on this machine for the tests; then
   // this PC's own login is never used.
   const testApi = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(process.env.ADE_PLUGIN_UPDATE_TEST_API ?? '') ? process.env.ADE_PLUGIN_UPDATE_TEST_API : null;
   const github = createGithub({
     ...(testApi && { api: testApi, web: testApi }),
-    credential: async () => store.state.github ? { token: store.state.github.token, via: 'ade' } : testApi ? null : machineToken()
+    credential: async () => store.state.github ? { token: store.state.github.token, via: 'ade' } : testApi ? null : machineToken({ account: store.state.ghAccount })
   });
   // Only GitHub's own pages are opened from here.
   const openExternal = url => { if (/^https:\/\/github\.com\//.test(url)) void shell.openExternal(url); };
@@ -86,7 +86,12 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     dir, builtinDir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
     onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp,
     github, clientId: githubClientId(), openExternal,
-    probeCredential: async () => { const found = testApi ? null : await machineToken(); return found && { via: found.via }; },
+    probeCredential: async () => {
+      if (testApi) return null;
+      const accounts = await machineAccounts();
+      const found = accounts.ghAvailable ? null : await machineToken();
+      return { ...accounts, via: found?.via ?? null };
+    },
     ...(testApi && firstCheckMs > 0 && { firstCheckMs })
   });
 
@@ -112,6 +117,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     signInGithub: () => manager.signInGithub(),
     cancelSignIn: () => manager.cancelSignIn(),
     probeGithub: () => manager.probeGithub(),
+    selectGithubAccount: login => manager.selectGithubAccount(typeof login === 'string' ? login : ''),
     // The plugin's releases page on GitHub (from its approved plugin.json, never from the page).
     openSource: async id => {
       const repo = manager.snapshot().plugins.find(plugin => plugin.id === String(id))?.update?.source?.github;

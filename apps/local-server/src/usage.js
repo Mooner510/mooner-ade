@@ -194,8 +194,8 @@ export function createAccountResolver({ env = process.env, platform = process.pl
   };
   // The folder one running agent uses: '' for the default, null when it cannot be told.
   const byPid = new Map();
-  const agentDir = async (provider, pid, configured) => {
-    const name = accountVariable[provider], server = env[name] || '', key = `${provider}:${pid}`;
+  const agentDir = async (provider, pid, configured, name = accountVariable[provider]) => {
+    const server = env[name] || '', key = `${provider}:${name}:${pid}`;
     // A process keeps its environment for life; a reused PID only lands back here if it runs the same CLI.
     if (byPid.has(key)) return byPid.get(key);
     let dir = await readVariable(pid, name, { platform });
@@ -221,10 +221,10 @@ export function createAccountResolver({ env = process.env, platform = process.pl
   };
   return Object.assign(resolve, {
     // For per-process files such as Claude's sessions/<pid>.json: the agent's own folder, else what the project would give it.
-    async agentFolder(provider, pid, root) {
-      const configured = await fromDirenv(root, accountVariable[provider]);
-      const dir = await agentDir(provider, pid, configured) ?? configured ?? (env[accountVariable[provider]] || '');
-      return dir || path.join(home, provider === 'claude' ? '.claude' : '.codex');
+    async agentFolder(provider, pid, root, name = accountVariable[provider]) {
+      const configured = await fromDirenv(root, name);
+      const dir = await agentDir(provider, pid, configured, name) ?? configured ?? (env[name] || '');
+      return dir || path.join(home, provider === 'claude' ? '.claude' : provider === 'cursor' ? '.cursor' : '.codex');
     }
   });
 }

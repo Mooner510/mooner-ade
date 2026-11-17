@@ -11,9 +11,9 @@ const runNode = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 const git = (cwd, ...args) => new Promise((resolve, reject) => spawn('git', args, { cwd, stdio: 'ignore' }).on('exit', code => code ? reject(new Error(`git ${args}`)) : resolve()));
 
-async function boot(t) {
+async function boot(t, extraEnv = {}) {
   const data = await mkdtemp(join(tmpdir(), 'ade-data-')), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo-')));
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ...extraEnv, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
       const exited = new Promise(resolve => child.once('exit', resolve));
@@ -52,6 +52,10 @@ test('chat API preserves agent identity and rejects unsupported Cursor settings'
   for (const agent of ['claude', 'codex', 'cursor']) {
     const opened = await call('chat/open', { id: `chat-${agent}`, agent });
     assert.equal(opened.agent, agent); assert.equal(opened.state.agent, agent);
+    if (agent !== 'claude') {
+      const stats = await call('chat/stats', { id: `chat-${agent}` });
+      assert.equal(stats.source, 'ade'); assert.equal(stats.tokensAvailable, false); assert.equal(stats.cost, null);
+    }
     assert.deepEqual(await call('chat/sessions', { agent }), []);
     assert.equal(opened.state.capabilities.branch, agent !== 'cursor');
     await call('chat/open', { id: `chat-${agent}`, agent: agent === 'claude' ? 'codex' : 'claude' }, 400);
@@ -151,6 +155,56 @@ setInterval(()=>{}, 1000);
     assert.match(restored.command, new RegExp(`${agent === 'claude' ? '--resume' : 'resume'} ${sessionId}(?: |$)`));
     await call('terminal/close', { id: restored.id });
   }
+});
+
+test('terminal to Codex chat requires confirmation, restores native history, and leaves another terminal running', { skip: process.platform === 'win32' }, async t => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'ade-codex-switch-')), bin = join(fixtureRoot, 'bin'), cli = join(fixtureRoot, '@openai/codex/bin/codex.js');
+  await mkdir(bin); await mkdir(join(fixtureRoot, '@openai/codex/bin'), { recursive: true });
+  const quote = value => `'${value.replaceAll("'", "'\"'\"'")}'`;
+  await writeFile(cli, `import {writeFileSync} from 'node:fs';
+import path from 'node:path'; import {randomUUID} from 'node:crypto'; import readline from 'node:readline';
+const args=process.argv.slice(2);
+if(args.includes('app-server')) readline.createInterface({input:process.stdin}).on('line',line=>{
+ const raw=JSON.parse(line), p=raw.params??{}; if(raw.id===undefined)return;
+ const result=raw.method==='initialize'?{}:raw.method==='thread/read'?{thread:{id:p.threadId,cwd:process.cwd(),turns:[{id:'native-turn',status:'completed',items:[{type:'userMessage',content:[{type:'text',text:'native question'}]},{type:'agentMessage',id:'native-answer',text:'native answer'}]}]}}:null;
+ if(result===null)throw new Error('unexpected model or session write'); process.stdout.write(JSON.stringify({id:raw.id,result})+'\\n');
+});
+else {const root=args[args.indexOf('-c')+1].slice('log_dir='.length),id=randomUUID();
+writeFileSync(path.join(root,'codex-tui.log'),'2026-11-17T00:00:00Z INFO session_loop{thread_id='+id+'}: codex_core::session: new\\n');
+writeFileSync(path.join(root,'pid'),String(process.pid)); console.log('switch-ready'); setInterval(()=>{},1000);}
+`);
+  await writeFile(join(bin, 'codex'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`, { mode: 0o700 });
+  const ctx = await boot(t, { PATH: `${bin}:${process.env.PATH}`, CODEX_HOME: join(fixtureRoot, 'config') });
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  if (!(await ctx.call('readiness')).pty.installed) return t.skip('node-pty unavailable');
+  const ws = new WebSocket(`${ctx.origin.replace('http', 'ws')}/ws`, { headers: { Origin: ctx.origin, Cookie: ctx.cookie } }), messages = [];
+  t.after(() => ws.close());
+  ws.on('message', raw => messages.push(JSON.parse(String(raw))));
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  ws.send(JSON.stringify({ type: 'subscribe', projectId: ctx.projectId }));
+  const terminals = [];
+  for (let n = 0; n < 2; n++) {
+    const terminal = await ctx.call('terminal/open', { agent: 'codex' }); terminals.push(terminal);
+    ws.send(JSON.stringify({ type: 'terminal/input', projectId: ctx.projectId, id: terminal.id, data: `export PATH=${quote(bin)}:"$PATH"; ${terminal.command}\r` }));
+    let ready = false;
+    for (let i = 0; i < 400; i++) { if (messages.some(item => item.type === 'terminal' && item.id === terminal.id && item.data.includes('switch-ready'))) { ready = true; break; } await new Promise(resolve => setTimeout(resolve, 25)); }
+    assert.equal(ready, true);
+  }
+  const before = await ctx.call('terminal/session', { id: terminals[0].id, agent: 'codex' });
+  assert.ok(before.sessionId);
+  const refused = await ctx.call('terminal/to-chat', { id: terminals[0].id, newId: 'continued' }, 409);
+  assert.equal(refused.error.code, 'CHAT_SWITCH_UNSAFE');
+  const switched = await ctx.call('terminal/to-chat', { id: terminals[0].id, newId: 'continued', stop: true });
+  assert.equal(switched.agent, 'codex');
+  const chat = await ctx.call('chat/open', { id: 'continued', agent: 'codex' });
+  assert.equal(chat.state.sessionId, before.sessionId);
+  assert.ok(chat.events.some(event => event.kind === 'user' && event.text === 'native question'));
+  assert.ok(chat.events.some(event => event.uuid === 'native-answer' && event.turnId === 'native-turn'));
+  const sibling = await ctx.call('terminal/session', { id: terminals[1].id, agent: 'codex' });
+  assert.ok(sibling.sessionId); assert.notEqual(sibling.sessionId, before.sessionId);
+  const state = await ctx.call('snapshot');
+  assert.equal(state.terminals.some(item => item.id === terminals[1].id && !item.exited), true);
+  await ctx.call('terminal/close', { id: terminals[1].id });
 });
 
 test('server requires auth and rejects foreign origins', async t => {

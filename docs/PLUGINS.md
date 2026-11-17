@@ -97,7 +97,10 @@ GitHub 릴리스만 받습니다(일반 다운로드 링크는 출처로 쓸 수
    물어 네이티브 확인 창(`GitHub 계정 <이름>을 연결할까요?`)에 보여 주고, 승인하면 `plugins.bin`에 봉인합니다. Fine-grained 토큰에서
    플러그인 저장소만 고르고 **Contents: Read-only**만 주세요. **GitHub로 로그인**(기기 코드 방식)은 MoonerADE에 GitHub App 또는
    OAuth App의 client id가 들어 있을 때만 나옵니다(`plugin-updates.js`의 `GITHUB_CLIENT_ID`, 개발 중에는 `ADE_GITHUB_CLIENT_ID`).
-2. 이 PC의 `gh auth token`, 없으면 `git credential fill`(github.com). 어떤 창이나 프롬프트도 띄우지 않습니다.
+2. `gh`가 있으면 **GitHub 연결**에서 `gh auth`에 등록된 github.com 계정을 선택합니다. 계정 이름만 저장하고 요청할 때
+   `gh auth token --hostname github.com --user <계정>`으로 인증을 가져옵니다. gh의 활성 계정은 바꾸지 않습니다.
+   선택 전에는 공개 저장소만 조회하며, 선택한 계정의 인증 실패 시 다른 계정으로 전환하지 않습니다.
+   `gh`가 없을 때만 기존 시스템 Git 인증(`git credential fill`, github.com)을 이용합니다. 어떤 창이나 프롬프트도 띄우지 않습니다.
 3. 없으면 로그인 없이 요청합니다. 저장소를 찾지 못하면 GitHub 연결을 안내합니다.
 
 토큰은 GitHub API(`api.github.com`)에만 보냅니다. 파일 저장소로 넘겨주는 주소에는 붙이지 않고, 로그에 남기거나 화면에 보이거나

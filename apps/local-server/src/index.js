@@ -25,8 +25,10 @@ import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
 import { chatMcpServers, deniedMcpTools, readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
+import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
+import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
 import { readSessionStats, sessionFiles } from './chat-stats.js';
-import { openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
+import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
@@ -361,7 +363,8 @@ const chatProcHost = ptyHost?.procs ? {
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
-    prepare: chatLaunchFiles, recover: () => checkAgents(), defaults });
+    prepare: chatLaunchFiles, recover: () => checkAgents(), defaults,
+    account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
   project.chats.set(id, chat);
   return chat;
 }
@@ -659,14 +662,49 @@ async function chatLaunchFiles(root, context) {
 // again, and the same session continues as a chat. A half-typed prompt in the composer is not detectable and is lost with the process.
 const SWITCH_BLOCKED = { turn: '응답 중입니다', background: '백그라운드 작업이 실행 중입니다', waiting: '승인 또는 질문을 기다리고 있습니다', scheduled: '예약된 작업이 남아 있습니다', unknown: '상태를 확인할 수 없습니다' };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-async function terminalToChat(project, id, newId, workspace) {
+async function terminalToChat(project, id, newId, workspace, stop = false, selectedSession) {
   const refuse = why => fault('CHAT_SWITCH_UNSAFE', `Chat으로 전환할 수 없습니다: ${why}`, 409);
+  const destination = chatFolder(project.directory, newId);
+  if (await fs.stat(path.join(destination, 'meta.json')).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) throw refuse('이미 있는 채팅입니다');
   const terminal = project.terminals.get(id);
   if (!terminal || terminal.exited || !terminal.native.pid) throw fault('NOT_FOUND', '터미널을 찾을 수 없습니다.', 404);
   const table = await processTable([terminal.native.pid]).catch(() => null);
   const found = table && terminalProcesses(table)(terminal.native.pid);
-  if (!found || found.agent !== 'claude' || !found.agentPid) throw refuse('실행 중인 Claude Code를 찾지 못했습니다');
+  if (!found?.agent || !found.agentPid) throw refuse('실행 중인 에이전트를 찾지 못했습니다');
   if (found.ssh) throw refuse('SSH 터미널은 지원하지 않습니다');
+  if (found.agent === 'codex' || found.agent === 'cursor') {
+    if (!stop) throw refuse('전환하면 실행 중인 작업과 미전송 입력이 종료됩니다. 중단 후 전환을 확인하세요');
+    const agent = found.agent, configDir = await accounts.agentFolder(agent, found.agentPid, project.root, agent === 'cursor' ? 'CURSOR_CONFIG_DIR' : 'CODEX_HOME');
+    const sessionId = agent === 'cursor' ? selectedSession : await readTerminalSession(project.directory, id, agent);
+    if (!sessionId) throw refuse('이 터미널의 세션 ID를 확인할 수 없습니다');
+    const options = { cwd: terminal.cwd, env: { ...pluginEnv(), [agent === 'cursor' ? 'CURSOR_CONFIG_DIR' : 'CODEX_HOME']: configDir } };
+    let cwd, cursorSource;
+    if (agent === 'cursor') {
+      cwd = await workspace.resolve(terminal.cwd);
+      cursorSource = (await listCursorSessions({ cwd, configDir })).find(item => item.sessionId === sessionId)?.file;
+      if (!cursorSource) throw refuse('이 프로젝트의 Cursor 대화를 선택하세요');
+    } else {
+      const before = await readCodexConversation(options, sessionId);
+      cwd = await workspace.resolve(before.thread.cwd).catch(() => null);
+      if (!cwd) throw refuse('에이전트가 프로젝트 밖의 폴더에서 실행 중입니다');
+    }
+    // Stop only this terminal's agent subtree; another Codex and the shell stay untouched.
+    const currentTable = await processTable([terminal.native.pid]);
+    const current = currentTable && terminalProcesses(currentTable)(terminal.native.pid);
+    if (current?.agentPid !== found.agentPid || current.agent !== agent || current.ssh) throw refuse('전환을 준비하는 동안 터미널의 에이전트가 바뀌었습니다');
+    if (agent === 'codex' && await readTerminalSession(project.directory, id, agent) !== sessionId) throw refuse('전환을 준비하는 동안 대화가 바뀌었습니다');
+    const pids = new Set([found.agentPid]);
+    for (let changed = true; changed;) { changed = false; for (const entry of currentTable) if (pids.has(entry.ppid) && !pids.has(entry.pid)) { pids.add(entry.pid); changed = true; } }
+    for (const pid of [...pids].reverse()) { try { process.kill(pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+    for (let waited = 0; [...pids].some(alive) && waited < 3000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+    if ([...pids].some(alive)) throw fault('CHAT_SWITCH_FAILED', '에이전트 종료를 확인하지 못했습니다. 터미널에서 종료한 뒤 다시 불러오세요.', 409);
+    const nextId = agent === 'cursor' ? await forkCursorSession({ checkpoint: cursorSource, cwd, configDir }) : sessionId;
+    const events = agent === 'cursor' ? await readCursorConversation(options, nextId) : (await readCodexConversation(options, sessionId)).events;
+    await seedChat({ directory: project.directory, id: newId, events, meta: { agent, cwd, sessionId: nextId, configDir, addDirs: [] } });
+    terminal.native.close(); project.terminals.delete(id);
+    return { cwd, agent };
+  }
+  if (found.agent !== 'claude') throw refuse('이 에이전트의 세션을 아직 확인할 수 없습니다');
   if (terminal.status.status?.state === 'working') throw refuse(SWITCH_BLOCKED.turn);
   const pid = found.agentPid, dir = await accounts.agentFolder('claude', pid, project.root).catch(() => null);
   if (!dir) throw refuse('Claude 설정 폴더를 찾지 못했습니다');
@@ -687,7 +725,7 @@ async function terminalToChat(project, id, newId, workspace) {
   if (file) await seedFromTranscript({ directory: project.directory, id: newId, file, sessionId: live.sessionId, configDir: dir === path.join(os.homedir(), '.claude') ? undefined : dir });
   else await seedChat({ directory: project.directory, id: newId, events: [], meta: { addDirs: [] } });
   terminal.native.close(); project.terminals.delete(id);
-  return { cwd };
+  return { cwd, agent: 'claude' };
 }
 // Where this project's `claude` keeps its history: the account its .envrc or running agent names, and always the default folder.
 const cliConfigDirs = async project => [(await accounts('claude', project).catch(() => null))?.dir || defaultClaudeDir(), defaultClaudeDir()];
@@ -909,7 +947,7 @@ async function route(action, input, project) {
         const command = input.agent === undefined ? undefined : [await terminalAgentCommand(project.directory, id, input.agent, input.restoreId, sessionShell.tracked), input.args?.trim()].filter(Boolean).join(' ');
         // xterm handles ConEmu's OSC 9;4 progress; an inherited Windows Terminal identity suppresses Claude's reports.
         // node-pty sets TERM only off Windows; without it (and WT_SESSION) CLIs fall back to ASCII glyphs, e.g. Claude's `>` prompt instead of `❯`.
-        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...(typeof input.configDir === 'string' && path.isAbsolute(input.configDir) && input.configDir.length <= 1024 && !input.configDir.includes('\0') && { [input.agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: input.configDir }), ...sessionShell.env }, meta: { projectId: project.id, id, cwd, startedAt: Date.now() } });
+        const native = await runtime.terminal.open({ shell, cwd, args: sessionShell.args, env: { ConEmuANSI: 'ON', WT_SESSION: '', TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'MoonerADE', ...pluginEnv(), ...(typeof input.configDir === 'string' && path.isAbsolute(input.configDir) && input.configDir.length <= 1024 && !input.configDir.includes('\0') && { [input.agent === 'codex' ? 'CODEX_HOME' : input.agent === 'cursor' ? 'CURSOR_CONFIG_DIR' : 'CLAUDE_CONFIG_DIR']: input.configDir }), ...sessionShell.env }, meta: { projectId: project.id, id, cwd, startedAt: Date.now() } });
         registerTerminal(project, id, native, cwd);
         return { id, ...(command && { command }) };
       } finally { project.openingTerminals--; }
@@ -944,7 +982,10 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const ref = chat.sessionRef();
-      if (ref.agent !== 'claude') throw fault('CHAT_UNSUPPORTED', '세션 통계는 Claude 채팅에서만 볼 수 있습니다.', 409);
+      if (ref.agent !== 'claude') {
+        if (action === 'chat/spend') throw fault('CHAT_UNSUPPORTED', '플랜 비용 기여도는 Claude 채팅에서만 볼 수 있습니다.', 409);
+        return chat.stats();
+      }
       if (!ref.sessionId) throw fault('NOT_FOUND', '아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.', 404);
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
@@ -1085,7 +1126,15 @@ async function route(action, input, project) {
     }
     // The agent session ID of a terminal (Claude via its SessionStart hook, Codex via its log); null while unknown (Cursor never reports one).
     case 'terminal/session': return { sessionId: (['claude', 'codex', 'cursor'].includes(input.agent) && await readTerminalSession(project.directory, text(input.id, '터미널 ID', 128), input.agent)) || null };
-    case 'terminal/to-chat': return terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace);
+    case 'terminal/chat-sessions': {
+      const terminal = project.terminals.get(text(input.id, '터미널 ID', 128));
+      if (!terminal || terminal.exited) throw fault('NOT_FOUND', '터미널을 찾을 수 없습니다.', 404);
+      const table = await processTable([terminal.native.pid]), found = table && terminalProcesses(table)(terminal.native.pid);
+      if (found?.agent !== 'cursor' || found.ssh) throw fault('CHAT_SWITCH_UNSAFE', '로컬 Cursor 터미널에서 대화를 선택하세요.', 409);
+      const configDir = await accounts.agentFolder('cursor', found.agentPid, project.root, 'CURSOR_CONFIG_DIR');
+      return (await listCursorSessions({ cwd: await workspace.resolve(terminal.cwd), configDir })).map(({ file, ...item }) => item);
+    }
+    case 'terminal/to-chat': return project.chatOpen(() => terminalToChat(project, text(input.id, '터미널 ID', 128), text(input.newId, '채팅 ID', 128), workspace, input.stop === true, input.sessionId));
     // Chat -> terminal, step 1: end the chat's child (refused unless idle) and make its session the restore source; the caller then opens the terminal with `restoreId` and closes the chat.
     case 'chat/to-terminal': {
       const id = text(input.id, '채팅 ID', 128), chat = project.chats.get(id);
@@ -1099,7 +1148,7 @@ async function route(action, input, project) {
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
       const configDir = typeof input.configDir === 'string' && path.isAbsolute(input.configDir) ? input.configDir : '';
-      const env = { ...pluginEnv(), ...(configDir ? { [agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: configDir } : {}) };
+      const env = { ...pluginEnv(), ...(configDir ? { [agent === 'codex' ? 'CODEX_HOME' : agent === 'cursor' ? 'CURSOR_CONFIG_DIR' : 'CLAUDE_CONFIG_DIR']: configDir } : {}) };
       const extraNames = Array.isArray(input.names) ? input.names.filter(name => typeof name === 'string') : [];
       // Names come from a running chat's own init event; without them the shared init answer (claudeInit) stands in until a chat has started.
       const key = JSON.stringify([agent, cwd, configDir, extraNames]);

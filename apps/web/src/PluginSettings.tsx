@@ -31,6 +31,7 @@ export type PluginUpdate = {
   current?: string; latest?: string | null; available?: boolean; checkedAt?: number | null; error?: string | null; via?: string | null; viaLabel?: string; review?: string[];
 };
 export type GithubAccount = {
+  ghAvailable?: boolean; accounts?: { login: string; active: boolean; valid: boolean }[]; ghAccount?: string | null;
   available: boolean; login: string | null; via: 'pat' | 'oauth' | null; machine: 'gh' | 'git' | null; machineChecked: boolean; signIn: boolean; error: string | null;
   device: { userCode: string; verifyUrl: string; expiresAt: number } | null;
 };
@@ -58,6 +59,7 @@ type PluginsBridge = {
   checkUpdates?(id?: string): Promise<PluginsState>; installUpdate?(id: string): Promise<PluginsState>; setUpdateMode?(id: string, mode: UpdateMode): Promise<PluginsState>;
   connectGithub?(token: string): Promise<PluginsState>; disconnectGithub?(): Promise<PluginsState>; signInGithub?(): Promise<PluginsState>; cancelSignIn?(): Promise<PluginsState>;
   probeGithub?(): Promise<PluginsState>; openSource?(id: string): Promise<PluginsState>; openTokenPage?(): Promise<PluginsState>;
+  selectGithubAccount?(login: string): Promise<PluginsState>;
 };
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
 const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins;
@@ -637,14 +639,18 @@ function GithubSection({ github, busy, run, bridge, notice }: { github: GithubAc
   const [token, setToken] = useState('');
   const [open, setOpen] = useState(false);
   const working = Boolean(busy);
-  // Which login this PC has is looked up once when the page opens (it runs `gh`), not on every render.
-  useEffect(() => { if (!github.login && !github.machineChecked && bridge.probeGithub) void bridge.probeGithub().catch(() => {}); }, []);
+  // Refresh saved gh accounts whenever the connection dialog opens.
+  useEffect(() => { if ((!github.machineChecked || open) && bridge.probeGithub) void bridge.probeGithub().catch(() => {}); }, [open]);
   const connect = () => { const value = token.trim(); if (!value) return; run('github:connect', async () => { const next = await bridge.connectGithub!(value); if (next.github?.login) setToken(''); return next; }); };
+  const selectedGh = github.ghAvailable && github.accounts?.some(account => account.login === github.ghAccount && account.valid);
   let status: ReactNode;
   if (github.login) status = <><Icon name="check" size={15} /><span><strong>{github.login}</strong> 계정이 연결되어 있습니다<small>{github.via === 'oauth' ? 'GitHub 로그인' : '개인 액세스 토큰'} · 비공개 저장소의 플러그인 업데이트에 씁니다</small></span></>;
-  else if (github.machine) status = <><Icon name="check" size={15} /><span><strong>이 PC의 {github.machine === 'gh' ? 'gh' : 'git'} 로그인</strong>을 씁니다<small>MoonerADE에 따로 연결하지 않아도 그 계정이 볼 수 있는 저장소에서 업데이트를 받습니다.</small></span></>;
+  else if (selectedGh) status = <><Icon name="check" size={15} /><span><strong>{github.ghAccount}</strong> 계정으로 조회합니다<small>gh에 등록된 계정 · 이 계정이 볼 수 있는 저장소에서 업데이트를 받습니다.</small></span></>;
+  else if (github.ghAvailable && github.ghAccount) status = <><Icon name="info" size={15} /><span><strong>{github.ghAccount} 계정의 인증을 확인하세요</strong><small>gh에서 다시 로그인하거나 다른 계정을 선택하세요.</small></span></>;
+  else if (!github.ghAvailable && github.machine === 'git') status = <><Icon name="check" size={15} /><span><strong>이 PC의 git 로그인</strong>을 씁니다<small>시스템에 등록된 Git 인증으로 업데이트를 받습니다.</small></span></>;
+  else if (github.ghAvailable) status = <><Icon name="info" size={15} /><span><strong>조회할 gh 계정을 선택하세요</strong><small>선택 전에는 공개 저장소만 조회합니다.</small></span></>;
   else status = <><Icon name="info" size={15} /><span><strong>연결된 계정이 없습니다</strong><small>{github.machineChecked ? '공개 저장소의 플러그인만 업데이트를 확인합니다.' : '이 PC의 GitHub 로그인을 확인하는 중…'}</small></span></>;
-  const linked = Boolean(github.login || github.machine);
+  const linked = Boolean(github.login || (github.ghAvailable ? selectedGh : github.machine === 'git'));
   return <>
     <button type="button" className="plugin-button plugin-github-open" data-linked={linked || undefined} title="비공개 저장소 플러그인 업데이트용 GitHub 계정" onClick={() => setOpen(true)}>
       <Icon name="person" />GitHub<i className="plugin-github-dot" aria-hidden="true" />
@@ -658,6 +664,18 @@ function GithubSection({ github, busy, run, bridge, notice }: { github: GithubAc
         <div className="plugin-github-status" data-tone={linked ? 'ok' : 'info'}>{status}
           {github.login && <BusyButton className="danger" busy={working} running={busy === 'github:disconnect'} onClick={() => run('github:disconnect', () => bridge.disconnectGithub!())}>연결 해제</BusyButton>}
         </div>
+        {github.ghAvailable && <div className="plugin-token">
+          <label htmlFor="plugin-github-account">gh에 등록된 계정</label>
+          <div className="plugin-token-row">
+            <select id="plugin-github-account" disabled={working} value={github.ghAccount ?? ''} onChange={event => { if (event.target.value) run('github:select', () => bridge.selectGithubAccount!(event.target.value)); }}>
+              <option value="" disabled>조회할 계정을 선택하세요</option>
+              {github.ghAccount && !github.accounts?.some(account => account.login === github.ghAccount) && <option value={github.ghAccount} disabled>{github.ghAccount} (등록 해제됨)</option>}
+              {github.accounts?.map(account => <option key={account.login} value={account.login} disabled={!account.valid}>{account.login}{account.active ? ' (gh 활성 계정)' : ''}{!account.valid ? ' (인증 확인 필요)' : ''}</option>)}
+            </select>
+            <BusyButton busy={working} running={busy === 'github:refresh'} onClick={() => run('github:refresh', () => bridge.probeGithub!())}>새로고침</BusyButton>
+          </div>
+          <small>{github.accounts?.length ? '선택은 MoonerADE에만 적용되며 gh의 활성 계정은 바꾸지 않습니다.' : '등록된 계정이 없습니다. gh auth login으로 로그인한 뒤 새로고침하세요.'}</small>
+        </div>}
         {github.device && <Callout tone="info" action={<BusyButton busy={working} running={busy === 'github:cancel'} onClick={() => run('github:cancel', () => bridge.cancelSignIn!())}>취소</BusyButton>}>
           브라우저에서 GitHub 페이지가 열렸습니다. 코드 <b className="mono">{github.device.userCode}</b>를 입력하고 승인하세요.
           <button type="button" className="plugin-link" onClick={() => copyText(github.device!.userCode)}>코드 복사</button>
