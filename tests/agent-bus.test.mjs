@@ -67,6 +67,20 @@ function world(chats, options = {}) {
 }
 const me = id => ({ chatId: id, projectId: 'p1', agent: id.startsWith('cl') ? 'claude' : id.startsWith('co') ? 'codex' : 'cursor' });
 
+test('a message also goes to the chat named by the session id the agent reports, or a prefix of it', async () => {
+  const { bus, sends } = world([chat('claude-1', 'claude', 'idle', { sessionId: '2814e713-c56f-4de1-829a-8e94b1943b2c' }), chat('claude-2222-bbbb', 'claude', 'idle', { sessionId: '8c5c8f7d-d0a2-4502-b138-6ae3b7190314' }), chat('codex-1', 'codex')]);
+  const listed = await bus.peers(me('codex-1'));
+  assert.deepEqual(listed.peers.map(peer => [peer.id, peer.sessionId]), [['claude-1', '2814e713-c56f-4de1-829a-8e94b1943b2c'], ['claude-2222-bbbb', '8c5c8f7d-d0a2-4502-b138-6ae3b7190314']]);
+  for (const to of ['8c5c8f7d-d0a2-4502-b138-6ae3b7190314', '8c5c8f7d', '8c5c']) {
+    const { results } = await bus.send(me('codex-1'), { to, message: 'hi' });
+    assert.deepEqual(results.map(result => [result.to, result.status]), [['claude-2222-bbbb', 'delivered']], to);
+  }
+  assert.equal(sends().length, 3);
+  assert.match(sends()[0].input.text, /chat id codex-1/); // the sender has no session id: nothing extra is printed
+  await bus.send(me('claude-2222-bbbb'), { to: '2814e713', message: 'hi' });
+  assert.match(sends()[3].input.text, /chat id claude-2222-bbbb \(session 8c5c8f7d-d0a2-4502-b138-6ae3b7190314\)/);
+});
+
 test('peers lists the other chats of the project and leaves out agents that are turned off', async () => {
   const { bus, calls } = world([chat('claude-1', 'claude', 'working', { title: 'Backend' }), chat('codex-1', 'codex'), chat('cursor-1', 'cursor'), chat('codex-x', 'codex', 'idle', { projectId: 'p2' })], { settings: { cursor: false } });
   const { self, peers } = await bus.peers(me('claude-1'));
