@@ -322,7 +322,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
           mcpServers: servers.filter(s => !s.disabledTools?.length).map(s => ({ name: s.name, command: s.command, args: s.args, env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) })) });
         autoServers = servers.filter(s => s.autoApprove && !s.disabledTools?.length).map(s => s.name);
         sessionId = meta.sessionId ?? response.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
-        if (meta.model) await this.configure({ model: meta.model });
+        let modelApplied = null;
+        if (meta.model) { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
         if (meta.permissionMode !== 'default') await request('session/set_mode', { sessionId, modeId: modeOf(meta.permissionMode) });
         for (const [configId, value] of Object.entries(meta.configValues ?? {})) {
           const option = capabilities.configOptions.find(item => item.id === configId);
@@ -332,6 +333,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         if (meta.effort && effortOption?.options.some(item => item.value === meta.effort)) await this.configure({ configOption: { configId: effortOption.id, value: meta.effort } });
         const commands = mergeCursorCommands([]);
         emit({ kind: 'session', sessionId, slashCommands: commands.map(item => item.name), commands }); publishCapabilities();
+        return { modelApplied };
       }
     },
     // Codex takes the approval policy, reviewer and sandbox with every turn/start, so changing them needs no restart. A bypass switch also settles what is
