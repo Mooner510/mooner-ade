@@ -749,11 +749,12 @@ async function route(action, input, project) {
   if (action.startsWith('verify/plugins/') && verifyPlugins) return verifyPlugins.route(action.slice('verify/plugins/'.length), input);
   if (action === 'system/info') return systemInfo();
   // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
+  // Cursor has no auto/bypass mode of its own; its Run Everything switch (every permission request is allowed) is what bypassPermissions means for the bus.
   if (action === 'chat/peers') {
     const scope = input.scope === 'all' ? [...projects.values()] : project ? [project] : [];
     return scope.flatMap(item => [...item.chats.entries()].map(([id, chat]) => {
       const state = chat.state();
-      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
+      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, sessionId: state.sessionId || '', title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: chat.agent === 'cursor' && state.runEverything === true ? 'bypassPermissions' : state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
     }));
   }
   if (action === 'recent/remove') {
