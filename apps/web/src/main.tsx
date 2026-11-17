@@ -6,7 +6,7 @@ import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settin
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
-import { onPluginsOpen } from './PluginSettings';
+import { onPluginsOpen, PluginTabPanel, usePluginsState } from './PluginSettings';
 import { AppVersion, Modal } from './views';
 import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
@@ -249,6 +249,9 @@ function Shell() {
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog);
+  const plugins = usePluginsState(), [pluginTab, setPluginTab] = useState('');
+  const pluginTabs = (plugins?.plugins ?? []).filter(plugin => plugin.tab && plugin.state === 'running');
+  const selectedPlugin = pluginTabs.find(plugin => plugin.id === pluginTab);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
   const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
@@ -423,7 +426,12 @@ function Shell() {
   const [skippedTour, setSkippedTour] = useState(false); // a skipped tour counts as done; the book button then gets a one-time pointer
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  const pluginNav = pluginTabs.length > 0 && <header className="plugin-workspace-tabs" role="tablist" aria-label="작업공간과 플러그인">
+    <button type="button" role="tab" aria-selected={!selectedPlugin} onClick={() => setPluginTab('')}>작업공간</button>
+    {pluginTabs.map(plugin => <button key={plugin.id} type="button" role="tab" aria-selected={selectedPlugin?.id === plugin.id} onClick={() => setPluginTab(plugin.id!)}>{plugin.name}</button>)}
+  </header>;
+  const pluginPage = selectedPlugin && <PluginTabPanel key={selectedPlugin.id} plugin={selectedPlugin} />;
+  if (!entries.length) return booted ? <><div className="plugin-welcome" inert={touring}>{pluginNav}{pluginPage || <main className="welcome"><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main>}</div><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
@@ -588,9 +596,13 @@ function Shell() {
         onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setWidth(clampWidth(settings.sidebarWidth + (event.key === 'ArrowLeft' ? -16 : 16))); } }} />}
     </nav>
     <div className="ws-stack">
+      {pluginNav}
+      <div className="workspace-content" hidden={Boolean(selectedPlugin)}>
       {entries.map(entry => <Workspace key={entry.root} ref={handle => { if (handle) handles.current.set(entry.root, handle); else handles.current.delete(entry.root); }}
-        root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
+        root={entry.root} active={!selectedPlugin && entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+      </div>
+      {pluginPage}
     </div>
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { binCommands, createPluginManager, createPluginStore, pluginTerminal, probeMcpTools, scanPlugins, treeHash, validBadge, validManifest, validPluginState, validTools, validView } from '../apps/desktop/src/plugin-core.js';
+import { binCommands, createPluginManager, createPluginStore, pluginTerminal, probeMcpTools, scanPlugins, treeHash, updateReview, validBadge, validManifest, validPluginState, validTools, validView } from '../apps/desktop/src/plugin-core.js';
 import { deniedMcpTools, setAgentMcpServers, terminalAgentCommand } from '../apps/local-server/src/terminal-sessions.js';
 
 const sealer = (available = true) => ({
@@ -67,6 +67,30 @@ test('manifests are checked strictly', () => {
 
 test('descriptions shown in the approval dialog are plain text', () => {
   assert.equal(validManifest(manifest({ description: 'one\r\ntwo\n\n\n\n\u202Ethree\u0007' })).description, 'one\ntwo\n\nthree');
+});
+
+test('tabs are a declared grant and secret fields never echo their reported value', () => {
+  assert.equal(validManifest(manifest({ tab: true })).tab, true);
+  assert.throws(() => validManifest(manifest({ tab: 'true' })));
+  assert.match(updateReview(manifest(), manifest({ tab: true })).join(' '), /상단.*탭/);
+  const view = validView({ fields: [{ key: 'key', label: 'API key', type: 'password', value: 'secret' }, { key: 'path', label: 'Repository', type: 'folder' }, { key: 'body', label: 'Body', type: 'textarea' }], document: { title: 'Report', text: '<script>private text</script>' } });
+  assert.equal(view.fields[0].value, '');
+  assert.deepEqual(view.fields.map(field => field.type), ['password', 'folder', 'textarea']);
+  assert.equal(view.document.text, '<script>private text</script>');
+  assert.equal(validView({ document: { title: 'Too long', text: 'a'.repeat(65537) } }).document, null);
+});
+
+test('only a running approved plugin can expose a declared tab', async t => {
+  const s = setup(t, { answers: [0, 0] });
+  plugin(s.dir, 'example', manifest({ tab: true }));
+  await s.manager.rescan();
+  assert.equal(s.manager.snapshot().plugins[0].tab, false);
+  await s.manager.setEnabled(true); await s.manager.approve('example');
+  const host = s.hosts[0].child;
+  host.emit('message', { type: 'ready' });
+  assert.equal(s.manager.snapshot().plugins[0].tab, true);
+  await s.manager.revoke('example');
+  assert.equal(s.manager.snapshot().plugins[0].tab, false);
 });
 
 test('the tree hash covers names and bytes and refuses links', t => {
