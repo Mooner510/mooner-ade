@@ -20,7 +20,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
   const crypto = {
     isEncryptionAvailable: () => true,
     encryptString(text) { const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv); const data = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]); return Buffer.concat([iv, cipher.getAuthTag(), data]); },
-    decryptString(blob) { const cipher = createDecipheriv('aes-256-gcm', key, blob.subarray(0, 12)); cipher.setAuthTag(blob.subarray(12, 28)); return Buffer.concat([cipher.update(blob.subarray(28)), cipher.final()]).toString('utf8'); }
+    decryptString(blob) { const cipher = createDecipheriv('aes-256-gcm', key, blob.subarray(0, 12), { authTagLength: 16 }); cipher.setAuthTag(blob.subarray(12, 28)); return Buffer.concat([cipher.update(blob.subarray(28)), cipher.final()]).toString('utf8'); }
   };
   if (env.VERIFY_PLUGIN_DIR) {
     const source = path.resolve(env.VERIFY_PLUGIN_DIR), manifest = validManifest(JSON.parse(fs.readFileSync(path.join(source, 'plugin.json'), 'utf8'))), target = path.join(dir, manifest.id);
