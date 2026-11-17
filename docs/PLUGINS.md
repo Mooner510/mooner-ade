@@ -404,4 +404,4 @@ MoonerADE → 플러그인
 
 ### 격리 브라우저 테스트
 
-`VERIFY_OUT=<OS 임시 폴더> node scripts/verify/start-ui.mjs`에서도 플러그인을 설치·승인하고 상단 탭에서 사용할 수 있습니다. 실행 코어와 호스트 IPC는 데스크톱과 같고, 확인창·zip 선택·저장소는 테스트 전용 구현입니다. 일반 웹 서버에서는 활성화되지 않습니다. 로컬 소스는 `VERIFY_PLUGIN_DIR=<플러그인 폴더>`로 지정하며 공개 저장소에 비공개 플러그인을 넣지 않습니다. 테스트 세션의 Hub는 `scripts/verify/hub-fake.mjs`의 가짜 Hub이고(`ADE_HUB_URL`로 연결), 마켓 로그인·설치·업데이트는 `node scripts/verify/t-hub-market.mjs`로 확인합니다. 가짜 Hub는 다른 프로세스에서 `/__test/*`로 조작합니다(플러그인 게시, 승인, 토큰 만료, 계정 폐기). 키 보호 수준·실제 CLI 모드·재시작·정리는 [TESTING_GUIDE 7절](TESTING_GUIDE.md#7-브라우저에서-플러그인-검증)을 따릅니다.
+검증 세션(`node scripts/verify/session.mjs up`)에서도 플러그인을 설치·승인하고 상단 탭에서 사용할 수 있습니다. 실행 코어와 호스트 IPC는 데스크톱과 같고, 확인창·zip 선택·저장소는 테스트 전용 구현입니다. 일반 웹 서버에서는 활성화되지 않습니다. 로컬 소스는 `VERIFY_PLUGIN_DIR=<플러그인 폴더>`로 지정하며 공개 저장소에 비공개 플러그인을 넣지 않습니다. 키 보호 수준·실제 CLI 모드·재시작·정리는 [TESTING_GUIDE 7절](TESTING_GUIDE.md#7-브라우저에서-플러그인-검증)을 따릅니다.

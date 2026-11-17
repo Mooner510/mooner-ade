@@ -1,5 +1,5 @@
 // The plugin market of MoonerADE Hub in the isolated session: sign in, the list, installing from it, updates, an expired token, signing out, a lost account.
-// Usage: VERIFY_OUT=… node scripts/verify/t-hub-market.mjs   (needs a running start-ui.mjs session; the fake Hub is driven through /__test/*)
+// Usage: VERIFY_OUT=… node scripts/verify/t-hub-market.mjs   (needs a running verify session (node scripts/verify/session.mjs up); the fake Hub is driven through /__test/*)
 // The background update round (auto mode) does not run in the browser session (no startUpdates); tests/hub-market.test.mjs covers it.
 import { connect, env } from './cdp.mjs'; import { check, eq, getResults, ok, sleep } from './lib.mjs'; import { writeFileSync } from 'node:fs'; import { join } from 'node:path'; import { S } from './lib.mjs';
 const hub = env().hub, c = await connect(p => p.url.includes('127.0.0.1'));

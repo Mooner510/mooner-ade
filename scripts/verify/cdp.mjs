@@ -3,8 +3,13 @@ export const env = () => JSON.parse(readFileSync(join(S, 'env.json'), 'utf8'));
 // The user keeps working while a test runs: never pull the Chrome window to the front or move it. The one exception is the feedback screen capture
 // (getDisplayMedia fails on a hidden page): connect(match, { focus: true }).
 const FOCUS = new Set(['Page.bringToFront', 'Target.activateTarget', 'Browser.setWindowBounds']);
+// VERIFY_TAB=<이름> (from `session.mjs tab --as <이름>`): only that agent's own tab in the shared Chrome, whatever `match` says, so agents do not drive each other's tab.
 export async function connect(match = () => true, { focus = false } = {}) {
-  const e = env(); const list = await (await fetch(`${e.cdp}/json/list`)).json(); const t = list.find(x => x.type === 'page' && match(x)); if (!t) throw new Error('no page: ' + JSON.stringify(list.map(x => x.url)));
+  const e = env(); const list = await (await fetch(`${e.cdp}/json/list`)).json();
+  const tabs = () => { try { return JSON.parse(readFileSync(join(S, 'tabs.json'), 'utf8')); } catch { return {}; } };
+  const mine = process.env.VERIFY_TAB && (tabs()[process.env.VERIFY_TAB]?.targetId ?? process.env.VERIFY_TAB);
+  const t = list.find(x => x.type === 'page' && (mine ? x.id === mine : match(x)));
+  if (!t) throw new Error(mine ? `VERIFY_TAB=${process.env.VERIFY_TAB} 탭이 없습니다(닫혔으면 session.mjs tab --as ${process.env.VERIFY_TAB}로 다시 엽니다)` : 'no page: ' + JSON.stringify(list.map(x => x.url)));
   const ws = new WebSocket(t.webSocketDebuggerUrl); await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
   let id = 0; const waiting = new Map(), problems = [];
   ws.on('message', raw => { const m = JSON.parse(raw); if (m.id && waiting.has(m.id)) { const p = waiting.get(m.id); waiting.delete(m.id); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); }
