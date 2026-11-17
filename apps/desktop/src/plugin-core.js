@@ -8,11 +8,12 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, credentialLabel, isNewer, validSource, versionText } from './plugin-updates.js';
+import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, credentialLabel, isNewer, sourceKey, sourceKind, sourceLabel, validSource, versionText } from './plugin-updates.js';
 
 export const PLUGIN_API = 1;
-// What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell.
-export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates'];
+// What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell. `hub`: plugin.json
+// `source.hub` (updates and installs from MoonerADE Hub).
+export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub'];
 const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[\w.-]{1,64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
@@ -94,7 +95,7 @@ export function validManifest(value) {
     if (typeof value.header !== 'boolean') throw fail('header 항목이 올바르지 않습니다.');
     if (value.header) manifest.header = true;
   }
-  // Where updates come from: a GitHub repository's releases (plugin-updates.js).
+  // Where updates come from: MoonerADE Hub and/or a GitHub repository's releases (plugin-updates.js).
   if (value.source !== undefined) manifest.source = validSource(value.source, manifest.id);
   // The steps that make the plugin work, shown as a guide before it even runs; the running plugin reports how far it got
   // (view.setup). Shown by MoonerADE as plain text.
@@ -255,13 +256,13 @@ export function grantsFor(manifest) {
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
-const sourceLine = manifest => manifest.source ? `\n업데이트 출처: github.com/${manifest.source.github} (릴리스)` : '';
+const sourceLine = manifest => !manifest.source ? '' : sourceKind(manifest.source) === 'hub' ? `\n업데이트 출처: ${sourceLabel(manifest.source)}` : `\n업데이트 출처: ${sourceLabel(manifest.source)} (릴리스)`;
 const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}${sourceLine(manifest)}\n${place}\nSHA-256: ${hash}`;
-// What an update asks for that the installed version did not: new grants, or updates from another repository. An update
-// that asks for more is never installed without the user seeing it, even in automatic mode.
+// What an update asks for that the installed version did not: new grants, or updates from another place (another repository,
+// or the Hub instead of GitHub). An update that asks for more is never installed without the user seeing it, even in automatic mode.
 export function updateReview(before, after) {
   const had = new Set(grantsFor(before)), review = grantsFor(after).filter(line => !had.has(line)).map(line => `새 권한: ${line}`);
-  if ((before.source?.github ?? null) !== (after.source?.github ?? null)) review.push(`업데이트 출처가 바뀝니다: ${before.source ? `github.com/${before.source.github}` : '없음'} → ${after.source ? `github.com/${after.source.github}` : '없음'}`);
+  if (sourceKey(before.source) !== sourceKey(after.source)) review.push(`업데이트 출처가 바뀝니다: ${sourceLabel(before.source)} → ${sourceLabel(after.source)}`);
   return review;
 }
 
@@ -270,7 +271,8 @@ export function updateReview(before, after) {
 // `builtin[id]` is the on/off choice for a plugin that ships with the app (on until the user turns it off).
 // `updates[id]` is how a plugin is updated (`mode`: auto, notify or manual) and the newest version already announced.
 // `github` is the GitHub account connected in MoonerADE for private plugin repositories: { token, login, via: 'pat'|'oauth' }.
-export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null, ghAccount: null });
+// `hub` is the sign-in to MoonerADE Hub (hub-client.js): { account, at, deviceId, access, refresh, accessExpiresAt }.
+export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null, ghAccount: null, hub: null });
 export function validPluginState(value) {
   const state = emptyPluginState();
   if (!value || typeof value !== 'object' || value.version !== 1) return state;
@@ -299,6 +301,10 @@ export function validPluginState(value) {
   if (github && typeof github === 'object' && typeof github.token === 'string' && /^[\x21-\x7e]{20,255}$/.test(github.token) && typeof github.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(github.login)) {
     state.github = { token: github.token, login: github.login, via: github.via === 'oauth' ? 'oauth' : 'pat', at: Number.isFinite(github.at) ? github.at : 0 };
   }
+  const hub = value.hub, tokenText = token => typeof token === 'string' && /^[\x21-\x7e]{20,400}$/.test(token);
+  if (hub && typeof hub === 'object' && tokenText(hub.access) && tokenText(hub.refresh) && Number.isFinite(hub.accessExpiresAt) && typeof hub.deviceId === 'string' && /^[\w.-]{1,64}$/.test(hub.deviceId) && str(hub.account, 100)) {
+    state.hub = { account: hub.account, at: Number.isFinite(hub.at) ? hub.at : 0, deviceId: hub.deviceId, access: hub.access, refresh: hub.refresh, accessExpiresAt: hub.accessExpiresAt };
+  }
   return state;
 }
 // A built-in plugin's storage is a plain file (0600) in its data folder, not sealed: it ships with the app and needs no approval,
@@ -320,6 +326,9 @@ function writeStorageFile(dir, text) {
 // Without working encryption nothing sealed is stored and plugins that need approval stay off.
 const SEALED = ['approved', 'data'];
 const githubMeta = github => github && /^[A-Za-z0-9-]{1,39}$/.test(github.login) ? { login: github.login, via: github.via === 'oauth' ? 'oauth' : 'pat', at: Number.isFinite(github.at) ? github.at : 0 } : null;
+// What of the Hub sign-in is not secret: the account's name (shown on the settings page) and when it was made.
+const hubMeta = hub => hub && str(hub.account, 100) ? { account: hub.account, at: Number.isFinite(hub.at) ? hub.at : 0 } : null;
+const HUB_SECRET = ['access', 'refresh', 'accessExpiresAt', 'deviceId'];
 function writeAtomic(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
@@ -332,18 +341,20 @@ export function createPluginStore({ file, crypto }) {
   // The sealed part, read once; what cannot be read counts as empty (and `problem` says why).
   function openSealed() {
     if (sealed) return sealed;
-    sealed = { approved: {}, data: {}, token: null, all: emptyPluginState() };
+    sealed = { approved: {}, data: {}, token: null, hub: null, all: emptyPluginState() };
     let blob;
     try { blob = fs.readFileSync(file); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; return sealed; }
     if (!probe()) { problem = 'unavailable'; return sealed; }
-    try { const all = validPluginState(JSON.parse(crypto.decryptString(blob))); sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, all }; }
+    try { const all = validPluginState(JSON.parse(crypto.decryptString(blob))); sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all }; }
     catch { problem = 'unreadable'; }
     return sealed;
   }
   // The state as callers see it. approved and data are not enumerable, so `{ ...state }` never opens the sealed file; reading them does.
+  // So are the tokens: `github.token` and `hub.secret` ({ access, refresh, accessExpiresAt, deviceId }).
   function view() {
-    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null, ghAccount: plain.ghAccount };
+    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null, ghAccount: plain.ghAccount, hub: null };
     if (plain.github) value.github = Object.defineProperty({ ...plain.github }, 'token', { get: () => openSealed().token });
+    if (plain.hub) value.hub = Object.defineProperty({ ...plain.hub }, 'secret', { get: () => { const hub = openSealed().hub; return hub ? Object.fromEntries(HUB_SECRET.map(key => [key, hub[key]])) : null; } });
     for (const key of SEALED) Object.defineProperty(value, key, { get: () => openSealed()[key] });
     return value;
   }
@@ -356,28 +367,30 @@ export function createPluginStore({ file, crypto }) {
       let text;
       try { text = fs.readFileSync(plainFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; }
       if (text !== undefined) {
-        try { const value = JSON.parse(text); plain = { ...validPluginState({ ...value, github: null }), github: githubMeta(value.github) }; } catch { problem = 'unreadable'; }
+        try { const value = JSON.parse(text); plain = { ...validPluginState({ ...value, github: null, hub: null }), github: githubMeta(value.github), hub: hubMeta(value.hub) }; } catch { problem = 'unreadable'; }
       } else if (problem === null && fs.existsSync(file)) {
         // Settings of an earlier version, all inside plugins.bin: opened this once, and written out as plugins.json.
         const { all } = openSealed();
-        if (problem === null) { plain = { ...all, github: githubMeta(all.github) }; writePlain(); }
+        if (problem === null) { plain = { ...all, github: githubMeta(all.github), hub: hubMeta(all.hub) }; writePlain(); }
       }
       return view();
     },
     save(next) { return this.update(() => next, true); },
     update(change, forceSealed = false) {
-      const current = view(), next = change(current), value = validPluginState({ ...next, github: null });
+      const current = view(), next = change(current), value = validPluginState({ ...next, github: null, hub: null });
       const github = githubMeta(next.github);
-      const touchesSealed = forceSealed || SEALED.some(key => Object.hasOwn(next, key)) || (next.github ?? null) !== current.github;
+      const touchesSealed = forceSealed || SEALED.some(key => Object.hasOwn(next, key)) || (next.github ?? null) !== current.github || (next.hub ?? null) !== current.hub;
       if (touchesSealed) {
         if (!probe()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
         const old = openSealed();
         const token = next.github === current.github ? old.token : next.github?.token ?? null;
-        const all = validPluginState({ ...value, approved: Object.hasOwn(next, 'approved') ? next.approved : old.approved, data: Object.hasOwn(next, 'data') ? next.data : old.data, github: github && token ? { ...github, token } : null });
+        // A new Hub sign-in arrives flat ({ account, at, deviceId, access, refresh, accessExpiresAt }); an unchanged one keeps what was sealed.
+        const hub = (next.hub ?? null) === current.hub ? old.hub : next.hub ?? null;
+        const all = validPluginState({ ...value, approved: Object.hasOwn(next, 'approved') ? next.approved : old.approved, data: Object.hasOwn(next, 'data') ? next.data : old.data, github: github && token ? { ...github, token } : null, hub });
         writeAtomic(file, crypto.encryptString(JSON.stringify(all)));
-        sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, all };
+        sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all };
       }
-      plain = { ...value, github: touchesSealed && !sealed.token ? null : github };
+      plain = { ...value, github: touchesSealed && !sealed.token ? null : github, hub: touchesSealed && !sealed.hub ? null : hubMeta(next.hub) };
       writePlain();
       if (touchesSealed) problem = null;
       return view();
@@ -541,10 +554,11 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // extractZip({ zip, dest }) unpacks a plugin zip into `dest` (default: the OS's bsdtar); zips are unpacked under `stagingRoot`.
 // probeMcp({ command, args, cwd, env }) resolves the raw tools/list of a plugin's MCP server (default: probeMcpTools).
 // github: the release client (plugin-updates.js createGithub) for plugins that declared `source`; null turns updates off.
+// hub: the MoonerADE Hub client (hub-client.js) for the plugin market and for plugins whose `source.hub` is true; null turns both off.
 // probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
 // clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
 // openExternal(url) opens GitHub's sign-in page in the browser.
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, log = console }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -573,6 +587,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         available: Boolean(github), login: store.state.github?.login ?? null, via: store.state.github?.via ?? null, machine: machineVia, machineChecked, signIn: Boolean(clientId), error: githubError,
         ghAvailable, accounts: machineAccounts, ghAccount: store.state.ghAccount,
         device: device ? { userCode: device.userCode, verifyUrl: device.verifyUrl, expiresAt: device.expiresAt } : null
+      },
+      // MoonerADE Hub: the sign-in (the account's name, never a token) and the plugin market it serves.
+      hub: {
+        available: Boolean(hub?.available), host: hub?.host ?? null, signedIn: Boolean(hub && store.state.hub), account: hub ? store.state.hub?.account ?? null : null, error: hubError,
+        device: hubDevice ? { userCode: hubDevice.userCode, verifyUrl: hubDevice.verifyUrl, expiresAt: hubDevice.expiresAt } : null,
+        catalog: hubCatalogView()
       },
       plugins: list.map(item => {
         const host = item.manifest && hosts.get(item.manifest.id);
@@ -976,10 +996,10 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     });
   }
   // One at a time. `picked` (chosen in the settings page) asks again even about a zip cancelled before.
-  function installZip(file, { picked = false, update = null } = {}) {
+  function installZip(file, { picked = false, update = null, origin = null } = {}) {
     const zip = path.resolve(String(file));
     queued.add(zip);
-    const run = installs.then(() => install(zip, { picked, update })).finally(() => queued.delete(zip));
+    const run = installs.then(() => install(zip, { picked, update, origin })).finally(() => queued.delete(zip));
     installs = run.catch(() => {});
     return run;
   }
@@ -996,7 +1016,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   // `update` ({ id, version, auto }) is a release downloaded by the updater: the zip must be that plugin at that version.
   // With `auto`, an update that asks for nothing new is installed without the dialog; one that does throws NEEDS_REVIEW.
-  async function install(zip, { picked = false, update = null } = {}) {
+  // `origin: 'hub'` says the zip was downloaded from MoonerADE Hub (the dialog names it as the source instead of a file).
+  async function install(zip, { picked = false, update = null, origin = null } = {}) {
     const before = fs.lstatSync(zip, { throwIfNoEntry: false });
     if (!before) { if (picked) throw fail('zip 파일을 찾을 수 없습니다.', 'NOT_FOUND'); return snapshot(); }
     const key = zipKey(zip, before);
@@ -1026,7 +1047,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
       if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
       if (!silent) {
-        const from = update ? `github.com/${installed?.manifest.source?.github ?? manifest.source?.github ?? ''} 릴리스` : `파일: ${zip}`;
+        const source = installed?.manifest.source ?? manifest.source;
+        const from = origin === 'hub' ? '받은 곳: MoonerADE Hub' : update ? `${source?.github ? `github.com/${source.github}` : ''} 릴리스` : `파일: ${zip}`;
         const answer = await ask({
           type: 'warning', title: current ? '플러그인 업데이트' : '플러그인 설치',
           message: current ? `“${manifest.name}” 플러그인을 업데이트하고 실행할까요?` : `“${manifest.name}” ${manifest.version} 플러그인을 설치하고 실행할까요?`,
@@ -1061,38 +1083,49 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     }
   }
 
-  // ---- updates from the plugin's GitHub releases (plugin.json `source`) --------------------------------------------
-  // id -> { status: 'checking'|'latest'|'available'|'downloading'|'installing'|'error', found, checkedAt, error, review }
+  // ---- updates from the plugin's Hub or GitHub releases (plugin.json `source`) -------------------------------------
+  // id -> { status: 'checking'|'latest'|'available'|'downloading'|'installing'|'error', found, kind, checkedAt, error, review }
   const updates = new Map(), checking = new Map();
   let updateTimers = [], round = null, machineVia = null, machineChecked = false, device = null, githubError = null, ghAvailable = false, machineAccounts = [];
+  // The client a source is served by (the Hub when plugin.json says `hub`, else GitHub), or null when this app has none.
+  const clientFor = source => sourceKind(source) === 'hub' ? hub : sourceKind(source) === 'github' ? github : null;
+  const hubSignedIn = () => Boolean(hub && store.state.hub);
   const modeOf = id => store.state.updates?.[id]?.mode ?? DEFAULT_UPDATE_MODE;
   function updateView(item) {
     const id = item.manifest.id, source = item.manifest.source ?? null;
     if (!source) return { source: null, mode: modeOf(id) };
-    const entry = updates.get(id), latest = entry?.found?.version ?? null, available = Boolean(latest && isNewer(latest, item.manifest.version));
-    const status = !entry ? 'idle' : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
+    const entry = updates.get(id), kind = sourceKind(source), latest = entry?.found?.version ?? null, available = Boolean(latest && isNewer(latest, item.manifest.version));
+    let status = !entry ? 'idle' : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
+    // A Hub plugin cannot be checked until the Hub sign-in is back: the page says so instead of showing an old answer.
+    if (kind === 'hub' && !hubSignedIn() && !['checking', 'downloading', 'installing'].includes(status)) status = 'needs-login';
     return {
-      source: { github: source.github, asset: source.asset }, mode: modeOf(id), status, current: item.manifest.version, latest, available,
+      source: kind === 'hub' ? { kind, ...(source.github && { github: source.github, asset: source.asset }) } : { kind, github: source.github, asset: source.asset },
+      mode: modeOf(id), status, current: item.manifest.version, latest, available,
       checkedAt: entry?.checkedAt ?? null, error: entry?.error ?? null, via: entry?.found?.via ?? null, viaLabel: credentialLabel(entry?.found?.via ?? null),
       review: available ? entry?.review ?? [] : []
     };
   }
   function sourceItem(id) {
-    if (!github) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
+    if (!github && !hub) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
     const item = list.find(entry => !entry.builtin && entry.manifest?.id === id);
     if (!item?.manifest) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
     if (!item.manifest.source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
+    if (!clientFor(item.manifest.source)) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
     return item;
   }
   // One check at a time per plugin; a check started while one runs gets the running one's answer.
   function checkUpdate(id) {
     const item = sourceItem(id);
     if (checking.has(id)) return checking.get(id);
+    const source = item.manifest.source, client = clientFor(source), kind = sourceKind(source);
+    if (kind === 'hub' && !hubSignedIn()) return Promise.reject(fail('MoonerADE Hub에 로그인해야 업데이트를 확인할 수 있습니다. 설정 → 플러그인 → 마켓에서 로그인하세요.', 'NOT_SIGNED_IN'));
     const entry = updates.get(id) ?? {};
     updates.set(id, entry);
-    Object.assign(entry, { status: 'checking', error: null });
+    // An answer from the other place (the plugin moved from GitHub to the Hub) is not an answer for this one.
+    if (entry.kind !== kind) { entry.found = null; entry.review = []; }
+    Object.assign(entry, { kind, status: 'checking', error: null });
     changed();
-    const run = github.latest(item.manifest.source, id).then(found => {
+    const run = client.latest(source, id).then(found => {
       if (entry.found?.version !== found.version) entry.review = [];
       Object.assign(entry, { status: 'latest', found, checkedAt: Date.now(), error: null });
       if (found.via === 'gh' || found.via === 'git') { machineVia = found.via; machineChecked = true; }
@@ -1104,22 +1137,27 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     checking.set(id, run);
     return run;
   }
-  // Downloads the newest release, checks it against the release's checksum and installs it the way a zip is installed
-  // (the dialog, unless `auto` and the update asks for nothing new). A check within the last minute is reused.
+  // A downloaded zip, in the private staging folder, for installZip to read.
+  function writeStagingZip(data) {
+    fs.mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
+    const zip = path.join(stagingRoot, `${randomUUID()}.update.zip`);
+    fs.writeFileSync(zip, data, { flag: 'wx', mode: 0o600 });
+    return zip;
+  }
+  // Downloads the newest release (or the Hub's newest), checks it against the checksum it was announced with and installs it the
+  // way a zip is installed (the dialog, unless `auto` and the update asks for nothing new). A check within the last minute is reused.
   async function installUpdate(id, { auto = false } = {}) {
-    const item = sourceItem(id), entry = updates.get(id);
-    const found = entry?.found && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
+    const item = sourceItem(id), entry = updates.get(id), kind = sourceKind(item.manifest.source);
+    const found = entry?.found && entry.kind === kind && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
     const now = updates.get(id);
     if (!isNewer(found.version, item.manifest.version)) return { ...snapshot(), message: `“${item.manifest.name}” 플러그인은 이미 최신(${item.manifest.version})입니다.` };
     let zip = null;
     try {
       now.status = 'downloading'; changed();
-      const { data } = await github.download(found);
-      fs.mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
-      zip = path.join(stagingRoot, `${randomUUID()}.update.zip`);
-      fs.writeFileSync(zip, data, { flag: 'wx', mode: 0o600 });
+      const { data } = await clientFor(item.manifest.source).download(found);
+      zip = writeStagingZip(data);
       now.status = 'installing'; changed();
-      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto } });
+      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto }, ...(kind === 'hub' && { origin: 'hub' }) });
       now.status = 'latest';
       return result;
     } catch (error) {
@@ -1144,6 +1182,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const id = item.manifest?.id;
       if (closing) return;
       if (!id || item.builtin || item.error || !item.manifest.source || modeOf(id) === 'manual') continue;
+      // Without the client (an app build without the Hub) or the Hub sign-in there is nothing to ask; the settings page says so.
+      if (!clientFor(item.manifest.source) || (sourceKind(item.manifest.source) === 'hub' && !hubSignedIn())) continue;
       let found;
       try { found = await checkUpdate(id); } catch (error) { log.warn(`[plugin ${id}] 업데이트를 확인하지 못했습니다: ${error.message}`); continue; }
       const { name, version } = item.manifest;
@@ -1164,7 +1204,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   const runRound = () => { round ??= checkAll().catch(error => log.warn(`플러그인 업데이트 확인 실패: ${error.message}`)).finally(() => { round = null; }); return round; };
   function startUpdates() {
-    if (!github || updateTimers.length) return;
+    if ((!github && !hub) || updateTimers.length) return;
     const first = setTimeout(() => { void runRound(); const every = setInterval(() => void runRound(), checkEveryMs); every.unref?.(); updateTimers.push(every); }, firstCheckMs);
     first.unref?.();
     updateTimers.push(first);
@@ -1175,8 +1215,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const item = sourceItem(id), found = await checkUpdate(id);
       return { ...snapshot(), message: isNewer(found.version, item.manifest.version) ? `${item.manifest.name} ${found.version} 업데이트가 있습니다.` : `${item.manifest.name} 플러그인은 최신(${item.manifest.version})입니다.` };
     }
-    const targets = list.filter(item => !item.builtin && !item.error && item.manifest?.source);
-    if (!github || !targets.length) return { ...snapshot(), message: '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
+    const usable = item => clientFor(item.manifest.source) && (sourceKind(item.manifest.source) !== 'hub' || hubSignedIn());
+    const targets = list.filter(item => !item.builtin && !item.error && item.manifest?.source && usable(item));
+    if (!targets.length) {
+      const waiting = list.some(item => !item.builtin && !item.error && sourceKind(item.manifest?.source) === 'hub' && !hubSignedIn());
+      return { ...snapshot(), message: waiting ? 'Hub에서 받은 플러그인을 확인하려면 설정 → 플러그인 → 마켓에서 MoonerADE Hub에 로그인하세요.' : '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
+    }
     const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
     const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && isNewer(results[index].value.version, item.manifest.version));
     const failed = results.filter(result => result.status === 'rejected').length;
@@ -1187,9 +1231,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!UPDATE_MODES.includes(mode)) throw fail('알 수 없는 업데이트 방식입니다.');
     const item = sourceItem(id), { name, source } = item.manifest;
     if (mode === 'auto' && modeOf(id) !== 'auto') {
+      const fromHub = sourceKind(source) === 'hub';
       const answer = await ask({
         type: 'warning', title: '플러그인 자동 업데이트', message: `“${name}” 플러그인을 자동으로 업데이트할까요?`,
-        detail: `github.com/${source.github}에 새 릴리스가 나오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 릴리스의 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\n이 저장소에 릴리스를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 저장소에만 켜세요.`,
+        detail: fromHub
+          ? `MoonerADE Hub에 새 버전이 올라오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 Hub가 알려 준 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\nHub에 플러그인을 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 Hub의 플러그인에만 켜세요.`
+          : `github.com/${source.github}에 새 릴리스가 나오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 릴리스의 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\n이 저장소에 릴리스를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 저장소에만 켜세요.`,
         buttons: ['자동 업데이트 켜기', '취소'], defaultId: 1, cancelId: 1
       });
       if (answer !== 0) return snapshot();
@@ -1278,13 +1325,117 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     return { ...snapshot(), message: `gh 계정 ${login}으로 플러그인을 조회합니다.` };
   }
 
+  // ---- MoonerADE Hub: the sign-in and the plugin market ---------------------------------------------------------------
+  // The market is the list the Hub serves to this account (hub-client.js); installing from it is installing a zip, with the
+  // same dialog. `hubDevice` is a sign-in waiting for the user to approve its code in the browser.
+  let hubDevice = null, hubError = null, hubCatalogRaw = null, hubCatalogStatus = 'idle', hubCatalogError = null, hubCatalogLoading = null;
+  const HUB_SIGN_IN_ERRORS = ['UNAUTHORIZED', 'NOT_SIGNED_IN', 'FORBIDDEN'];
+  const noteHubError = error => { if (HUB_SIGN_IN_ERRORS.includes(error?.code)) hubError = String(error.message).slice(0, 300); };
+  const needHub = () => { if (!hub?.available) throw fail('이 MoonerADE에서는 MoonerADE Hub를 쓸 수 없습니다.', 'HUB_UNAVAILABLE'); };
+  const needSignIn = () => { needHub(); if (!hubSignedIn()) throw fail('MoonerADE Hub에 로그인하지 않았습니다. 설정 → 플러그인 → 마켓에서 로그인하세요.', 'NOT_SIGNED_IN'); };
+  // The Hub's list merged with what is installed here. The Hub's words are shown as plain text, cleaned like a plugin.json's.
+  function hubCatalogView() {
+    if (!hub) return null;
+    return {
+      status: hubCatalogStatus, error: hubCatalogError, checkedAt: hubCatalogRaw?.checkedAt ?? null,
+      plugins: (hubCatalogRaw?.plugins ?? []).map(entry => {
+        const installed = list.find(item => !item.builtin && item.manifest?.id === entry.id)?.manifest ?? null;
+        return {
+          id: entry.id, name: plainText(entry.name).slice(0, 60) || entry.id, description: plainText(entry.description), version: entry.version, size: entry.size, grants: entry.grants, publishedAt: entry.publishedAt,
+          installed: installed ? { version: installed.version } : null, updateAvailable: Boolean(installed && isNewer(entry.version, installed.version)),
+          // A plugin that ships with the app owns its id: the Hub's one cannot be installed.
+          reserved: list.some(item => item.builtin && item.manifest?.id === entry.id)
+        };
+      })
+    };
+  }
+  // Asks the Hub for its list (an answer from the last minute is reused unless `force`). A failure is shown in the list, not thrown.
+  async function hubCatalog({ force = false } = {}) {
+    needHub();
+    if (!hubSignedIn()) return snapshot();
+    if (hubCatalogLoading) { await hubCatalogLoading; return snapshot(); }
+    if (!force && hubCatalogRaw && Date.now() - hubCatalogRaw.checkedAt < 60_000) return snapshot();
+    hubCatalogStatus = 'loading'; changed();
+    hubCatalogLoading = hub.catalog().then(raw => { hubCatalogRaw = raw; hubCatalogStatus = 'ok'; hubCatalogError = null; }, error => {
+      hubCatalogStatus = 'error'; hubCatalogError = String(error?.message ?? error).slice(0, 300);
+      if (HUB_SIGN_IN_ERRORS.includes(error?.code)) { hubCatalogRaw = null; noteHubError(error); }
+    }).finally(() => { hubCatalogLoading = null; changed(); });
+    await hubCatalogLoading;
+    return snapshot();
+  }
+  // Installs the Hub's newest version of a plugin: downloaded, checked against the Hub's checksum, then the zip install dialog.
+  async function installFromHub(id) {
+    needSignIn();
+    if (!ID.test(String(id))) throw fail('플러그인 id가 올바르지 않습니다.', 'NOT_FOUND');
+    if (list.some(item => item.builtin && item.manifest?.id === id)) throw fail(`이 id(${id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
+    let found, zip = null;
+    try {
+      found = await hub.latest(null, id);
+      const installed = list.find(item => !item.builtin && !item.error && item.manifest?.id === id)?.manifest;
+      if (installed && !isNewer(found.version, installed.version)) return { ...snapshot(), message: `“${installed.name}” 플러그인은 이미 최신(${installed.version})입니다.` };
+      const { data } = await hub.download(found);
+      zip = writeStagingZip(data);
+      return await installZip(zip, { picked: true, update: { id, version: found.version }, origin: 'hub' });
+    } catch (error) { noteHubError(error); changed(); throw error; }
+    finally { if (zip) fs.rmSync(zip, { force: true }); changed(); }
+  }
+  // Sign in with the browser: the page the Hub shows takes the account's login and asks to approve the code shown here.
+  async function signInHub() {
+    needHub();
+    if (!store.available) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 로그인을 저장할 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
+    if (hubSignedIn()) return snapshot();
+    if (hubDevice && hubDevice.expiresAt > Date.now()) { openExternal(hubDevice.verifyUrl); return snapshot(); }
+    const started = await hub.deviceStart();
+    hubDevice = started; hubError = null;
+    openExternal(started.verifyUrl);
+    void pollHub(started);
+    changed();
+    return { ...snapshot(), message: `브라우저에서 로그인하고 코드 ${started.userCode}를 승인하세요.` };
+  }
+  async function pollHub(current) {
+    let wait = current.interval;
+    while (hubDevice === current && !closing && Date.now() < current.expiresAt) {
+      await new Promise(resolve => { const timer = setTimeout(resolve, wait * 1000); timer.unref?.(); });
+      if (hubDevice !== current || closing) return;
+      try {
+        const answer = await hub.devicePoll(current);
+        if (hubDevice !== current) return;
+        if (answer.account) {
+          hubDevice = null; hubError = null; changed();
+          // Signed in: the list, and the Hub plugins that could not be checked until now.
+          void hubCatalog({ force: true }).catch(() => {});
+          void runRound();
+          return;
+        }
+        wait += answer.wait ?? 0;
+      } catch (error) {
+        if (['NETWORK', 'TIMEOUT', 'HUB_BUSY', 'RATE_LIMITED'].includes(error.code)) continue;
+        if (hubDevice === current) { hubDevice = null; hubError = error.message; changed(); }
+        return;
+      }
+    }
+    if (hubDevice === current) { hubDevice = null; hubError = '로그인 시간이 지났습니다. 다시 시도하세요.'; changed(); }
+  }
+  function cancelHubSignIn() { hubDevice = null; changed(); return snapshot(); }
+  async function signOutHub() {
+    needHub();
+    const account = store.state.hub?.account;
+    hubDevice = null;
+    await hub.signOut();
+    hubError = null; hubCatalogRaw = null; hubCatalogStatus = 'idle'; hubCatalogError = null;
+    for (const [id, entry] of updates) if (entry.kind === 'hub') updates.delete(id);
+    changed();
+    return { ...snapshot(), message: account ? `MoonerADE Hub(${account})에서 로그아웃했습니다.` : null };
+  }
+
   function close() {
-    closing = true; device = null;
+    closing = true; device = null; hubDevice = null;
     for (const timer of updateTimers) { clearTimeout(timer); clearInterval(timer); }
     updateTimers = [];
     for (const host of [...hosts.values()]) stop(host);
   }
 
   return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback,
-    startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, selectGithubAccount, runUpdateRound: runRound };
+    startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, selectGithubAccount, runUpdateRound: runRound,
+    hubCatalog, installFromHub, signInHub, cancelHubSignIn, signOutHub };
 }
