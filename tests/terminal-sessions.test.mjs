@@ -168,7 +168,7 @@ test('PowerShell sessions bind Ctrl+D (PSReadLine leaves it unbound on Windows) 
 test('claude subcommands run without the session flags, a prompt still gets them (bash)', { skip: process.platform === 'win32' ? false : !existsSync('/bin/bash') }, async t => {
   const root = await directory(t), bin = path.join(root, 'bin');
   await mkdir(bin);
-  for (const agent of ['claude', 'codex']) await writeFile(path.join(bin, agent), '#!/bin/sh\necho "$0 $*" | sed "s|.*/||"\n', { mode: 0o700 });
+  for (const agent of ['claude', 'codex']) await writeFile(path.join(bin, agent), '#!/bin/sh\necho "${0##*/} $*"\n', { mode: 0o700 });
   const shell = await terminalSessionShell(root, 'sub', 'bash');
   const output = await new Promise((resolve, reject) => {
     const child = spawn('bash', [...shell.args, '-ic', 'claude update; claude mcp list; claude "fix it"'], { env: { ...process.env, ...shell.env, HOME: root, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
