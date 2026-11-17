@@ -1,5 +1,24 @@
 [
   {
+    "version": "0.5.10",
+    "date": "2026-11-17",
+    "time": "02:39",
+    "items": [
+      {
+        "kind": "신규 기능",
+        "title": "/btw 곁다리 질문",
+        "icon": "sparkles",
+        "text": "/btw로 진행 중인 대화에 영향 없이 곁다리 질문을 해요. Claude·Codex·Cursor 모두 가장 가벼운 모델로 답해요."
+      },
+      {
+        "kind": "신규 기능",
+        "title": "/usage 카드",
+        "icon": "chart",
+        "text": "/usage를 치면 컨텍스트, 비용, 플랜 한도를 카드로 한눈에 보여줘요."
+      }
+    ]
+  },
+  {
     "version": "0.5.9",
     "date": "2026-11-16",
     "time": "19:30",
