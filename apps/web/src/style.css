@@ -2798,3 +2798,15 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 @media (prefers-reduced-motion: reduce) { .chat-drop, .chat-drop::before, .chat-drop-card, .chat-drop-icon { transition: none !important; animation: none !important; } }
 
 .tc-val { position: absolute; transform: translateX(-50%); font-size: 10px; line-height: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; } .tc-val.on { color: var(--fg, var(--muted)); font-weight: 600; z-index: 1; }
+
+/* Claude Code CLI update notice under a chat's title (ClaudeUpdateNotice.tsx) */
+.chat-update { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); border-bottom: 1px solid var(--border); }
+.chat-update > .icon { flex: none; color: var(--accent); }
+.chat-update.done > .icon { color: var(--success, var(--accent)); }
+.chat-update.failed { background: color-mix(in srgb, var(--error) 10%, var(--surface)); }
+.chat-update.failed > .icon { color: var(--error); }
+.chat-update-text { flex: 1; min-width: 0; }
+.chat-update-text small { display: block; margin-top: 1px; color: var(--muted, var(--fg)); opacity: .75; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-update button { flex: none; padding: 2px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--raised); color: var(--fg); font: inherit; cursor: pointer; }
+.chat-update button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.chat-update button:hover { filter: brightness(1.1); }

@@ -5,7 +5,10 @@ const argv = process.argv.slice(2), log = o => { try { fs.appendFileSync(process
 const ctl = () => { try { return JSON.parse(fs.readFileSync(process.env.FAKE_CTL, 'utf8')); } catch { return {}; } };
 const send = m => process.stdout.write(JSON.stringify(m) + '\n');
 const envLog = { CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT, CLAUDE_CODE_MCP_STARTUP_WAIT_MS: process.env.CLAUDE_CODE_MCP_STARTUP_WAIT_MS };
-if (argv[0] === '--version') { console.log('2.1.322 (fake)'); process.exit(0); }
+// `claude update` (Settings/chat "새 버전" notice): installs the registry's newest version, i.e. what a real update would leave behind.
+const versionFile = process.env.FAKE_CTL + '.version', installed = () => { try { return fs.readFileSync(versionFile, 'utf8').trim(); } catch { return '2.1.322'; } };
+if (argv[0] === '--version') { console.log(installed() + ' (fake)'); process.exit(0); }
+if (argv[0] === 'update' || argv[0] === 'upgrade') { log({ update: true, from: installed() }); const next = ctl().updateTo ?? '2.1.999'; if (ctl().updateFails) { console.error('Error: update failed (fake)'); process.exit(1); } fs.writeFileSync(versionFile, next); console.log('Successfully updated from ' + installed().replace(/^/, '') + ' to version ' + next); process.exit(0); }
 if (argv[0] === 'auth') { console.log(JSON.stringify({ loggedIn: true, authMethod: 'fake' })); process.exit(0); }
 const stream = argv.includes('--input-format') && argv.includes('stream-json');
 if (!stream) {
