@@ -28,6 +28,10 @@ export const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROPIC|GIT_|SSH_|PATH|HOME|USER|SHELL|TERM|LD_|DYLD_|BASH_|PROMPT_|HTTP_|HTTPS_|ALL_|FTP_|SSL_|CURL_|REQUESTS_|JAVA_|JDK_|DOTNET_|COR_|CORECLR_|PYTHON|PIP_|SUDO_|XDG_|OTEL_|MCP_|DISABLE_|MAX_|API_)/;
 export const MAX_FILES = 2000, MAX_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST = 64 * 1024;
+// A plugin's icon (plugin.json `icon`): one SVG file in its folder. The page draws it only as a CSS mask (an image: no script runs,
+// nothing is fetched), in the colour of the text around it, so a plugin's icon sits with the app's own line icons.
+const MAX_ICON = 32 * 1024;
+const SVG_START = /^﻿?\s*(<\?xml[^>]*\?>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i;
 export const MAX_STORAGE = 64 * 1024;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
 // OS notifications a plugin may raise: this many per minute, more are dropped.
@@ -91,6 +95,10 @@ export function validManifest(value) {
     if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
     if (value.feedback) manifest.feedback = true;
   }
+  if (value.icon !== undefined) {
+    manifest.icon = relative(value.icon, 'icon');
+    if (!/\.svg$/i.test(manifest.icon)) throw fail('icon은 .svg 파일이어야 합니다.');
+  }
   if (value.header !== undefined) {
     if (typeof value.header !== 'boolean') throw fail('header 항목이 올바르지 않습니다.');
     if (value.header) manifest.header = true;
@@ -146,6 +154,15 @@ export function readManifest(folder) {
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error instanceof SyntaxError) throw fail('plugin.json을 읽을 수 없습니다.'); throw error; }
   return validManifest(value);
 }
+// The plugin's icon as SVG text, or null when it has none or it cannot be used (too large, not an SVG): a bad icon only costs the
+// icon (the generic one is drawn), never the plugin.
+export function readIcon(folder, manifest) {
+  if (!manifest.icon) return null;
+  const file = path.join(folder, ...manifest.icon.split('/')), stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > MAX_ICON) return null;
+  const text = fs.readFileSync(file, 'utf8');
+  return SVG_START.test(text) && /<\/svg>\s*$/i.test(text) ? text.replace(/^﻿/, '') : null;
+}
 // The files and folder the manifest names must be there (and be a file / a folder, not a link).
 export function checkPluginFiles(folder, manifest) {
   for (const target of [manifest.main, manifest.mcp?.script].filter(Boolean)) if (!fs.lstatSync(path.join(folder, target), { throwIfNoEntry: false })?.isFile()) throw fail(`${target} 파일이 없습니다.`);
@@ -170,6 +187,7 @@ export function scanPlugins(dir, { builtin = false, seen = new Set() } = {}) {
       checkPluginFiles(folder, item.manifest);
       item.hash = treeHash(folder);
       item.commands = binCommands(folder, item.manifest);
+      item.icon = readIcon(folder, item.manifest);
     } catch (error) { item.error = error.message; }
     list.push(item);
   }
@@ -599,7 +617,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         return {
           folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
           builtin: item.builtin === true, ...(item.builtin && { builtinEnabled: builtinOn(item) }),
-          description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
+          description: item.manifest?.description ?? '', icon: item.icon ?? null, hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
           terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
           header: host?.status === 'running' && item.manifest?.header === true,

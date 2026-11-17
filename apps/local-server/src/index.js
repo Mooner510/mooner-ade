@@ -758,11 +758,12 @@ async function route(action, input, project) {
   if (action.startsWith('verify/plugins/') && verifyPlugins) return verifyPlugins.route(action.slice('verify/plugins/'.length), input);
   if (action === 'system/info') return systemInfo();
   // The open chats the agent bus (a built-in plugin) can address: this project's, or every open project's.
+  // Cursor has no auto/bypass mode of its own; its Run Everything switch (every permission request is allowed) is what bypassPermissions means for the bus.
   if (action === 'chat/peers') {
     const scope = input.scope === 'all' ? [...projects.values()] : project ? [project] : [];
     return scope.flatMap(item => [...item.chats.entries()].map(([id, chat]) => {
       const state = chat.state();
-      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
+      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, sessionId: state.sessionId || '', title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: chat.agent === 'cursor' && state.runEverything === true ? 'bypassPermissions' : state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
     }));
   }
   if (action === 'recent/remove') {
@@ -1119,6 +1120,21 @@ async function route(action, input, project) {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       if (agent !== 'claude') {
+        if (agent === 'cursor' && input.refresh !== true) {
+          const entries = [...project.chats.entries()].filter(([, chat]) => chat.agent === 'cursor');
+          const read = chat => {
+            const state = chat.state(), catalog = state.capabilities?.catalog ?? [];
+            return catalog.length ? { models: state.model ? { '': state.model } : {}, catalog, configOptions: state.capabilities.configOptions ?? [] } : null;
+          };
+          let live = entries.map(([, chat]) => read(chat)).find(Boolean);
+          if (!live && entries.length) {
+            const preferred = entries.find(([key]) => key === input.id)?.[1] ?? entries[0][1];
+            await preferred.warm().catch(() => {});
+            live = entries.map(([, chat]) => read(chat)).find(Boolean);
+          }
+          // The open chat already has the list. A second cursor-agent would only compete with it.
+          if (live) return live;
+        }
         const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '', agentKeys.signature(agent)]);
         let cached = agentModelProbes.get(key);
         if (!cached || input.refresh === true || Date.now() - cached.at > 3_600_000) {
