@@ -12,7 +12,7 @@ import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, cred
 
 export const PLUGIN_API = 1;
 // What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell.
-export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'updates'];
+export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'tabs', 'updates'];
 const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[\w.-]{1,64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
@@ -89,6 +89,10 @@ export function validManifest(value) {
   if (value.feedback !== undefined) {
     if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
     if (value.feedback) manifest.feedback = true;
+  }
+  if (value.tab !== undefined) {
+    if (typeof value.tab !== 'boolean') throw fail('tab 항목이 올바르지 않습니다.');
+    if (value.tab) manifest.tab = true;
   }
   // Where updates come from: a GitHub repository's releases (plugin-updates.js).
   if (value.source !== undefined) manifest.source = validSource(value.source, manifest.id);
@@ -246,7 +250,8 @@ export function grantsFor(manifest) {
     manifest.terminal && `새로 여는 MoonerADE 터미널에 명령${manifest.terminal.bin ? `(${manifest.terminal.bin} 폴더)` : ''}과 환경 변수${manifest.terminal.envPrefix ? `(${manifest.terminal.envPrefix}*)` : ''}를 추가합니다.`,
     manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
     manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.',
-    manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.'
+    manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.',
+    manifest.tab && '앱 상단에 플러그인 탭을 표시합니다.'
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
@@ -384,7 +389,7 @@ export function createPluginStore({ file, crypto }) {
 
 // ---- what a plugin may show and add ------------------------------------------------------------------------------
 const TONES = ['ok', 'warn', 'error', 'info'];
-const FIELD_TYPES = ['text', 'select', 'switch', 'number'];
+const FIELD_TYPES = ['text', 'select', 'switch', 'number', 'password', 'folder', 'textarea'];
 // How far a setup step got: done, todo (not started), active (in progress, e.g. waiting for a browser sign-in), error.
 export const STEP_STATUS = ['done', 'todo', 'active', 'error'];
 // The settings page draws this as plain text; nothing a plugin sends becomes markup.
@@ -403,9 +408,11 @@ export function validView(view) {
     fields: list(view.fields, 24).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => {
       const type = FIELD_TYPES.includes(item.type) ? item.type : 'text';
       const options = type === 'select' ? list(item.options, 12).filter(option => option && str(option.value, 60) && str(option.label, 60)).map(option => ({ value: option.value, label: option.label })) : [];
-      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(item.required === true && { required: true }), ...(options.length && type === 'select' && { options }) };
+      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: type === 'password' ? '' : text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(item.required === true && { required: true }), ...(options.length && type === 'select' && { options }) };
     }),
     actions: list(view.actions, 12).filter(validButton).map(button),
+    formId: text(view.formId, 64),
+    document: view.document && str(view.document.title, 100) && str(view.document.text, 65536) ? { title: view.document.title, text: view.document.text } : null,
     // Only the text to encode; the settings page draws the code itself.
     qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null,
     // How far each setup step got (merged with plugin.json `setup` by id), and which fields, info rows, buttons and the QR
@@ -573,6 +580,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
           terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
+          tab: host?.status === 'running' && item.manifest?.tab === true,
           // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
           commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
           env: host?.status === 'running' && host.terminal ? Object.keys(host.terminal.env) : [],
