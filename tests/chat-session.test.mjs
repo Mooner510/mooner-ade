@@ -55,7 +55,7 @@ for (const agent of ['codex', 'cursor']) {
     await assert.rejects(session.cancelSteer(), /개별 취소/);
     await session.interrupt(); await until(() => session.state().status === 'idle');
     assert.ok(events.some(e => e.kind === 'result' && e.status === 'interrupted'));
-    if (agent === 'cursor') { assert.throws(() => session.branchSnapshot('unknown'), /분기를 제공/); await assert.rejects(session.set({ addDirs: [] }), /추가 작업 폴더/); }
+    if (agent === 'cursor') { assert.throws(() => session.branchSnapshot('unknown'), /분기 기록/); await assert.rejects(session.set({ addDirs: [] }), /추가 작업 폴더/); }
     if (agent === 'cursor') { await session.send('empty'); await until(() => session.state().status === 'idle'); assert.match(session.state().error, /표시할 응답 없이/); }
     await assert.rejects(session.set({ effort: 'made-up' }), /지원하지 않는 Effort/);
     await session.reset();
@@ -588,6 +588,21 @@ test('Cursor exposes context capability, window from config, and usage_update af
   await until(() => session.state().status === 'idle');
   assert.equal(session.state().contextTokens, 14_000);
   assert.equal(session.state().contextWindow, 300_000);
+});
+
+test('Cursor reported token totals survive a child restart and a zero USD cost is available', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-cursor-tokens-'));
+  const options = { directory, id: 'chat', cwd: directory, agent: 'cursor', executable: process.execPath, executableArgs: [fixture, 'cursor'],
+    env: { CURSOR_CONFIG_DIR: path.join(directory, 'cursor'), CURSOR_API_KEY: '', FAKE_CURSOR_USAGE: '1' } };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  await session.send('first'); await until(() => session.state().status === 'idle');
+  assert.deepEqual(session.state().tokens, { input: 10, output: 2, cacheRead: 100, cacheCreate: 5 });
+  assert.equal(session.state().costUsd, 0); assert.equal(session.state().capabilities.cost, true);
+  await session.close(); session = await openChatSession(options);
+  await session.send('second'); await until(() => session.state().status === 'idle');
+  assert.deepEqual(session.state().tokens, { input: 20, output: 4, cacheRead: 200, cacheCreate: 10 });
+  assert.equal(session.stats().tokens.input, 20);
 });
 
 test('listCommands reads argument-hint from project slash commands', async t => {

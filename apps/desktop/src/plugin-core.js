@@ -265,11 +265,12 @@ export function updateReview(before, after) {
 // `builtin[id]` is the on/off choice for a plugin that ships with the app (on until the user turns it off).
 // `updates[id]` is how a plugin is updated (`mode`: auto, notify or manual) and the newest version already announced.
 // `github` is the GitHub account connected in MoonerADE for private plugin repositories: { token, login, via: 'pat'|'oauth' }.
-export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null });
+export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null, ghAccount: null });
 export function validPluginState(value) {
   const state = emptyPluginState();
   if (!value || typeof value !== 'object' || value.version !== 1) return state;
   state.enabled = value.enabled === true;
+  if (typeof value.ghAccount === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(value.ghAccount)) state.ghAccount = value.ghAccount;
   for (const [id, entry] of Object.entries(value.approved ?? {})) {
     if (ID.test(id) && entry && /^[a-f0-9]{64}$/.test(entry.hash) && str(entry.folder, 200) && Number.isFinite(entry.approvedAt)) state.approved[id] = { hash: entry.hash, folder: entry.folder, version: String(entry.version ?? '').slice(0, 32), approvedAt: entry.approvedAt };
   }
@@ -336,7 +337,7 @@ export function createPluginStore({ file, crypto }) {
   }
   // The state as callers see it. approved and data are not enumerable, so `{ ...state }` never opens the sealed file; reading them does.
   function view() {
-    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null };
+    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null, ghAccount: plain.ghAccount };
     if (plain.github) value.github = Object.defineProperty({ ...plain.github }, 'token', { get: () => openSealed().token });
     for (const key of SEALED) Object.defineProperty(value, key, { get: () => openSealed()[key] });
     return value;
@@ -561,6 +562,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       // The GitHub account for private plugin repositories. Never the token itself.
       github: {
         available: Boolean(github), login: store.state.github?.login ?? null, via: store.state.github?.via ?? null, machine: machineVia, machineChecked, signIn: Boolean(clientId), error: githubError,
+        ghAvailable, accounts: machineAccounts, ghAccount: store.state.ghAccount,
         device: device ? { userCode: device.userCode, verifyUrl: device.verifyUrl, expiresAt: device.expiresAt } : null
       },
       plugins: list.map(item => {
@@ -1052,7 +1054,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // ---- updates from the plugin's GitHub releases (plugin.json `source`) --------------------------------------------
   // id -> { status: 'checking'|'latest'|'available'|'downloading'|'installing'|'error', found, checkedAt, error, review }
   const updates = new Map(), checking = new Map();
-  let updateTimers = [], round = null, machineVia = null, machineChecked = false, device = null, githubError = null;
+  let updateTimers = [], round = null, machineVia = null, machineChecked = false, device = null, githubError = null, ghAvailable = false, machineAccounts = [];
   const modeOf = id => store.state.updates?.[id]?.mode ?? DEFAULT_UPDATE_MODE;
   function updateView(item) {
     const id = item.manifest.id, source = item.manifest.source ?? null;
@@ -1199,7 +1201,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       buttons: ['연결', '취소'], defaultId: 0, cancelId: 1
     });
     if (answer !== 0) return snapshot();
-    store.update(state => ({ ...state, github: { token: value, login, via: 'pat', at: Date.now() } }));
+    store.update(state => ({ ...state, ghAccount: null, github: { token: value, login, via: 'pat', at: Date.now() } }));
     githubError = null;
     changed();
     return { ...snapshot(), message: `GitHub 계정 ${login}을(를) 연결했습니다.` };
@@ -1231,7 +1233,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         if (device !== current) return;
         if (answer.token) {
           const { login } = await github.whoami(answer.token);
-          store.update(state => ({ ...state, github: { token: answer.token, login, via: 'oauth', at: Date.now() } }));
+          store.update(state => ({ ...state, ghAccount: null, github: { token: answer.token, login, via: 'oauth', at: Date.now() } }));
           device = null; changed();
           return;
         }
@@ -1243,10 +1245,27 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   function cancelSignIn() { device = null; changed(); return snapshot(); }
   // Which login this PC itself has for GitHub (gh / git), for the settings page. The token is not kept.
   async function probeGithub() {
-    try { machineVia = (await probeCredential())?.via ?? null; } catch { machineVia = null; }
+    try {
+      const found = await probeCredential();
+      machineVia = found?.via ?? null;
+      ghAvailable = found?.ghAvailable === true;
+      machineAccounts = found?.accounts ?? [];
+      githubError = null;
+    } catch (error) { machineVia = null; machineAccounts = []; githubError = error.message; }
     machineChecked = true;
     changed();
     return snapshot();
+  }
+
+  async function selectGithubAccount(login) {
+    await probeGithub();
+    if (githubError || !ghAvailable || !machineAccounts.some(account => account.login === login && account.valid)) throw fail('사용할 수 있는 gh 계정을 선택하세요. 계정 목록을 새로고침하고 다시 시도하세요.', 'GH_AUTH_FAILED');
+    if (checking.size || [...updates.values()].some(entry => ['downloading', 'installing'].includes(entry.status))) throw fail('플러그인 조회 또는 업데이트가 끝난 뒤 계정을 변경하세요.', 'BUSY');
+    device = null;
+    store.update(state => ({ ...state, github: null, ghAccount: login }));
+    updates.clear();
+    changed();
+    return { ...snapshot(), message: `gh 계정 ${login}으로 플러그인을 조회합니다.` };
   }
 
   function close() {
@@ -1257,5 +1276,5 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
 
   return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback,
-    startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, runUpdateRound: runRound };
+    startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, selectGithubAccount, runUpdateRound: runRound };
 }

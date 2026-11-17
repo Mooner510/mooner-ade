@@ -24,6 +24,7 @@ test('terminal processes detect native macOS CLIs, npm wrappers, exec and SSH wi
     90 1 /bin/zsh
     91 90 /Users/me/.local/bin/agent --use-system-ca /Users/me/.local/share/cursor-agent/versions/2026.10.19-6bbf2c4/index.js --resume
     92 1 /usr/local/bin/agent --config cursor-agent.json index.js
+    93 1 "C:\\Users\\me\\AppData\\Local\\cursor-agent\\versions\\2026.11.11-043ef28\\node.exe" "C:\\Users\\me\\AppData\\Local\\cursor-agent\\versions\\2026.11.11-043ef28\\index.js" acp
   `);
   const inspect = terminalProcesses(table);
   assert.partialDeepStrictEqual(inspect(10), { agent: 'claude', ssh: false });
@@ -36,6 +37,7 @@ test('terminal processes detect native macOS CLIs, npm wrappers, exec and SSH wi
   assert.partialDeepStrictEqual(inspect(80), { agent: 'cursor', agentPid: 81, ssh: false });
   assert.partialDeepStrictEqual(inspect(90), { agent: 'cursor', agentPid: 91, ssh: false });
   assert.equal(inspect(92).agent, null);
+  assert.equal(inspect(93).agent, 'cursor');
   assert.equal(terminalProcesses(table.filter(entry => entry.pid !== 11 && entry.pid !== 12))(10).agent, null);
 });
 

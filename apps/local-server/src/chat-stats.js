@@ -17,6 +17,52 @@ const usageOf = raw => {
 };
 const isPrompt = content => typeof content === 'string' ? content.trim() !== '' : Array.isArray(content) && content.some(part => part?.type === 'text' && String(part.text ?? '').trim() !== '');
 
+// ADE events report completed turns, not individual model requests. Cumulative token snapshots are differenced once per turn.
+export function chatEventStats(events) {
+  const start = events.findLastIndex(event => event.kind === 'divider');
+  const kept = events.slice(start + 1), tools = new Map(), calls = new Map(), failed = new Set(), models = new Map(), timeline = [], turnSeries = [], compactionAt = [];
+  let previous = {}, current = {}, context = 0, model = 'unknown', turn = 0, tokensAvailable = false, cost = null;
+  const tokens = { input: 0, output: 0, thinking: 0, read: 0, write5m: 0, write1h: 0 };
+  for (const event of kept) {
+    if (event.model) model = event.model;
+    if (event.kind === 'user') turn++;
+    if (event.kind === 'compact') compactionAt.push(event.at);
+    if (event.kind === 'usage') {
+      if (event.tokens) { current = event.tokens; tokensAvailable = true; }
+      context = event.contextTokens ?? context;
+      if (Number.isFinite(event.costUsd)) cost = event.costUsd;
+    }
+    if (event.kind === 'message') for (const block of event.blocks ?? []) {
+      if (block.type !== 'tool_use' || calls.has(block.id)) continue;
+      calls.set(block.id, block.name);
+      const row = tools.get(block.name) ?? { name: block.name, count: 0, errors: 0 };
+      row.count++; tools.set(block.name, row);
+    }
+    if (event.kind === 'tool_result' && event.isError && calls.has(event.toolUseId) && !failed.has(event.toolUseId)) {
+      tools.get(calls.get(event.toolUseId)).errors++;
+      failed.add(event.toolUseId);
+    }
+    if (event.kind !== 'result') continue;
+    const delta = key => Math.max(0, num(current[key]) - num(previous[key]));
+    const input = delta('input'), output = delta('output'), read = delta('cacheRead'), write = delta('cacheCreate'), thinking = delta('thinking');
+    tokens.input += input; tokens.output += output; tokens.read += read; tokens.write5m += write; tokens.thinking += thinking;
+    previous = { ...current };
+    if (Number.isFinite(event.costUsd)) cost = event.costUsd;
+    const row = models.get(model) ?? { model, requests: 0, input: 0, output: 0, read: 0, write: 0, costUsd: null };
+    row.requests++; row.input += input; row.output += output; row.read += read; row.write += write; models.set(model, row);
+    timeline.push({ at: event.at, ctx: context, output, costUsd: event.turnCostUsd ?? null, turn, sub: false });
+    turnSeries.push({ index: turn, at: event.at, requests: 1, output, ctx: context, costUsd: event.turnCostUsd ?? null, ms: event.durationMs ?? 0 });
+  }
+  tokens.input = Math.max(tokens.input, num(current.input)); tokens.output = Math.max(tokens.output, num(current.output));
+  tokens.read = Math.max(tokens.read, num(current.cacheRead)); tokens.write5m = Math.max(tokens.write5m, num(current.cacheCreate));
+  const input = tokens.input + tokens.read + tokens.write5m;
+  return { source: 'ade', tokensAvailable, contextAvailable: kept.some(event => event.kind === 'usage' && Number.isFinite(event.contextTokens)), requests: turnSeries.length, subRequests: 0, turns: turn, compactions: compactionAt.length, compactionAt,
+    startedAt: kept[0]?.at ?? null, endedAt: kept.at(-1)?.at ?? null, activeMs: turnSeries.reduce((sum, row) => sum + row.ms, 0), tokens,
+    cacheHitRate: tokensAvailable && input > 0 ? tokens.read / input : null, peakContext: Math.max(0, ...timeline.map(row => row.ctx)),
+    cost: cost === null ? null : { totalUsd: cost, toolMs: 0, linesAdded: 0, linesRemoved: 0 }, models: [...models.values()],
+    tools: [...tools.values()].sort((a, b) => b.count - a.count), toolCalls: [...tools.values()].reduce((sum, row) => sum + row.count, 0), timeline, turnSeries, blocks: [] };
+}
+
 export async function readSessionStats(files, since = [], total = null) {
   const requests = new Map(), tools = new Map(), toolName = new Map(), turns = [{ at: null, ms: 0 }], compactions = [];
   let costState = null;
