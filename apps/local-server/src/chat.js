@@ -22,6 +22,7 @@ import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
+import { readLastLines } from './file-util.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -87,7 +88,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   cwd = meta.cwd ?? cwd;
   let events = [], seq = 0;
   try {
-    for (const line of (await fs.readFile(logFile, 'utf8')).split('\n')) { if (!line) continue; try { const event = JSON.parse(line); events.push(event); seq = Math.max(seq, event.seq); } catch { /* torn last line after a crash */ } }
+    // Only the tail is read: the log on disk keeps every event (history, stats and reviews can read it whole), a chat shows the last KEEP_EVENTS, and `seq` only grows.
+    for (const line of await readLastLines(logFile, KEEP_EVENTS)) { if (!line) continue; try { const event = JSON.parse(line); events.push(event); seq = Math.max(seq, event.seq); } catch { /* torn last line after a crash */ } }
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   events = events.slice(-KEEP_EVENTS);
 
@@ -215,10 +217,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
   const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
+  let lastMeta = null;
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
+    if (data === lastMeta) return writing;
+    lastMeta = data;
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
-    writing = saved.catch(reportStorage); return saved;
+    writing = saved.catch(error => { if (lastMeta === data) lastMeta = null; reportStorage(error); }); return saved;
   };
   const tokensShown = () => {
     const reported = turnUsage ?? zero();
@@ -1088,7 +1094,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
       closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
-      if (child) { const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref(); }
+      if (child) {
+        const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();
+        // Closed means the child is gone: on Windows a still-exiting child keeps its folder locked, so the caller (or a test) could not delete it right after close.
+        await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 2000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
+      }
       await cursorSnapshot;
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});

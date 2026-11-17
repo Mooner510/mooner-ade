@@ -24,7 +24,7 @@ import { createTerminalStatus } from './terminal-status.js';
 import { createTerminalBuffer } from './terminal-buffer.js';
 import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
-import { chatMcpServers, deniedMcpTools, readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
+import { readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
 import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
@@ -33,7 +33,7 @@ import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, 
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
-import { chatPrompt } from './chat-prompt.js';
+import { chatLaunchFiles } from './chat-launch-files.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
@@ -371,7 +371,7 @@ async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
     keyAvailable: () => agentKeys.hasKey(agent),
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
-    prepare: chatLaunchFiles, recover: () => checkAgents(), defaults,
+    prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
   project.chats.set(id, chat);
   return chat;
@@ -648,23 +648,6 @@ async function createProject(input) {
 function trimRecent(list) {
   let unpinned = 0;
   return list.filter(item => item.pinned || ++unpinned <= 30);
-}
-// The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript, and
-// the plugin tools the user turned off as deny rules in a --settings file.
-// A built-in plugin's server (the agent bus) also gets the chat it serves (ADE_CHAT_*) and its tools are allowed without a prompt.
-async function chatLaunchFiles(root, context) {
-  const servers = chatMcpServers(context);
-  // The file-path and interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
-  const promptFile = context.interactiveUi || context.fileLinks ? path.join(root, 'ade-ui-prompt.md') : undefined;
-  if (promptFile) await fs.writeFile(promptFile, chatPrompt(context.interactiveUi, context.fileLinks), { mode: 0o600 });
-  if (!servers.length) return { promptFile };
-  const mcpFile = path.join(root, 'claude-mcp.json');
-  await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }), { mode: 0o600 });
-  const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-  if (!denied.length && !allowed.length) return { mcpFile, promptFile };
-  const settingsFile = path.join(root, 'claude-settings.json');
-  await fs.writeFile(settingsFile, JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }), { mode: 0o600 });
-  return { mcpFile, settingsFile, promptFile };
 }
 // Terminal -> chat for a Claude that is completely at rest: nothing running, no dialog open, no background task or wakeup pending.
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
