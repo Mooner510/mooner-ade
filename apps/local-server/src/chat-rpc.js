@@ -106,7 +106,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     const extra = completed && item.type === 'agentMessage' ? { uuid: item.id, turnId: atTurn } : {};
     if (item.type === 'agentMessage' || item.type === 'plan') { if (completed) message(item.id, [{ type: 'text', text: item.text ?? '' }], extra); }
     else if (item.type === 'reasoning') { if (completed) message(item.id, [{ type: 'thinking', text: [...(item.summary ?? []), ...(item.content ?? [])].join('\n') }]); }
-    else if (item.type === 'contextCompaction') { if (completed) { emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: null, postTokens: null }); if (compacting) { compacting = false; result(); } } }
+    else if (item.type === 'contextCompaction') { if (completed) emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: null, postTokens: null }); }
     else if (item.type !== 'userMessage') {
       const name = item.type === 'commandExecution' ? 'Bash' : item.type === 'fileChange' ? 'Patch' : item.tool ?? item.type;
       const input = item.type === 'commandExecution' ? { command: item.command, cwd: item.cwd } : item.type === 'fileChange' ? { changes: item.changes }
@@ -144,7 +144,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       } else if (method === 'thread/tokenUsage/updated') {
         const value = params.tokenUsage;
         emit({ kind: 'usage', tokens: usage(value.total), contextTokens: value.last.totalTokens, contextWindow: value.modelContextWindow });
-      } else if (method === 'turn/completed') { chunks.clear(); result(params.turn.status === 'interrupted' ? 'interrupted' : params.turn.status === 'failed' ? 'failed' : 'success', params.turn.error?.message ?? ''); }
+      } else if (method === 'turn/completed') { chunks.clear(); compacting = false; result(params.turn.status === 'interrupted' ? 'interrupted' : params.turn.status === 'failed' ? 'failed' : 'success', params.turn.error?.message ?? ''); }
       else if (method === 'error' && !params.willRetry) emit({ kind: 'error', message: params.error?.message ?? 'Codex 오류' });
       else if (method === 'serverRequest/resolved') { const id = String(params.requestId); approvals.delete(id); emit({ kind: 'approval', phase: 'cancel', requestId: id }); }
       return;

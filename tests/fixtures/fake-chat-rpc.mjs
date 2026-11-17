@@ -78,6 +78,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       if (text === 'question') send({ id: requestId, method: cursor ? 'cursor/ask_question' : 'item/tool/requestUserInput', params: { threadId: sessionId, questions: cursor ? [{ id: 'q1', prompt: '선택', options: [{ id: 'a', label: 'A' }] }] : [{ id: 'q1', question: '선택', options: [{ label: 'A' }] }] } });
       else send({ id: requestId, method: cursor ? 'session/request_permission' : 'item/commandExecution/requestApproval', params: cursor ? { sessionId, toolCall: { title: 'Bash', rawInput: { command: 'pwd' } }, options: [{ optionId: 'allow', kind: 'allow_once' }, { optionId: 'always', kind: 'allow_always' }, { optionId: 'deny', kind: 'reject_once' }] } : { threadId: sessionId, itemId: 'tool-1', command: 'pwd', availableDecisions: ['accept', 'acceptForSession', 'decline'] } });
     } else finish();
+  } else if (raw.method === 'thread/compact/start') {
+    turnId = `compact-${++count}`; reply(raw.id, {}); notify('turn/started', { threadId: sessionId, turn: { id: turnId } });
+    notify('item/started', { threadId: sessionId, turnId, item: { id: 'compact', type: 'contextCompaction' } });
+    setTimeout(() => { notify('item/completed', { threadId: sessionId, turnId, item: { id: 'compact', type: 'contextCompaction' } }); setTimeout(() => notify('turn/completed', { threadId: sessionId, turn: { id: turnId, status: 'completed' } }), 100); }, 100);
   } else if (raw.method === 'turn/steer') reply(raw.id, { turnId });
   else if (raw.method === 'turn/interrupt') { reply(raw.id, {}); finish('interrupted'); }
   else if (raw.method === 'session/cancel') finish('interrupted');

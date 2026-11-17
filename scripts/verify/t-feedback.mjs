@@ -75,7 +75,7 @@ for (const [mode, expectCode] of [['fail', null], ['badjson', null], ['empty', n
   await check(`F3.3-${mode}`, `ai-draft failure (${mode}): status rolls back to draft with error, item not lost`, async () => {
     await s.setCtl({ fb: mode }); const f = await s.api('feedback/create', { body: '원문 유지' });
     const r = await s.status('feedback/ai-draft', { id: f.id }); ok(r.status >= 400, 'status ' + r.status + ' ' + JSON.stringify(r.body));
-    const back = await s.api('feedback/get', { id: f.id }); eq(back.status, 'draft'); eq(back.body, '원문 유지'); ok(/AI 정리 실패/.test(back.error ?? ''), 'error recorded: ' + back.error);
+    const back = await s.api('feedback/get', { id: f.id }); eq(back.status, 'draft'); eq(back.body, '원문 유지'); ok(/AI 작성 실패/.test(back.error ?? ''), 'error recorded: ' + back.error);
     await s.setCtl({}); return `${r.status} ${r.body?.error?.code ?? r.body?.code ?? ''}`;
   });
 }

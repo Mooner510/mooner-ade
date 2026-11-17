@@ -48,6 +48,12 @@ export const feedbackCall = async (action: string, input: object) => applyItem(a
 export const openFeedback = (id: string) => set({ currentId: id });
 export const removeLocal = (id: string) => set({ items: state.items.filter(item => item.id !== id), currentId: state.currentId === id ? '' : state.currentId });
 export const createFeedback = async () => { const item = await feedbackCall('feedback/create', {}); set({ currentId: item.id }); return item; };
+// A fresh draft for the write screen; calls while one is being made share it (the panel opens straight into an editor, so nothing may create two).
+let starting: Promise<Feedback> | null = null;
+export function startDraft() {
+  if (!starting) starting = createFeedback().finally(() => { starting = null; });
+  return starting;
+}
 // The open item if it can still take images, else a fresh draft.
 export async function ensureDraft() {
   const current = state.items.find(item => item.id === state.currentId);

@@ -26,7 +26,7 @@ import '@fontsource-variable/noto-sans-kr/wght.css';
 import '@fontsource-variable/jetbrains-mono/wght.css';
 
 // data-blurred: the window is not the one in use. A blur also comes when focus moves into a chat's UI iframe, so it is decided by hasFocus() a tick later.
-const syncFocus = () => document.documentElement.toggleAttribute('data-blurred', !document.hasFocus());
+const syncFocus = () => document.documentElement.toggleAttribute('data-blurred', !document.hasFocus() && !document.documentElement.hasAttribute('data-keep-anim'));
 addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(syncFocus)); syncFocus();
 import './style.css';
 
@@ -296,6 +296,7 @@ function Shell() {
     }).catch(cause => setBootError(errorText(cause)));
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
+  useEffect(() => { document.documentElement.toggleAttribute('data-keep-anim', settings.animateInBackground); syncFocus(); }, [settings.animateInBackground]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
   useEffect(() => { (window as unknown as { adeDesktop?: { setZoom?(percent: number): void } }).adeDesktop?.setZoom?.(settings.uiZoom); }, [settings.uiZoom]);
   // A custom accent replaces the theme's accent family inline; an empty one removes the override so the stylesheet applies again.

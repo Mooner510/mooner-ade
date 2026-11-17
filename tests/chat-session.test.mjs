@@ -19,6 +19,18 @@ async function setup(t, agent) {
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
   return { directory, events, options, get session() { return session; }, async reopen() { await session.close(); session = await openChatSession(options); return session; } };
 }
+test('Codex manual compact remains busy until its turn completes', async t => {
+  const { session, events } = await setup(t, 'codex');
+  await session.send('/compact');
+  await until(() => events.some(event => event.kind === 'compact'));
+  assert.equal(session.state().status, 'working');
+  assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active));
+  assert.equal(events.filter(event => event.kind === 'result').length, 0);
+  await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'result').length, 1);
+  await session.send('follow-up'); await until(() => session.state().status === 'idle');
+  assert.ok(events.some(event => event.kind === 'user' && event.text === 'follow-up'));
+});
 for (const agent of ['codex', 'cursor']) {
   test(`${agent}: streaming, images, restart and exact session restore`, async t => {
     const ctx = await setup(t, agent), { session } = ctx;

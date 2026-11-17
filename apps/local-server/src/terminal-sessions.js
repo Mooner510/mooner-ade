@@ -142,7 +142,9 @@ export async function terminalSessionShell(directory, id, shell) {
   if (windows) {
     // PSReadLine 2.1+ can suggest from history, but Windows PowerShell leaves it off; respect any source the profile chose.
     const predictions = `$readLine = Get-Module PSReadLine | Select-Object -First 1\nif ($readLine -and $readLine.Version -ge [version]'2.1' -and (Get-PSReadLineOption).PredictionSource -eq 'None') { Set-PSReadLineOption -PredictionSource History }\nRemove-Variable readLine`;
-    await fs.writeFile(init, `${predictions}\n${functions}`);
+    // PSReadLine's default Windows mode leaves Ctrl+D unbound (^D does nothing); bind it like bash/zsh (delete a character, exit on an empty line) unless the profile already chose something.
+    const eof = `if (Get-Module PSReadLine) { if (-not (Get-PSReadLineKeyHandler -Bound | Where-Object { $_.Key -eq 'Ctrl+d' })) { Set-PSReadLineKeyHandler -Chord 'Ctrl+d' -Function DeleteCharOrExit } }`;
+    await fs.writeFile(init, `${predictions}\n${eof}\n${functions}`);
     return { args: ['-NoExit', '-Command', `. ${quote(init, true)}`], env: {}, tracked: true };
   }
   if (name === 'fish') {

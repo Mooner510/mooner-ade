@@ -39,10 +39,11 @@ import { createAgentKeys } from './agent-keys.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
-import { createFeedbackStore } from './feedback-store.js';
+import { createFeedbackStore, issueTitle } from './feedback-store.js';
 import { runFeedbackDraft, FEEDBACK_MODELS, FEEDBACK_EFFORTS } from './feedback-agent.js';
 import { createFeedbackQueue } from './feedback-queue.js';
 import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
+import { deviceUUID, feedbackIdentity } from './feedback-identity.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
@@ -86,6 +87,7 @@ const pty = ptyHost
   : localPty;
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
+const installationUUID = await deviceUUID(dataRoot);
 const projects = new Map();
 // The feedback inbox (feedback-store.js). Every screen is told when an item changes and fetches the list again.
 const feedback = createFeedbackStore({ root: path.join(dataRoot, 'feedback'), onChange: id => { for (const socket of clients) send(socket, { type: 'feedback/changed', ...(id && { id }) }); } });
@@ -118,9 +120,9 @@ let feedbackDevice = null;
 // or anonymously at most once per 5 minutes. The item id is the Hub's idempotency key, so a resend never doubles an issue.
 const feedbackQueue = createFeedbackQueue({
   store: feedback, stateFile: path.join(feedback.root, 'queue.json'), availability: feedbackAvailability,
-  metaOf: item => ({ clientKey: item.id, title: item.title, body: item.body, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` }),
-  sendAccount: submitThroughApp,
-  sendAnonymous: async (meta, images) => postAnonymousFeedback({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), meta, images })
+  metaOf: item => ({ clientKey: item.id, title: issueTitle(item), body: item.body, types: item.types, source: item.source, appVersion, platform: `${process.platform}-${process.arch}` }),
+  sendAccount: async (meta, images) => submitThroughApp({ ...meta, deviceUUID: installationUUID, ...await feedbackIdentity() }, images),
+  sendAnonymous: async (meta, images) => postAnonymousFeedback({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), meta: { ...meta, deviceUUID: installationUUID, ...await feedbackIdentity() }, images })
 });
 async function feedbackSubmit(id) {
   if (feedbackRunning.has(id)) throw fault('FEEDBACK_LOCKED', '이미 처리 중입니다.', 409);
@@ -142,10 +144,11 @@ async function feedbackAiDraft(id, input) {
     const item = await feedback.get(id);
     previous = item.status;
     await feedback.setStatus(id, 'drafting', { error: undefined }, { from: ['draft', 'review', 'failed'] });
-    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), model: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }[input.model] ?? (FEEDBACK_MODELS.includes(input.model) ? input.model : 'claude-haiku-5-5'), effort: FEEDBACK_EFFORTS.includes(input.effort) ? input.effort : 'low', title: item.title, body: item.body, note, context, env: pluginEnv });
-    return await feedback.setStatus(id, 'review', { title: draft.title || item.title, body: draft.body, source: 'ai', reviewed: false });
+    const draft = await runFeedbackDraft({ cwd: feedback.folder(id), images: feedback.imagesOf(item).map(image => image.path), model: { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }[input.model] ?? (FEEDBACK_MODELS.includes(input.model) ? input.model : 'claude-haiku-5-5'), effort: FEEDBACK_EFFORTS.includes(input.effort) ? input.effort : 'low', title: item.title, body: item.body, types: item.types, note, context, env: pluginEnv });
+    // The types the person already picked stay; the AI's pick is only for a draft with none.
+    return await feedback.setStatus(id, 'review', { title: draft.title || item.title, body: draft.body, types: item.types.length ? item.types : draft.types, source: 'ai', reviewed: false });
   } catch (error) {
-    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 정리 실패: ${error.message}` }).catch(() => {});
+    if (previous) await feedback.setStatus(id, previous === 'failed' ? 'draft' : previous, { error: `AI 작성 실패: ${error.message}` }).catch(() => {});
     throw error;
   } finally { feedbackRunning.delete(id); }
 }
@@ -743,8 +746,8 @@ async function feedbackRoute(action, input) {
   switch (action) {
     case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability(), queue: await feedbackQueue.info() };
     case 'feedback/get': return feedback.get(id());
-    case 'feedback/create': return feedback.create({ title: input.title, body: input.body });
-    case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, reviewed: input.reviewed });
+    case 'feedback/create': return feedback.create({ title: input.title, body: input.body, types: input.types });
+    case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, types: input.types, reviewed: input.reviewed });
     case 'feedback/delete': return feedback.remove(id());
     case 'feedback/image/add': return feedback.addImage(id(), image(), input.mime);
     case 'feedback/image/replace': return feedback.replaceImage(id(), input.name, image());

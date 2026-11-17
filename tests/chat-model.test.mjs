@@ -420,6 +420,8 @@ test("compacting shows while the CLI compacts and leaves a marker that keeps the
   view = reduce(view, { kind: "delta", phase: "compacting", active: true });
   assert.equal(view.compacting, true);
   view = reduce(view, { kind: "compact", trigger: "manual", preTokens: 231097, postTokens: 14613 });
+  assert.equal(view.compacting, true, 'the compact item can precede turn completion');
+  view = reduce(view, { kind: "result", status: "success" });
   assert.equal(view.compacting, false);
   assert.deepEqual(view.items.map(item => item.kind), ["user", "compact"]);
   assert.deepEqual([view.items[1].preTokens, view.items[1].postTokens], [231097, 14613]);
@@ -571,6 +573,7 @@ test('a background job that ends by itself leaves one 알림 rule, since the CLI
   view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
   view = reduce(view, { seq: 4, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
   assert.deepEqual(view.items.filter(item => item.kind === 'note').map(item => item.text), ['알림 · Watch hub 끝남']);
+  assert.deepEqual(view.items.find(item => item.kind === 'note').tones, [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: 'Watch hub 끝남', color: 'var(--fg)' }]);
 });
 
 test('agent list and pending maps keep their identity while nothing about them changed (pane contexts read by every tool card)', () => {

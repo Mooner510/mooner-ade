@@ -57,22 +57,38 @@ async function titleOf(file) {
 }
 
 export async function listCliSessions({ directory, cwd, configDirs }) {
-  const bySession = await chatsBySession(directory), sessions = [], seen = new Set();
+  const bySession = await chatsBySession(directory), sessions = [], candidates = new Map();
   for (const dir of new Set(configDirs)) {
     const folder = cliProjectFolder(dir, cwd), live = await liveSessions(dir);
-    for (const name of await fs.readdir(folder).catch(() => [])) {
-      const sessionId = name.slice(0, -'.jsonl'.length);
-      if (!name.endsWith('.jsonl') || !UUID.test(sessionId) || seen.has(sessionId)) continue;
+    const names = (await fs.readdir(folder).catch(() => [])).filter(name => name.endsWith('.jsonl') && UUID.test(name.slice(0, -'.jsonl'.length)));
+    for (let at = 0; at < names.length; at += 32) {
+      const batch = await Promise.all(names.slice(at, at + 32).map(async name => {
+        try { const file = path.join(folder, name); return { file, sessionId: name.slice(0, -'.jsonl'.length), stat: await fs.stat(file), live }; }
+        catch { return null; } // vanished or unreadable
+      }));
+      for (const item of batch) if (item) {
+        const copies = candidates.get(item.sessionId) ?? [];
+        copies.push(item); candidates.set(item.sessionId, copies);
+      }
+    }
+  }
+  // Inspect newest candidates first: older transcripts cannot enter the 50 rows we return.
+  // Copies stay in config-directory order so the project's account still takes precedence.
+  const groups = [...candidates.values()].map(copies => ({ copies, newest: Math.max(...copies.map(item => item.stat.mtimeMs)) })).sort((a, b) => b.newest - a.newest);
+  for (const { copies, newest } of groups) {
+    if (sessions.length === MAX_LISTED && newest < sessions.at(-1).updatedAt) break;
+    for (const { file, sessionId, stat, live } of copies) {
       try {
-        const file = path.join(folder, name), stat = await fs.stat(file);
         const title = await titleOf(file);
-        if (!title) continue; // never answered or only commands: nothing worth continuing
-        seen.add(sessionId);
+        if (!title) continue;
         sessions.push({ sessionId, title, updatedAt: stat.mtimeMs, size: stat.size, running: live.has(sessionId), chatId: bySession.get(sessionId) ?? null });
+        sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+        if (sessions.length > MAX_LISTED) sessions.pop();
+        break;
       } catch { /* vanished or unreadable */ }
     }
   }
-  return sessions.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_LISTED);
+  return sessions;
 }
 
 // A plain-CLI conversation continued as a chat: same seeding as terminal -> chat, minus the process hand-over.

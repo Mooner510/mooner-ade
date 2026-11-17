@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, utimes } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cliProjectFolder, importCliSession, listCliSessions } from '../apps/local-server/src/cli-sessions.js';
@@ -59,4 +60,32 @@ test('a conversation still open in a running claude is refused', async t => {
   await writeFile(join(dir, 'sessions', `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: A, cwd }));
   assert.equal((await listCliSessions({ directory: join(root, 'data'), cwd, configDirs: [dir] }))[0].running, true);
   await assert.rejects(importCliSession({ directory: join(root, 'data'), id: 'x', sessionId: A, cwd, configDirs: [dir] }), { code: 'CHAT_SWITCH_UNSAFE' });
+});
+
+test('only the newest 50 usable transcripts are opened, with account precedence and titleless fallback', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ade-cli-many-')), dir = join(root, 'claude'), other = join(root, 'other'), cwd = join(root, 'project');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const folder = cliProjectFolder(dir, cwd), otherFolder = cliProjectFolder(other, cwd);
+  await mkdir(folder, { recursive: true }); await mkdir(otherFolder, { recursive: true });
+  const id = n => `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
+  const put = async (folder, n, text, time = n) => {
+    const file = join(folder, `${id(n)}.jsonl`);
+    await writeFile(file, text); await utimes(file, time, time);
+  };
+  for (let n = 1; n <= 120; n++) await put(folder, n, transcript(`대화 ${n}`));
+  await put(folder, 121, line('user', { role: 'user', content: '/clear' }) + '\n');
+  const opened = [], open = fs.open;
+  t.mock.method(fs, 'open', async (...args) => { opened.push(args[0]); return open(...args); });
+  const options = { directory: join(root, 'data'), cwd, configDirs: [dir] };
+  let sessions = await listCliSessions(options);
+  assert.equal(sessions.length, 50);
+  assert.equal(sessions[0].sessionId, id(120)); assert.equal(sessions.at(-1).sessionId, id(71));
+  assert.equal(opened.length, 51, 'the command-only newest transcript must not hide an older usable one');
+
+  await put(otherFolder, 1, transcript('다른 계정의 최신 복사본'), 200);
+  await put(otherFolder, 121, transcript('빈 대화의 다른 복사본'), 201);
+  sessions = await listCliSessions({ ...options, configDirs: [dir, other] });
+  assert.equal(sessions[0].sessionId, id(121)); assert.equal(sessions[0].title, '빈 대화의 다른 복사본');
+  assert.ok(!sessions.some(item => item.sessionId === id(1)), 'the older project-account copy keeps precedence');
+  assert.equal(sessions.at(-1).sessionId, id(72));
 });
