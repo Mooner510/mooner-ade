@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.5.12",
+    "date": "2026-11-17",
+    "time": "23:12",
+    "items": [
+      { "kind": "신규 기능", "title": "플러그인 패널과 채팅", "icon": "plugin", "text": "상단 탭 대신 헤더 버튼으로 플러그인 패널을 열고, 플러그인과 채팅하고, 비밀값을 가려서 입력해요." },
+      { "kind": "신규 기능", "title": "플랜·API 전환", "icon": "key", "text": "Claude 채팅 상태 줄의 Plan Usage / API Usage 버튼으로 CLI 플랜과 API 키를 채팅 중에 바꿔요. 채팅마다 쓰던 인증 방식이 유지돼요." },
+      { "kind": "개선", "title": "Codex 크레딧 사용률", "icon": "chart", "text": "Codex 크레딧 지출 한도를 사용률 막대로 한눈에 확인해요." },
+      { "kind": "개선", "title": "업데이트 진행 표시", "icon": "laptop", "text": "업데이트 진행 상황이 모든 운영체제에서 메인 창 안에 표시돼요." },
+      { "kind": "개선", "title": "피드백 패널", "icon": "sparkles", "text": "피드백을 보낸 사람이 구분되고 패널이 더 보기 편해졌어요. 채팅과 세션 정리도 다듬었어요." },
+      { "kind": "개선", "title": "PowerShell Ctrl+D", "icon": "keyboard", "text": "Windows PowerShell 터미널에서 Ctrl+D로 글자를 지우고, 빈 줄에서는 셸을 종료해요." }
+    ]
+  },
+  {
     "version": "0.5.11",
     "date": "2026-11-17",
     "time": "14:11",
