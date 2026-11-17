@@ -360,7 +360,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // A reply to something we asked (set_model, interrupt, ...).
     if (raw?.type === 'control_response') { controls.get(raw.response?.request_id)?.(raw.response); controls.delete(raw.response?.request_id); }
     if (protocol) { protocol.handle(raw); return; }
-    for (const event of normalizeClaude(raw)) handleEvent(event);
+    for (const event of normalizeClaude(raw, meta.model ?? state.model)) handleEvent(event);
   }
   // The CLI says only in the result text that auto mode refused a call. The refusal is recorded next to the call it was for (its input, the reason and the exact allow rule
   // that would let it through), so the screen and a later "allow and retry" work from what the CLI really ran, never from what the page sends.
@@ -975,6 +975,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (model !== undefined) {
         if (model !== null && !(typeof model === 'string' && /^[\w.\[\]-]{1,100}$/.test(model))) throw fault('INVALID_INPUT', '잘못된 모델입니다.');
         meta.model = model ?? undefined; lastMainModel = undefined;
+        // The window reported for the previous model must not size the new one; the catalog stands in until the next result reports it.
+        if (agent === 'claude' && model !== state.model) state.contextWindow = null;
         if (model === null) {
           // "Default model": the running CLI has no way to go back to its default, so it is restarted without --model (same session). Until the next
           // answer's init event reports the real model, none is shown as chosen.

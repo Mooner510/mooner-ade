@@ -121,6 +121,9 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   return `${command} --settings ${quote(settingsFile)} --mcp-config ${quote(mcpFile)}`;
 }
 
+// Claude Code's own subcommands (`claude --help`): they run without the session flags ADE adds to an interactive `claude`.
+export const CLAUDE_SUBCOMMANDS = ['update', 'upgrade', 'doctor', 'install', 'mcp', 'plugin', 'plugins', 'auth', 'auto-mode', 'agents', 'attach', 'logs', 'respawn', 'rm', 'stop', 'kill', 'setup-token', 'import', 'purge', 'gateway', 'ultrareview'];
+
 // Source the user's normal startup first; these functions exist only in ADE's interactive shell.
 export async function terminalSessionShell(directory, id, shell) {
   const name = path.basename(shell).toLowerCase().replace(/\.exe$/, '');
@@ -128,16 +131,25 @@ export async function terminalSessionShell(directory, id, shell) {
   const root = folder(directory, id), windows = ['powershell', 'pwsh'].includes(name);
   const claude = await terminalAgentCommand(directory, id, 'claude');
   const codex = await terminalAgentCommand(directory, id, 'codex');
+  // `claude update`, `claude mcp ...` and the like are not sessions: the session flags must not go in front of them (the variadic --mcp-config
+  // swallowed `update` as a config file name), so a CLI subcommand runs the plain command.
+  const subcommands = CLAUDE_SUBCOMMANDS;
   const functions = windows
     ? [claude, codex].map(command => {
-      const agent = command.split(' ')[0];
-      return `function global:${agent} { & (Get-Command ${agent} -CommandType Application -ErrorAction Stop).Source ${command.slice(agent.length + 1)} @args }`;
+      const agent = command.split(' ')[0], source = `(Get-Command ${agent} -CommandType Application -ErrorAction Stop).Source`, flags = command.slice(agent.length + 1);
+      return agent === 'claude'
+        ? `function global:claude { if ($args.Count -gt 0 -and $args[0] -in @(${subcommands.map(item => `'${item}'`).join(',')})) { & ${source} @args } else { & ${source} ${flags} @args } }`
+        : `function global:${agent} { & ${source} ${flags} @args }`;
     }).join('\n')
-    : [claude, codex].map(command => name === 'fish'
-      ? `function ${command.split(' ')[0]}\n command ${command} $argv\nend`
-      : name === 'zsh' ? `\\${command.split(' ')[0]}() { command \\${command} "$@"; }`
+    : [claude, codex].map(command => {
+      const agent = command.split(' ')[0], plain = agent === 'claude';
+      if (name === 'fish') return plain
+        ? `function claude\n switch "$argv[1]"\n case ${subcommands.join(' ')}\n  command claude $argv\n case '*'\n  command ${command} $argv\n end\nend`
+        : `function ${agent}\n command ${command} $argv\nend`;
+      const call = plain ? `case "$1" in ${subcommands.join('|')}) command \\claude "$@";; *) command \\${command} "$@";; esac` : `command \\${command} "$@"`;
       // bash and POSIX sh reject `\\name()`; drop a user alias first (on its own line, since aliases expand when a line is parsed).
-      : `unalias ${command.split(' ')[0]} 2>/dev/null\n${command.split(' ')[0]}() { command \\${command} "$@"; }`).join('\n');
+      return name === 'zsh' ? `\\${agent}() { ${call}; }` : `unalias ${agent} 2>/dev/null\n${agent}() { ${call}; }`;
+    }).join('\n');
   const init = path.join(root, windows ? 'init.ps1' : 'init.sh');
   if (windows) {
     // PSReadLine 2.1+ can suggest from history, but Windows PowerShell leaves it off; respect any source the profile chose.
