@@ -127,6 +127,28 @@ test('Codex auto uses the auto_review reviewer, and the sandbox is its own choic
   assert.deepEqual(chatCapabilities('codex').sandboxes, ['read-only', 'workspace-write', 'danger-full-access']);
   assert.deepEqual(chatCapabilities('claude').sandboxes, []);
 });
+test('Codex: cache writes survive cumulative usage updates and replay without counting them twice as input', async t => {
+  const ctx = await setup(t, 'codex');
+  for (let turn = 1; turn <= 2; turn++) {
+    await ctx.session.send('hello');
+    await until(() => ctx.session.state().status === 'idle');
+    assert.deepEqual(ctx.session.state().tokens, { input: turn * 6, output: turn * 2, cacheRead: turn, cacheCreate: turn * 3 });
+  }
+  const restored = await ctx.reopen();
+  assert.deepEqual(restored.state().tokens, { input: 12, output: 4, cacheRead: 2, cacheCreate: 6 });
+});
+
+test('Codex: older usage without cache writes still works and input cannot go negative', () => {
+  const events = [], protocol = createChatProtocol('codex', { write: async () => {}, emit: event => events.push(event) });
+  for (const total of [{ inputTokens: 10, cachedInputTokens: 4, outputTokens: 2 }, { inputTokens: 10, cachedInputTokens: 4, cacheWriteInputTokens: 8, outputTokens: 2 }]) {
+    protocol.handle({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { total, last: { totalTokens: 12 }, modelContextWindow: 1000 } } });
+  }
+  assert.deepEqual(events.map(event => event.tokens), [
+    { input: 6, output: 2, cacheRead: 4, cacheCreate: 0 },
+    { input: 0, output: 2, cacheRead: 4, cacheCreate: 8 }
+  ]);
+});
+
 test('Codex: switching to Bypass accepts the requests already waiting and the ones that follow, but never answers a question', async () => {
   const events = [], sent = [];
   let protocol;
@@ -153,6 +175,44 @@ test('Codex: switching to Bypass accepts the requests already waiting and the on
   assert.ok(!sent.some(message => message.id === 'c3'), 'back to asking once Bypass is off');
 });
 
+test('Codex reports the effective Effort on start, resume and fork without overriding the CLI default', async t => {
+  for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
+    for (const [effort, reported] of [[undefined, 'high'], ['low', 'low'], [undefined, undefined]]) {
+      await t.test(`${method}: chosen=${effort}, reported=${reported}`, async () => {
+        const events = [], sent = [];
+        let protocol;
+        const answers = { initialize: {}, 'model/list': { data: [] }, 'skills/list': { data: [] }, 'config/read': { config: {} },
+          [method]: { thread: { id: 't1' }, reasoningEffort: reported }, 'turn/start': { turn: { id: 'turn1' } } };
+        protocol = createChatProtocol('codex', {
+          write: async line => {
+            const message = JSON.parse(line); sent.push(message);
+            if (message.method in answers) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] }));
+          }, emit: event => events.push(event)
+        });
+        try {
+          await protocol.initialize({ permissionMode: 'default', addDirs: [], effort,
+            ...(method !== 'thread/start' && { sessionId: 'old' }), ...(method === 'thread/fork' && { resumeAt: 'old-turn' }) }, '/repo');
+          assert.deepEqual(events.filter(event => event.kind === 'settings'), reported === undefined ? [] : [{ kind: 'settings', effort: reported }]);
+          assert.equal(sent.find(message => message.method === method).params.config.model_reasoning_effort, effort);
+          await protocol.send('hello', []);
+          assert.equal(sent.find(message => message.method === 'turn/start').params.effort, effort);
+        } finally { protocol.dispose(); }
+      });
+    }
+  }
+});
+test('Codex shows the inherited Effort, and a later explicit pick wins over it when reopened', async t => {
+  const ctx = await setup(t, 'codex');
+  ctx.options.env = { FAKE_CODEX_EFFORT: 'high' };
+  let session = await ctx.reopen();
+  await session.send('hello'); await until(() => session.state().status === 'idle');
+  assert.equal(session.state().effort, 'high');
+  await session.set({ effort: 'low' });
+  session = await ctx.reopen();
+  assert.equal(session.state().effort, 'low');
+  await session.send('again'); await until(() => session.state().status === 'idle');
+  assert.equal(session.state().effort, 'low');
+});
 test('RPC requests time out and pending requests reject on disconnection', async () => {
   const protocol = createChatProtocol('codex', { write: async () => {}, emit() {} });
   await assert.rejects(protocol.request('no-response', {}, 5), /응답 시간이 초과/);

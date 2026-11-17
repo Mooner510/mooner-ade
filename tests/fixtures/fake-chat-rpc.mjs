@@ -31,7 +31,7 @@ function finish(status = 'completed') {
   } else {
     notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: `m${count}`, delta: '안녕' });
     notify('item/completed', { threadId: sessionId, turnId, item: { id: `m${count}`, type: 'agentMessage', text: '안녕' } });
-    notify('thread/tokenUsage/updated', { threadId: sessionId, turnId, tokenUsage: { total: { inputTokens: count * 10, cachedInputTokens: count, outputTokens: count * 2 }, last: { totalTokens: 12 }, modelContextWindow: 1000 } });
+    notify('thread/tokenUsage/updated', { threadId: sessionId, turnId, tokenUsage: { total: { inputTokens: count * 10, cachedInputTokens: count, cacheWriteInputTokens: count * 3, outputTokens: count * 2 }, last: { totalTokens: 12 }, modelContextWindow: 1000 } });
     notify('thread/name/updated', { threadId: sessionId, threadName: `Codex 테스트 ${count}` });
     notify('turn/completed', { threadId: sessionId, turn: { id: turnId, status } });
   }
@@ -55,7 +55,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   else if (raw.method === 'thread/start' || raw.method === 'thread/resume' || raw.method === 'thread/fork') {
     if (process.env.EXPECT_PROVIDER !== undefined && raw.method !== 'thread/start' && p.modelProvider !== process.env.EXPECT_PROVIDER) throw new Error(`resume must use provider ${process.env.EXPECT_PROVIDER}, got ${p.modelProvider}`);
     if (raw.method === 'thread/fork' && !p.lastTurnId) throw new Error('fork must include the exact turn');
-    sessionId = raw.method === 'thread/resume' ? p.threadId : randomUUID(); reply(raw.id, { thread: { id: sessionId }, model: p.model ?? 'codex-test' });
+    sessionId = raw.method === 'thread/resume' ? p.threadId : randomUUID(); reply(raw.id, { thread: { id: sessionId }, model: p.model ?? 'codex-test', ...(process.env.FAKE_CODEX_EFFORT && { reasoningEffort: p.config?.model_reasoning_effort ?? process.env.FAKE_CODEX_EFFORT }) });
   } else if (raw.method === 'session/new' || raw.method === 'session/load') { sessionId = p.sessionId ?? sessionId; reply(raw.id, cursorInfo()); }
   else if (raw.method === 'turn/start' || raw.method === 'session/prompt') {
     turnId = `turn-${++count}`; promptId = raw.id;

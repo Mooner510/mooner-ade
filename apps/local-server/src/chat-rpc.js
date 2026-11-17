@@ -14,7 +14,7 @@ export function chatCapabilities(agent) {
       addDirs: 'Cursor ACP는 추가 작업 폴더를 제공하지 않습니다.', terminalToChat: '세션과 완전한 대기 상태를 확인할 수 없어 전환할 수 없습니다.' } };
 }
 
-const usage = value => ({ input: Math.max(0, (value?.inputTokens ?? 0) - (value?.cachedInputTokens ?? 0)), output: value?.outputTokens ?? 0,
+const usage = value => ({ input: Math.max(0, (value?.inputTokens ?? 0) - (value?.cachedInputTokens ?? 0) - (value?.cacheWriteInputTokens ?? 0)), output: value?.outputTokens ?? 0,
   cacheRead: value?.cachedInputTokens ?? 0, cacheCreate: value?.cacheWriteInputTokens ?? 0 });
 const contextWindowOf = value => { const match = /^(\d+(?:\.\d+)?)([km])$/i.exec(String(value ?? '').trim()); return match ? Number(match[1]) * (match[2].toLowerCase() === 'm' ? 1_000_000 : 1_000) : 0; };
 const cursorContextWindow = (options = []) => contextWindowOf(options.find(option => option.id === 'context')?.currentValue);
@@ -271,6 +271,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         const response = await request(meta.resumeAt ? 'thread/fork' : meta.sessionId ? 'thread/resume' : 'thread/start', {
           ...params, ...(provider && { modelProvider: provider }), ...(instructions && { developerInstructions: instructions }), ...(meta.sessionId && { threadId: meta.sessionId }), ...(meta.resumeAt && { lastTurnId: meta.resumeAt }), ...(meta.sessionId && { excludeTurns: true }) });
         sessionId = response.thread.id;
+        if (response.reasoningEffort !== undefined) emit({ kind: 'settings', effort: response.reasoningEffort });
         const resumed = agentTitle(response.thread?.name);
         if (resumed) emit(resumed);
         const commands = [{ name: 'compact', description: '대화 컨텍스트를 압축합니다', hint: '[지침]' }, ...[...skills.values()].flatMap(skill => typeof skill?.name === 'string' ? [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description : '' }] : [])];
