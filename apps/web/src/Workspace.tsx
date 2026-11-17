@@ -1,4 +1,4 @@
-import { appKey, matches, showAppKey } from './shortcuts';
+import { appKey, appKeyInTerminal, matches, showAppKey } from './shortcuts';
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
@@ -22,6 +22,7 @@ import { GitLog } from './GitLog';
 import { loadSpec } from './git-graph';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
+import { byLastUsed, FILE_EVENT, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -35,7 +36,7 @@ export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' 
 export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
-export type WorkspaceHandle = { requestClose(): Promise<boolean>; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
+export type WorkspaceHandle = { requestClose(): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
@@ -208,6 +209,32 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     return () => window.removeEventListener('ade:link', onLink);
   }, []);
 
+  // A file or folder clicked in a chat reply (or picked from the sidebar menu): ask how to open it (an installed editor, the file manager, or just copy the path), then do it.
+  // Like a link, only the visible project answers a click.
+  const askOpen = async (target: OpenTarget) => {
+    const { ides, fileManager } = await ideList().catch(() => ({ ides: [] as IdeInfo[], fileManager: '파일 관리자' }));
+    const last = lastIde(), where = target.line ? `${target.path}:${target.line}` : target.path, kind = target.folder ? '폴더를' : '파일을';
+    const choice = await pick(`${kind} 열까요?
+${where}`, [
+      ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, ...(ide.id === last && { detail: '마지막 사용' }) })),
+      { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기` }, { id: 'copy', label: '경로 복사' }, { id: 'cancel', label: '취소' }]);
+    if (choice === 'copy') copyText(target.path);
+    else if (choice === 'files' || choice?.startsWith('ide:')) {
+      const ide = choice === 'files' ? 'files' : choice.slice(4);
+      if (ide !== 'files') rememberIde(ide);
+      await call('ide/open', { ide, path: target.path, line: target.line, column: target.column, chatId: target.chatId });
+    }
+  };
+  const askOpenRef = useRef(askOpen); askOpenRef.current = askOpen;
+  useEffect(() => {
+    const onFile = (event: Event) => {
+      const target = (event as CustomEvent<OpenTarget>).detail;
+      if (refs.active.current && target && typeof target.path === 'string') void askOpenRef.current(target).catch(report);
+    };
+    window.addEventListener(FILE_EVENT, onFile);
+    return () => window.removeEventListener(FILE_EVENT, onFile);
+  }, [report]);
+
   // ---- tabs and pane trees ----
   const commitTabs = (next: PaneTab[]) => { refs.paneTabs.current = next; setPaneTabs(next); };
   const activePane = () => refs.paneTabs.current.find(tab => tab.id === refs.activeTab.current)?.pane ?? null;
@@ -307,6 +334,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const next = [...list]; [next[at], next[to]] = [next[to], next[at]]; commitTabs(next);
   }
   useImperativeHandle(handleRef, () => ({
+    // The sidebar's "파일 열기": pick one of the project's files by name, then choose how to open it.
+    pickFile: () => run(async () => {
+      const files = ((await call<{ files: string[] }>('files/list')).files ?? []).filter(file => !file.endsWith('/'));
+      if (!files.length) throw new Error('열 수 있는 파일이 없습니다.');
+      const chosen = await pick('열 파일을 고르세요', files.map(file => ({ id: file, label: file })));
+      if (chosen) await askOpen({ path: chosen });
+    }),
     selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
     // Reordering only changes the list order; the saved layout follows it.
     // Dropping a tab onto another folds its panes into it, side by side.
@@ -850,6 +884,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     ...Array.from({ length: 9 }, (_, index) => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
     { id: 'splitRight', label: '오른쪽으로 분할', run: () => splitTerminal(refs.focus.current, 'row') },
     { id: 'splitDown', label: '아래로 분할', run: () => splitTerminal(refs.focus.current, 'column') },
+    { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },
     { id: 'closePane', label: '포커스된 pane 닫기', run: closeFocused },
     { id: 'preset', label: '현재 탭을 터미널 2 × 3 그리드로', run: preset },
     { id: 'zoom', label: 'Pane 최대화 전환', run: () => setZoom(value => value ? '' : refs.focus.current) },
@@ -877,8 +912,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       if (!command) return;
       // A dialog keeps the keys to itself, except the feedback capture, which is how a dialog gets into a screenshot.
       if (document.querySelector('dialog[open]') && command.id !== 'feedbackCapture') return;
-      // Preserve shell Ctrl bindings unless the user explicitly assigned one to an app action.
-      if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['nextTab2', 'prevTab2'].includes(command.id) && !settingsRef.current.appKeys?.[command.id]) return;
+      // In a terminal, plain Ctrl+key stays with the shell unless the key is meant to work there or the user said so (settings.termKeys, per key).
+      if (inTerminal && !appKeyInTerminal(settingsRef.current, command.id, event)) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);
@@ -984,8 +1019,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar" data-feedback-region="상단 바">
       <div className="split-button">
-        <button className="bar-button new-tab" title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
-        <button ref={launcherButton} className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
+        <button className="bar-button new-tab" data-tip={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
+        <button ref={launcherButton} className="bar-button caret" data-tip={`모드와 Provider를 선택해 새 탭 열기 (${showAppKey(settings.appKeys, 'launcher')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
           <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
@@ -993,9 +1028,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
-      <button className={`bar-button ${gitOpen ? 'on' : ''}`} title={`Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})${git.additions || git.deletions ? `\n커밋하지 않은 변경: +${git.additions} −${git.deletions}` : ''}`} aria-label="Git 커밋 그래프" aria-pressed={gitOpen} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleGit}>
+      <button className={`bar-button ${gitOpen ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})${git.additions || git.deletions ? `\n커밋하지 않은 변경: +${git.additions} −${git.deletions}` : ''}`} aria-label="Git 커밋 그래프" aria-pressed={gitOpen} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleGit}>
         <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
-      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
+      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} title={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><Icon name="plugin" /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />

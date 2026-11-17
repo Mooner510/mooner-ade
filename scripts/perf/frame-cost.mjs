@@ -1,6 +1,6 @@
 // Frame cost (CPU) of ADE vs a blank Electron window, same harness, same display. Results/how to read them: docs/perf/FRAME_COST.md
 //   pnpm --filter @mooner/ade-web build   (ade-* scenarios load apps/web/dist)
-//   VERIFY_OUT=$(mktemp -d -t ade-verify-out) node scripts/perf/frame-cost.mjs [scenario ...]
+//   node scripts/perf/frame-cost.mjs [scenario ...]   (screenshots into tmp/main; VERIFY_OUT=<tmp/ade-* folder> for a separate one)
 // Scenarios: see ALL below and the ablation keys in electron/main.cjs. PROBE=1 also prints running animations, composited layers, rAF callers,
 // main-thread metrics and a 2 s trace of style invalidations (diagnosis only; the probes skew that run's numbers).
 // The window stays invisible and never takes focus (SHOW=1 to watch). Other heavy work on the Mac still shows up in the numbers.

@@ -13,7 +13,7 @@ export const contextTip = (tokens: number | undefined, minK: number) => tokens &
   : undefined;
 
 export const queueTip = '💡 작업 중엔 Enter 대신 Tab: 끝나자마자 자동 전송되고 수정·취소도 돼요';
-export const splitTip = (keys: (binding: string) => string) => `💡 터미널에서 ${keys('mod+shift+backslash')} 좌우 · ${keys('mod+alt+backslash')} 상하 분할`;
+export const splitTip = (keys: (binding: string) => string) => `💡 터미널에서 ${keys('ctrl+d')} 좌우 · ${keys('ctrl+shift+d')} 상하 분할`;
 
 // `chatTipPending`: Chat has not been opened yet and the card was not dismissed. Shown while an agent CLI terminal is focused.
 export const chatModeTipDue = (settings: { chatTipPending: boolean; tips: boolean }, kind: string | undefined, agent: string | undefined) =>

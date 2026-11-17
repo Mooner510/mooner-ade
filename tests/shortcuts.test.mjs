@@ -17,12 +17,14 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outfile = join(directory, 'keys.cjs');
   await build({ stdin: { contents: `export * from './shortcuts'; export { chatKey, chatKeyDefs, validCombo } from './chat-model';`, resolveDir }, bundle: true, platform: 'node', format: 'cjs', outfile });
-  const { appKey, appKeyDefs, chatKey, chatKeyDefs, normalizeCombo, matches, combosOverlap, showAppKey, validCombo } = require(outfile);
+  const { appKey, appKeyDefs, chatKey, chatKeyDefs, normalizeCombo, matches, combosOverlap, showAppKey, validCombo, appKeyInTerminal, appKeyInTerminalByDefault } = require(outfile);
   const key = (code, modifiers = {}) => ({ code, key: code, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
   assert.equal(new Set(appKeyDefs.map(def => def.id)).size, appKeyDefs.length);
   assert.equal(appKey({}, 'newTab'), 'mod+shift+t');
   assert.equal(appKey({ newTab: 'alt+k' }, 'newTab'), 'alt+k');
-  assert.equal(appKey({}, 'splitRight'), 'mod+shift+backslash');
+  assert.equal(appKey({}, 'splitRight'), 'ctrl+d');
+  assert.equal(appKey({}, 'splitDown'), 'ctrl+shift+d');
+  assert.equal(appKey({}, 'sendEof'), 'ctrl+alt+d');
   assert.equal(appKey({}, 'project9'), 'mod+alt+9');
   assert.ok(matches(appKey({ newTab: 'alt+k' }, 'newTab'), key('KeyK', { altKey: true })));
   assert.ok(!matches(appKey({ newTab: 'alt+k' }, 'newTab'), key('KeyT', { metaKey: true, shiftKey: true })));
@@ -56,7 +58,19 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
       assert.ok(![...appKeyDefs, ...chatKeyDefs].some(def => matches(def.keys, key(code, modifiers))), `text selection: ${code}`);
     }
   }
-  assert.ok(!appKeyDefs.some(def => matches(def.keys, key('KeyD', { ctrlKey: true }))));
+  // Ctrl+D splits (as it always did), and ^D has its own key; whether a key wins over the shell in a terminal is a per-key choice.
+  assert.ok(matches(appKey({}, 'splitRight'), key('KeyD', { ctrlKey: true })));
+  assert.ok(!matches(appKey({}, 'sendEof'), key('KeyD', { ctrlKey: true })) && matches(appKey({}, 'sendEof'), key('KeyD', { ctrlKey: true, altKey: true })));
+  const ctrlD = { metaKey: false, ctrlKey: true, altKey: false, shiftKey: false };
+  assert.ok(appKeyInTerminal({}, 'splitRight', ctrlD), 'split default works inside a terminal');
+  assert.ok(!appKeyInTerminal({ termKeys: { splitRight: false } }, 'splitRight', ctrlD), 'switched off: ^D reaches the shell');
+  assert.ok(!appKeyInTerminal({ appKeys: { newTab: 'ctrl+k' }, termKeys: { newTab: false } }, 'newTab', { ...ctrlD }));
+  assert.ok(appKeyInTerminal({ appKeys: { newTab: 'ctrl+k' } }, 'newTab', ctrlD), 'a key the user rebound keeps working in a terminal');
+  assert.ok(!appKeyInTerminal({}, 'newTab', ctrlD), 'other plain Ctrl keys stay with the shell');
+  assert.ok(appKeyInTerminal({}, 'newTab', { ...ctrlD, shiftKey: true }));
+  assert.ok(!appKeyInTerminal({ termKeys: { tab1: false } }, 'tab1', { ...ctrlD, ctrlKey: false, altKey: true }), 'even an Alt key can be left to the shell');
+  assert.ok(appKeyInTerminal({ termKeys: { tab1: true } }, 'tab1', { ...ctrlD, ctrlKey: false, altKey: true }));
+  assert.ok(appKeyInTerminalByDefault({}, 'splitRight') && appKeyInTerminalByDefault({}, 'newTab') && appKeyInTerminalByDefault({ appKeys: { closeTab: 'ctrl+k' } }, 'closeTab'));
   for (const code of ['ArrowUp', 'ArrowDown']) assert.ok(!appKeyDefs.some(def => matches(def.keys, key(code, { altKey: true }))));
   const definitions = [...appKeyDefs, ...chatKeyDefs];
   for (const [index, def] of definitions.entries()) {
@@ -70,6 +84,8 @@ test('app shortcut overrides survive persistence validation; malformed values ar
   const overrides = { newTab: 'meta+alt+k', project9: 'ctrl+9', nextTab: 'alt+bracketright' };
   assert.deepEqual(validateAppState(state(overrides)).settings.appKeys, overrides);
   assert.deepEqual(validateAppState(state({})).settings.appKeys, {});
+  assert.deepEqual(validateAppState({ openProjects: [], activeProjectId: '', settings: { termKeys: { splitRight: false, tab1: true } } }).settings.termKeys, { splitRight: false, tab1: true });
+  for (const bad of [{ splitRight: 'no' }, [], null, { 'bad id': true }]) assert.throws(() => validateAppState({ openProjects: [], activeProjectId: '', settings: { termKeys: bad } }), { code: 'INVALID_INPUT' });
   for (const bad of [null, [], 'ctrl+k', { newTab: 1 }, { newTab: 'ctrl+k\n' }, { 'bad id': 'ctrl+k' }, Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`tab${i}`, 'alt+k']))]) {
     assert.throws(() => validateAppState(state(bad)), { code: 'INVALID_INPUT' });
   }

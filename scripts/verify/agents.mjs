@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'; import { existsSync, readFileSyn
 import { agentDirs } from './agent-dirs.mjs';
 const S = process.env.VERIFY_OUT; // optional: only AGENT_FRESH needs a session
 const recorded = S && existsSync(join(S, 'env.json')) ? JSON.parse(readFileSync(join(S, 'env.json'), 'utf8')).temp : undefined;
-const { base, dirs } = agentDirs(process.env.VERIFY_TEMP || recorded || '/nonexistent'), env = { ...process.env, ...dirs };
+const { base, dirs } = await agentDirs(process.env.VERIFY_TEMP || recorded || '/nonexistent'), env = { ...process.env, ...dirs };
 // stdout and stderr together: `codex login status` prints "Logged in" on stderr even when it succeeds.
 const run = (cmd, args) => { const r = spawnSync(cmd, args, { env, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }); return `${r.stdout ?? ''}${r.stderr ?? ''}`; };
 const login = { claude: ['claude', ['auth', 'login']], codex: ['codex', ['login']], cursor: ['cursor-agent', ['login']] };

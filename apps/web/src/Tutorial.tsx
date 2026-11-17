@@ -20,11 +20,11 @@ import { Logo } from './Splash';
 import { playSound } from './sound';
 import { AppVersion, type Ask } from './views';
 import { matches, showKeys as showDefaultKeys } from './Workspace';
-import { appKey, appKeyDefs, showAppKey } from './shortcuts';
+import { appKey, appKeyDefs, appKeyInTerminal, showAppKey } from './shortcuts';
 import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPrompt, stepDone, steps, type Action, type Agent, type Tour, type TourProject, type TourTab } from './onboarding-steps';
 
 // First-run tutorial: a full-screen practice copy of the app, drawn with the app's own markup and styles (sidebar, tab bar, panes,
-// status bar) and the real launchers, chat pane, command palette, review panel, settings window and xterm. A coach card points at what to do next.
+// status bar) and the real launchers, chat pane, command palette, Git graph drawer, settings window and xterm. A coach card points at what to do next.
 // Nothing here changes anything on the server (the chat pane runs on tourChatCall); finishing fades it away onto the real screen underneath.
 
 // `setup`: start with the theme and font screen (first run); a replay goes straight to the tour. Every step but the last has "건너뛰기". `onDone` runs as the tour starts to fade.
@@ -32,7 +32,7 @@ type Props = { settings: Settings; onSettings(next: Settings): void; setup: bool
 
 const agentOf = (command: string): Agent | '' => command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : command === 'cursor-agent' ? 'cursor' : '';
 const summary: [string, string][] = [
-  ['새 탭', 'mod+shift+t'], ['탭 번호로 이동', 'alt+1'], ['좌우 분할', 'mod+shift+backslash'], ['상하 분할', 'mod+alt+backslash'],
+  ['새 탭', 'mod+shift+t'], ['탭 번호로 이동', 'alt+1'], ['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'],
   ['Pane 최대화', 'mod+shift+enter'], ['Git 커밋 그래프', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1']
 ];
 const features: [Parameters<typeof Icon>[0]['name'], string, string][] = [
@@ -134,7 +134,7 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
   if (leaf.kind === 'launcher') return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={pick}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
-      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={close} /></span></div>
+      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" keys="Esc" onClick={close} /></span></div>
     <Launchers mode={ctx.mode} onModeChange={ctx.setMode} shell={settings.terminalShell} autoFocus={focused} onLaunch={command => dispatch(launchOf(id, command))} />
   </section>;
   if (leaf.kind === 'chat') return <ChatPane leaf={leaf} focused={focused} zoomed={zoomed} visible={ctx.visible(id)} ctx={ctx.chat} onFocus={pick} onZoom={() => dispatch({ type: 'zoom' })} onSplit={(_, dir) => dispatch({ type: 'split', dir })} />;
@@ -148,7 +148,7 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
       <span className="pane-actions">
         <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={dir => dispatch({ type: 'split', dir })} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
-        <IconButton icon="x" tip="none" label="터미널 종료" onClick={close} /></span></div>
+        <IconButton icon="x" tip="none" label="터미널 종료" action="closePane" onClick={close} /></span></div>
     <TourTerminal lines={tour.lines[id] ?? []} prompt={ctx.prompt(id)} settings={settings} focused={focused} focusKey={ctx.focusKey} onSubmit={text => ctx.submit(id, text)} onTab={text => ctx.tab(id, text)} />
     {claude && claude.queue.length > 0 && <div className="claude-follow-up">
       <div className="follow-up-heading" role="status">Follow-up {claude.queue.length}개 · 현재 작업 완료 후 순서대로 전송</div>
@@ -186,14 +186,14 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('dialog')) return; // the real settings window opened from here
     const inTerminal = Boolean(target?.closest('.tour .xterm'));
-    const split = matches(configuredKey('mod+shift+backslash'), event) ? 'row' : matches(configuredKey('mod+alt+backslash'), event) ? 'column' : null;
+    const split = matches(configuredKey('ctrl+d'), event) ? 'row' : matches(configuredKey('ctrl+shift+d'), event) ? 'column' : null;
     if (split) {
       event.preventDefault(); event.stopPropagation();
       dispatch({ type: 'split', dir: split });
       return;
     }
     // As in the app: plain Ctrl+key inside a terminal belongs to the shell.
-    if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['ctrl+pageup', 'ctrl+pagedown'].some(keys => matches(keys, event)) && !appKeyDefs.some(def => settings.appKeys?.[def.id] && matches(settings.appKeys[def.id], event))) return;
+    if (inTerminal && !appKeyDefs.some(def => matches(appKey(settings.appKeys, def.id)!, event) && appKeyInTerminal(settings, def.id, event))) return;
     const panes = leafList(shown.pane).length;
     const focusBy = (step: number) => () => panes > 1 ? dispatch({ type: 'focusBy', step }) : note('분할된 칸이 하나뿐이라 옮겨 갈 곳이 없습니다.');
     const newTab = () => dispatch({ type: 'newTab' });
@@ -402,17 +402,17 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     return <main key={item.id} className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!on}>
       <header className="tabbar">
         <div className="split-button">
-          <button className="bar-button new-tab" title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => dispatch({ type: 'newTab' })}><Icon name="plus" /><span>새 탭</span></button>
-          <button className="bar-button caret" title="모드와 Provider를 선택해 새 탭 열기" aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
+          <button className="bar-button new-tab" data-tip={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => dispatch({ type: 'newTab' })}><Icon name="plus" /><span>새 탭</span></button>
+          <button className="bar-button caret" data-tip={`모드와 Provider를 선택해 새 탭 열기 (${showKeys('mod+shift+n')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
           {menu && on && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={() => setMenu(false)} />
             <LauncherMenu mode={mode} items={launchersFor(mode, shellLabel(shells, settings.terminalShell))} onModeChange={setMode} onClose={() => setMenu(false)} onLaunch={command => { setMenu(false); dispatch(launchOf('', command)); }} /></>}
         </div>
         <span className="drag-space" />
         <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
         <div className="bar-tools" role="group" aria-label="패널과 설정">
-          <button className={`bar-button ${tour.diff ? 'on' : ''}`} title={`Git 커밋 그래프 (${showKeys('mod+shift+g')})`} aria-label="Git 커밋 그래프" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
+          <button className={`bar-button ${tour.diff ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showKeys('mod+shift+g')})`} aria-label="Git 커밋 그래프" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
             <Icon name="graph" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
-          <button className="bar-button" title="피드백 요청" aria-label="피드백 요청" onClick={() => note('실제 앱에서는 여기서 화면을 캡처해 무너에이드 개발자에게 의견을 보낼 수 있어요.')}><Icon name="feedback" /></button>
+          <button className="bar-button" data-tip={`피드백 요청 (${showKeys('mod+alt+f')})`} aria-label="피드백 요청" onClick={() => note('실제 앱에서는 여기서 화면을 캡처해 무너에이드 개발자에게 의견을 보낼 수 있어요.')}><Icon name="feedback" /></button>
           <IconButton icon="settings" label="설정" keys={showKeys('mod+,')} className="bar-icon" onClick={() => dispatch({ type: 'settings', open: true })} />
         </div>
       </header>

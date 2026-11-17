@@ -12,9 +12,10 @@
 - Delete the remote branch after the merge (`--delete-branch`).
 
 ## Testing
-- The session that develops also tests, in an isolated session only (temp `ADE_DATA_DIR`/repo, temp-profile Chrome over CDP). Never touch the installed app or the real `~/.claude`/`~/.codex`/`~/.cursor`. Real-AI runs use `AGENT_DIRS=1`: HOME stays real and only the CLI config dirs are isolated (`~/.ade-test/agents`); Cursor shares its Keychain login.
-- Pass `VERIFY_OUT=...` on every verify command (an `export` does not survive between commands; the scripts refuse to run without it).
+- The session that develops also tests, in an isolated session only (the session folder's `ADE_DATA_DIR`/repo, its own-profile Chrome over CDP). Never touch the installed app or the real `~/.claude`/`~/.codex`/`~/.cursor`.
+- **One shared session for everyone.** Sessions live in the main checkout's `tmp/` (gitignored; every worktree sees the same one). Always start with `node scripts/verify/session.mjs status`, then use **`tmp/main`**: `session.mjs up --as <name>` (starts it only if it is not running), `session.mjs tab --as <name>` for your own tab in its one Chrome, and run drivers with `VERIFY_TAB=<name>` and no `VERIFY_OUT`. It follows the source by itself (web: HMR; server: automatic restart, same URL); `session.mjs use` points it at your worktree.
+- A separate `tmp/ade-*` session only when real accounts, API keys or usage must be isolated: `session.mjs new <purpose> --real|--agent-dirs --reason "..."` (real AI: `--agent-dirs`, HOME stays real and only the CLI config dirs are isolated in `~/.ade-test/agents`; Cursor shares its Keychain login). Pass its `VERIFY_OUT=...` on every command for it (an `export` does not survive between commands).
 - Full basic checks (`pnpm typecheck`, `node --test`) only at the start (baseline) and the end (compare). Mid-run, a single test file for the module you touched is fine.
 - Real-AI runs: cheapest model/effort (Haiku 5.5 · low).
-- Always clean up with `scripts/verify/cleanup-ui.mjs` (manifest-based). Never kill by process name or `rm -rf` a path you have not verified.
+- Clean up what you made: `session.mjs down <tmp/ade-* name>` (manifest-based), your tab and probe scripts. Never stop `tmp/main` unless the user says so (`down main --main`). Never kill by process name or `rm -rf` a path you have not verified.
 - If the testing can be finished in this session, finish it here and report the results in the reply; write no `docs/tests/.../GUIDE.md`. A guide is only for what could not be verified in this session (and only for those items), or when the user asks for one. Rules: `docs/TESTING_GUIDE.md`.
