@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { MAX_BODY, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TITLE, imageInfo } from './feedback-store.js';
+import { FEEDBACK_TYPES, MAX_BODY, MAX_IMAGES, MAX_IMAGE_BYTES, MAX_TITLE, cleanTypes, imageInfo, withoutBrackets } from './feedback-store.js';
 import { ADE_OVERVIEW, OVERVIEW_RULE } from './ade-overview.js';
 
 export const TOOL = {
@@ -18,8 +18,9 @@ export const TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      title: { type: 'string', description: `한 줄 요약 (${MAX_TITLE}자 이하)` },
+      title: { type: 'string', description: `한 줄 요약 (${MAX_TITLE}자 이하). 대괄호 [ ]는 쓰지 마세요: 유형 접두어는 앱이 제목 앞에 자동으로 붙입니다.` },
       body: { type: 'string', description: '마크다운 본문: 문제, 기대 동작, 개선 제안, 재현 방법' },
+      types: { type: 'array', items: { type: 'string', enum: Object.keys(FEEDBACK_TYPES) }, description: `요청 유형 1~3개: ${Object.entries(FEEDBACK_TYPES).map(([id, [tag]]) => `${id}(${tag})`).join(', ')}` },
       imagePaths: { type: 'array', items: { type: 'string' }, description: `첨부할 PNG/JPEG 스크린샷의 절대 경로 (${MAX_IMAGES}장 이하, 장당 ${MAX_IMAGE_BYTES / 1024 / 1024}MB 이하)` }
     },
     required: ['title', 'body'],
@@ -28,8 +29,8 @@ export const TOOL = {
 };
 
 // Writes the images first and the .json last (atomically), so the app never imports half a draft.
-export async function writeDraft(incoming, { title, body, imagePaths = [] }) {
-  if (typeof title !== 'string' || !title.trim()) throw new Error('title이 필요합니다.');
+export async function writeDraft(incoming, { title, body, types, imagePaths = [] }) {
+  if (typeof title !== 'string' || !withoutBrackets(title)) throw new Error('title이 필요합니다.');
   if (typeof body !== 'string' || !body.trim()) throw new Error('body가 필요합니다.');
   if (Buffer.byteLength(body) > MAX_BODY) throw new Error(`body는 ${MAX_BODY / 1024}KB 이하여야 합니다.`);
   if (!Array.isArray(imagePaths) || imagePaths.length > MAX_IMAGES || !imagePaths.every(file => typeof file === 'string' && path.isAbsolute(file))) throw new Error(`imagePaths는 절대 경로 ${MAX_IMAGES}개 이하여야 합니다.`);
@@ -46,7 +47,7 @@ export async function writeDraft(incoming, { title, body, imagePaths = [] }) {
       images.push(name);
     }
     const target = path.join(incoming, `${key}.json`), tmp = `${target}.${randomUUID()}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify({ title: title.trim().slice(0, MAX_TITLE), body, images }), { flag: 'wx', mode: 0o600 });
+    await fs.writeFile(tmp, JSON.stringify({ title: withoutBrackets(title).slice(0, MAX_TITLE), body, types: cleanTypes(types), images }), { flag: 'wx', mode: 0o600 });
     await fs.rename(tmp, target);
   } catch (error) {
     for (const name of images) await fs.rm(path.join(incoming, name), { force: true });

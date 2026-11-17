@@ -18,7 +18,7 @@ if (!stream) {
     if (mode === 'empty') { console.log(JSON.stringify({ type: 'result', is_error: false, result: '' })); process.exit(0); }
     if (mode === 'iserror') { console.log(JSON.stringify({ type: 'result', is_error: true, result: 'quota' })); process.exit(0); }
     if (mode === 'slow') await new Promise(r => setTimeout(r, 4000));
-    console.log(JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ title: '가짜 제목', body: '## 문제\n가짜 본문 ' + 'x'.repeat(40) + '\n\n## 기대 동작\n되어야 함\n\n## 개선 제안\n고쳐 주세요' }) }));
+    console.log(JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ title: '[버그] 가짜 제목', types: ['bug', 'perf'], body: '## 문제\n가짜 본문 ' + 'x'.repeat(40) + '\n\n## 기대 동작\n되어야 함\n\n## 개선 제안\n고쳐 주세요' }) }));
     process.exit(0);
   });
 } else {

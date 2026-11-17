@@ -8,14 +8,14 @@
 import { promises as fs } from 'node:fs';
 import { ANONYMOUS_INTERVAL_MS } from './feedback-hub.js';
 
-const PERMANENT = new Set(['bad_request', 'too_large', 'forbidden', 'INVALID_INPUT']);
+const PERMANENT = new Set(['bad_request', 'too_large', 'forbidden', 'update_required', 'INVALID_INPUT']);
 // Codes that mean "the other way (account / anonymous) may work now": tried again shortly with whatever is available then.
 const SWITCH = new Set(['not_logged_in', 'unauthorized', 'invalid_token', 'token_expired', 'FEEDBACK_UNAVAILABLE', 'PLUGIN_STOPPED']);
 const MAX_BACKOFF_MS = 30 * 60_000;
 // Answers after which the Hub surely made no issue. After any other failure (a lost answer: network, timeout, a plugin that
 // died mid-upload) the issue may exist, and the Hub keeps account and anonymous submissions apart, so the retry must go the
 // same way (`pinnedVia`) or it could open a second issue.
-const NOTHING_SENT = new Set([...PERMANENT, 'rate_limited', 'rate-limited', 'feedback_disabled', 'upstream_failed', ...SWITCH].filter(code => code !== 'PLUGIN_STOPPED'));
+const NOTHING_SENT = new Set([...PERMANENT, 'rate_limited', 'rate-limited', 'feedback_disabled', 'version_check_failed', 'upstream_failed', ...SWITCH].filter(code => code !== 'PLUGIN_STOPPED'));
 export const surelyNotCreated = error => NOTHING_SENT.has(String(error?.code ?? ''));
 export const backoffMs = attempts => Math.min(MAX_BACKOFF_MS, 30_000 * 2 ** Math.max(0, attempts - 1));
 

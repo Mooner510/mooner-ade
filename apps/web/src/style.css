@@ -2056,7 +2056,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-spin { transition: border-color .4s; }
 /* With the window in the background (another app or a game in front) the endless loops pause until it is focused again (data-blurred, main.tsx;
    the working comets stop there too). Each running loop keeps the window drawing frames; entrance animations are not listed, they end on their own. */
-:root[data-blurred] :is(.chat-spin, .look-bundle-head i, .plugin-spinner, .usage-detail .icon, .feedback-spinner, .feedback-progress-bar, .look-caret, .effort-wrap *),
+:root[data-blurred] :is(.chat-spin, .look-bundle-head i, .plugin-spinner, .usage-detail .icon, .feedback-spinner, .feedback-progress-bar, .feedback-empty-mark, .feedback-card.drafting, .feedback-dot::after, .feedback-status::before, .feedback-ai-btn .icon, .look-caret, .effort-wrap *),
 :root[data-blurred] .chat-send.stop::before, :root[data-blurred] .chat-agent-dot::after { animation-play-state: paused !important; }
 :root[data-blurred] .chat-working { transition: none; }
 /* Option lists open from their anchor with a little overshoot; rows nudge toward the cursor. */
@@ -2401,70 +2401,150 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 @media (prefers-reduced-motion: reduce) { .chat-agent-dot, .chat-agent-dot::after, .chat-agent-drawer { animation: none !important; } .chat-pane { transition: none; } }
 .chat-approval-preview { max-height: 220px; overflow: auto; margin-top: 6px; }
 /* feedback requests (피드백 요청): right panel, capture overlay, annotate dialog */
-.feedback-panel { container-type: inline-size; }
+.feedback-panel { container-type: inline-size; position: relative; --agent: var(--accent); }
 .feedback-panel .panel-head > .icon { color: var(--accent); }
-.feedback-panel .panel-head .feedback-new { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; }
-.feedback-panel .panel-head .feedback-new.primary { color: var(--accent-fg); }
-.feedback-panel .panel-head .feedback-new:not(.primary) { color: var(--fg); border: 1px solid var(--border-strong); }
-.feedback-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.feedback-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 10px 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); color: var(--muted); line-height: 1.45; }
+.feedback-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 12px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); color: var(--muted); line-height: 1.45; animation: rise-in .28s var(--ease-out); }
 .feedback-note.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
-.feedback-note.ok { color: var(--add); border-color: color-mix(in srgb, var(--add) 40%, transparent); }
-.feedback-note button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--fg); border-color: var(--border); }
-.feedback-list { align-items: stretch; }
-.feedback-row { display: flex; align-items: center; gap: 10px; width: 100%; flex: none; text-align: left; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); }
-.feedback-row:hover { border-color: var(--border-strong); background: var(--raised); }
-.feedback-row.unseen { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
-.feedback-thumb { flex: none; width: 56px; height: 40px; border-radius: 5px; overflow: hidden; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); color: var(--faint); }
+.feedback-note.ok { color: var(--add); border-color: color-mix(in srgb, var(--add) 40%, transparent); background: color-mix(in srgb, var(--add) 7%, var(--raised)); }
+.feedback-note button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--fg); border-color: var(--border); border-radius: 999px; }
+.feedback-done-mark { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--add); color: var(--bg); animation: feedback-pop .5s cubic-bezier(.34, 1.56, .64, 1) backwards; }
+@keyframes feedback-pop { from { scale: 0; } }
+@keyframes feedback-in-right { from { opacity: 0; translate: 14px 0; } }
+@keyframes feedback-in-left { from { opacity: 0; translate: -14px 0; } }
+@keyframes feedback-pulse { 50% { opacity: .25; } }
+@keyframes feedback-float { 50% { translate: 0 -5px; } }
+@keyframes feedback-glow { 50% { box-shadow: 0 0 0 4px var(--accent-soft), 0 0 22px color-mix(in srgb, var(--accent) 26%, transparent); } }
+@keyframes feedback-twinkle { 50% { scale: 1.3; rotate: 18deg; } }
+
+/* list: filter chips, rows, empty state, quick composer (the composer is the chat one, tinted with the accent) */
+.feedback-filters { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; animation: rise-in .25s var(--ease-out) backwards; }
+.feedback-filters .chat-chip { height: 28px; gap: 6px; padding: 0 6px 0 11px; border-radius: 999px; font-size: 12.5px; color: var(--muted); transition: background .15s, color .15s, translate .15s var(--ease-out); }
+.feedback-filters .chat-chip[aria-pressed=true] { color: var(--fg); background: var(--selected); }
+.feedback-filters .chat-chip b { min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--hover); font-size: 11px; font-weight: 600; text-align: center; }
+.feedback-filters .group-todo b { color: var(--accent); }
+.feedback-list { align-items: stretch; padding: 12px; gap: 8px; animation: feedback-in-left .24s var(--ease-out); }
+.feedback-row-wrap { position: relative; flex: none; animation: item-in .32s var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 32ms); }
+.feedback-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 10px 9px 9px; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); transition: border-color .15s, background .15s, box-shadow .2s, translate .18s var(--ease-out); }
+.feedback-row:hover { border-color: var(--border-strong); background: var(--raised); translate: 0 -1px; box-shadow: 0 6px 16px #0003; }
+.feedback-row:active { translate: 0; box-shadow: none; }
+.feedback-row.unseen { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--raised)); }
+.feedback-row > .icon:last-child { flex: none; color: var(--faint); transition: translate .18s var(--ease-out), color .15s; }
+.feedback-row:hover > .icon:last-child { color: var(--fg); translate: 2px 0; }
+.feedback-thumb { flex: none; width: 56px; height: 42px; border-radius: 8px; overflow: hidden; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); color: var(--faint); }
 .feedback-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.feedback-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.feedback-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .feedback-row-main strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feedback-row-main strong.untitled { color: var(--muted); font-style: italic; }
-.feedback-row-main small { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.feedback-source, .feedback-count { display: inline-flex; align-items: center; gap: 2px; }
+.feedback-row-main small { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
+.feedback-source, .feedback-count { display: inline-flex; align-items: center; gap: 3px; }
 .feedback-row time { color: var(--faint); font-size: 11px; }
-.feedback-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-.feedback-status { flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; color: var(--muted); background: var(--hover); border: 1px solid var(--border); white-space: nowrap; }
-.feedback-status.status-review { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.feedback-status.status-drafting, .feedback-status.status-submitting { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, transparent); }
-.feedback-status.status-submitted { color: var(--add); border-color: color-mix(in srgb, var(--add) 45%, transparent); }
-.feedback-status.status-failed { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
-.feedback-detail { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.feedback-eta { color: var(--warn); }
+.feedback-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.feedback-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: feedback-ping 1.8s ease-out infinite; }
+@keyframes feedback-ping { to { scale: 3; opacity: 0; } }
+/* Delete: a small round button on the card's top corner, shown on hover or keyboard focus (always on touch screens). */
+.feedback-row-wrap > .feedback-row-delete { position: absolute; top: -7px; right: 10px; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--overlay); color: var(--muted); opacity: 0; scale: .7; transition: opacity .15s, scale .18s var(--ease-out), color .15s, background .15s; }
+.feedback-row-wrap:hover > .feedback-row-delete, .feedback-row-wrap:focus-within > .feedback-row-delete { opacity: 1; scale: 1; }
+.feedback-row-wrap > .feedback-row-delete:not(:disabled):hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, var(--overlay)); }
+@media (hover: none) { .feedback-row-wrap > .feedback-row-delete { opacity: .85; scale: 1; } }
+.feedback-status { --tone: var(--muted); flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 1px 8px 1px 7px; border-radius: 999px; color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 32%, transparent); white-space: nowrap; }
+.feedback-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.feedback-status.status-review { --tone: var(--accent); }
+.feedback-status.status-drafting, .feedback-status.status-submitting { --tone: var(--info); }
+.feedback-status.status-drafting::before, .feedback-status.status-submitting::before { animation: feedback-pulse 1.1s ease-in-out infinite; }
+.feedback-status.status-queued { --tone: var(--warn); }
+.feedback-status.status-submitted { --tone: var(--add); }
+.feedback-status.status-failed { --tone: var(--error); }
+.feedback-empty { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 320px; padding: 16px; text-align: center; }
+.feedback-empty > * { animation: rise-in .45s var(--ease-out) backwards; }
+.feedback-empty > :nth-child(2) { animation-delay: .06s; } .feedback-empty > :nth-child(3) { animation-delay: .12s; } .feedback-empty > :nth-child(4) { animation-delay: .18s; }
+.feedback-empty .primary { margin-top: 10px; padding: 6px 16px; }
+.feedback-empty-mark { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 18px; color: var(--accent); background: var(--accent-soft); animation: rise-in .45s var(--ease-out) backwards, feedback-float 3.4s ease-in-out .5s infinite; }
+.feedback-empty h3 { margin: 8px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+.feedback-empty p { margin: 0; color: var(--muted); line-height: 1.5; }
+
+
+/* history: a button of its own in the header; the two ways to write are a switch under it */
+.panel-head > .feedback-history-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 8px; font-size: 12.5px; color: var(--muted); transition: background .15s, color .15s; }
+.panel-head > .feedback-history-btn:hover { color: var(--fg); }
+.panel-head > .feedback-history-btn[aria-pressed=true] { color: var(--accent); background: var(--accent-soft); }
+.feedback-history-btn b { min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--hover); color: var(--fg); font-size: 10.5px; font-weight: 600; line-height: 16px; text-align: center; }
+
+/* start: only the choice of how to write */
+.feedback-start { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 16px 12px 40px; animation: feedback-in-left .24s var(--ease-out); }
+.feedback-start > h3 { margin: 0 0 6px; text-align: center; font-size: 18px; font-weight: 600; letter-spacing: -.01em; animation: rise-in .4s var(--ease-out) backwards; }
+.feedback-choice { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 14px; text-align: left; border: 1px solid var(--border); border-radius: 14px; background: var(--raised); animation: rise-in .4s var(--ease-out) backwards; transition: border-color .15s, background .15s, box-shadow .2s, translate .18s var(--ease-out); }
+.feedback-choice:nth-of-type(1) { animation-delay: .06s; } .feedback-choice:nth-of-type(2) { animation-delay: .12s; }
+.feedback-choice:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--raised); translate: 0 -1px; box-shadow: 0 6px 16px #0003; }
+.feedback-choice:active { translate: 0; box-shadow: none; }
+.feedback-choice-mark { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--accent); background: var(--accent-soft); }
+.feedback-choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.feedback-choice-text strong { font-size: 14px; font-weight: 600; }
+.feedback-choice > .icon:last-child { flex: none; color: var(--faint); transition: translate .18s var(--ease-out), color .15s; }
+.feedback-choice:hover > .icon:last-child { color: var(--fg); translate: 2px 0; }
+
+/* write screen: one card for title, text and images, like the chat composer; the model, Effort, 'AI로 정리' and submit sit below it */
+.feedback-detail { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px; animation: feedback-in-right .24s var(--ease-out); }
 .feedback-detail .feedback-note { margin: 0; }
-.feedback-title { flex: none; font-size: 13px; padding: 6px 10px; }
-.feedback-tabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
-.feedback-tabs > button { padding: 3px 10px; color: var(--muted); }
-.feedback-tabs > button[aria-pressed=true] { color: var(--fg); }
-.feedback-tabs > .feedback-ai { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.feedback-actions .feedback-ai-btn:not(:disabled) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
-.feedback-actions .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
-.feedback-actions .dropdown summary:hover, .feedback-actions .dropdown[open] summary { background: var(--hover); }
-.feedback-progress { position: relative; flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 8%, var(--raised)); }
+.feedback-tag { flex: none; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); }
+/* AI screen: the chat composer with a model and Effort row; everything above it is the hero (or the progress card while the AI writes) */
+.feedback-ai { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; animation: feedback-in-left .24s var(--ease-out); }
+.feedback-ai[hidden] { display: none; }
+.feedback-ai > .feedback-note { margin: 10px 0 0; }
+.feedback-ai-main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.feedback-compose { flex: none; }
+.feedback-compose textarea { field-sizing: content; min-height: 24px; max-height: 220px; }
+.feedback-compose .chat-send { color: var(--accent-fg); }
+.feedback-ai-main > .feedback-progress { margin-top: auto; }
+.feedback-types { flex: none; display: flex; flex-wrap: wrap; gap: 5px; animation: rise-in .25s var(--ease-out) backwards; }
+.feedback-types .chat-chip { height: 24px; gap: 4px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: transparent; font-size: 12px; color: var(--muted); transition: border-color .15s, background .15s, color .15s; }
+.feedback-types .chat-chip:hover:not(:disabled) { border-color: var(--border-strong); color: var(--fg); }
+.feedback-types .chat-chip > .icon { color: var(--faint); transition: color .15s; }
+.feedback-types .chat-chip[aria-pressed=true] > .icon { color: var(--accent); }
+.feedback-types .chat-chip[aria-pressed=true] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); }
+.feedback-types .chat-chip:disabled { opacity: .5; cursor: default; }
+.feedback-title-row { flex: none; display: flex; align-items: center; gap: 8px; padding-right: 14px; }
+.feedback-title-warn { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 7px; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--warn); cursor: help; animation: fade-in .2s var(--ease-out); }
+.feedback-drop { position: absolute; inset: 8px; z-index: 5; display: grid; place-content: center; justify-items: center; gap: 8px; border: 2px dashed var(--accent); border-radius: 16px; background: color-mix(in srgb, var(--bg) 80%, transparent); backdrop-filter: blur(2px); color: var(--accent); pointer-events: none; animation: fade-in .15s var(--ease-out); }
+.feedback-card { flex: 1 0 auto; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--input); box-shadow: 0 1px 2px rgb(0 0 0 / .12); transition: border-color .15s, box-shadow .2s; }
+.feedback-card:focus-within { border-color: color-mix(in srgb, var(--fg) 38%, var(--border-strong)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent); }
+.feedback-card.drafting { border-color: var(--accent); animation: feedback-glow 1.8s ease-in-out infinite; }
+.feedback-card :is(input, textarea) { border: 0; border-radius: 0; background: transparent; outline: 0; }
+.feedback-title { flex: 1; min-width: 0; padding: 12px 0 2px 14px; font-size: 15px; font-weight: 600; }
+.feedback-title::placeholder { font-weight: 400; }
+.feedback-body { flex: 1 0 auto; min-height: 170px; field-sizing: content; resize: none; padding: 6px 14px 10px; font-size: 13.5px; line-height: 1.6; }
+.feedback-preview { flex: 1 0 auto; min-height: 170px; padding: 6px 14px 12px; overflow-wrap: anywhere; }
+.feedback-preview .hint { padding: 0; }
+.feedback-strip { list-style: none; margin: 0; padding: 0 14px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.feedback-strip li { position: relative; min-width: 0; animation: pop-in .28s var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 40ms); }
+.feedback-strip-image { position: relative; display: block; width: 100%; padding: 0; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); transition: border-color .15s, scale .18s var(--ease-out); }
+.feedback-strip-image:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); scale: 1.02; }
+.feedback-strip-image:disabled { opacity: 1; cursor: default; }
+.feedback-strip-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.feedback-annotated { position: absolute; left: 4px; top: 4px; font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 4px; color: #1b1300; background: var(--warn); }
+.feedback-strip-tools { position: absolute; inset: auto 4px 4px; display: flex; justify-content: center; padding: 1px; border: 1px solid var(--border-strong); border-radius: 8px; background: color-mix(in srgb, var(--overlay) 90%, transparent); backdrop-filter: blur(6px); opacity: 0; translate: 0 4px; transition: opacity .15s, translate .18s var(--ease-out); }
+.feedback-strip li:hover .feedback-strip-tools, .feedback-strip li:focus-within .feedback-strip-tools { opacity: 1; translate: 0; }
+@media (hover: none) { .feedback-strip-tools { opacity: 1; translate: 0; } }
+.feedback-strip-tools .icon-btn { width: 20px; height: 20px; }
+.feedback-card-bar { display: flex; align-items: center; gap: 4px; padding: 2px 8px 8px 10px; }
+.feedback-capture-buttons { flex: none; display: inline-flex; }
+.feedback-count-hint { min-width: 0; margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 11.5px; }
+.feedback-tabs { position: relative; flex: none; isolation: isolate; display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: 999px; background: var(--hover); }
+.feedback-tabs::before { content: ''; position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px; width: calc(50% - 2px); border-radius: 999px; background: var(--raised); box-shadow: 0 1px 2px #0004; transition: translate .22s var(--ease-out); }
+.feedback-tabs[data-tab=preview]::before { translate: 100% 0; }
+.feedback-tabs > button { padding: 2px 12px; border-radius: 999px; color: var(--muted); font-size: 12px; white-space: nowrap; transition: color .15s; }
+.feedback-tabs > button:hover { background: transparent; color: var(--fg); }
+.feedback-tabs > button[aria-selected=true] { color: var(--fg); }
+.feedback-progress { position: relative; flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--raised)); animation: rise-in .28s var(--ease-out); }
 .feedback-progress > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .feedback-progress small { color: var(--muted); line-height: 1.4; }
 .feedback-spinner { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 .feedback-progress-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 40%; background: var(--accent); animation: feedback-progress 1.4s ease-in-out infinite; }
 @keyframes feedback-progress { from { translate: -100% 0; } to { translate: 250% 0; } }
-@media (prefers-reduced-motion: reduce) { .feedback-spinner, .feedback-progress-bar { animation: none; } }
-.feedback-body { min-height: 200px; flex: 1 0 200px; resize: none; font: 13px/1.55 var(--mono); padding: 8px 10px; }
-.feedback-preview { min-height: 120px; flex: none; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }
-.feedback-preview .hint { padding: 0; }
-.feedback-images { display: flex; flex-direction: column; gap: 6px; flex: none; }
-.feedback-images-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.feedback-images-head strong { font-weight: 600; }
-.feedback-capture-buttons { display: inline-flex; gap: 2px; padding-right: 4px; border-right: 1px solid var(--border); }
-.feedback-images > .hint { padding: 10px; border-radius: 8px; background: var(--surface); text-align: center; }
-.feedback-strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
-.feedback-strip li { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.feedback-strip-image { position: relative; padding: 0; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
-.feedback-strip-image:hover { border-color: var(--accent); background: var(--surface); }
-.feedback-strip-image:disabled { opacity: 1; cursor: default; }
-.feedback-strip-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.feedback-annotated { position: absolute; left: 4px; bottom: 4px; font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 4px; color: #1b1300; background: var(--warn); }
-.feedback-strip-tools { display: flex; justify-content: center; flex-wrap: wrap; }
-.feedback-strip-tools .icon-btn { width: 22px; height: 22px; }
-.feedback-actions { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; padding: 8px 10px; border-top: 1px solid var(--border); }
+.feedback-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; padding: 8px 12px 10px; border-top: 1px solid var(--border); }
 .feedback-actions button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.feedback-actions .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 4px 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
+.feedback-actions .dropdown summary:hover, .feedback-actions .dropdown[open] summary { background: var(--hover); }
 .feedback-pick { display: inline-flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; }
 .feedback-pick .dropdown { min-width: 0; }
 .feedback-actions .chat-model summary { min-width: 0; }
@@ -2472,22 +2552,31 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .feedback-actions > button, .feedback-actions > span:not(.spacer):not(.feedback-pick) { flex: none; }
 .feedback-actions button:not(.primary) { color: var(--muted); }
 .feedback-actions button:not(.primary):hover { color: var(--fg); }
-/* Delete lives in the header, at the far right next to resize and close; the divider keeps the destructive one apart from them. */
-.feedback-panel .panel-head .feedback-head-delete:not(:disabled):hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
-.feedback-head-sep { flex: none; align-self: center; width: 1px; height: 16px; margin: 0 2px; background: var(--border); }
-.feedback-reason { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.feedback-actions .feedback-ai-btn, .feedback-submit { padding: 5px 13px 5px 11px; border-radius: 999px; transition: background .15s, color .15s, border-color .15s, scale .15s var(--ease-out); }
+.feedback-actions .feedback-ai-btn { border: 1px solid var(--border-strong); }
+.feedback-actions .feedback-ai-btn:not(:disabled) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: var(--accent-soft); }
+.feedback-actions .feedback-ai-btn:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.feedback-ai-btn.busy .icon { animation: feedback-twinkle 1s ease-in-out infinite; }
+.feedback-submit:not(:disabled):active, .feedback-ai-btn:not(:disabled):active { scale: .95; }
+.feedback-submit .icon { transition: translate .18s var(--ease-out); }
+.feedback-submit:not(:disabled):hover .icon { translate: 2px -2px; }
+.feedback-head-delete:not(:disabled):hover { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+.feedback-reason { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); animation: fade-in .2s var(--ease-out); }
 .feedback-reason .icon { flex: none; }
 .feedback-panel > .feedback-note { margin-bottom: 4px; }
-/* Narrow panel: the row stays one line. Once it gets tight, the Effort word and the "AI로 정리" text go (their bars / sparkle icon stay; both keep aria-labels and tooltips), and the model name is what shrinks last, with an ellipsis. */
+/* Narrow panel: the footer stays one line. Once it gets tight, the Effort word and the "AI로 정리" text go (their bars / sparkle icon stay; both keep aria-labels and tooltips), and the model name is what shrinks last, with an ellipsis. */
 @container (max-width: 420px) {
   .feedback-actions .chat-effort .dd-text, .feedback-actions .feedback-btn-text { display: none; }
   .feedback-actions .chat-effort summary { padding-left: 6px; padding-right: 6px; }
 }
+@container (max-width: 560px) { .panel-head:has(.feedback-queue-chip) .feedback-panel-title { display: none; } }
+@container (max-width: 400px) { .feedback-panel-title, .panel-head > .icon { display: none; } }
 @container (max-width: 380px) {
   .feedback-actions button:not(.primary) { padding: 3px 5px; font-size: 12px; }
-  .feedback-strip { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
-  .feedback-row time { display: none; }
+  .feedback-strip { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+  .feedback-row time, .feedback-count-hint { display: none; }
 }
+@media (prefers-reduced-motion: reduce) { .feedback-panel *, .feedback-panel *::before, .feedback-panel *::after { animation: none !important; transition: none !important; } }
 .statusbar .feedback-badge { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 4px; color: var(--accent-fg); background: var(--accent); font-weight: 600; }
 .statusbar .feedback-badge:hover { color: var(--accent-fg); background: var(--accent-strong); }
 .feedback-mode-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }

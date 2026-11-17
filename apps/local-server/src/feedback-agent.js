@@ -1,10 +1,11 @@
-// "AI로 정리" in the feedback requests: one `claude -p` run that looks at the draft's screenshots and the person's note and writes an
-// improvement request for MoonerADE's developer. The result is only a draft: a person reviews it before it can be submitted.
+// "AI로 작성" / "AI로 다듬기" in the feedback requests: one `claude -p` run that looks at the draft's screenshots and the person's note and writes an
+// improvement request for MoonerADE's developer (title, body and request types). The result is only a draft: a person reviews it before it can be submitted.
 import { spawn } from 'node:child_process';
 import { fault } from './files.js';
 import { ADE_OVERVIEW, OVERVIEW_RULE } from './ade-overview.js';
+import { FEEDBACK_TYPES, cleanTypes, withoutBrackets } from './feedback-store.js';
 
-export function feedbackPrompt({ images = [], title = '', body = '', note = '', context = '' }) {
+export function feedbackPrompt({ images = [], title = '', body = '', note = '', context = '', types = [] }) {
   return [
     '당신은 MoonerADE(AI 에이전트용 데스크톱 개발 환경) 사용자의 피드백을 개발자에게 전달할 개선 요청서로 정리합니다.',
     `MoonerADE 개요(이미 있는 기능과 부르는 이름을 확인하는 용도):\n${ADE_OVERVIEW}`,
@@ -13,12 +14,15 @@ export function feedbackPrompt({ images = [], title = '', body = '', note = '', 
     images.length ? `스크린샷(순서대로 1번부터):\n${images.map((file, index) => `${index + 1}. ${file}`).join('\n')}` : '스크린샷은 없습니다.',
     note && `사용자 메모:\n${note}`,
     (title || body.trim()) && `사용자가 적은 요건(초안):\n${title ? `제목: ${title}\n` : ''}${body}`,
+    cleanTypes(types).length && `사용자가 이미 고른 유형: ${cleanTypes(types).join(', ')}`,
     context && `ADE 상태 정보:\n${context}`,
     [
       // Last, next to the answer format: placed up beside the overview it lost to the user's own wording (a requested feature that already exists got requested again).
       OVERVIEW_RULE,
-      '결과는 다른 말 없이 JSON 한 개로만 답하세요: {"title": "...", "body": "..."}',
-      '- title: 60자 이하 한국어 한 줄 요약',
+      '결과는 다른 말 없이 JSON 한 개로만 답하세요: {"title": "...", "body": "...", "types": ["..."]}',
+      // The app puts the chosen types in front of the title ("[버그] …") and labels the issue with them, so a title of its own with [ ] would double them up.
+      '- title: 60자 이하 한국어 한 줄 요약. 대괄호 [ ]는 절대 쓰지 마세요(유형 접두어는 앱이 제목 앞에 자동으로 붙입니다).',
+      `- types: 아래 id 중 내용에 맞는 것 1~3개를 고른 배열(가장 맞는 것 먼저). 애매하면 ["pain"].\n${Object.entries(FEEDBACK_TYPES).map(([id, [tag, help]]) => `  · ${id} (${tag}): ${help}`).join('\n')}`,
       // Output length is the run's main cost (~1000 tokens took ~6s of a 9s run), so the answer is kept short on purpose.
       '- body: 한국어 마크다운, 전체 400자 이내로 짧게. 다음 절을 이 순서로: "## 문제"(1~2문장), "## 기대 동작"(1문장), "## 개선 제안"(불릿 최대 3개). 재현 순서가 분명할 때만 "## 재현 방법"(최대 3단계)을 더하세요. 스크린샷은 "스크린샷 1"처럼 번호로 가리키세요.',
       '- 서론·맺음말·같은 말의 반복은 쓰지 마세요. 사용자 메모에 없는 내용을 지어내지 마세요.'
@@ -33,11 +37,11 @@ export function parseFeedbackDraft(text) {
   for (const candidate of candidates) {
     try {
       const value = JSON.parse(candidate);
-      if (value && typeof value.body === 'string' && value.body.trim()) return { title: typeof value.title === 'string' ? value.title.trim() : '', body: value.body.trim() };
+      if (value && typeof value.body === 'string' && value.body.trim()) return { title: typeof value.title === 'string' ? withoutBrackets(value.title) : '', body: value.body.trim(), types: cleanTypes(value.types) };
     } catch { /* next candidate */ }
   }
   if (!raw) throw fault('AGENT_PROTOCOL', 'AI가 빈 답을 보냈습니다.', 502);
-  return { title: '', body: raw };
+  return { title: '', body: raw, types: [] };
 }
 
 // `claude -p --output-format json` prints one object whose `result` is the final answer.
@@ -47,11 +51,11 @@ export const FEEDBACK_EFFORTS = ['low', 'medium']; // Effort stops at Medium for
 // Startup, not the model, is what makes a draft slow: a plain `claude -p` also boots every MCP server, skill and project setting the user has (one-line answer on a dev Mac: 10-21s
 // that way, ~5-6s without them; `--bare` would be cleaner still but never reads the OAuth login, only ANTHROPIC_API_KEY, so it is not used). This run needs none of it. `--setting-sources user` still reads the user's own settings (login, proxy, env).
 const ISOLATED = ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', 'user', '--disable-slash-commands', '--no-session-persistence'];
-// Only "AI로 정리" needs a Claude Code login; submitting never does (it goes anonymously when nobody is signed in), so the message says so.
+// Only the AI buttons need a Claude Code login; submitting never does (it goes anonymously when nobody is signed in), so the message says so.
 export const loginProblem = text => /not logged in|please run \/login|invalid api key|authentication_error|oauth token has expired/i.test(String(text ?? ''));
-export const LOGIN_HINT = 'AI 정리는 Claude Code 로그인이 필요합니다. 터미널에서 claude를 실행해 로그인한 뒤 다시 시도하세요. 제출은 로그인 없이도 할 수 있으니, 직접 쓴 내용을 그대로 제출해도 됩니다.';
-export function runFeedbackDraft({ executable = 'claude', executableArgs = [], model = '', effort = '', cwd, images, title, body, note, context, env = {}, spawnProcess = spawn, timeoutMs = 120_000 }) {
-  const prompt = feedbackPrompt({ images, title, body, note, context });
+export const LOGIN_HINT = 'AI로 작성·다듬기는 Claude Code 로그인이 필요합니다. 터미널에서 claude를 실행해 로그인한 뒤 다시 시도하세요. 제출은 로그인 없이도 할 수 있으니, 직접 쓴 내용을 그대로 제출해도 됩니다.';
+export function runFeedbackDraft({ executable = 'claude', executableArgs = [], model = '', effort = '', cwd, images, title, body, note, context, types, env = {}, spawnProcess = spawn, timeoutMs = 120_000 }) {
+  const prompt = feedbackPrompt({ images, title, body, note, context, types });
   return new Promise((resolve, reject) => {
     // Only Read: the run looks at the screenshots and answers; it cannot edit or run anything.
     const args = [...executableArgs, ...(FEEDBACK_MODELS.includes(model) ? ['--model', model] : []), ...(FEEDBACK_EFFORTS.includes(effort) ? ['--effort', effort] : []), '-p', '--output-format', 'json', '--allowedTools', 'Read', '--disallowedTools', 'Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch', ...ISOLATED];
@@ -62,7 +66,7 @@ export function runFeedbackDraft({ executable = 'claude', executableArgs = [], m
       try { proc?.kill(); } catch { /* already gone */ }
       fn(value);
     };
-    const timer = setTimeout(() => finish(reject, fault('AGENT_TIMEOUT', 'AI 정리 시간이 초과되었습니다.', 504)), timeoutMs);
+    const timer = setTimeout(() => finish(reject, fault('AGENT_TIMEOUT', 'AI 작성 시간이 초과되었습니다.', 504)), timeoutMs);
     try {
       proc = spawnProcess(executable, args, { cwd, env: { ...process.env, ...(typeof env === 'function' ? env() : env), NO_COLOR: '1' }, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch {
@@ -72,7 +76,7 @@ export function runFeedbackDraft({ executable = 'claude', executableArgs = [], m
     const settle = code => {
       let result = null;
       try { const value = JSON.parse(stdout); result = value?.is_error ? null : value?.result; if (value?.is_error) stderr = String(value.result ?? stderr); } catch { /* not JSON */ }
-      if (code !== 0 || typeof result !== 'string') return finish(reject, fault(loginProblem(stderr) ? 'AGENT_LOGIN' : 'AGENT_PROTOCOL', loginProblem(stderr) ? LOGIN_HINT : (stderr.trim() || `AI 정리를 하지 못했습니다 (${code}).`).slice(0, 500), loginProblem(stderr) ? 401 : 502));
+      if (code !== 0 || typeof result !== 'string') return finish(reject, fault(loginProblem(stderr) ? 'AGENT_LOGIN' : 'AGENT_PROTOCOL', loginProblem(stderr) ? LOGIN_HINT : (stderr.trim() || `AI 작성을 하지 못했습니다 (${code}).`).slice(0, 500), loginProblem(stderr) ? 401 : 502));
       try { finish(resolve, parseFeedbackDraft(result)); } catch (error) { finish(reject, error); }
     };
     proc.stdout?.on('data', chunk => {
