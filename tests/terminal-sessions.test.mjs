@@ -151,3 +151,14 @@ test('chat handoff resumes the exact provider session, including Cursor', async 
     assert.equal(await readTerminalSession(root, agent, agent), first);
   }
 });
+
+test('PowerShell sessions bind Ctrl+D (PSReadLine leaves it unbound on Windows) unless the profile chose one', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ade-ps-'));
+  try {
+    const shell = await terminalSessionShell(root, 'ps', '/usr/bin/pwsh');
+    assert.equal(shell.tracked, true);
+    const init = await readFile(shell.args.at(-1).match(/^\. ['"]?(.+?)['"]?$/)[1], 'utf8');
+    assert.match(init, /Set-PSReadLineKeyHandler -Chord 'Ctrl\+d' -Function DeleteCharOrExit/);
+    assert.match(init, /Where-Object \{ \$_\.Key -eq 'Ctrl\+d' \}/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
