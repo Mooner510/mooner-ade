@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { binCommands, createPluginManager, createPluginStore, pluginTerminal, probeMcpTools, scanPlugins, treeHash, updateReview, validBadge, validManifest, validPluginState, validTools, validView } from '../apps/desktop/src/plugin-core.js';
+import { binCommands, createPluginManager, createPluginStore, pluginTerminal, probeMcpTools, readIcon, scanPlugins, treeHash, updateReview, validBadge, validManifest, validPluginState, validTools, validView } from '../apps/desktop/src/plugin-core.js';
 import { deniedMcpTools, setAgentMcpServers, terminalAgentCommand } from '../apps/local-server/src/terminal-sessions.js';
 
 const sealer = (available = true) => ({
@@ -581,4 +581,23 @@ test('a plugin that did not declare feedback is never asked and never counted', 
   assert.equal(env.manager.feedbackStatus().ok, false);
   assert.equal((await env.manager.submitFeedback({ meta: {}, images: [] })).ok, false);
   assert.ok(!child.sent.some(message => message.type === 'feedback/submit'));
+});
+
+test('a plugin may name one SVG icon in its folder; a bad icon only falls back to the generic one', t => {
+  assert.equal(validManifest(manifest({ icon: 'assets/icon.svg' })).icon, 'assets/icon.svg');
+  for (const icon of ['icon.png', '../icon.svg', '/icon.svg', 'C:/icon.svg', 'a\\icon.svg', 7]) assert.throws(() => validManifest(manifest({ icon })), /icon/);
+  const root = temp(t), folder = path.join(root, 'example');
+  fs.mkdirSync(path.join(folder, 'bin'), { recursive: true });
+  for (const file of ['host.js', 'bin/cli.js']) fs.writeFileSync(path.join(folder, file), '');
+  const svg = '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 12h18"/></svg>\n';
+  fs.writeFileSync(path.join(folder, 'icon.svg'), svg);
+  fs.writeFileSync(path.join(folder, 'plugin.json'), JSON.stringify(manifest({ icon: 'icon.svg' })));
+  const [item] = scanPlugins(root);
+  assert.equal(item.error, null); assert.equal(item.icon, svg);
+  const named = { icon: 'icon.svg' };
+  fs.writeFileSync(path.join(folder, 'icon.svg'), '<html><script>alert(1)</script></html>'); assert.equal(readIcon(folder, named), null);
+  fs.writeFileSync(path.join(folder, 'icon.svg'), `<svg>${'x'.repeat(40 * 1024)}</svg>`); assert.equal(readIcon(folder, named), null);
+  fs.rmSync(path.join(folder, 'icon.svg')); assert.equal(readIcon(folder, named), null);
+  assert.equal(scanPlugins(root)[0].error, null, 'a missing icon does not break the plugin');
+  assert.equal(readIcon(folder, {}), null);
 });
