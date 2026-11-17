@@ -3,7 +3,7 @@ export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
-import { PluginBadges } from './PluginSettings';
+import { PluginBadges, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
@@ -133,8 +133,11 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
-  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [reviewWide, setReviewWide] = useState(false);
+  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [pluginOpen, setPluginOpen] = useState(''), [reviewWide, setReviewWide] = useState(false);
   const feedback = useFeedback();
+  // Plugins that declare `header` add one button to the top bar; it opens the plugin's panel in the right-panel slot.
+  const headerPlugins = (usePluginsState()?.plugins ?? []).filter(plugin => plugin.header && plugin.state === 'running');
+  const pluginShown = headerPlugins.find(plugin => plugin.id === pluginOpen) ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
   const launcherButton = useRef<HTMLButtonElement>(null);
   const closeLauncherMenu = () => { setMenuOpen(false); launcherButton.current?.focus(); };
@@ -435,6 +438,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     try {
           if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); }
           else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
+          // A plugin started a chat in this project (a header plugin's work): it shows up as a tab.
+          else if (message.type === 'plugin/chat') { if (!tabOf(message.id)) void takeOver(undefined, { ...chatLeaf(message.cwd, message.agent), id: message.id }); }
           // A stream of file events (an agent at work) refreshes Git at most twice a second; a hidden window catches up when it shows (visibilitychange).
           else if (message.type === 'fs') {
             if (refs.active.current && !document.hidden && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
@@ -799,12 +804,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
   // The git poll already keeps the state fresh; the extra refresh waits out the slide-in so it does not re-render the workspace mid-animation.
-  const showReview = () => { setErrorsOpen(false); setFeedbackOpen(false); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
-  const toggleReview = () => { if (errorsOpen || feedbackOpen) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
-  const toggleErrors = () => { setFeedbackOpen(false); setErrorsOpen(value => !value); };
+  const showReview = () => { setErrorsOpen(false); setFeedbackOpen(false); setPluginOpen(''); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
+  const toggleReview = () => { if (errorsOpen || feedbackOpen || pluginShown) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
+  const toggleErrors = () => { setFeedbackOpen(false); setPluginOpen(''); setErrorsOpen(value => !value); };
   // The feedback inbox shares the right panel slot: opening it closes the error list and covers the diff, like the error list does.
-  const showFeedback = () => { setErrorsOpen(false); setFeedbackOpen(true); };
-  const toggleFeedback = () => { setErrorsOpen(false); setFeedbackOpen(value => !value); };
+  const showFeedback = () => { setErrorsOpen(false); setPluginOpen(''); setFeedbackOpen(true); };
+  const toggleFeedback = () => { setErrorsOpen(false); setPluginOpen(''); setFeedbackOpen(value => !value); };
+  const togglePlugin = (id: string) => { setErrorsOpen(false); setFeedbackOpen(false); setPluginOpen(value => value === id ? '' : id); };
   const startCapture = () => { if (!canCapture()) throw new Error('이 브라우저는 화면 캡쳐를 지원하지 않습니다. 이미지를 붙여넣거나 파일로 추가하세요.'); requestCapture('element'); };
   // Text for an AI draft about what is on screen: app version, open panes, project, the last few errors of this project.
   const feedbackContext = async () => {
@@ -924,11 +930,12 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing'); setSettings(previous => previous.reviewWidth === width ? previous : { ...previous, reviewWidth: width }); };
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
   };
-  const reviewShown = rightVisible && !errorsOpen && !feedbackOpen;
-  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : feedbackOpen ? '피드백 요청' : '변경사항 패널'} aria-label={errorsOpen ? '오류' : feedbackOpen ? '피드백 요청' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
+  const reviewShown = rightVisible && !errorsOpen && !feedbackOpen && !pluginShown;
+  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : pluginShown ? `플러그인 ${pluginShown.name}` : feedbackOpen ? '피드백 요청' : '변경사항 패널'} aria-label={errorsOpen ? '오류' : pluginShown ? pluginShown.name : feedbackOpen ? '피드백 요청' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
     <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="변경사항 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
     {errorsOpen ? <ErrorPanel scope={root} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
+      : pluginShown ? <PluginPanel key={pluginShown.id} plugin={pluginShown} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onSettings={onOpenPlugins} onClose={() => setPluginOpen('')} />
       : feedbackOpen ? <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />
       : <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
         openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
@@ -976,13 +983,14 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       <button className={`bar-button ${reviewShown ? 'on' : ''}`} title={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
         <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><span>{git.changes.length}</span><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} title={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
+      {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} title={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><Icon name="plugin" /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
       </div>
     </header>
     <ErrorToast scope={root} active={active} />
     {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
-    <div className="workbench">{center}{(rightVisible || errorsOpen || feedbackOpen) && rightPanel}</div>
+    <div className="workbench">{center}{(rightVisible || errorsOpen || feedbackOpen || pluginShown) && rightPanel}</div>
     <footer className="statusbar" data-feedback-region="상태바">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title={`검토할 피드백 초안 ${reviewCount}개 · 피드백 요청 열기`} aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
