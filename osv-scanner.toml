@@ -1,0 +1,7 @@
+# picomatch ReDoS (extglob). 패치된 버전이 아직 없고(4.0.7이 최신), vite -> tinyglobby -> fdir를 거치는
+# 개발 의존성이라 배포되는 앱에는 들어가지 않는다. 패치가 나오면 이 항목을 지우고 업데이트한다.
+# 만료일이 지나면 다시 CI가 실패해서 재검토하게 된다.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-31
+reason = "picomatch ReDoS: 패치 버전 없음, vite 빌드 시점에만 쓰는 dev 의존성(배포물 미포함)"
