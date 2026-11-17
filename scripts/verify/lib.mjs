@@ -2,18 +2,15 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import http from 'node:http';
-import { tmpdir } from 'node:os';
-import { join, dirname, delimiter } from 'node:path';
+import { join, dirname, delimiter, resolve } from 'node:path';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { agentDirs } from './agent-dirs.mjs';
 import { createHubRoutes } from './hub-fake.mjs';
-// HERE: this folder (the fake `claude` lives in HERE/bin). ROOT: the checkout. S: where env.json, screenshots and results go (VERIFY_OUT, required:
-// a fixed default let parallel sessions overwrite each other's env.json, and a shell `export` does not survive between an agent's commands).
-export const HERE = dirname(fileURLToPath(import.meta.url));
-export const ROOT = join(HERE, '..', '..');
-if (!process.env.VERIFY_OUT) { console.error('VERIFY_OUT가 없습니다. 예: VERIFY_OUT=$(mktemp -d -t ade-verify-out) 를 명령마다 붙이세요.'); process.exit(2); }
-export const S = process.env.VERIFY_OUT;
+import { HERE, ROOT, MARKER, tmpRoot, mainDir, ensureSession } from './session-dirs.mjs';
+export { HERE, ROOT };
+// S: the session folder (env.json, screenshots, results). VERIFY_OUT picks an isolated one (tmp/ade-*); without it everything goes to the shared
+// tmp/main, the one session every agent uses (`node scripts/verify/session.mjs status` shows which sessions run and who started them).
+export const S = process.env.VERIFY_OUT ? resolve(process.env.VERIFY_OUT) : mainDir();
 mkdirSync(join(S, 'shots'), { recursive: true });
 export const WebSocket = createRequire(join(ROOT, 'apps/local-server/package.json'))('ws');
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -38,27 +35,28 @@ export async function fakeHub() {
   return hub;
 }
 
-// A server of this checkout in its own HOME/data dir; `claude` on PATH is the fake. Never touches the installed app.
-// Every temp folder boot() creates is removed when this process exits, unless `keep` (start-ui keeps its main one for restart-ui; cleanup-ui removes it).
-// ponytail: an 'exit' hook, so a SIGKILL or an unhandled Ctrl-C still leaves the folder; `cleanup-ui.mjs --list` shows those.
+// A server of a checkout (`root`, default this one) in its own HOME/data dir; `claude` on PATH is the fake. Never touches the installed app.
+// `dir`: a session folder to boot in and keep (start-ui: tmp/main or tmp/ade-*; its data, home and repo survive a restart, so saved keys and chats stay).
+// Without it the server gets a tmp/run-* folder of its own, removed when this process exits.
+// ponytail: an 'exit' hook, so a SIGKILL or an unhandled Ctrl-C still leaves the folder; `session.mjs prune` removes those.
 const made = new Set(); process.on('exit', () => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
-// `temp`: reuse an earlier boot's folder (its data, home and repo, so a saved API key or chat survives a restart) instead of a new one.
-export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false, temp: reuse, keep = false } = {}) {
-  const temp = await realpath(reuse || await mkdtemp(join(tmpdir(), 'ade-verify-')));
-  if (!reuse && !keep) made.add(temp);
+export async function boot({ env = {}, data, home, repoFiles = true, minimalPath = false, dir, root = ROOT, port } = {}) {
+  let temp;
+  if (dir) temp = ensureSession(dir);
+  else { await mkdir(tmpRoot(), { recursive: true }); temp = await realpath(await mkdtemp(join(tmpRoot(), 'run-'))); made.add(temp); await writeFile(join(temp, MARKER), JSON.stringify({ kind: 'run', pid: process.pid, createdAt: Date.now() })); }
   data ??= join(temp, 'data'); home ??= join(temp, 'home'); const repo = join(temp, 'repo');
   for (const d of [data, home, repo]) await mkdir(d, { recursive: true });
   const git = (...a) => execFileSync('git', ['-c', 'user.name=v', '-c', 'user.email=v@example.invalid', '-c', 'core.hooksPath=/dev/null', ...a], { cwd: repo, stdio: 'ignore' });
-  if (repoFiles && !(reuse && existsSync(join(repo, '.git')))) {
+  if (repoFiles && !existsSync(join(repo, '.git'))) {
     git('init', '-q', '-b', 'main'); await mkdir(join(repo, 'src')); await writeFile(join(repo, 'a.txt'), 'hello\n'); await writeFile(join(repo, 'src/b.ts'), 'export const x = 1;\n'); await writeFile(join(repo, '.gitignore'), 'ignored.log\n');
     git('add', '.'); git('commit', '-q', '-m', 'init'); await writeFile(join(repo, 'untracked.md'), 'u\n'); await writeFile(join(repo, 'ignored.log'), 'i\n');
   }
-  const log = join(temp, 'fake-claude.jsonl'), ctlFile = join(temp, 'ctl.json'); await writeFile(log, ''); await writeFile(ctlFile, '{}');
+  const log = join(temp, 'fake-claude.jsonl'), ctlFile = join(temp, 'ctl.json'); if (!dir || !existsSync(log)) await writeFile(log, ''); if (!dir || !existsSync(ctlFile)) await writeFile(ctlFile, '{}');
   // REAL_AGENTS=1: the real CLIs on PATH instead of the fake (still the temp HOME, so only an API key saved in Settings > AI 툴 can sign them in).
-  const agents = process.env.AGENT_DIRS ? agentDirs(temp) : null;
+  const agents = process.env.AGENT_DIRS ? await agentDirs(temp) : null;
   const PATH = minimalPath ? `${dirname(process.execPath)}:/usr/bin:/bin` : process.env.REAL_AGENTS || agents ? process.env.PATH : `${join(HERE, 'bin')}${delimiter}${process.env.PATH}`;
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
-    env: { ...process.env, HOME: agents ? process.env.HOME : home, USERPROFILE: agents ? process.env.USERPROFILE ?? process.env.HOME : home, ...agents?.dirs, PATH, FAKE_LOG: log, FAKE_CTL: ctlFile, ADE_DEV: '0', ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', ...env } });
+  const child = spawn(process.execPath, [join(root, 'apps/local-server/src/index.js')], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    env: { ...process.env, HOME: agents ? process.env.HOME : home, USERPROFILE: agents ? process.env.USERPROFILE ?? process.env.HOME : home, ...agents?.dirs, PATH, FAKE_LOG: log, FAKE_CTL: ctlFile, ADE_DEV: '0', ADE_PORT: String(port ?? 0), ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '', ADE_HUB_URL: 'http://127.0.0.1:9', VERIFY_OUT: S, ...env } });
   let stderr = ''; child.stderr.on('data', c => { stderr += c; if (process.env.VERIFY_STDERR) process.stderr.write(c); }); // VERIFY_STDERR=1: pass the server's stderr through (debug logs)
   const line = await new Promise((resolve, reject) => { let out = ''; child.stdout.on('data', c => { out += c; if (/#token=\w+/.test(out)) resolve(out); }); child.once('exit', () => reject(new Error('server exited: ' + stderr))); setTimeout(() => reject(new Error('startup timeout')), 20000); });
   const [, origin, token] = /(http:\/\/127\.0\.0\.1:\d+)\/#token=(\w+)/.exec(line);

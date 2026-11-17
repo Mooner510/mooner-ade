@@ -1,7 +1,7 @@
 // Browser verification uses the production plugin manager; only its transport, confirmations and temporary key store differ.
 import fs from 'node:fs';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
+import { inside, isSessionDir, real } from './session-dirs.mjs';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { createPluginManager, createPluginStore, validManifest } from '../../apps/desktop/src/plugin-core.js';
@@ -9,9 +9,10 @@ import { createHubClient } from '../../apps/desktop/src/hub-client.js';
 import { createGithub, githubClientId, machineAccounts, machineToken } from '../../apps/desktop/src/plugin-updates.js';
 
 export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = process.env, onTerminal, onFeedback, toServer }) {
-  const temp = fs.realpathSync(tmpdir());
-  const insideTemp = value => { const relative = path.relative(temp, fs.realpathSync(value)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); };
-  if (!verifyOut || !insideTemp(verifyOut) || !insideTemp(dataRoot) || !path.basename(path.dirname(dataRoot)).startsWith('ade-verify-')) throw new Error('플러그인 검증은 OS 임시 폴더의 격리 세션에서만 실행할 수 있습니다.');
+  // Only inside a verify session folder (<main checkout>/tmp/<session>, or the OS temp dir for tests) that start-ui/boot marked, with the data dir and
+  // VERIFY_OUT both in it: never the installed app's data.
+  const session = real(path.dirname(path.resolve(dataRoot))), out = verifyOut && real(verifyOut);
+  if (!session || !out || !isSessionDir(session) || !(out === session || inside(session, out))) throw new Error('플러그인 검증은 격리 세션 폴더(tmp/<세션>)에서만 실행할 수 있습니다.');
   const root = path.join(dataRoot, 'verify-plugins'), dir = path.join(root, 'plugins');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const keyFile = path.join(root, 'session.key');
