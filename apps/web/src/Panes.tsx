@@ -113,7 +113,7 @@ function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, s
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onClose(id); } }}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
-      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
+      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" keys="Esc" onClick={() => onClose(id)} /></span></div>
     <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} nudge={nudge} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
@@ -621,9 +621,9 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `클릭하여 세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
         {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
-        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'mod+shift+backslash' ? 'splitRight' : 'splitDown'))); }} />
+        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
-        <IconButton icon="x" tip="none" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
+        <IconButton icon="x" tip="none" label="터미널 종료" action="closePane" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
     {hint && <Hint title="언제든 Chat으로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 Chat 화면에서 그대로 이어가요. 코드 변경과 도구 실행을 한눈에 볼 수 있어요." onDone={hintSeen} />}
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
@@ -666,7 +666,7 @@ function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Le
       <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''}`}
         onClick={() => ctx.onSelectTab(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
         <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
-      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" tip="none" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
+      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(leaf.id)} /><IconButton icon="x" tip="none" label="Diff 패널 닫기" action="closePane" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
     {active ? <DiffTab key={active} spec={active} ctx={ctx} />
       : <div className="empty"><h2>열린 diff가 없습니다</h2><p>오른쪽 변경사항 패널에서 파일을 선택하세요.</p></div>}
   </section>;
