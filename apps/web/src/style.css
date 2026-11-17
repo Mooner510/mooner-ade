@@ -1816,6 +1816,11 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md li.nested { margin-left: 18px; }
 .md a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
 .md code { padding: 1px 5px; border-radius: 4px; background: var(--raised); border: 1px solid var(--border); font: 0.9em var(--mono); }
+/* A file or folder of the project in a reply: Material file icon + relative path, clickable (Markdown.tsx FileChip). */
+.md-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 0 7px 0 5px; margin: 0 1px; border-radius: 6px; vertical-align: baseline; background: var(--raised); border: 1px solid var(--border); color: var(--fg); font: 0.9em var(--mono); line-height: 1.55; text-align: left; cursor: pointer; }
+.md-file span { min-width: 0; overflow-wrap: anywhere; }
+.md-file:hover { border-color: var(--border-strong); background: var(--selected); }
+.md-file:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md blockquote { padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
 .md-table { display: block; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }

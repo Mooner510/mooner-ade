@@ -20,7 +20,7 @@ import { chatEventStats } from './chat-stats.js';
 import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
-import { UI_PROMPT } from './chat-ui-prompt.js';
+import { chatPrompt } from './chat-prompt.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -213,7 +213,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   const saveMeta = () => {
     const data = JSON.stringify(snapshotMeta());
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
@@ -521,7 +521,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // Without a pick the CLI would follow ~/.claude/settings.json at every (re)start, so a change made in another project (or a terminal `/model`) would silently
     // switch this conversation on its next resume. The model and Effort it is running with are pinned to the chat instead.
     if (agent === 'claude') { let pinned = false; if (!meta.model && state.model) { meta.model = state.model; pinned = true; } if (meta.effort === undefined && state.effort && state.capabilities.efforts.includes(state.effort)) { meta.effort = state.effort; pinned = true; } if (pinned) await saveMeta(); }
-    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true }) : {};
+    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true, fileLinks: meta.fileLinks === true }) : {};
     const args = [...argsOf(executableArgs, meta.auth), ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
@@ -555,7 +555,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     attach(proc);
     if (protocol) {
       try {
-        await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), meta.interactiveUi === true ? UI_PROMPT : undefined);
+        await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true));
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -840,10 +840,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       try { await this.send(text, held.flatMap(item => item.data), { previews: held.flatMap(item => item.previews ?? []) }); }
       catch (error) { emit({ kind: 'steer', phase: 'cancelled', uuid: '', text }); throw error; } // not sent: the text goes back into the input box
     },
-    // Whether the agent is told about UI blocks is decided once, by the setting at the chat's first message, and kept: a later change would rewrite the system prompt
+    // Whether the agent is told about UI blocks (and how to write file paths, see chat-prompt.js) is decided once, by the setting at the chat's first message, and kept: a later change would rewrite the system prompt
     // and make the whole conversation miss the prompt cache. Chats that already had a session (older ones) never get it. Cursor has no system-prompt channel.
     setInteractiveUi(value) {
-      if (meta.interactiveUi === undefined && !state.sessionId && !child && typeof value === 'boolean') meta.interactiveUi = value;
+      if (meta.interactiveUi === undefined && !state.sessionId && !child && typeof value === 'boolean') { meta.interactiveUi = value; meta.fileLinks = true; }
     },
     async warm() { live(); if (agent === 'cursor' && !closed && !child && !turnOpen) await start(); },
     async set({ model, effort, worktree, addDirs, permissionMode, configOption, sandbox, network, runEverything, auth }) {

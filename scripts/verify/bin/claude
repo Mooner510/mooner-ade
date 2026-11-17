@@ -22,7 +22,8 @@ if (!stream) {
     process.exit(0);
   });
 } else {
-  log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog });
+  const promptAt = argv.indexOf('--append-system-prompt-file');
+  log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog, systemPrompt: promptAt >= 0 ? (() => { try { return fs.readFileSync(argv[promptAt + 1], 'utf8'); } catch { return null; } })() : undefined });
   const sid = 'fake-session-' + process.pid;
   const init = { type: 'system', subtype: 'init', session_id: sid, model: (argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null) ?? 'Model 1.0', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
   send(init);
@@ -63,6 +64,8 @@ if (!stream) {
       send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
+    // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
+    if (text.includes('filechips')) { say(['고친 곳은 [[file:src/b.ts:2]] 와 [[file:README.md]] 이고, 폴더 [[file:src/]] 도 봤어요.', '', '- 링크 형태: [a.txt](a.txt)', '- 주소는 그대로: [문서](https://example.com/docs) 와 [[1, 2]]', '', '`[[file:code.ts]]`는 코드라 칩이 아니에요.'].join('\n')); result('chips'); return; }
     if (/\btables\b/.test(text)) { // markdown table samples: long prose cells, many columns, code/CJK, narrow, alignment
       const long = '이 문장은 일부러 아주 길게 써서 셀 안에서 자동 개행이 되는지 확인하기 위한 것입니다. 표가 좌우로 넓어지면 읽기 힘들기 때문에 컨테이너 폭에 맞춰 줄바꿈되어야 합니다.';
       say(['### 1. 긴 문장 셀', '', '| 항목 | 설명 | 비고 |', '|---|---|---|', `| 개행 | ${long} | 통과 |`, `| 영문 | ${'This is a very long English sentence that should wrap inside the cell instead of stretching the table sideways. '.repeat(2)} | ok |`, '',
