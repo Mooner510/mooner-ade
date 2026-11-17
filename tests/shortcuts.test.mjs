@@ -16,13 +16,13 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   const directory = await mkdtemp(join(tmpdir(), 'ade-keys-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outfile = join(directory, 'keys.cjs');
-  await build({ stdin: { contents: `export * from './shortcuts'; export { validCombo } from './chat-model';`, resolveDir }, bundle: true, platform: 'node', format: 'cjs', outfile });
-  const { appKey, appKeyDefs, normalizeCombo, matches, combosOverlap, showAppKey, validCombo } = require(outfile);
+  await build({ stdin: { contents: `export * from './shortcuts'; export { chatKey, chatKeyDefs, validCombo } from './chat-model';`, resolveDir }, bundle: true, platform: 'node', format: 'cjs', outfile });
+  const { appKey, appKeyDefs, chatKey, chatKeyDefs, normalizeCombo, matches, combosOverlap, showAppKey, validCombo } = require(outfile);
   const key = (code, modifiers = {}) => ({ code, key: code, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
   assert.equal(new Set(appKeyDefs.map(def => def.id)).size, appKeyDefs.length);
   assert.equal(appKey({}, 'newTab'), 'mod+shift+t');
   assert.equal(appKey({ newTab: 'alt+k' }, 'newTab'), 'alt+k');
-  assert.equal(appKey({}, 'splitRight'), 'ctrl+d');
+  assert.equal(appKey({}, 'splitRight'), 'mod+shift+backslash');
   assert.equal(appKey({}, 'project9'), 'mod+alt+9');
   assert.ok(matches(appKey({ newTab: 'alt+k' }, 'newTab'), key('KeyK', { altKey: true })));
   assert.ok(!matches(appKey({ newTab: 'alt+k' }, 'newTab'), key('KeyT', { metaKey: true, shiftKey: true })));
@@ -46,9 +46,22 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   assert.equal(appKey({}, 'feedbackCapture'), 'mod+alt+shift+f');
   assert.ok(matches(appKey({}, 'feedbackCapture'), key('KeyF', { ctrlKey: true, altKey: true, shiftKey: true })));
   assert.ok(!matches(appKey({}, 'feedback'), key('KeyF', { ctrlKey: true, altKey: true, shiftKey: true })));
-  for (const [index, def] of appKeyDefs.entries()) {
+  assert.equal(chatKey({}, 'modelNext'), 'ctrl+alt+arrowright');
+  assert.equal(chatKey({}, 'modelPrev'), 'ctrl+alt+arrowleft');
+  assert.equal(chatKey({}, 'effortUp'), 'ctrl+alt+arrowup');
+  assert.equal(chatKey({}, 'effortDown'), 'ctrl+alt+arrowdown');
+  assert.equal(chatKey({ modelNext: 'meta+k' }, 'modelNext'), 'meta+k');
+  for (const code of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+    for (const modifiers of [{ shiftKey: true }, { altKey: true, shiftKey: true }, { metaKey: true, shiftKey: true }]) {
+      assert.ok(![...appKeyDefs, ...chatKeyDefs].some(def => matches(def.keys, key(code, modifiers))), `text selection: ${code}`);
+    }
+  }
+  assert.ok(!appKeyDefs.some(def => matches(def.keys, key('KeyD', { ctrlKey: true }))));
+  for (const code of ['ArrowUp', 'ArrowDown']) assert.ok(!appKeyDefs.some(def => matches(def.keys, key(code, { altKey: true }))));
+  const definitions = [...appKeyDefs, ...chatKeyDefs];
+  for (const [index, def] of definitions.entries()) {
     assert.match(def.id, /^[a-zA-Z][a-zA-Z0-9]{0,23}$/);
-    for (const other of appKeyDefs.slice(index + 1)) assert.ok(!combosOverlap(def.keys, other.keys), `${def.id} / ${other.id}`);
+    for (const other of definitions.slice(index + 1)) assert.ok(!combosOverlap(def.keys, other.keys), `${def.id} / ${other.id}`);
   }
 });
 
@@ -79,7 +92,7 @@ test('shortcut editor changes, cancels, rejects duplicates and resets individual
   `, loader: 'tsx', resolveDir }, bundle: true, write: false, jsx: 'automatic', external: ['monaco-editor', 'monaco-editor/*'], format: 'iife' });
   const css = await readFile(new URL('../apps/web/src/style.css', import.meta.url), 'utf8');
   const server = createServer((req, res) => {
-    res.setHeader('Content-Type', req.url === '/app.js' ? 'text/javascript' : 'text/html');
+    res.setHeader('Content-Type', req.url === '/app.js' ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8');
     res.end(req.url === '/app.js' ? bundle.outputFiles[0].text : `<style>${css}</style><div id="root"></div><script src="/app.js"></script>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

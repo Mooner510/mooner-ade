@@ -19,11 +19,13 @@ test('missing provider usage is rendered as unavailable instead of zero', async 
     export const modelColors = ['astra','sol','terra','luna'].map(family => chatItemView('model', {state: {...emptyState(), agent: 'codex', model: 'gpt-6.1-' + family}}).color);
     export const cursorColor = chatItemView('model', {state: {...emptyState(), agent: 'cursor', model: 'composer-2'}}).color;
     export const views = ['cost','tokens','context'].map(id => chatItemView(id, {state})?.text ?? null);
+    export const codexCache = chatItemView('tokens', {state: {...emptyState(), agent: 'codex', tokens: {input: 600, output: 200, cacheRead: 1000, cacheCreate: 3000}}}).extra.text;
   `, resolveDir: fileURLToPath(new URL('../apps/web/src', import.meta.url)) }, bundle: true, external: ['monaco-editor'], platform: 'node', format: 'cjs', jsx: 'automatic', outfile });
   const result = require(outfile);
   assert.deepEqual(result.views, [null, null, null]);
   assert.deepEqual(result.modelColors, ['astra','sol','terra','luna'].map(family => `var(--model-${family})`));
   assert.equal(result.cursorColor, 'var(--provider-cursor)');
+  assert.equal(result.codexCache, '↑3k ↓1k');
 });
 
 test('Cursor model modal renders party tabs, provider groups and readable names', async t => {
