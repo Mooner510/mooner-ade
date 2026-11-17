@@ -1,0 +1,21 @@
+/* The plugin market (PluginMarket.tsx). It reuses the plugin list's own classes (.plugin-list, .plugin-mark, .plugin-tag, .plugin-pill,
+   .plugin-callout, .plugin-empty), so only what is specific to the market is here. */
+.plugin-market { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.plugin-market > .plugin-callout { margin: 0; }
+.plugin-market-account { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
+.plugin-market-account > span:first-child { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); }
+.plugin-market-account strong { color: var(--fg); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-market-account small { color: var(--faint); font-size: 11.5px; }
+.plugin-market-account-actions { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.plugin-market-account-actions .plugin-button { min-height: 0; height: 28px; padding: 0 10px; font-size: 12px; font-weight: 500; }
+.plugin-market-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.plugin-market-row .plugin-row-name { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.plugin-market-row .plugin-row-name .plugin-tag { margin-left: 0; }
+.plugin-market-desc { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.plugin-market-grants { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.plugin-market-action { flex: none; display: inline-flex; align-items: center; }
+.plugin-market-signin { padding: 28px 24px; }
+.plugin-market-signin .plugin-button { margin-top: 6px; }
+.plugin-market-signin small { color: var(--faint); font-size: 11.5px; }
+.plugin-market-note { margin: 2px 2px 0; }
+.plugin-market .plugin-empty .plugin-spinner { width: 18px; height: 18px; }

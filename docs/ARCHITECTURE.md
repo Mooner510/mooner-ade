@@ -31,6 +31,8 @@ Claude Code·Codex는 터미널에서 공식 CLI로 실행합니다. 권한·승
 
 받은 플러그인 폴더를 `<userData>/plugins`에 넣어 기능을 더합니다. 설치한 플러그인은 기본으로 꺼져 있고, 켜기와 플러그인별 승인은 main의 네이티브 확인 창을 거칩니다. 승인은 폴더의 SHA-256에 고정되어 파일이 바뀌면 실행되지 않습니다. 승인한 플러그인은 각자 Node 프로세스로 실행되고 main과 IPC로만 이야기합니다. main은 플러그인이 선언한 환경 변수 접두사, bin 폴더, MCP 스크립트만 골라 서버에 `plugins/terminal`로 보내고, 서버는 새 터미널과 그 안의 Claude Code·Codex에 이것을 더합니다. `workspace`를 선언한 플러그인의 작업공간 세션은 main이 서버에 `plugin/workspace`로 전달하고, 서버는 화면의 요청과 같은 처리기로 다룹니다(`apps/desktop/src/plugin-core.js`, [플러그인](PLUGINS.md)).
 
+MoonerADE Hub에 로그인하면 Hub가 제공하는 플러그인을 설정 → 플러그인 → 마켓에서 골라 설치합니다. main의 Hub 클라이언트(`apps/desktop/src/hub-client.js`)는 앱 자신이 Hub의 기기(종류 `app`)로 기기 코드 로그인을 하고, 토큰은 `plugins.bin`에 봉인하며 Hub 주소(`ADE_HUB_URL`)에만 보냅니다. Hub에서 받은 zip은 `installZip`과 같은 길(확인 창, 해시 고정)로 설치하고, `plugin.json`의 `source.hub`가 있는 플러그인의 업데이트도 이 클라이언트가 확인합니다(GitHub 릴리스용 `createGithub`와 같은 `latest`/`download` 모양, `plugin-updates.js`). 서버(`apps/local-server`)는 마켓을 다루지 않습니다.
+
 앱에는 [내장 플러그인](PLUGINS.md#내장-플러그인)이 하나 들어 있습니다(`apps/desktop/builtin-plugins/agent-bus`, 채팅 에이전트끼리 메시지를 주고받는 [에이전트 버스](AGENT_BUS.md)). 같은 플러그인 API를 쓰지만 승인 확인 창과 해시 고정이 없고 각자 켜고 끕니다.
 
 ## 피드백 요청
