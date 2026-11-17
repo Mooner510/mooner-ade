@@ -37,7 +37,8 @@ export function Modal({ children, onClose, className = '', labelledBy, region = 
 }
 // A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.
 export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };
-const DdIcon = ({ icon, bars }: { icon?: string; bars?: number }) => <SettingGlyph icon={icon} bars={bars} size={15} />;
+// 16, not 15: an odd box in a 20px label lands on a half pixel, and the glyph then paints a whole pixel off the button's centre.
+const DdIcon = ({ icon, bars }: { icon?: string; bars?: number }) => <SettingGlyph icon={icon} bars={bars} size={16} />;
 export function Dropdown({ value, options, onChange, label, className = '', placeholder, locked }: { value: string; options: { value: string; label: string; color?: string; icon?: string; bars?: number; hint?: string; divider?: boolean }[]; onChange(value: string): void; label: string; className?: string; placeholder?: string; locked?: string }) {
   const root = useRef<HTMLDetailsElement>(null);
   const list = useRef<HTMLDivElement>(null);
