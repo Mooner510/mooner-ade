@@ -12,7 +12,7 @@ export type Settings = {
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
   cacheTimer: boolean; cacheWarn: number; cacheSendWarn: boolean; cacheSendWarnMinutes: number; followUpQueue: boolean; interactiveUi: boolean; artifactAlways: boolean; usageRefresh: number;
   // Chat composer shortcut overrides (id -> combo, see chat-model chatKeyDefs); a missing id uses its default.
-  chatKeys: Record<string, string>; appKeys: Record<string, string>;
+  chatKeys: Record<string, string>; appKeys: Record<string, string>; termKeys: Record<string, boolean>;
   // chatTipPending: Chat was never opened and its card was not dismissed (new users too: they may pick CLI and never see Chat).
   defaultMode: AgentMode; chatTipPending: boolean;
   // tips: hint cards in a pane corner (long context, shortcuts for what was just done with the mouse); contextTipK = context size in thousands of tokens that triggers the /clear tip.
@@ -96,7 +96,7 @@ export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
