@@ -286,6 +286,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   for (const event of retainedEvents()) fold(event, true);
   // Replaying old init events would show the model the child started with, not the one picked since (set_model sends no new init): the pick is stored, so it wins.
   if (meta.model) state.model = meta.model;
+  if (agent === 'codex' && meta.effort !== undefined) state.effort = meta.effort;
   if (agent === 'claude' && meta.permissionMode !== undefined) state.permissionMode = meta.permissionMode; // a mode picked since (or reported by the CLI) wins over older events
   refreshChatTitle();
   state.sessionId = meta.sessionId ?? null;

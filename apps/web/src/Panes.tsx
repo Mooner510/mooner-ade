@@ -1,4 +1,5 @@
 import { showAppKey } from './shortcuts';
+import { terminalEditKey } from './terminal-keys';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -493,9 +494,9 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         if (isPrefixKey(event, settingsRef.current.tmuxPrefix)) { if (!event.repeat && (tmuxGuide.state !== 'idle' || !replays && tmuxOnScreen())) tmuxGuide.prefix(); }
         else if (!isModifierOnly(event.key)) tmuxGuide.key();
       }
-      // Cmd+←/→ (no Shift) jumps to line start/end like macOS terminals do (^A / ^E); xterm itself sends nothing for Cmd+arrows.
-      if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-        if (event.type === 'keydown') { event.preventDefault(); callbacks.current.send({ type: 'terminal/input', id, data: event.key === 'ArrowLeft' ? '\x01' : '\x05' }); }
+      const editKey = terminalEditKey(event, /Mac|iPhone|iPad/.test(navigator.platform));
+      if (editKey !== undefined) {
+        if (event.type === 'keydown') { event.preventDefault(); terminal.input(editKey, true); }
         return false;
       }
       if (event.type !== 'keydown' || event.altKey || event.metaKey) return true;
@@ -621,7 +622,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" title={tip} onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `클릭하여 세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
         {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
-        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
+        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'mod+shift+backslash' ? 'splitRight' : 'splitDown'))); }} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" tip="none" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
