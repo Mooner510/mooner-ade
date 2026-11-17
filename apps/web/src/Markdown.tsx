@@ -1,6 +1,9 @@
 import { Fragment, memo, useContext, useEffect, useState, type ReactNode } from 'react';
 import { colorize } from './Editor';
+import { FileIcon } from './FileIcon';
+import { fileHref, fileRef, type FileRef } from './file-ref';
 import { Icon } from './Icon';
+import { requestOpen } from './ide-open';
 import { copyText } from './toast';
 import { holdBack, INLINE, parse, stableSplit, type Node } from './markdown-parse';
 import { ChatUiContext, UiFrame } from './UiFrame';
@@ -12,7 +15,15 @@ import { UiSpecView } from './UiBlocks';
 // and links go through the app's own "open external link?" dialog (ade:link).
 // shortcut: no nested lists beyond two levels, no HTML; code is coloured by Monaco's tokenizer (CodeBlock). Add a library only if replies need more.
 
+// A file or folder of the project ([[file:src/a.ts:42]], or a link whose target is a path): its Material file icon and relative path; a click asks which editor to open it in.
+function FileChip({ file }: { file: FileRef }) {
+  const chatId = useContext(ChatUiContext)?.chatId, name = file.path.split('/').pop() || file.path;
+  const shown = file.line ? `${file.path}:${file.line}${file.column ? `:${file.column}` : ''}` : file.folder ? `${file.path}/` : file.path;
+  return <button type="button" className="md-file" title={`${shown}\n클릭하면 어떻게 열지 고릅니다`} onClick={() => requestOpen({ ...file, chatId })}><FileIcon name={name} size={15} folder={file.folder} /><span>{shown}</span></button>;
+}
 function link(href: string, label: ReactNode, key: number) {
+  const file = /^https?:\/\//i.test(href) ? null : fileHref(href);
+  if (file) return <FileChip key={key} file={file} />;
   if (!/^https?:\/\//i.test(href)) return <Fragment key={key}>{label}</Fragment>;
   return <a key={key} href={href} rel="noreferrer noopener" onClick={event => { event.preventDefault(); window.dispatchEvent(new CustomEvent('ade:link', { detail: href })); }}>{label}</a>;
 }
@@ -24,6 +35,7 @@ export function inline(source: string): ReactNode[] {
     else if (match[2] || match[3]) out.push(<strong key={key++}>{inline(text.slice(2, -2))}</strong>);
     else if (match[4] || match[5]) out.push(<em key={key++}>{inline(text.slice(1, -1))}</em>);
     else if (match[6]) { const split = text.indexOf(']('); out.push(link(text.slice(split + 2, -1), inline(text.slice(1, split)), key++)); }
+    else if (match[8]) { const file = fileRef(text.slice(7, -2)); out.push(file ? <FileChip key={key++} file={file} /> : text); }
     else { const url = text.replace(/[.,;:!?]+$/, ''); out.push(link(url, url, key++)); if (url.length < text.length) out.push(text.slice(url.length)); }
     last = match.index + text.length;
   }
