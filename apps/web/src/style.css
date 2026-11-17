@@ -454,21 +454,22 @@ dialog.settings-modal.bar-live::backdrop { mask-image: linear-gradient(#000 0, #
 
 /* multi-project shell: a rail of open projects beside the stack of workspaces */
 .shell { display: flex; height: 100dvh; background: var(--bg); }
-.ws-stack { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.workspace-content { flex: 1; min-height: 0; }
-.workspace-content[hidden] { display: none; }
-.plugin-workspace-tabs { position: relative; z-index: 1; display: flex; flex: none; gap: 4px; min-height: 40px; padding: 4px 8px 4px max(8px, calc(var(--desktop-controls-width, 0px) - var(--rail-w, 0px))); background: var(--bg); border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
-.plugin-workspace-tabs button { -webkit-app-region: no-drag; padding: 4px 12px; border-radius: 6px; color: var(--muted); }
-.plugin-workspace-tabs button[aria-selected="true"] { background: var(--selected); color: var(--fg); }
-.plugin-tab-page { flex: 1; min-height: 0; width: 100%; max-width: 1200px; align-self: center; padding: 20px; overflow: auto; }
-.plugin-tab-page > h2 { margin: 0 0 12px; font-size: 18px; }
+.ws-stack { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.plugin-panel-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 12px; }
+.plugin-panel .plugin-status { padding: 8px 12px; border-radius: 8px; font-weight: 500; line-height: 1.45; background: color-mix(in srgb, var(--tone) 9%, transparent); }
+.plugin-panel .plugin-body { padding: 0; border: 0; background: none; }
+.plugin-panel .plugin-field { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 0; border-bottom: 0; }
+.plugin-panel .plugin-field input:not([role=switch]), .plugin-panel .plugin-field select, .plugin-panel .plugin-field > textarea, .plugin-panel .plugin-field .plugin-folder { width: 100%; }
+.plugin-panel .plugin-field .plugin-folder input:not([role=switch]) { width: 0; }
+.plugin-panel .plugin-actions { position: static; justify-content: flex-start; margin: 0; padding: 4px 0 0; border: 0; border-radius: 0; background: none; }
+.plugin-panel .plugin-document { display: flex; flex-direction: column; gap: 6px; }
+.plugin-panel .plugin-document h3 { margin: 0; font-size: 12.5px; }
+.plugin-panel .plugin-document pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
 .plugin-field .plugin-folder { display: flex; flex: none; gap: 6px; width: 65%; }
 .plugin-field .plugin-folder input { flex: 1; width: 0; min-width: 0; }
 .plugin-folder button { flex: none; }
 .plugin-field > textarea { flex: none; width: 65%; min-height: 96px; }
 .plugin-document pre { padding: 12px; border: 1px solid var(--border); border-radius: 8px; max-height: 65vh; overflow: auto; }
-.plugin-welcome { display: flex; flex-direction: column; height: 100dvh; }
-.plugin-welcome .welcome { min-height: 0; flex: 1; overflow: auto; }
 .app[hidden] { display: none; }
 .app.loading { display: grid; place-items: center; }
 .open-failed { display: grid; justify-items: center; gap: 8px; max-width: 480px; text-align: center; }
@@ -1760,6 +1761,21 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-statusbar .status-left, .chat-statusbar .status-right { gap: 4px; }
 .chat-statusbar .chat-stat { gap: 4px; padding: 2px 4px; cursor: default; transition: color .15s; }
 .chat-statusbar .chat-stat:is(:hover, :focus-visible) { color: color-mix(in srgb, var(--fg) 75%, var(--muted)); outline: none; }
+/* The usage item is the one pressable item of the line: a quiet outline and a caret say so, API Usage is tinted because it costs money. */
+.chat-statusbar .chat-stat.usage-basis { cursor: pointer; font: inherit; gap: 4px; padding: 1px 4px 1px 6px; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 6px; transition: color .15s, background .15s, border-color .15s; }
+.chat-statusbar .chat-stat.usage-basis:is(:hover, :focus-visible), .chat-statusbar .chat-stat.usage-basis[aria-expanded=true] { color: var(--fg); background: var(--hover); border-color: var(--border-strong); }
+.chat-statusbar .chat-stat.usage-basis:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.chat-statusbar .chat-stat.usage-basis.api { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.chat-statusbar .chat-stat.usage-basis.api:is(:hover, :focus-visible), .chat-statusbar .chat-stat.usage-basis.api[aria-expanded=true] { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: var(--warn); }
+.usage-basis .usage-caret { opacity: .6; transition: transform .15s var(--ease); }
+.usage-basis[aria-expanded=true] .usage-caret { transform: rotate(180deg); }
+/* Only while open: a closed popover must stay display:none (the UA rule), or it covers the button and takes its clicks. */
+.chat-stat-tip.usage-panel { max-width: 330px; padding: 10px 12px; }
+.chat-stat-tip.usage-panel:popover-open { display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
+.usage-panel .usage-fixed { margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--border); font-weight: 600; color: color-mix(in srgb, var(--fg) 85%, var(--muted)); }
+.usage-panel ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
+.usage-panel .usage-panel-action { align-self: flex-start; margin-top: 2px; padding: 3px 10px; font-size: 11.5px; color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; cursor: pointer; }
+.usage-panel .usage-panel-action:hover { background: var(--hover); }
 .chat-stat-tip { position: fixed; inset: auto; margin: 0; width: max-content; max-width: 270px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--muted); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11px; line-height: 1.55; white-space: normal; word-break: keep-all; pointer-events: none; opacity: 0; transition: opacity .12s; }
 .chat-stat-tip:popover-open { opacity: 1; }
 @starting-style { .chat-stat-tip:popover-open { opacity: 0; } }

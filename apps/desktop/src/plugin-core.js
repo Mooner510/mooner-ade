@@ -12,7 +12,7 @@ import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, cred
 
 export const PLUGIN_API = 1;
 // What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell.
-export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'tabs', 'updates'];
+export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates'];
 const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[\w.-]{1,64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
@@ -90,9 +90,9 @@ export function validManifest(value) {
     if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
     if (value.feedback) manifest.feedback = true;
   }
-  if (value.tab !== undefined) {
-    if (typeof value.tab !== 'boolean') throw fail('tab 항목이 올바르지 않습니다.');
-    if (value.tab) manifest.tab = true;
+  if (value.header !== undefined) {
+    if (typeof value.header !== 'boolean') throw fail('header 항목이 올바르지 않습니다.');
+    if (value.header) manifest.header = true;
   }
   // Where updates come from: a GitHub repository's releases (plugin-updates.js).
   if (value.source !== undefined) manifest.source = validSource(value.source, manifest.id);
@@ -251,7 +251,7 @@ export function grantsFor(manifest) {
     manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
     manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.',
     manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.',
-    manifest.tab && '앱 상단에 플러그인 탭을 표시합니다.'
+    manifest.header && '앱 상단 바에 버튼을 추가하고, 누르면 플러그인 패널을 엽니다.'
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
@@ -412,6 +412,8 @@ export function validView(view) {
     }),
     actions: list(view.actions, 12).filter(validButton).map(button),
     formId: text(view.formId, 64),
+    // What the plugin's header panel shows. `view` itself is the settings page, so the two can differ.
+    panel: view.panel && typeof view.panel === 'object' && !Array.isArray(view.panel) ? validView({ ...view.panel, panel: undefined }) : null,
     document: view.document && str(view.document.title, 100) && str(view.document.text, 65536) ? { title: view.document.title, text: view.document.text } : null,
     // Only the text to encode; the settings page draws the code itself.
     qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null,
@@ -580,7 +582,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           description: item.manifest?.description ?? '', hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
           terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
-          tab: host?.status === 'running' && item.manifest?.tab === true,
+          header: host?.status === 'running' && item.manifest?.header === true,
           // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
           commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
           env: host?.status === 'running' && host.terminal ? Object.keys(host.terminal.env) : [],

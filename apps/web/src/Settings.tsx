@@ -141,14 +141,14 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
       const marker = drop?.side === side && dragging !== id ? drop.index === index ? 'drop-before' : drop.index === index + 1 && index === layout[side].length - 1 ? 'drop-after' : '' : '';
       const hint = id === 'wakatime' && !settings.wakatime ? 'WakaTime 작업 시간 기록을 켜야 표시됩니다.' : chat ? chatStatusDefs[id]?.hint ?? statusHints[id] : statusHints[id];
       if (!queryHit(query, `${labels[id] ?? id} ${hint ?? ''}`)) return null;
-      return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} draggable className={`setting-hit ${shown.has(id) ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${marker}`}
+      return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} draggable className={`setting-hit ${shown.has(id) || (chat && id === 'share') ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${marker}`}
         title="끌어서 순서와 위치를 바꿉니다 (Alt+화살표)"
         onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', id); setDragging(id); }}
         onDragOver={event => { const box = event.currentTarget.getBoundingClientRect(); over(event, side, event.clientY < box.top + box.height / 2 ? index : index + 1); }}
         onDrop={finish} onDragEnd={() => { setDragging(''); setDrop(null); }} onKeyDown={event => keys(event, id, side, index)}>
         <Icon name="grip" size={14} />
         <span><strong>{labels[id] ?? id}</strong><span className="statusbar status-sample" aria-hidden="true">{sample(id)}</span>{hint && <small>{hint}</small>}</span>
-        <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${labels[id] ?? id} 표시`} checked={shown.has(id)} onChange={event => toggle(id, event.target.checked)} /></span>
+        <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${labels[id] ?? id} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '어느 로그인(플랜·API 키)이 쓰이는지 늘 보여야 해서 끌 수 없습니다.' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
       </li>;
     })}</ul>
   </section>;

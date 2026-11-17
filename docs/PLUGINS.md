@@ -155,7 +155,7 @@ GitHub 릴리스만 받습니다(일반 다운로드 링크는 출처로 쓸 수
   "mcp": { "name": "example_tools", "script": "bin/example.js", "args": ["mcp"], "chatOnly": false },
   "workspace": true,
   "feedback": true,
-  "tab": true,
+  "header": true,
   "source": { "github": "owner/repo", "asset": "example.zip" },
   "setup": [
     { "id": "account", "label": "계정 연결", "detail": "…" },
@@ -168,9 +168,10 @@ GitHub 릴리스만 받습니다(일반 다운로드 링크는 출처로 쓸 수
 - 경로는 모두 플러그인 폴더 안의 상대 경로이고 `/`로 씁니다. `..`과 절대 경로, `:`(NTFS 대체 데이터 스트림)는 받지 않습니다.
 - `name`과 `description`은 승인 확인 창에 그대로 나오므로 제어 문자와 글자 방향을 바꾸는 문자를 쓸 수 없습니다.
   `name`에 있으면 받지 않고, `description`에서는 지웁니다(줄바꿈은 두 줄까지 남깁니다).
-- `terminal`, `mcp`, `workspace`, `feedback`, `tab`은 선택입니다.
-- `tab: true`인 플러그인이 승인되어 실행되면 앱 상단에 플러그인 이름의 탭이 나타납니다. 기존 `view`의 입력칸·목록·버튼을
-  같은 렌더러로 표시하며 HTML이나 플러그인 스크립트는 실행하지 않습니다. 중지·승인 취소 시 탭은 사라지고 작업공간으로 돌아갑니다.
+- `terminal`, `mcp`, `workspace`, `feedback`, `header`는 선택입니다.
+- `header: true`인 플러그인이 승인되어 실행되면 앱 상단 바(새 탭·검색·변경사항·피드백·설정이 있는 줄)에 플러그인 버튼이 하나 더해집니다.
+  새 탭 줄이나 별도 화면은 만들지 않습니다. 버튼을 누르면 변경사항·피드백처럼 오른쪽 패널이 열려 기존 `view`의 입력칸·목록·버튼을 같은
+  렌더러로 보여 주며, HTML이나 플러그인 스크립트는 실행하지 않습니다. 중지·승인 취소 시 버튼과 패널은 사라집니다. 버튼은 프로젝트를 연 작업 화면의 상단 바에 있습니다.
 - `mcp.chatOnly: true`는 MCP 서버를 **채팅의 에이전트에게만** 주고 터미널에는 주지 않는다는 뜻입니다. 이 서버는 자기가 섬기는 채팅을
   환경 변수 `ADE_CHAT_ID`, `ADE_PROJECT_ID`, `ADE_CHAT_AGENT`(claude, codex, cursor)로 받습니다. 이 변수는 채팅에서만 생깁니다.
 - `workspace: true`는 플러그인이 이 PC의 프로젝트와 터미널을 열고 조작할 수 있는 권한입니다. 승인 확인 창에 표시됩니다.
@@ -246,16 +247,18 @@ lists: [{ id: 'phones', title: '페어링한 폰', empty: '아직 없습니다.'
 
 목록은 4개, 항목은 50개, 항목의 버튼은 4개까지입니다. 항목 `id`는 `[\w.-]{1,64}`이고, 버튼을 누르면 `action`에 `item`으로 옵니다.
 
-### 상단 탭의 입력과 문서
+### 헤더 패널의 입력과 문서
 
-`init.features`의 `tabs`, `view.password`, `view.folder`, `view.document`로 지원 여부를 확인합니다. 이전 앱에서 비밀 입력을
+`init.features`의 `header`, `view.password`, `view.folder`, `view.document`로 지원 여부를 확인합니다. 이전 앱에서 비밀 입력을
 일반 텍스트 입력으로 대체하지 마세요. 지원하지 않으면 입력과 실행을 제공하지 말고 앱 업데이트를 안내합니다.
 
 - `fields[].type: 'password'`: 가려진 입력칸입니다. 플러그인이 보낸 `value`는 항상 빈 문자열로 바꾸고, 버튼을 누르면 입력값을
   한 번 전달한 뒤 화면에서 지웁니다. 저장한 비밀을 `view`에 다시 넣지 마세요. 비밀 저장에는 기존 `storage` 봉인을 사용합니다.
 - `type: 'folder'`: 경로 입력과 데스크톱 폴더 선택, `type: 'textarea'`: 여러 줄 텍스트 입력입니다.
 - `view.formId`(64자 이하): 다른 작업이나 문서로 바뀌어 입력을 초기화해야 할 때 함께 바꿉니다.
-- `view.document: {title, text}`: 상단 탭에서 표시하는 긴 원문입니다(제목 100자, 본문 65,536자). 코드나 HTML을 실행하지 않는
+- `view.panel`: 헤더 패널에 보여 줄 별도 `view`(같은 모양, `panel` 안의 `panel`은 무시). 있으면 설정 → 플러그인의 상세 화면은 `view`(설정)만,
+  헤더 패널은 `view.panel`(작업)만 그립니다. 없으면 패널도 `view`를 그립니다. 설정은 설정 화면에, 매번 쓰는 작업은 패널에 나누세요.
+- `view.document: {title, text}`: 헤더 패널에서 표시하는 긴 원문입니다(제목 100자, 본문 65,536자). 코드나 HTML을 실행하지 않는
   일반 텍스트로 그립니다. 한도를 넘으면 일부만 잘라 보여 주지 않고 문서 전체를 거절합니다.
 
 ### 작업공간 (`workspace`)
@@ -280,6 +283,16 @@ MoonerADE → 플러그인
 | `{type:'workspace', op:'message', session, text}` | 세션이 받은 알림(JSON 문자열) |
 | `{type:'workspace', op:'closed', session}` | 세션이 닫혔습니다(열 수 없었을 때도 옵니다) |
 | `{type:'workspace', op:'reset'}` | MoonerADE가 다시 시작되어 모든 세션이 닫혔습니다. 필요한 세션을 다시 여세요 |
+
+#### 채팅 열기 (`chat/open`)
+
+`workspace` 권한이 있으면 `api`로 채팅도 열 수 있습니다(`chat/open` → `chat/send` → 이후 받는 `chat/event`). 플러그인용으로 더해진 입력은 이렇습니다.
+
+- `path`: 프로젝트 폴더 밖이어도 **그 프로젝트 저장소의 git worktree**이면 채팅의 작업 폴더로 쓸 수 있습니다(다른 폴더는 거절).
+- `auth`: Claude 채팅에서 그 채팅만의 로그인 방식. `'login'`은 설정 → AI 툴에 저장된 키와 상관없이 CLI 로그인, `'key'`는 `apiKey`(`sk-ant-…`)로 실행합니다.
+  키는 그 채팅 프로세스의 환경 변수로만 가고 저장되지 않습니다. 이 채팅을 앱이 다시 열 때(재시작 등)는 설정 → AI 툴의 선택을 따릅니다.
+- `show: true`: 그 프로젝트를 연 창에 채팅이 새 탭으로 나타납니다. 창이 그 프로젝트를 열고 있지 않으면 탭은 생기지 않고 채팅은 그대로 실행됩니다.
+- 턴이 끝나면 `{type:'chat/event', id, event:{kind:'result', status:'success'|'failed', text, costUsd, durationMs}}`가 옵니다(먼저 `subscribe`).
 
 - 플러그인 하나가 세션을 16개, 터미널을 8개까지 열 수 있습니다.
 - 알림을 읽지 않아 쌓이면 그 세션을 닫습니다.
