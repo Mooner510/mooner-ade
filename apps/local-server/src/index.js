@@ -1027,6 +1027,13 @@ async function route(action, input, project) {
       await chat.retry();
       return {};
     }
+    // Allow what auto mode blocked (the CLI's /permissions "Recently blocked"): for this chat only; retry also tells the agent to run it again.
+    case 'chat/allow-blocked': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      await chat.allowBlocked(input.toolUseIds, { retry: input.retry !== false });
+      return {};
+    }
     case 'chat/send': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
