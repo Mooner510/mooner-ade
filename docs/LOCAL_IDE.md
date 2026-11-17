@@ -45,17 +45,42 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 | `mod+Alt+1…9` | 프로젝트 선택 (9는 마지막) |
 | `mod+Alt+]` / `mod+Alt+[` | 다음 / 이전 프로젝트 |
 | `mod+Alt+B` | 사이드바 접기/펼치기 |
-| `mod+Shift+T` / `Alt+T` | 새 터미널 탭 |
+| `mod+Shift+T` | 새 터미널 탭 |
 | `mod+Shift+N` | 새 탭에서 CLI 실행 선택 |
-| `mod+Shift+W` / `Alt+W` | 탭 / 포커스 pane 닫기 |
+| `mod+Shift+W` / `mod+Alt+Shift+W` | 탭 / 포커스 pane 닫기 |
 | `Alt+]` / `Alt+[` / `Alt+1…9` | 다음 / 이전 / N번째 탭 |
+| `Ctrl+PageDown` / `Ctrl+PageUp` | 다음 / 이전 탭 |
+| `mod+Shift+\` / `mod+Alt+\` | 좌우 / 상하 분할 |
 | `mod+Shift+Enter` | pane 최대화 전환 |
-| `Alt+Shift+방향키` / `Cmd(Ctrl)+Shift+방향키` | pane 포커스 이동 (Shift 없는 Alt·Cmd+방향키는 터미널로 전달: 단어·줄 이동) |
+| `Alt+Shift+]` / `Alt+Shift+[` | 다음 / 이전 pane 포커스 이동 |
+| `Ctrl+Alt+←/→` | 채팅 입력창에서 이전 / 다음 모델 |
+| `Ctrl+Alt+↑/↓` | 채팅 입력창에서 Effort 올리기 / 내리기 |
 | `mod+Shift+G` / `mod+,` | Diff 패널 / 설정 |
 | `mod+Alt+F` | 피드백 요청 패널 전환 |
 | `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 시작 |
 
-터미널에 포커스가 있을 때 일반 Ctrl 조합은 셸·CLI로 전달합니다. 분할은 pane의 도구 버튼 또는 명령 팔레트를 사용하세요. 과거 안내의 Ctrl+D 좌우 분할은 현재 터미널 입력 정책과 일치하지 않습니다.
+터미널에 포커스가 있을 때 일반 Ctrl 조합은 셸·CLI로 전달합니다. Ctrl+D는 문자 삭제/EOF, Alt+W는 CLI 입력으로 남겨 둡니다. 사용자가 설정에서 직접 지정한 단축키는 기본키보다 우선합니다.
+
+### 글자 편집
+
+macOS의 키캡 `Delete`는 브라우저에서 `Backspace`이며, `Fn+Delete`는 앞으로 지우는 `Delete`입니다. Option은 Alt와 같은 키입니다.
+
+| 키 | 터미널로 전달하는 동작/시퀀스 |
+|---|---|
+| `Cmd+←/→` | 줄 처음/끝 (`Ctrl+A/E`) |
+| `Cmd+↑/↓` | 입력 처음/끝 (`Ctrl+Home/End`) |
+| `Cmd+Shift+방향키` | Shift+Home/End 또는 Ctrl+Shift+Home/End |
+| `Cmd+Delete` / `Cmd+Fn+Delete` | 줄 삭제 (`Ctrl+U`) / 커서 뒤 삭제 (`Ctrl+K`) |
+| `Option+←/→` | 이전/다음 단어 (`Esc b/f`) |
+| `Option+Delete` / `Option+Fn+Delete` | 이전/다음 단어 삭제 (`Esc DEL` / `Esc d`) |
+| `Ctrl+Backspace` | 이전 단어 삭제 (`Ctrl+W`) |
+| 방향키·Shift+방향키·Ctrl+방향키·Home·End·Delete | xterm의 일반/애플리케이션 모드 시퀀스 |
+| `Tab` / `Shift+Tab` | 자동완성 / 역방향 Tab (`HT` / `Esc [Z`); Claude 작업 중 기존 후속 입력 큐는 유지 |
+| `Shift+Enter` / `Alt+Enter` | CLI의 줄바꿈 (`Esc CR`) |
+
+선택 영역, 여러 줄 이동, 삭제 범위는 실행 중인 셸·CLI의 키맵에 따릅니다. 예를 들어 기본 zsh의 Ctrl+U는 줄 전체를 지웁니다. Shift 선택을 지원하지 않는 CLI에 선택 기능을 강제로 추가하지는 않습니다. Option+문자의 Esc 접두 입력은 설정의 **Option 키를 Meta로 사용**을 켜면 사용할 수 있으며, 꺼 두면 특수 문자 입력을 유지합니다. 한글 등 IME 조합 중 편집키는 가로채지 않습니다.
+
+채팅 입력창에서는 Shift/Option/Cmd+방향키를 브라우저의 글자 선택·이동에 사용합니다. 슬래시·파일 자동완성 목록이 열려 있어도 수식키가 붙은 방향키·Tab을 자동완성으로 처리하지 않습니다.
 
 ## 데이터와 복구
 

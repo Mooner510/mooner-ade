@@ -1684,31 +1684,32 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           onKeyDown={event => {
             if (event.nativeEvent.isComposing) return;
             const modSend = ctx.settings.chatSendKey === 'mod-enter';
+            const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
             const combo = comboOf(event.nativeEvent), keyOf = (id: Parameters<typeof chatKey>[1]) => combo === chatKey(ctx.settings.chatKeys, id);
             if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; hintSeen('keyeffort'); const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void setChat({ id, effort }).catch(ctx.fail); return; }
             if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); hintSeen('keymodel'); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void setChat({ id, model: next }).catch(ctx.fail); return; }
             if (keyOf('stash')) { event.preventDefault(); hintSeen('keystash'); if (text.trim()) { setStash(text); setText(''); } else if (stash) { setText(stash); setStash(''); } return; }
-            if (event.key === 'Tab' && event.shiftKey) { event.preventDefault(); hintSeen('keymode'); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
+            if (event.key === 'Tab' && event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); hintSeen('keymode'); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
             if (matches.length) {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length); return; }
+              if (plain && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length); return; }
               // Enter on a command typed out in full that takes no argument (/usage, /cost…) runs it at once instead of only completing it.
-              const exact = event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey) && matches[menuAt].name === slash?.[1] && !matches[menuAt].hint;
-              if (!exact && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) { event.preventDefault(); complete(matches[menuAt].name); return; }
+              const exact = event.key === 'Enter' && !event.shiftKey && !event.altKey && (!modSend || event.metaKey || event.ctrlKey) && matches[menuAt].name === slash?.[1] && !matches[menuAt].hint;
+              if (!exact && plain && (event.key === 'Tab' || event.key === 'Enter')) { event.preventDefault(); complete(matches[menuAt].name); return; }
               if (event.key === 'Escape') { event.preventDefault(); setText(''); return; }
             }
             if (mentions.length) {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + mentions.length) % mentions.length); return; }
-              if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) { event.preventDefault(); pickMention(mentions[Math.min(menuAt, mentions.length - 1)]); return; }
+              if (plain && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + mentions.length) % mentions.length); return; }
+              if (plain && (event.key === 'Tab' || event.key === 'Enter')) { event.preventDefault(); pickMention(mentions[Math.min(menuAt, mentions.length - 1)]); return; }
               if (event.key === 'Escape') { event.preventDefault(); setMentionOff(mentionAt); return; }
             }
-            if (event.key === 'Tab' && !event.shiftKey && busy && ctx.settings.followUpQueue && (text.trim() || images.length)) { event.preventDefault(); void submit('queue'); return; }
+            if (event.key === 'Tab' && plain && busy && ctx.settings.followUpQueue && (text.trim() || images.length)) { event.preventDefault(); void submit('queue'); return; }
             // `/…` lines are one-line commands: typed line breaks and Tab's focus move are blocked (pasted newlines still go in).
-            if (event.key === 'Tab' && text.startsWith('/')) { event.preventDefault(); return; }
-            if (event.key === 'Enter' && !event.shiftKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
+            if (event.key === 'Tab' && plain && text.startsWith('/')) { event.preventDefault(); return; }
+            if (event.key === 'Enter' && !event.shiftKey && !event.altKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
             else if (event.key === 'Enter' && text.startsWith('/')) event.preventDefault();
             else if (event.key === 'Escape' && busy) { event.preventDefault(); interrupt(view.steers.length > 0 && caps?.cancelSteer !== false); }
             // ↑ with nothing typed takes the last steering message back; otherwise ↑/↓ walk the sent messages (the draft is kept aside and ↓ past the newest brings it back).
-            else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+            else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && plain) {
               const field = event.currentTarget, up = event.key === 'ArrowUp';
               if (up && !text && view.steers.length && caps?.cancelSteer !== false) { event.preventDefault(); void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); return; }
               const sent = shown.flatMap(item => item.kind === 'user' ? [item.text] : []);

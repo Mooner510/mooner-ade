@@ -862,7 +862,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       // A dialog keeps the keys to itself, except the feedback capture, which is how a dialog gets into a screenshot.
       if (document.querySelector('dialog[open]') && command.id !== 'feedbackCapture') return;
       // Preserve shell Ctrl bindings unless the user explicitly assigned one to an app action.
-      if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['splitRight', 'splitDown'].includes(command.id) && !settingsRef.current.appKeys?.[command.id]) return;
+      if (inTerminal && !(event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey) && !['nextTab2', 'prevTab2'].includes(command.id) && !settingsRef.current.appKeys?.[command.id]) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);
