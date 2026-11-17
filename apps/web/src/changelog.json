@@ -1,5 +1,21 @@
 [
   {
+    "version": "0.5.11",
+    "date": "2026-11-17",
+    "time": "14:11",
+    "items": [
+      { "kind": "신규 기능", "title": "Codex·Cursor 세션 통계", "icon": "chart", "text": "Codex와 Cursor 채팅에서도 /stats로 ADE에 보관된 대화의 통계를 확인해요. 토큰과 비용은 제공된 경우 표시해요." },
+      { "kind": "신규 기능", "title": "터미널과 채팅 전환", "icon": "terminal", "text": "Codex와 Cursor의 로컬 터미널 대화도 중단 확인 후 채팅으로 가져와 이어갈 수 있어요." },
+      { "kind": "신규 기능", "title": "Cursor 대화 분기와 복원", "icon": "sparkles", "text": "기능 적용 후 완료된 Cursor 응답에서 대화를 분기하거나 해당 지점으로 복원해요." },
+      { "kind": "신규 기능", "title": "Codex 남은 크레딧", "icon": "chart", "text": "상태바와 사용량 상세에서 Codex의 남은 크레딧을 확인해요." },
+      { "kind": "개선", "title": "GitHub 계정 선택", "icon": "plugin", "text": "플러그인 연결에 사용할 gh 계정을 선택해요. gh의 활성 계정은 바뀌지 않아요." },
+      { "kind": "개선", "title": "터미널과 채팅 편집키", "icon": "keyboard", "text": "글자 이동·삭제와 자동완성 단축키 충돌을 줄이고 터미널 분할 단축키를 바꿨어요." },
+      { "kind": "개선", "title": "Cursor 대기 메시지", "icon": "sparkles", "text": "현재 응답을 중단하고 대기 중인 메시지를 바로 보낼 수 있어요." },
+      { "kind": "변경", "title": "상태바 정리", "icon": "terminal", "text": "상태바에서 터미널 개수와 크기 표시를 제거했어요." },
+      { "kind": "버그 수정", "title": "Codex 세션 설정과 사용량", "icon": "check", "text": "세션을 다시 열 때 Effort를 복원하고 캐시 생성 토큰을 중복 집계하지 않아요." }
+    ]
+  },
+  {
     "version": "0.5.10",
     "date": "2026-11-17",
     "time": "02:39",
