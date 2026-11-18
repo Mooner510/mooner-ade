@@ -583,18 +583,18 @@ export function GitLog(props: GitLogProps) {
     <div className="git-search">
       <Icon name="search" size={14} />
       <input ref={search} type="search" placeholder="텍스트 또는 해시" value={filters.text} aria-label="텍스트 또는 해시로 필터" onChange={event => setFilters(previous => ({ ...previous, text: event.target.value }))} />
-      <IconButton icon="regex" label="정규식" pressed={filters.regex} className={filters.regex ? 'on' : ''} onClick={() => setFilters(previous => ({ ...previous, regex: !previous.regex }))} />
+      <IconButton icon="regex" label="정규식으로 검색" pressed={filters.regex} className={filters.regex ? 'on' : ''} onClick={() => setFilters(previous => ({ ...previous, regex: !previous.regex }))} />
       <IconButton icon="matchCase" label="대소문자 구분" pressed={filters.matchCase} className={filters.matchCase ? 'on' : ''} onClick={() => setFilters(previous => ({ ...previous, matchCase: !previous.matchCase }))} />
     </div>
-    <button className={`git-filter ${filters.branches.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'branchFilter', '브랜치 필터')}>{filterLabel('브랜치', filters.branches)}<Icon name="chevronDown" size={12} /></button>
-    <button className={`git-filter ${filters.users.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'user', '사용자 필터')}>{filterLabel('사용자', filters.users)}<Icon name="chevronDown" size={12} /></button>
-    <button className={`git-filter ${filters.since !== null || filters.until !== null ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'date', '날짜 필터')}>{filters.since !== null || filters.until !== null ? `날짜: ${filters.since ? absoluteDate(filters.since).slice(0, 10) : '…'} ~ ${filters.until ? absoluteDate(filters.until).slice(0, 10) : '…'}` : '날짜'}<Icon name="chevronDown" size={12} /></button>
-    <button className={`git-filter ${filters.paths.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'path', '경로 필터')}>{filterLabel('경로', filters.paths)}<Icon name="chevronDown" size={12} /></button>
+    <button data-tip="표시할 브랜치 선택" className={`git-filter ${filters.branches.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'branchFilter', '브랜치 필터')}>{filterLabel('브랜치', filters.branches)}<Icon name="chevronDown" size={12} /></button>
+    <button data-tip="작성자로 필터" className={`git-filter ${filters.users.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'user', '사용자 필터')}>{filterLabel('사용자', filters.users)}<Icon name="chevronDown" size={12} /></button>
+    <button data-tip="기간으로 필터" className={`git-filter ${filters.since !== null || filters.until !== null ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'date', '날짜 필터')}>{filters.since !== null || filters.until !== null ? `날짜: ${filters.since ? absoluteDate(filters.since).slice(0, 10) : '…'} ~ ${filters.until ? absoluteDate(filters.until).slice(0, 10) : '…'}` : '날짜'}<Icon name="chevronDown" size={12} /></button>
+    <button data-tip="파일·폴더로 필터" className={`git-filter ${filters.paths.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'path', '경로 필터')}>{filterLabel('경로', filters.paths)}<Icon name="chevronDown" size={12} /></button>
     <span className="git-sep" />
-    <IconButton icon="graph" label="그래프 옵션" dot={settings.gitSort !== 'date' || settings.gitLinear || settings.gitFirstParent || settings.gitNoMerges} onClick={event => openMenu(...under(event), 'graph', '그래프 옵션')} />
-    <IconButton icon="refresh" label="새로고침" onClick={() => void load(true)} />
-    <IconButton icon="cherry" label="체리픽" disabled={!selection.length} onClick={() => { const list = [...selection].reverse(); if (list.some(commit => (data?.commits[fullGraph!.index.get(commit.h)!]?.p.length ?? 0) > 1)) { notify('머지 커밋은 체리픽할 수 없습니다.', 'warn'); return; } void op({ op: 'cherry-pick', shas: list.map(commit => commit.h) }, '체리픽', `커밋 ${list.length}개를 체리픽했습니다.`); }} />
-    <IconButton icon="eye" label="보기 옵션" onClick={event => openMenu(...under(event), 'view', '보기 옵션')} />
+    <IconButton icon="graph" label="그래프 정렬·표시 옵션" dot={settings.gitSort !== 'date' || settings.gitLinear || settings.gitFirstParent || settings.gitNoMerges} onClick={event => openMenu(...under(event), 'graph', '그래프 옵션')} />
+    <IconButton icon="refresh" label="기록 새로고침" onClick={() => void load(true)} />
+    <IconButton icon="cherry" label="선택한 커밋 체리픽" disabled={!selection.length} onClick={() => { const list = [...selection].reverse(); if (list.some(commit => (data?.commits[fullGraph!.index.get(commit.h)!]?.p.length ?? 0) > 1)) { notify('머지 커밋은 체리픽할 수 없습니다.', 'warn'); return; } void op({ op: 'cherry-pick', shas: list.map(commit => commit.h) }, '체리픽', `커밋 ${list.length}개를 체리픽했습니다.`); }} />
+    <IconButton icon="eye" label="열·표시 옵션" onClick={event => openMenu(...under(event), 'view', '보기 옵션')} />
     <IconButton icon="target" label="해시·브랜치·태그로 이동" onClick={async () => {
       const value = (await ask.input('해시, 브랜치 또는 태그로 이동', ''))?.trim(); if (!value || !data) return;
       const ref = data.refs.find(item => item.name === value) ?? data.refs.find(item => item.name.endsWith(`/${value}`));
@@ -605,10 +605,10 @@ export function GitLog(props: GitLogProps) {
   const branchTools = <>
     <IconButton icon="plus" label="새 브랜치" onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); newBranch(ref?.ref ?? data?.head.sha ?? '', ref?.name ?? currentName); }} />
     <IconButton icon="sync" label="선택 항목 업데이트" disabled={!allRefs.find(item => item.ref === branchSel && item.kind === 'local' && item.upstream)} onClick={() => update(allRefs.find(item => item.ref === branchSel) ?? null)} />
-    <IconButton icon="trash" label="삭제" disabled={!allRefs.find(item => item.ref === branchSel && !item.current)} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) void deleteBranch(ref); }} />
-    <IconButton icon="fetch" label="모든 원격 저장소 Fetch" disabled={!data?.remotes.length} onClick={fetchAll} />
-    <IconButton icon="star" label="즐겨찾기로 표시/해제" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) toggleFavorite(ref); }} />
-    <IconButton icon="target" label="로그에서 브랜치 헤드로 이동" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) jump(ref.sha); }} />
+    <IconButton icon="trash" label="브랜치 삭제" disabled={!allRefs.find(item => item.ref === branchSel && !item.current)} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) void deleteBranch(ref); }} />
+    <IconButton icon="fetch" label="모든 원격 Fetch" disabled={!data?.remotes.length} onClick={fetchAll} />
+    <IconButton icon="star" label="즐겨찾기 고정/해제" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) toggleFavorite(ref); }} />
+    <IconButton icon="target" label="브랜치 최신 커밋으로 이동" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) jump(ref.sha); }} />
     <span className="spacer" />
     <IconButton icon="settings" label="브랜치 패널 설정" onClick={event => openMenu(...under(event), 'branchSettings', '브랜치 패널 설정')} />
   </>;
@@ -682,9 +682,9 @@ export function GitLog(props: GitLogProps) {
       <span className="spacer" />
       {data && current && <span className="git-head-branch" title="현재 브랜치"><Icon name="branch" size={13} />{current.name}{current.ahead ? <small className="out">↑{current.ahead}</small> : null}{current.behind ? <small className="in">↓{current.behind}</small> : null}</span>}
       {data && !current && data.head.sha && <span className="git-head-branch warn"><Icon name="alert" size={13} />Detached HEAD</span>}
-      {data && data.remotes.length > 0 && <IconButton icon="fetch" label="Fetch" onClick={fetchAll} />}
+      {data && data.remotes.length > 0 && <IconButton icon="fetch" label="원격 변경 가져오기 (Fetch)" onClick={fetchAll} />}
       {data && current?.upstream && <IconButton icon="sync" label={`업데이트 (${settings.gitUpdateMethod === 'rebase' ? '리베이스' : '머지'})`} onClick={() => update(null)} />}
-      {data && current && <IconButton icon="push" label="Push…" onClick={() => push(null)} />}
+      {data && current && <IconButton icon="push" label="커밋 올리기 (Push)" onClick={() => push(null)} />}
       <IconButton icon="x" tip="none" label="닫기 (Shift+Esc)" onClick={props.onClose} />
     </header>
     {opBar}

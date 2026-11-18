@@ -19,6 +19,28 @@ const usageOf = raw => {
     w1: num(created.ephemeral_1h_input_tokens), w5: split ? num(created.ephemeral_5m_input_tokens) : total };
 };
 const isPrompt = content => typeof content === 'string' ? content.trim() !== '' : Array.isArray(content) && content.some(part => part?.type === 'text' && String(part.text ?? '').trim() !== '');
+const clipText = (text, max) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+const promptLabel = content => {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(part => part?.type === 'text' && String(part.text ?? '').trim()).map(part => String(part.text)).join(' ') : '';
+  return clipText(text.replace(/\s+/g, ' ').trim(), 160);
+};
+// One subagent run shares an id wherever the CLI wrote it (the sidechain copy in the main transcript, and subagents/*.jsonl).
+const subKeys = (entry, file, fromSubagent) => {
+  if (!(fromSubagent || entry.isSidechain === true || entry.parent_tool_use_id)) return [];
+  const agentId = typeof entry.agentId === 'string' && entry.agentId ? entry.agentId : typeof entry.agent_id === 'string' ? entry.agent_id : '';
+  const keys = [];
+  if (agentId) keys.push(agentId);
+  if (entry.parent_tool_use_id) keys.push(`parent:${entry.parent_tool_use_id}`);
+  if (fromSubagent) keys.push(`file:${path.basename(file, '.jsonl')}`);
+  return keys.length ? keys : ['sidechain'];
+};
+const thinPoints = (points, max) => {
+  if (points.length <= max) return points;
+  const stride = Math.ceil(points.length / max);
+  const kept = points.filter((_, index) => index % stride === 0);
+  if (kept.at(-1) !== points.at(-1)) kept.push(points.at(-1));
+  return kept;
+};
 
 // ADE events report completed turns, not individual model requests. Cumulative token snapshots are differenced once per turn.
 export function chatEventStats(events) {
@@ -54,7 +76,7 @@ export function chatEventStats(events) {
     const row = models.get(model) ?? { model, requests: 0, input: 0, output: 0, read: 0, write: 0, costUsd: null };
     row.requests++; row.input += input; row.output += output; row.read += read; row.write += write; models.set(model, row);
     timeline.push({ at: event.at, ctx: context, output, costUsd: event.turnCostUsd ?? null, turn, sub: false });
-    turnSeries.push({ index: turn, at: event.at, requests: 1, output, ctx: context, costUsd: event.turnCostUsd ?? null, ms: event.durationMs ?? 0 });
+    turnSeries.push({ index: turn, at: event.at, requests: 1, output, ctx: context, costUsd: event.turnCostUsd ?? null, ms: event.durationMs ?? 0, subRequests: 0, subPeak: 0, subCostUsd: null });
   }
   tokens.input = Math.max(tokens.input, num(current.input)); tokens.output = Math.max(tokens.output, num(current.output));
   tokens.read = Math.max(tokens.read, num(current.cacheRead)); tokens.write5m = Math.max(tokens.write5m, num(current.cacheCreate));
@@ -67,11 +89,11 @@ export function chatEventStats(events) {
     startedAt: kept[0]?.at ?? null, endedAt: kept.at(-1)?.at ?? null, activeMs: turnSeries.reduce((sum, row) => sum + row.ms, 0), tokens,
     cacheHitRate: tokensAvailable && input > 0 ? tokens.read / input : null, peakContext: Math.max(0, ...timeline.map(row => row.ctx)),
     cost: cost === null ? null : { totalUsd: cost, toolMs: 0, linesAdded: 0, linesRemoved: 0 }, models: [...models.values()],
-    tools: [...tools.values()].sort((a, b) => b.count - a.count), toolCalls: [...tools.values()].reduce((sum, row) => sum + row.count, 0), timeline, turnSeries, blocks: [] };
+    tools: [...tools.values()].sort((a, b) => b.count - a.count), toolCalls: [...tools.values()].reduce((sum, row) => sum + row.count, 0), timeline, turnSeries, subagents: [], blocks: [] };
 }
 
 export async function readSessionStats(files, since = [], total = null) {
-  const requests = new Map(), tools = new Map(), toolName = new Map(), turns = [{ at: null, ms: 0 }], compactions = [];
+  const requests = new Map(), tools = new Map(), toolName = new Map(), turns = [{ at: null, ms: 0 }], compactions = [], prompts = new Map(), agentCalls = new Map();
   let costState = null;
   for (const file of files) {
     const fromSubagent = file.split(path.sep).includes('subagents');
@@ -85,24 +107,45 @@ export async function readSessionStats(files, since = [], total = null) {
       if (entry.type === 'assistant' && entry.message?.usage) {
         if (entry.message.model === '<synthetic>') continue; // the CLI's own error/interrupt notes, not a request
         const message = entry.message, key = `${message.id ?? entry.uuid}:${entry.requestId ?? ''}`, usage = usageOf(message.usage), found = requests.get(key);
+        const keys = subKeys(entry, file, fromSubagent);
         for (const block of Array.isArray(message.content) ? message.content : []) {
           if (block?.type !== 'tool_use' || !block.id || toolName.has(block.id)) continue;
           toolName.set(block.id, block.name);
           const row = tools.get(block.name) ?? { name: block.name, count: 0, errors: 0 }; row.count += 1; tools.set(block.name, row);
+          const input = block.input && typeof block.input === 'object' ? block.input : null;
+          if (!fromSubagent && input && (block.name === 'Agent' || block.name === 'Task' || input.subagent_type)) {
+            const description = clipText(String(input.description || '').replace(/\s+/g, ' ').trim(), 160);
+            const type = String(input.subagent_type || '').trim();
+            if (description || type) agentCalls.set(block.id, { description, type });
+          }
         }
-        if (!found) requests.set(key, { at, model: message.model || 'unknown', usage, turn: turns.length - 1, sub: fromSubagent || entry.isSidechain === true || Boolean(entry.parent_tool_use_id) });
-        else if (usage.output >= found.usage.output) { found.usage = usage; if (message.model) found.model = message.model; }
-      } else if (entry.type === 'user' && !entry.isSidechain && !entry.isMeta) {
+        if (!found) requests.set(key, { at, model: message.model || 'unknown', usage, turn: 0, sub: keys.length > 0, keys });
+        else {
+          if (keys.length) { found.sub = true; found.keys = [...new Set([...(found.keys ?? []), ...keys])]; }
+          if (usage.output >= found.usage.output) { found.usage = usage; if (message.model) found.model = message.model; }
+        }
+      } else if (entry.type === 'user' && !entry.isMeta) {
         const content = entry.message?.content;
-        if (isPrompt(content)) turns.push({ at, ms: 0 });
+        const keys = subKeys(entry, file, fromSubagent);
+        if (keys.length) {
+          const text = promptLabel(content);
+          if (text) for (const id of keys) if (!prompts.has(id)) prompts.set(id, text);
+        } else if (isPrompt(content)) turns.push({ at, ms: 0 });
+        // A subagent's tool calls are counted above, so its failed results count too (otherwise errors undercount against calls).
         for (const part of Array.isArray(content) ? content : []) if (part?.type === 'tool_result' && part.is_error === true) { const row = tools.get(toolName.get(part.tool_use_id)); if (row) row.errors += 1; }
       } else if (entry.type === 'cost-state') costState = entry;
       else if (entry.subtype === 'turn_duration' && typeof entry.durationMs === 'number') turns[turns.length - 1].ms += entry.durationMs;
-      else if (entry.subtype === 'compact_boundary') compactions.push(at);
+      else if (entry.subtype === 'compact_boundary' && !fromSubagent && !entry.isSidechain) compactions.push(at);
     }
   }
 
   const list = [...requests.values()].filter(item => Number.isFinite(item.at)).sort((a, b) => a.at - b.at);
+  // Subagent files are read after the main transcript, so the turn captured while parsing would be the last one. Place every request in the user turn that was open at its time.
+  for (const item of list) {
+    let index = 0;
+    for (let i = 1; i < turns.length; i++) if (turns[i].at != null && turns[i].at <= item.at) index = i;
+    item.turn = index;
+  }
   // price per weight unit of each model, from the CLI's own totals
   const unit = new Map(), spend = costState?.modelUsage ?? {};
   for (const [model, row] of Object.entries(spend)) {
@@ -132,13 +175,18 @@ export async function readSessionStats(files, since = [], total = null) {
 
   // the context size a request saw: everything it sent in (fresh + cached)
   const ctxOf = item => item.usage.input + item.usage.read + item.usage.w5 + item.usage.w1;
-  const stride = Math.max(1, Math.ceil(list.length / MAX_POINTS));
-  const timeline = list.filter((_, index) => index % stride === 0 || index === list.length - 1).map(item => ({ at: item.at, ctx: ctxOf(item), output: item.usage.output, costUsd: costOf(item), turn: item.turn, sub: item.sub }));
+  // The chart follows the conversation itself. A subagent has its own context window, so drawing it on the same line makes the curve jump.
+  const main = list.filter(item => !item.sub);
+  const stride = Math.max(1, Math.ceil(main.length / MAX_POINTS));
+  const timeline = main.filter((_, index) => index % stride === 0 || index === main.length - 1).map(item => ({ at: item.at, ctx: ctxOf(item), output: item.usage.output, costUsd: costOf(item), turn: item.turn, sub: false }));
+  const subagents = groupSubagents(list.filter(item => item.sub), { costOf, ctxOf, prompts, agentCalls });
 
   const perTurn = turns.map((turn, index) => {
-    const mine = list.filter(item => item.turn === index);
+    const mine = list.filter(item => item.turn === index && !item.sub);
+    const extra = list.filter(item => item.turn === index && item.sub);
     return { index, at: turn.at ?? mine[0]?.at ?? null, requests: mine.length, output: sum(mine, i => i.usage.output), ctx: mine.length ? Math.max(...mine.map(ctxOf)) : 0,
-      costUsd: mine.some(item => costOf(item) !== null) ? sum(mine, i => costOf(i) ?? 0) : null, ms: turn.ms };
+      costUsd: mine.some(item => costOf(item) !== null) ? sum(mine, i => costOf(i) ?? 0) : null, ms: turn.ms,
+      subRequests: extra.length, subPeak: extra.length ? Math.max(...extra.map(ctxOf)) : 0, subCostUsd: extra.some(item => costOf(item) !== null) ? sum(extra, i => costOf(i) ?? 0) : null };
   }).filter(turn => turn.requests > 0).slice(-MAX_TURNS);
 
   const blocks = [];
@@ -153,11 +201,49 @@ export async function readSessionStats(files, since = [], total = null) {
   return {
     spentSince, requests: list.length, subRequests: list.filter(item => item.sub).length, turns: perTurn.length, compactions: compactions.length, compactionAt: compactions,
     startedAt: list[0]?.at ?? null, endedAt: list.at(-1)?.at ?? null, activeMs: costState ? num(costState.totalAPIDuration) : sum(turns, turn => turn.ms),
-    tokens, cacheHitRate: promptSide ? tokens.read / promptSide : null, peakContext: list.length ? Math.max(...list.map(ctxOf)) : 0,
+    tokens, cacheHitRate: promptSide ? tokens.read / promptSide : null, peakContext: main.length ? Math.max(...main.map(ctxOf)) : 0,
     cost: costState ? { totalUsd: num(costState.totalCostUSD), toolMs: num(costState.totalToolDuration), linesAdded: num(costState.totalLinesAdded), linesRemoved: num(costState.totalLinesRemoved) } : null,
     models, tools: [...tools.values()].sort((a, b) => b.count - a.count).slice(0, 12), toolCalls: sum([...tools.values()], row => row.count),
-    timeline, turnSeries: perTurn, blocks: blocks.map(({ lastAt, ...rest }) => ({ ...rest, end: rest.start + BLOCK }))
+    timeline, turnSeries: perTurn, subagents, blocks: blocks.map(({ lastAt, ...rest }) => ({ ...rest, end: rest.start + BLOCK }))
   };
+}
+
+// Subagent requests that share an agent id or a parent Agent/Task call are one run. The label prefers the description the main agent gave that call.
+function groupSubagents(items, { costOf, ctxOf, prompts, agentCalls }) {
+  const parent = new Map();
+  const runs = items.filter(item => item.keys?.length);
+  for (const item of runs) for (const key of item.keys) parent.set(key, key);
+  const find = key => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root);
+    let node = key;
+    while (node !== root) { const next = parent.get(node); parent.set(node, root); node = next; }
+    return root;
+  };
+  const union = (a, b) => { const left = find(a), right = find(b); if (left !== right) parent.set(right, left); };
+  for (const item of runs) for (let index = 1; index < item.keys.length; index++) union(item.keys[0], item.keys[index]);
+  const groups = new Map();
+  for (const item of runs) {
+    const id = find(item.keys[0]);
+    const ctx = ctxOf(item);
+    let group = groups.get(id);
+    if (!group) groups.set(id, group = { id, keys: new Set(), model: item.model, at: item.at, endedAt: item.at, turn: item.turn, requests: 0, peak: 0, costUsd: null, points: [] });
+    group.requests += 1;
+    group.peak = Math.max(group.peak, ctx);
+    if (item.at < group.at) { group.at = item.at; group.turn = item.turn; }
+    if (item.at > group.endedAt) group.endedAt = item.at;
+    if (item.model && item.model !== 'unknown') group.model = item.model;
+    const cost = costOf(item);
+    if (cost !== null) group.costUsd = (group.costUsd ?? 0) + cost;
+    group.points.push({ at: item.at, ctx });
+    for (const key of item.keys) group.keys.add(key);
+  }
+  return [...groups.values()].map(group => {
+    const parents = [...group.keys].filter(key => key.startsWith('parent:')).map(key => key.slice('parent:'.length));
+    const named = parents.map(id => agentCalls.get(id)).find(row => row?.description || row?.type);
+    const label = named?.description || [...group.keys].map(key => prompts.get(key)).find(Boolean) || '';
+    return { id: group.id, label, type: named?.type || '', model: group.model, at: group.at, endedAt: group.endedAt, turn: group.turn, requests: group.requests, peak: group.peak, costUsd: group.costUsd, points: thinPoints(group.points, 60) };
+  }).sort((a, b) => a.at - b.at || b.peak - a.peak);
 }
 
 // How much token-weight a Codex or Cursor chat added from each time on. Their CLIs report a running token total (kind `usage`), not a dollar cost.
