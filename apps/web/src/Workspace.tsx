@@ -18,7 +18,8 @@ import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { errorText, pushError } from './errors';
 import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
-import { ReviewPanel } from './Review';
+import { GitLog } from './GitLog';
+import { loadSpec } from './git-graph';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
 import { byLastUsed, FILE_EVENT, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
@@ -134,7 +135,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
-  const [rightVisible, setRightVisible] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [pluginOpen, setPluginOpen] = useState(''), [reviewWide, setReviewWide] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [pluginOpen, setPluginOpen] = useState(''), [reviewWide, setReviewWide] = useState(false);
   const feedback = useFeedback();
   // Plugins that declare `header` add one button to the top bar; it opens the plugin's panel in the right-panel slot.
   const headerPlugins = (usePluginsState()?.plugins ?? []).filter(plugin => plugin.header && plugin.state === 'running');
@@ -166,7 +167,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const shells = useShells();
   const settingsRef = useRef(settings); settingsRef.current = settings;
   useEffect(() => setSystemRefresh(settings.systemRefresh), [settings.systemRefresh]);
-  // Monaco is several MB to parse; reading it while the app is idle keeps that cost out of the moment the review panel opens.
+  // Monaco is several MB to parse; reading it while the app is idle keeps that cost out of the moment a diff opens.
   useEffect(() => {
     if (!('requestIdleCallback' in window)) return;
     const id = requestIdleCallback(preloadMonaco, { timeout: 8000 }); return () => cancelIdleCallback(id);
@@ -426,10 +427,11 @@ ${where}`, [
     setZoom('');
     // Settings used to live in each project's layout; the shell adopts them once and keeps its own copy from then on.
     if (ui.settings) onLegacySettings(ui.settings);
-    setRightVisible(ui.rightVisible ?? false);
-    // Older versions could also open plain files in editor panes; only diff tabs are kept.
+    // `rightVisible` is the saved name of "the Git drawer is open" (it used to be the changes panel on the right).
+    setGitOpen(ui.rightVisible ?? false);
+    // Older versions could also open plain files and working-tree diffs (the removed changes panel) in editor panes; only commit diff tabs are kept.
     const clean = (tree: Pane | null): Pane | null => {
-      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(isDiffTab); return { id: item.id, kind: 'editor', tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
+      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(tab => isDiffTab(tab) && !/^diff:(all|staged|unstaged):/.test(tab)); return { id: item.id, kind: 'editor', tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
       return next;
     };
     const live = new Set(state.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
@@ -548,10 +550,10 @@ ${where}`, [
     if (!project?.id || restoring) return;
     const timer = setTimeout(() => {
       const savedTabs = paneTabs.map(tab => ({ id: tab.id, pane: remember(tab.pane), ...(tab.title ? { title: tab.title } : {}), ...(refs.tabFocus.current[tab.id] ? { focus: refs.tabFocus.current[tab.id] } : {}) }));
-      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible } }).catch(report);
+      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen } }).catch(report);
     }, 400);
     return () => clearTimeout(timer);
-  }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, rightVisible, agentKey, call, report]);
+  }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, gitOpen, agentKey, call, report]);
   // Polling only runs for the project being shown and while the window is visible; coming back refreshes immediately.
   useEffect(() => {
     if (!project?.id || !active) return;
@@ -820,12 +822,9 @@ ${where}`, [
     refs.repository.current = id; setGitRepositoryId(id);
     if (refs.project.current?.multiRepo && id) void call('git/status', { repositoryId: id }).then(setGit).catch(report); else setGit(emptyGit);
   };
+  // A diff tab is `diff:<revision>:<path>[\t<old path>]`: one commit against its parent, `a..b` between two commits, `a..` against the working tree.
   async function loadDiff(kind: string, path: string) {
-    const [before, after] = await Promise.all([
-      call<{ content: string }>('git/show', { path, staged: kind === 'unstaged' }),
-      call<{ content: string }>('git/show', kind === 'staged' ? { path, staged: true } : { path, working: true })
-    ]);
-    const original = before.content, modified = after.content;
+    const { original, modified } = await loadSpec(call, `diff:${kind}:${path}`);
     return { original, modified };
   }
   async function switchBranch() {
@@ -841,9 +840,8 @@ ${where}`, [
     const choice = await pick('명령 팔레트', items);
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
-  // The git poll already keeps the state fresh; the extra refresh waits out the slide-in so it does not re-render the workspace mid-animation.
-  const showReview = () => { setErrorsOpen(false); setFeedbackOpen(false); setPluginOpen(''); preloadMonaco(); setRightVisible(true); setTimeout(() => run(refreshGit), 300); };
-  const toggleReview = () => { if (errorsOpen || feedbackOpen || pluginShown) { showReview(); return; } if (rightVisible) setRightVisible(false); else showReview(); };
+  // The Git drawer rises from the bottom and lives beside the right panel (errors, feedback, plugins), so both can be open.
+  const toggleGit = () => { preloadMonaco(); setGitOpen(value => !value); if (settingsRef.current.gitTipPending) setSettings(previous => ({ ...previous, gitTipPending: false })); };
   const toggleErrors = () => { setFeedbackOpen(false); setPluginOpen(''); setErrorsOpen(value => !value); };
   // The feedback inbox shares the right panel slot: opening it closes the error list and covers the diff, like the error list does.
   const showFeedback = () => { setErrorsOpen(false); setPluginOpen(''); setFeedbackOpen(true); };
@@ -897,7 +895,7 @@ ${where}`, [
     { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
     { id: 'focusNext', label: '다음 pane으로 이동', run: () => moveFocus(1) },
     { id: 'focusPrev', label: '이전 pane으로 이동', run: () => moveFocus(-1) },
-    { id: 'review', label: '변경사항(Diff) 패널 전환', run: toggleReview },
+    { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', run: toggleGit },
     { id: 'feedback', label: '피드백 요청', run: toggleFeedback },
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', run: startCapture },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
@@ -959,6 +957,16 @@ ${where}`, [
     onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)), onToChat: (id: string) => run(() => terminalToChat(id)),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
+  // The drawer's top edge: dragging moves a CSS variable, the height is saved once the pointer is released. Double-click: half / default.
+  const clampGit = (value: number) => Math.max(160, Math.min(Math.round(window.innerHeight - 120), Math.round(value)));
+  const startGitResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget, drawer = handle.parentElement!, startY = event.clientY, startHeight = drawer.getBoundingClientRect().height; let height = clampGit(startHeight);
+    handle.setPointerCapture(event.pointerId); handle.classList.add('dragging'); document.body.classList.add('resizing-row');
+    const move = (e: PointerEvent) => { height = clampGit(startHeight + startY - e.clientY); drawer.style.setProperty('--git-h', `${height}px`); };
+    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing-row'); setSettings(previous => previous.gitLogHeight === height ? previous : { ...previous, gitLogHeight: Math.min(2000, height) }); };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+  };
   // Dragging only moves a CSS variable on the panel; the width is saved to the settings once the pointer is released.
   const clampReview = (value: number) => Math.max(320, Math.min(1600, Math.round(value)));
   const startReviewResize = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -969,17 +977,22 @@ ${where}`, [
     const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); document.body.classList.remove('resizing'); setSettings(previous => previous.reviewWidth === width ? previous : { ...previous, reviewWidth: width }); };
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
   };
-  const reviewShown = rightVisible && !errorsOpen && !feedbackOpen && !pluginShown;
-  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : pluginShown ? `플러그인 ${pluginShown.name}` : feedbackOpen ? '피드백 요청' : '변경사항 패널'} aria-label={errorsOpen ? '오류' : pluginShown ? pluginShown.name : feedbackOpen ? '피드백 요청' : '변경사항'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
-    <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="변경사항 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
+  const rightOpen = errorsOpen || feedbackOpen || Boolean(pluginShown);
+  const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : pluginShown ? `플러그인 ${pluginShown.name}` : '피드백 요청'} aria-label={errorsOpen ? '오류' : pluginShown ? pluginShown.name : '피드백 요청'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
+    <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="오른쪽 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
     {errorsOpen ? <ErrorPanel scope={root} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
       : pluginShown ? <PluginPanel key={pluginShown.id} plugin={pluginShown} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onSettings={onOpenPlugins} onClose={() => setPluginOpen('')} />
-      : feedbackOpen ? <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />
-      : <ReviewPanel git={git} gitVersion={gitVersion} settings={settings} controls={gitControls} fail={report} refresh={refreshGit} loadDiff={loadDiff}
-        openDiffTab={path => openDiff(`diff:all:${path}`)} switchBranch={() => run(switchBranch)}
-        hasRepository={project.repositories.length > 0} selectionRequired={project.multiRepo && !gitRepositoryId} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />}
+      : <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />}
   </aside>;
+  const gitDrawer = gitOpen && <div className={`git-drawer ${settings.gitLogDock ? 'docked' : 'floating'}`} style={{ '--git-h': `${settings.gitLogHeight}px` } as CSSProperties}>
+    <div className="git-resizer" role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Git 패널 높이 조절 (더블클릭: 절반/기본)" onPointerDown={startGitResize}
+      onDoubleClick={() => setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 }))}
+      onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); } }} />
+    <GitLog call={call} settings={settings} setSettings={setSettings} visible={active && gitOpen} ask={ask} fail={report} onClose={() => setGitOpen(false)} onChanged={() => run(refreshGit)}
+      openDiff={spec => openDiff(spec)} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
+      unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
+  </div>;
   const shown = (id: string) => settings.statusItems.includes(id);
   const reviewCount = pendingReviewCount(feedback.items);
   const layout = statusLayout(settings);
@@ -1019,8 +1032,8 @@ ${where}`, [
       <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
-      <button className={`bar-button ${reviewShown ? 'on' : ''}`} data-tip={`변경사항 Diff (${showAppKey(settings.appKeys, 'review')})`} aria-label="변경사항 Diff 패널" aria-pressed={reviewShown} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleReview}>
-        <Icon name="diff" />{git.changes.length > 0 && <span className="diffstat"><span>{git.changes.length}</span><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
+      <button className={`bar-button ${gitOpen ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})${git.additions || git.deletions ? `\n커밋하지 않은 변경: +${git.additions} −${git.deletions}` : ''}`} aria-label="Git 커밋 그래프" aria-pressed={gitOpen} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleGit}>
+        <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
@@ -1028,8 +1041,10 @@ ${where}`, [
       </div>
     </header>
     <ErrorToast scope={root} active={active} />
-    {/* The review panel floats over the terminals instead of taking a column, so opening it never shrinks them. */}
-    <div className="workbench">{center}{(rightVisible || errorsOpen || feedbackOpen || pluginShown) && rightPanel}</div>
+    {/* The right panel floats over the terminals instead of taking a column, so opening it never shrinks them. The Git drawer floats over
+        their bottom too, unless it is docked (then the terminals give it the room, like IntelliJ's docked tool window). */}
+    <div className="workbench">{center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}</div>
+    {settings.gitLogDock && gitDrawer}
     <footer className="statusbar" data-feedback-region="상태바">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title={`검토할 피드백 초안 ${reviewCount}개 · 피드백 요청 열기`} aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
@@ -1043,6 +1058,23 @@ ${where}`, [
         <div className="chat-mode-tip-actions">
           <button className="primary" onClick={() => run(() => launch(`ade:chat:${agentOf(focus)}`, 'tab'))}>Chat으로 열기<Icon name="arrowRight" size={14} /></button>
           <button onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))}>괜찮아요</button>
+        </div>
+      </div>
+    </aside>}
+    {/* Once, for people who knew the changes panel: it is now the Git graph. Opening the graph or "확인" ends it for good. */}
+    {active && settings.gitTipPending && settings.onboarded && <aside className="chat-mode-tip git-graph-tip" aria-label="Git 그래프 안내">
+      <svg className="git-tip-art" viewBox="0 0 112 84" aria-hidden="true">
+        <path d="M20 8V76" stroke="#3cb45c" strokeWidth="2.5" fill="none" /><path d="M20 22L44 34V54L20 66" stroke="#9f79b5" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
+        <path d="M44 34L68 44V50" stroke="#e1a431" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
+        {[[20, 8], [20, 22], [44, 34], [68, 44], [44, 54], [20, 66], [20, 76]].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r="4.5" fill={x === 20 ? '#3cb45c' : x === 44 ? '#9f79b5' : '#e1a431'} />)}
+        <rect x="76" y="4" width="32" height="9" rx="3" fill="#3cb45c" opacity=".85" /><rect x="76" y="40" width="28" height="9" rx="3" fill="#9f79b5" opacity=".85" />
+      </svg>
+      <div className="chat-mode-tip-body">
+        <strong>변경사항 패널이 Git 그래프로 바뀌었어요</strong>
+        <p>상단 Git 버튼에는 커밋하지 않은 <span className="diffstat"><ins>+</ins><del>−</del></span> 줄 수만 보여요. 누르면 아래에서 커밋 그래프가 올라와 브랜치·체크아웃·머지·리베이스·체리픽을 IntelliJ처럼 바로 할 수 있어요. ({showAppKey(settings.appKeys, 'gitLog')})</p>
+        <div className="chat-mode-tip-actions">
+          <button className="primary" onClick={() => { setGitOpen(true); setSettings(previous => ({ ...previous, gitTipPending: false })); }}>Git 그래프 열기<Icon name="arrowRight" size={14} /></button>
+          <button onClick={() => setSettings(previous => ({ ...previous, gitTipPending: false }))}>확인</button>
         </div>
       </div>
     </aside>}

@@ -19,7 +19,7 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   { id: 'zoom', group: '분할 · Pane', label: 'Pane 최대화 전환', keys: 'mod+shift+enter' },
   { id: 'focusNext', group: '분할 · Pane', label: '다음 pane으로 이동', keys: 'alt+shift+]' },
   { id: 'focusPrev', group: '분할 · Pane', label: '이전 pane으로 이동', keys: 'alt+shift+[' },
-  { id: 'review', group: '화면 · 도구', label: '변경사항(Diff) 패널 전환', keys: 'mod+shift+g' },
+  { id: 'gitLog', group: '화면 · 도구', label: 'Git 로그(커밋 그래프) 전환', keys: 'mod+shift+g' },
   { id: 'palette', group: '화면 · 도구', label: '명령 팔레트', keys: 'mod+shift+p' },
   { id: 'palette2', group: '화면 · 도구', label: '명령 팔레트(F1)', keys: 'f1' },
   // Ids are camelCase like the rest: the server's appKeys validation only accepts [a-zA-Z][a-zA-Z0-9]*.
