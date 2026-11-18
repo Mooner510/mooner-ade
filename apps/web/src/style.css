@@ -1764,6 +1764,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-attach:hover { background: var(--hover); color: var(--fg); }
 .chat-send { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: 4px; padding: 0; border-radius: 50%; background: var(--agent); color: var(--bg); }
 .chat-send:hover:not(:disabled) { filter: brightness(1.12); }
+/* The global button:hover paints --hover (nearly the background) and outranks .chat-send; keep the agent colour while hovered. */
+.chat-send:not(.stop):hover:not(:disabled) { background: var(--agent); }
 .chat-send:disabled { background: var(--hover); color: var(--muted); opacity: .7; cursor: default; }
 .chat-send.stop { position: relative; isolation: isolate; background: transparent; color: var(--fg); }
 /* The circle behind the icon breathes, not the button: the button turns into "stop" while its own colour transitions run, and Chromium then keeps

@@ -58,7 +58,8 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
-  if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
+  // On an API key the money sits inside the API Usage item (same dollars() format), so the separate cost item would show it twice.
+  if (id === 'cost' && (state.costUsd === null || state.apiKey === true && state.agent === 'claude') || id === 'tokens' && state.capabilities?.tokens === false) return null;
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon, tip: def.extra.tip } : undefined;
@@ -87,7 +88,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
   const key = state.apiKey === true, locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
   const needsKey = !key && keyReady === false;
   useEffect(() => { if (open) void api<{ claude?: { key: string } }>('agent-keys/status').then(status => setKeyReady(Boolean(status.claude?.key)), () => setKeyReady(null)); }, [open]);
-  const choose = (auth: 'login' | 'key') => { if (!locked && (auth === 'login') === key) onAuth(auth); };
+  const choose = (auth: 'login' | 'key') => { if (!locked && (auth === 'login') === key) { onAuth(auth); pop.current?.hidePopover(); } };
   const openSettings = () => { pop.current?.hidePopover(); onSettings?.(); };
   return <>
     <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId}>

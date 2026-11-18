@@ -532,7 +532,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
         </div>
         {plugin.description && <p>{plugin.description}</p>}
       </div>
-      {id && plugin.state !== 'invalid' && <input type="checkbox" role="switch" className="plugin-master" aria-label={`${plugin.name} 사용`} title={on ? '끄기' : '켜기'} checked={on} disabled={Boolean(busy)} onChange={event => toggle(event.target.checked)} />}
+      {id && plugin.state !== 'invalid' && <input type="checkbox" role="switch" className="plugin-master" aria-label={`${plugin.name} 사용`} checked={on} disabled={Boolean(busy)} onChange={event => toggle(event.target.checked)} />}
     </header>
     {plugin.state === 'invalid' && <Callout tone="error">{plugin.error ?? '플러그인을 읽을 수 없습니다.'}<small>plugin.json과 폴더 구성을 고친 뒤 목록의 다시 읽기를 누르세요.</small></Callout>}
     {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}

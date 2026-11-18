@@ -201,11 +201,20 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     else if (type === 'session_info_update') { const event = agentTitle(update.title); if (event) emit(event); }
   }
   // Bypass answers command, file-change and permission requests itself. Questions (requestUserInput) are never answered for the user.
-  const autoAcceptable = raw => agent === 'codex' && config?.permissionMode === 'bypassPermissions' && ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(raw.method);
+  // An MCP tool's approval comes either as a question whose ids are `mcp_tool_call_approval_*` or as an elicitation tagged with an approval kind in _meta;
+  // both are permission prompts, not questions for the user. A server's own form (an elicitation without that tag) still reaches the user.
+  const mcpApprovalQuestions = raw => raw.method === 'item/tool/requestUserInput' && Array.isArray(raw.params?.questions) && raw.params.questions.length > 0 && raw.params.questions.every(q => /^mcp_tool_call_approval/i.test(String(q.id)));
+  const mcpApprovalElicitation = raw => raw.method === 'mcpServer/elicitation/request' && Object.keys(raw.params?._meta ?? {}).some(key => /approval/i.test(key));
+  const autoAcceptable = raw => agent === 'codex' && config?.permissionMode === 'bypassPermissions' && (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(raw.method) || mcpApprovalQuestions(raw) || mcpApprovalElicitation(raw));
+  // The plain "allow" choice (once), not "always"/"session" ones: bypass decides again for each request.
+  const allowOption = options => (options ?? []).find(o => /^(allow|accept|yes|approve)\b/i.test(o.label) && !/always|session|forever/i.test(o.label)) ?? (options ?? []).find(o => /allow|accept|approve/i.test(o.label) && !/always|deny|decline|cancel/i.test(o.label)) ?? options?.[0];
   async function autoAccept(id, announced = true) {
     const raw = approvals.get(id); if (!raw || !autoAcceptable(raw)) return;
     const p = raw.params ?? {};
-    const response = raw.method === 'item/permissions/requestApproval' ? { permissions: p.permissions, scope: 'turn' } : { decision: 'accept' };
+    const response = raw.method === 'item/permissions/requestApproval' ? { permissions: p.permissions, scope: 'turn' }
+      : raw.method === 'item/tool/requestUserInput' ? { answers: Object.fromEntries(p.questions.map(q => [q.id, { answers: [allowOption(q.options)?.label].filter(Boolean) }])) }
+      : raw.method === 'mcpServer/elicitation/request' ? { action: 'accept', content: null }
+      : { decision: 'accept' };
     approvals.delete(id); if (announced) emit({ kind: 'approval', phase: 'cancel', requestId: id });
     await send({ id: raw.id, result: response });
   }

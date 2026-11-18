@@ -120,7 +120,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     </button>
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
-        <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
+        <button className="icon-btn" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
       {windows.length > 0 && <UsageRows windows={windows} colors={colors} />}
       {credit && <CreditRow credit={credit} colors={colors} />}
       {codexCredits && <CodexCreditRow value={codexCredits} colors={colors} />}

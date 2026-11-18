@@ -4,7 +4,7 @@ import readline from 'node:readline';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const result = (extra = {}) => send({ type: 'result', is_error: false, result: 'ok', session_id: 'control-session', total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, ...extra });
 send({ type: 'system', subtype: 'init', session_id: 'control-session', model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'] });
-let running = false, allow = []; // allow: the permissions.allow the host put into the flag settings
+let running = false, allow = [], mcpAnswer = 'grants'; // allow: the permissions.allow the host put into the flag settings
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
   if (message.type === 'control_request' && message.request?.subtype === 'interrupt') {
@@ -26,8 +26,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
     return;
   }
-  if (message.type === 'control_response' && message.response?.request_id === 'req-mcp') { // the host's answer to 'askmcp': what it asked the CLI to remember
+  if (message.type === 'control_response' && message.response?.request_id === 'req-mcp' && mcpAnswer === 'grants') { // the host's answer to 'askmcp': what it asked the CLI to remember
     send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `grants=${JSON.stringify(message.response.response?.updatedPermissions ?? [])}` }] } });
+    result();
+    return;
+  }
+  if (message.type === 'control_response') { // the host's answer to a can_use_tool request: what it decided is the next assistant text
+    const answer = message.response?.response;
+    send({ type: 'assistant', message: { id: `a${Date.now()}`, content: [{ type: 'text', text: `${message.response?.request_id}=${answer?.behavior}` }] } });
     result();
     return;
   }
@@ -49,9 +55,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (text.includes('다시 실행해')) { send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `allow=${JSON.stringify(allow)}` }] } }); result(); return; }
   if (text === 'askmcp') { // an MCP tool the CLI offers no suggestions for
+    mcpAnswer = 'grants';
     send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__run', input: { command: 'x' }, tool_use_id: 'toolu_mcp' } });
     return;
   }
+  if (text === 'bypass') { send({ type: 'system', subtype: 'status', permissionMode: 'bypassPermissions', session_id: 'control-session' }); result(); return; }
+  if (text === 'mcpask') { mcpAnswer = 'behavior'; send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__tool', input: { a: 1 }, tool_use_id: 'toolu_m' } }); return; }
+  if (text === 'plainask') { send({ type: 'control_request', request_id: 'req-ask', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
   if (text === 'approve') {
     send({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' } });
     setTimeout(() => process.exit(1), 150);
