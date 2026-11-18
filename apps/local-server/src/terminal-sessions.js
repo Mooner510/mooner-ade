@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { fault } from './files.js';
+import { ATTRIBUTION_OFF } from './agent-signature.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 // PowerShell also ends a single-quoted string at the typographic quotes U+2018-U+201B (a path such as a user or folder name
@@ -110,7 +111,7 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   const hook = [process.execPath, import.meta.filename, path.join(root, 'session.json')]
     .map(value => quote(value.replaceAll('\\', '/'), false)).join(' ');
   const denied = deniedMcpTools();
-  const settings = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] }, ...(denied.length && { permissions: { deny: denied } }) });
+  const settings = JSON.stringify({ ...ATTRIBUTION_OFF, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] }, ...(denied.length && { permissions: { deny: denied } }) });
   const settingsFile = path.join(root, 'claude-settings.json');
   await fs.writeFile(settingsFile, settings, { mode: 0o600 });
   if (!terminalMcpServers().length) return `${command} --settings ${quote(settingsFile)}`;

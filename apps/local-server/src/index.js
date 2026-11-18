@@ -36,6 +36,7 @@ import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
+import { signatureGuard } from './agent-signature.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
@@ -90,6 +91,8 @@ const pty = ptyHost
   : localPty;
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
+// Chat agents (not terminals) commit through a git hooks dir that strips agent signatures from commit messages.
+const signatureEnv = await signatureGuard(dataRoot);
 const installationUUID = await deviceUUID(dataRoot);
 const projects = new Map();
 // The feedback inbox (feedback-store.js). Every screen is told when an item changes and fetches the list again.
@@ -478,7 +481,7 @@ function claudeInit(cwd, env, refresh = false) {
 }
 // What a chat of `agent` launches with: the plugin environment plus the API key when the user chose one for that agent (Settings > AI 툴).
 // `auth` is the chat's own login choice (its meta); the chat passes it at every start.
-const chatEnv = agent => auth => ({ ...pluginEnv(), ...agentKeys.launch(agent, auth).env });
+const chatEnv = agent => auth => ({ ...pluginEnv(), ...signatureEnv, ...agentKeys.launch(agent, auth).env });
 const chatArgs = agent => auth => agentKeys.launch(agent, auth).args;
 // Claude's model list: with an API key the CLI keeps no catalog of its own, so ask the Models API (cached an hour per key); otherwise the CLI's catalog.
 let apiCatalog = null; // { key, at, promise }
