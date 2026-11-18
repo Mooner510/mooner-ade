@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { detectIdes, ideCommand, revealCommand, launch, openPath } from '../apps/local-server/src/ide.js';
+import { detectIdes, ideCommand, revealCommand, launch, openPath, outsideTarget } from '../apps/local-server/src/ide.js';
 import { FILE_PROMPT, chatPrompt } from '../apps/local-server/src/chat-prompt.js';
 import { UI_PROMPT } from '../apps/local-server/src/chat-ui-prompt.js';
 
@@ -91,11 +91,33 @@ test('opening a path that does not exist, or an editor that is not installed, is
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('a chip may name a place outside the project (absolute or ../), but never a network share', () => {
+  const root = path.join(tmpdir(), 'ade-ide-root');
+  assert.equal(outsideTarget(root, '../sibling/dist/a.zip'), path.resolve(root, '..', 'sibling', 'dist', 'a.zip'));
+  assert.equal(outsideTarget(root, tmpdir()), path.resolve(tmpdir()));
+  for (const share of ['//server/share/a.txt', '\\\\server\\share\\a.txt']) assert.throws(() => outsideTarget(root, share), { code: 'INVALID_INPUT' }, share);
+  assert.throws(() => outsideTarget(root, 'a\0b'), { code: 'INVALID_INPUT' });
+});
+
+test('a file outside the project opens in an editor with its own folder as the project, a file inside keeps the project root', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ade-ide-')), other = await mkdtemp(path.join(tmpdir(), 'ade-ide-other-'));
+  try {
+    await touch(path.join(root, 'a.ts')); await touch(path.join(other, 'dist', 'b.zip'));
+    const ide = { id: 'vscode', label: 'VS Code', kind: 'vscode', file: 'code.exe' };
+    // ideCommand is what openPath builds; openPath itself needs a detected editor, so the command is checked directly.
+    const outside = path.join(other, 'dist', 'b.zip');
+    assert.deepEqual(ideCommand(ide, { root: path.dirname(outside), target: outside }).args, [path.dirname(outside), '-g', outside]);
+    assert.deepEqual(ideCommand(ide, { root, target: path.join(root, 'a.ts') }).args, [root, '-g', path.join(root, 'a.ts')]);
+    await assert.rejects(openPath({ ide: 'files', root, target: path.join(other, 'nope.zip') }), { code: 'NOT_FOUND' });
+  } finally { await rm(root, { recursive: true, force: true }); await rm(other, { recursive: true, force: true }); }
+});
+
 test('a new chat is told how to write file paths, the UI blocks only when enabled, and an older chat keeps its prompt unchanged', () => {
   assert.equal(chatPrompt(false, true), FILE_PROMPT);
   assert.equal(chatPrompt(true, true), `${FILE_PROMPT}\n\n${UI_PROMPT}`);
   assert.equal(chatPrompt(true, false), UI_PROMPT, 'a chat from before this existed gets the same text as it always had (prompt cache)');
   assert.equal(chatPrompt(false, false), undefined);
-  for (const word of ['[[file:src/app.ts]]', ':42', 'relative to the project', 'folder']) assert.ok(FILE_PROMPT.includes(word), word);
+  for (const word of ['[[file:src/app.ts]]', ':42', 'relative to the project', 'folder', 'outside the project', '[[file:../', 'only when the user asks']) assert.ok(FILE_PROMPT.includes(word), word);
+  assert.ok(!/outside the project stays in backticks/.test(FILE_PROMPT), 'a path outside the project is a chip too');
   assert.ok(FILE_PROMPT.length < 1200, `cached, but every word competes for attention: ${FILE_PROMPT.length} chars`);
 });

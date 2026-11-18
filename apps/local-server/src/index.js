@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLocalRuntime, LocalProcesses, LocalWorkspace } from './runtime.js';
-import { listIdes, openPath } from './ide.js';
+import { listIdes, openPath, outsideTarget } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
@@ -1227,7 +1227,10 @@ async function route(action, input, project) {
       // The editors installed here (ide/list) or the OS file manager ('files'); a chat's path is relative to the folder that chat works in (its worktree, if it has one).
       const base = new LocalWorkspace(input.chatId ? project.chats.get(input.chatId)?.cwd || workspace.root : workspace.root);
       let target;
-      try { target = await base.resolve(text(input.path ?? '.', '경로', 4096)); } catch (error) { if (error.code === 'INVALID_INPUT') throw error; throw fault('INVALID_INPUT', '프로젝트 밖의 경로는 열 수 없습니다.'); }
+      const requested = text(input.path ?? '.', '경로', 4096);
+      // Inside the project the workspace checks it (no `..`, no symlink out). A chip may also name a place outside it (a sibling repo); that is shown as written,
+      // and the user has already picked how to open it in the dialog.
+      try { target = await base.resolve(requested); } catch (error) { if (error.code === 'INVALID_INPUT') throw error; target = outsideTarget(base.root, requested); }
       const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
       return openPath({ ide: text(input.ide, '편집기', 100), root: base.root, target, line: whole(input.line), column: whole(input.column) });
     }

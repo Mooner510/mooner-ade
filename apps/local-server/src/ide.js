@@ -136,7 +136,16 @@ export function findIde(id) {
   return cached.raw.find(item => item.id === id);
 }
 
-// Opens `target` (absolute, already confirmed inside `root`) in editor `ideId`, or in the file manager when `ideId` is 'files'.
+// A chip can point outside the project (a sibling repo, a build output elsewhere on this PC): `requested` is then absolute or `../…` from `root`.
+// Opening only shows the place in an editor or the file manager, so nothing is read or written, but a network share is refused (stat alone would reach out to it).
+export function outsideTarget(root, requested) {
+  if (typeof requested !== 'string' || requested.includes('\0')) throw fault('INVALID_INPUT', '경로를 확인하세요.');
+  const target = path.resolve(root, requested);
+  if (/^[\\/]{2}/.test(requested) || (process.platform === 'win32' && /^\\\\/.test(target))) throw fault('INVALID_INPUT', '네트워크 경로는 열 수 없습니다.');
+  return target;
+}
+
+// Opens `target` (absolute; inside `root`, or outside the project, see outsideTarget) in editor `ideId`, or in the file manager when `ideId` is 'files'.
 export async function openPath({ ide: ideId, root, target, line, column }) {
   const stat = await fs.promises.stat(target).catch(() => null);
   if (!stat) throw fault('NOT_FOUND', `파일을 찾을 수 없습니다: ${path.relative(root, target) || '.'}`, 404);
@@ -145,5 +154,7 @@ export async function openPath({ ide: ideId, root, target, line, column }) {
   const ide = findIde(ideId);
   if (!ide) throw fault('NOT_FOUND', '이 컴퓨터에서 해당 편집기를 찾을 수 없습니다. 설치를 확인하세요.', 404);
   if (!directory && !stat.isFile()) throw fault('INVALID_INPUT', '파일이나 폴더만 열 수 있습니다.');
-  return launch(ideCommand(ide, { root, target, directory, line, column }));
+  // A file outside the project opens with its own folder as the editor's project, not with the chat's folder added to the window.
+  const relative = path.relative(root, target), inProject = relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return launch(ideCommand(ide, { root: inProject ? root : path.dirname(target), target, directory, line, column }));
 }
