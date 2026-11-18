@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { agentExitBenign, chatFolder, openChatSession, seedChat, probeAgentModels } from '../apps/local-server/src/chat.js';
+import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
 
@@ -900,6 +901,34 @@ test('Claude: a chat switches between the CLI login and an API key; only the tur
   await assert.rejects(reopened.set({ auth: 'key' }), /API 키가 등록되어 있지 않습니다/);
   await assert.rejects(reopened.set({ auth: 'nope' }), /잘못된 로그인 방식/);
   await assert.rejects(reopened.set({ auth: 'login', model: 'haiku' }), /다른 설정과 함께/);
+});
+
+test('Claude: the API Usage figure is what the key cost across every chat, and a chat on the key repaints when another one spends', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-keyspend-'));
+  const spend = createApiSpend({ file: path.join(directory, 'api-key-spend.json') });
+  const sessions = [], seenB = [];
+  const open = async (id, key, onState) => {
+    const session = await openChatSession({
+      directory, id, cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-cost-stream.mjs', import.meta.url))],
+      env: () => ({ FAKE_COST_FILE: path.join(directory, `turns-${id}`), ANTHROPIC_API_KEY: key }), keyAvailable: () => true, defaults: { auth: 'key' }, spend, onState
+    });
+    sessions.push(session); return session;
+  };
+  t.after(async () => { for (const session of sessions) await session.close(); await rm(directory, { recursive: true, force: true }); });
+  const turn = async (session, text) => { await session.send(text); await until(() => session.state().status === 'idle'); };
+  const a = await open('a', 'sk-ant-shared-12345678901234567890'), b = await open('b', 'sk-ant-shared-12345678901234567890', state => seenB.push(state.apiCostUsd));
+  const other = await open('c', 'sk-ant-other-12345678901234567890');
+  await turn(a, 'one');
+  assert.ok(Math.abs(a.state().apiCostUsd - 0.1) < 1e-9);
+  assert.ok(Math.abs(b.state().apiCostUsd - 0.1) < 1e-9, 'b never ran a turn but shows what the key cost');
+  await until(() => seenB.some(value => Math.abs(value - 0.1) < 1e-9)); // b was told, not only able to be asked
+  await turn(b, 'two');
+  assert.ok(Math.abs(a.state().apiCostUsd - 0.2) < 1e-9);
+  assert.ok(Math.abs(b.state().costUsd - 0.1) < 1e-9, 'the own cost of the chat stays its own');
+  assert.equal(other.state().apiCostUsd, 0, 'another key keeps its own total');
+  await spend.flush();
+  const again = createApiSpend({ file: path.join(directory, 'api-key-spend.json') }); await again.load();
+  assert.ok(Math.abs(again.total('claude', 'sk-ant-shared-12345678901234567890') - 0.2) < 1e-9, 'the total survives a restart');
 });
 
 test('Claude: an action auto mode blocked is recorded with its call, can be allowed for the chat, and retried by message', async t => {

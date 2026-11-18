@@ -60,7 +60,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -103,6 +103,16 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // A chat made before the choice existed keeps what it runs on now: a later change of the setting for new chats must not move it.
   if (meta.auth !== 'login' && meta.auth !== 'key') meta.auth = usesApiKey({ ...process.env, ...(typeof env === 'function' ? env(undefined) : env) }) ? 'key' : 'login';
   state.apiKey = usesApiKey({ ...process.env, ...envNow() });
+  // The key this chat runs on right now (the setting, or the user's own environment) and what that key has cost across ALL chats (api-spend.js): the API Usage
+  // figure is the key's total, so every chat on the same key shows the same, growing number. Without a ledger (tests) it is this chat's own spend.
+  const keyNow = () => { const launch = { ...process.env, ...envNow() }; return agent === 'claude' ? launch.ANTHROPIC_API_KEY : agent === 'codex' ? launch[CODEX_KEY_ENV] : launch.CURSOR_API_KEY; };
+  const keyTotal = () => spend ? spend.total(agent, keyNow()) : (meta.apiCostUsd ?? 0);
+  // Spend recorded by a version that kept it per chat joins the key's total once, the first time the key is known.
+  const adoptOwnSpend = () => {
+    if (!spend || meta.apiCostAdopted || !(meta.apiCostUsd > 0) || !state.apiKey || !keyNow()) return;
+    spend.add(agent, keyNow(), meta.apiCostUsd); meta.apiCostAdopted = true;
+  };
+  adoptOwnSpend();
   // auth: the login this chat starts on (kept by /clear). lastAuth: the login its last turn ran on, so the composer can ask before a turn changes it.
   // apiCostUsd: what the turns that ran on the API key cost: real money, unlike the cost of a plan's turns.
   state.auth = meta.auth; state.lastAuth = meta.lastAuth ?? null; state.apiCostUsd = meta.apiCostUsd ?? 0;
@@ -220,7 +230,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, apiCostAdopted: meta.apiCostAdopted || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
   let lastMeta = null;
   const saveMeta = () => {
@@ -241,9 +251,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens);
     const inflight = typeof state.costUsd === 'number' && costPerUnit && live > 0 ? live * costPerUnit : 0;
     // The API Usage figure grows with the running turn too (the in-flight part is billed to the key), so it moves live like the session cost.
-    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' ? state.costUsd + inflight : state.costUsd, apiCostUsd: state.apiKey ? (state.apiCostUsd ?? 0) + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn() };
+    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' ? state.costUsd + inflight : state.costUsd, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn() };
   };
   const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
+  // Another chat spent on the key this one runs on: repaint, so the shared API Usage figure moves here too.
+  const unsubscribeSpend = spend?.subscribe(id => { if (!closed && state.apiKey && id === spend.idOf(agent, keyNow())) publishSoon(); });
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
   const publishSoon = () => { if (publishTimer) return; publishTimer = setTimeout(publish, 150); publishTimer.unref?.(); };
   // The last request since the last /clear, unless a successful result answered it.
@@ -346,7 +358,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (store) {
       if (event.kind === 'result') {
         meta.lastAuth = state.lastAuth = stamped.auth;
-        if (stamped.auth === 'key' && turnCost > 0) meta.apiCostUsd = state.apiCostUsd = (meta.apiCostUsd ?? 0) + turnCost;
+        if (stamped.auth === 'key' && turnCost > 0) {
+          meta.apiCostUsd = state.apiCostUsd = (meta.apiCostUsd ?? 0) + turnCost;
+          if (spend && keyNow()) { if (meta.apiCostAdopted) spend.add(agent, keyNow(), turnCost); else adoptOwnSpend(); } // adopting adds the whole own spend, this turn included
+        }
         void saveMeta().catch(() => {});
       }
       events.push(stamped); if (events.length > KEEP_EVENTS * 1.5) events = events.slice(-KEEP_EVENTS);
@@ -1148,7 +1163,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
-      closed = true; clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
+      closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
       if (child) {
         const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();
         // Closed means the child is gone: on Windows a still-exiting child keeps its folder locked, so the caller (or a test) could not delete it right after close.

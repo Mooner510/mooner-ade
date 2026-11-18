@@ -34,7 +34,7 @@ export const chatStatusDefs: Record<string, Def> = {
   tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), cacheWrite: compact(state.tokens.cacheCreate), total: compact(state.tokens.input + state.tokens.output) }),
     extra: { icon: 'database', format: '↑{cacheWrite} ↓{cache}', show: ({ state }) => state.tokens.cacheRead + state.tokens.cacheCreate > 0 },
     hint: '이 채팅의 누적 토큰. 캐시 아이콘 뒤는 ↑캐시 쓰기 ↓캐시 읽기. {input} {output} {cache}(캐시 읽기) {cacheWrite}(캐시 쓰기) {total}' },
-  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)' },
+  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: '이 채팅에서 든 비용(USD) · CLI가 보고한 세션 비용' },
   // Until a turn has been measured (and always on an API key, or for Codex/Cursor) the item names what this chat is billed against; the measured share replaces it.
   share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ state, share }) => ({ share: usageBasis(state, share) }),
     hint: 'API 키 채팅은 ‘API Usage’(토큰 과금), CLI 로그인 채팅은 측정 전 ‘Plan Usage’로 표시하고, 측정되면 이 채팅이 플랜 한도(5h·주)에서 차지한 %p(추정)로 바뀝니다.' },
@@ -51,8 +51,7 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
-  // On an API key the money sits inside the API Usage item (same dollars() format), so the separate cost item would show it twice.
-  if (id === 'cost' && (state.costUsd === null || state.apiKey === true && state.agent === 'claude') || id === 'tokens' && state.capabilities?.tokens === false) return null;
+  if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon } : undefined;
@@ -96,7 +95,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
             {!key && keyReady === false && <span className="usage-badge">키 미등록</span>}
           </button>
         </span>
-        {key && <span className="usage-spent"><span>이 채팅에서 API로 보낸 턴의 요금</span><b>${dollars(spent)}</b></span>}
+        {key && <span className="usage-spent"><span>이 API 키로 모든 채팅에서 쓴 요금</span><b>${dollars(spent)}</b></span>}
         {locked && <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">lock</span>응답이 끝난 뒤 바꿀 수 있습니다.</span>}
         <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>전환하면 기존 캐시를 쓸 수 없어 비용이 더 발생할 수 있습니다.</span>
       </> : <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>이 에이전트의 로그인 방식은 채팅을 시작할 때 정해집니다.</span>}

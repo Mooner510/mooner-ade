@@ -37,6 +37,7 @@ import { chatLaunchFiles } from './chat-launch-files.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
+import { createApiSpend } from './api-spend.js';
 import { createAccountResolver, createUsage } from './usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
@@ -187,6 +188,8 @@ const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname
 const wakatime = createWakaTime({ version: appVersion });
 const agentKeys = createAgentKeys({ file: path.join(dataRoot, 'agent-keys.json') });
 await agentKeys.load();
+const apiSpend = createApiSpend({ file: path.join(dataRoot, 'api-key-spend.json') });
+await apiSpend.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
 let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true;
@@ -369,7 +372,7 @@ const chatProcHost = ptyHost?.procs ? {
 } : null;
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
-    keyAvailable: () => agentKeys.hasKey(agent),
+    keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
