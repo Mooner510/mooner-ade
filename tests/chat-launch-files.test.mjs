@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { chatLaunchFiles } from '../apps/local-server/src/chat-launch-files.js';
 import { setAgentMcpServers } from '../apps/local-server/src/terminal-sessions.js';
 import { UI_PROMPT } from '../apps/local-server/src/chat-ui-prompt.js';
+import { ATTRIBUTION_OFF } from '../apps/local-server/src/agent-signature.js';
 
 async function setup(t, servers) {
   const dataRoot = await mkdtemp(join(tmpdir(), 'ade-launch-'));
@@ -25,7 +26,7 @@ test('chats share one prompt file and one settings file; each keeps only its own
   assert.equal(first.settingsFile, second.settingsFile);
   assert.notEqual(first.mcpFile, second.mcpFile);
   assert.equal(await readFile(first.promptFile, 'utf8'), UI_PROMPT);
-  assert.deepEqual(JSON.parse(await readFile(first.settingsFile, 'utf8')), { permissions: { allow: ['mcp__ade_bus'], deny: ['mcp__ade_bus__send_message'] } });
+  assert.deepEqual(JSON.parse(await readFile(first.settingsFile, 'utf8')), { ...ATTRIBUTION_OFF, permissions: { allow: ['mcp__ade_bus'], deny: ['mcp__ade_bus__send_message'] } });
   assert.equal(JSON.parse(await readFile(first.mcpFile, 'utf8')).mcpServers.ade_bus.env.ADE_CHAT_ID, 'a');
   assert.equal(JSON.parse(await readFile(second.mcpFile, 'utf8')).mcpServers.ade_bus.env.ADE_CHAT_ID, 'b');
   assert.deepEqual((await readdir(a)).sort(), ['claude-mcp.json'], 'nothing but the MCP file is written in the chat folder');
@@ -49,16 +50,17 @@ test('a changed plugin setting gets a new settings file and the old one stays re
   setAgentMcpServers([{ ...bus, disabledTools: [] }]);
   const after = await prepare(root, context);
   assert.notEqual(after.settingsFile, before.settingsFile);
-  assert.deepEqual(JSON.parse(await readFile(after.settingsFile, 'utf8')), { permissions: { allow: ['mcp__ade_bus'] } });
+  assert.deepEqual(JSON.parse(await readFile(after.settingsFile, 'utf8')), { ...ATTRIBUTION_OFF, permissions: { allow: ['mcp__ade_bus'] } });
   assert.ok(JSON.parse(await readFile(before.settingsFile, 'utf8')).permissions.deny, 'the old file is intact');
   assert.equal(after.promptFile, undefined, 'no prompt file unless the chat uses the interactive UI');
 });
 
-test('without plugin servers only the prompt is passed, and copies old versions left in the chat folder are removed', async t => {
+test('without plugin servers the prompt and the no-signature settings are passed, and copies old versions left in the chat folder are removed', async t => {
   const { prepare, chatRoot } = await setup(t, []);
   const root = await chatRoot('a');
   await writeFile(join(root, 'ade-ui-prompt.md'), 'old'); await writeFile(join(root, 'claude-settings.json'), '{}'); await writeFile(join(root, 'events.jsonl'), 'keep\n');
   const files = await prepare(root, { chatId: 'a', projectId: 'p', agent: 'claude', interactiveUi: true });
-  assert.deepEqual(Object.keys(files).sort(), ['promptFile']);
+  assert.deepEqual(Object.keys(files).sort(), ['promptFile', 'settingsFile']);
+  assert.deepEqual(JSON.parse(await readFile(files.settingsFile, 'utf8')), ATTRIBUTION_OFF, 'no rules, but Claude is still told not to sign commits and PRs');
   assert.deepEqual((await readdir(root)).sort(), ['events.jsonl'], 'only generated launch files are removed');
 });

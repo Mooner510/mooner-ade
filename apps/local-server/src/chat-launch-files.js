@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ATTRIBUTION_OFF } from './agent-signature.js';
 import { chatPrompt } from './chat-prompt.js';
 import { writeIfChanged, writeShared } from './file-util.js';
 import { chatMcpServers, deniedMcpTools } from './terminal-sessions.js';
@@ -18,12 +19,13 @@ export function chatLaunchFiles(dataRoot) {
     await Promise.all(['ade-ui-prompt.md', 'claude-settings.json'].map(name => fs.rm(path.join(root, name), { force: true }).catch(() => {})));
     // The file-path and interactive-UI instructions travel as a file too, so the argv stays short and a resumed session gets them again.
     const promptFile = context.interactiveUi || context.fileLinks ? await writeShared(shared, 'ade-ui-prompt', '.md', chatPrompt(context.interactiveUi, context.fileLinks)) : undefined;
-    if (!servers.length) return { promptFile };
+    // The settings file always exists: it also tells Claude not to sign the user's commits and PRs (see agent-signature.js).
+    const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
+    const permissions = { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) };
+    const settingsFile = await writeShared(shared, 'claude-settings', '.json', JSON.stringify({ ...ATTRIBUTION_OFF, ...(Object.keys(permissions).length && { permissions }) }));
+    if (!servers.length) return { settingsFile, promptFile };
     const mcpFile = path.join(root, 'claude-mcp.json');
     await writeIfChanged(mcpFile, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, { type: 'stdio', command: server.command, args: server.args, ...(server.env && { env: server.env }) }])) }));
-    const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-    if (!denied.length && !allowed.length) return { mcpFile, promptFile };
-    const settingsFile = await writeShared(shared, 'claude-settings', '.json', JSON.stringify({ permissions: { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) } }));
     return { mcpFile, settingsFile, promptFile };
   };
 }
