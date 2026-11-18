@@ -62,7 +62,6 @@ const glyphs = {
   star: 'star',
   graph: 'account_tree',
   eye: 'visibility',
-  cherry: 'nutrition',
   tag: 'sell',
   fetch: 'cloud_download',
   push: 'cloud_upload',
@@ -104,6 +103,8 @@ const glyphs = {
 const brands = {
   claude: <path d="M12 12 12 3M12 12l3.3-6.2M12 12l7.8-5.4M12 12l7.4-1M12 12l8.5 3.1M12 12l4.7 5.2M12 12l2.5 9.2M12 12l-2.1 7.7M12 12l-6.4 7.1M12 12l-7.1 2.6M12 12l-8.9-1.2M12 12 5.9 7.7M12 12 8 3.4" />,
   codex: <><path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z" /><path d="m9 10 2.5 2L9 14M13 14.5h2.5" /></>,
+  // Cherry-pick: Material Symbols has no cherry (its nearest glyph is an apple). This is the filled `cherry` from Tabler Icons (MIT), unchanged; the colour is in .brand-cherry.
+  cherry: <path d="M16.588 5.191l.058 .045l.078 .074l.072 .084l.013 .018a.998 .998 0 0 1 .182 .727l-.022 .111l-.03 .092c-.99 2.725 -.666 5.158 .679 7.706a4 4 0 1 1 -4.613 4.152l-.005 -.2l.005 -.2a4.002 4.002 0 0 1 2.5 -3.511c-.947 -2.03 -1.342 -4.065 -1.052 -6.207c-.166 .077 -.332 .15 -.499 .218l.094 -.064c-2.243 1.47 -3.552 3.004 -3.98 4.57a4.5 4.5 0 1 1 -7.064 3.906l-.004 -.212l.005 -.212a4.5 4.5 0 0 1 5.2 -4.233c.332 -1.073 .945 -2.096 1.83 -3.069c-1.794 -.096 -3.586 -.759 -5.355 -1.986l-.268 -.19l-.051 -.04l-.046 -.04l-.044 -.044l-.04 -.046l-.04 -.05l-.032 -.047l-.035 -.06l-.053 -.11l-.038 -.116l-.023 -.117l-.005 -.042l-.005 -.118l.01 -.118l.023 -.117l.038 -.115l.03 -.066l.023 -.045l.035 -.06l.032 -.046l.04 -.051l.04 -.046l.044 -.044l.046 -.04l.05 -.04c4.018 -2.922 8.16 -2.922 12.177 0z" />,
   // A chat tab: a speech bubble holding Claude's asterisk, so it reads differently from a file or a terminal tab.
   'claude-chat': <><path d="M6.5 3.5h11A2.5 2.5 0 0 1 20 6v8a2.5 2.5 0 0 1-2.5 2.5H11.5L7 20.5v-4h-.5A2.5 2.5 0 0 1 4 14V6a2.5 2.5 0 0 1 2.5-2.5z" /><path d="M12 6.6v6.8M9 8.3l6 3.4M15 8.3l-6 3.4" /></>,
   // The cube fills the whole 24 box (the other glyphs keep a margin), so shrink it about the centre.
@@ -138,19 +139,19 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 
 type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none'; dot?: boolean; action?: string };
 // Icon-only button: the label is both the tooltip and the accessible name, so no glyph has to be guessed.
-// tip='header' shows a styled tooltip (tab headers); tip='none' skips it for glyphs nobody has to guess (the close X), unless the button has a shortcut: then it shows the same
+// Always the styled tooltip (data-tip, tooltip.ts; a title would be taken off and put back on every hover); tip='none' skips it for glyphs nobody has to guess (the close X), unless the button has a shortcut: then it shows the same
 // styled tooltip with the key. action: the id of the app shortcut this button triggers (its current binding is appended to the label).
 
 export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot, action }: IconButtonProps) {
   const actionKeys = useActionKeys(action), shown = keys ?? actionKeys;
-  const text = shown ? `${label} (${shown})` : label, styled = tip === 'header' || (tip === 'none' && !!shown);
+  const text = shown ? `${label} (${shown})` : label, styled = tip !== 'none' || !!shown;
   // dot: a small red mark for something unread behind the button (the label should say so too).
-  return <button type="button" className={`icon-btn ${className}`} title={tip ? undefined : text} data-tip={styled ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
+  return <button type="button" className={`icon-btn ${className}`} data-tip={styled ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
 }
 
 // One split button for every pane header: it opens a small popover with the two directions. Native popover (top layer), so the pane edges never clip it.
 export function SplitButton({ onSplit, keys }: { onSplit(direction: 'row' | 'column', event: MouseEvent<HTMLButtonElement>): void; keys?: { row?: string; column?: string } }) {
-  const id = useId(), tipText = keys?.row && keys.column ? `분할 (${keys.row} 좌우 · ${keys.column} 상하)` : '분할', name = `--split-${id.replace(/:/g, '')}`;
+  const id = useId(), tipText = keys?.row && keys.column ? `분할\n좌우 (${keys.row})\n상하 (${keys.column})` : '분할', name = `--split-${id.replace(/:/g, '')}`;
   const pick = (direction: 'row' | 'column') => (event: MouseEvent<HTMLButtonElement>) => { (event.currentTarget.closest('[popover]') as HTMLElement | null)?.hidePopover(); onSplit(direction, event); };
   return <>
     <button type="button" className="icon-btn" data-tip={tipText} aria-label="분할" aria-haspopup="menu" popoverTarget={id} style={{ anchorName: name } as CSSProperties}><Icon name="splitH" /></button>

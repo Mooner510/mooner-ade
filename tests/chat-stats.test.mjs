@@ -115,6 +115,63 @@ test('stats: a sidechain request and a subagent file count toward tokens, cost s
     assert.equal(stats.subRequests, 2);
     assert.equal(stats.tokens.output, 5 + 2 + 6);
     assert.equal(stats.requests, 3);
+    assert.deepEqual(stats.timeline.map(point => point.ctx), [10]);
+    assert.ok(stats.timeline.every(point => point.sub === false));
+    assert.equal(stats.turnSeries[0].requests, 1);
+    assert.equal(stats.turnSeries[0].subRequests, 2);
+    assert.equal(stats.subagents.length, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('stats: the context graph keeps the main thread, and one subagent run stays together across the sidechain copy and its file', async () => {
+  const state = line({ type: 'cost-state', timestamp: at(12), totalCostUSD: 10, modelUsage: {
+    'claude-opus-5-5': { inputTokens: 40, outputTokens: 14, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, cacheCreationEphemeral5mInputTokens: 0, cacheCreationEphemeral1hInputTokens: 0, costUSD: 4 },
+    'claude-haiku-5-5': { inputTokens: 900004, outputTokens: 8, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, cacheCreationEphemeral5mInputTokens: 0, cacheCreationEphemeral1hInputTokens: 0, costUSD: 6 }
+  } });
+  const { root, file } = await fixture([
+    user(0, '질문'),
+    assistant('m1', 'r1', 1, usage(10, 5, 0, 0), [{ type: 'tool_use', id: 'toolu', name: 'Agent', input: { description: '코드 탐색', subagent_type: 'Explore', prompt: '찾아 줘' } }]),
+    line({ type: 'assistant', requestId: 'rside', timestamp: at(2), isSidechain: true, agentId: 'agent-1', parent_tool_use_id: 'toolu', message: { id: 'side', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'side' }], usage: usage(900000, 2, 0, 0) } }),
+    line({ type: 'user', timestamp: at(5), isSidechain: true, agentId: 'agent-2', parent_tool_use_id: 'toolu2', message: { role: 'user', content: '테스트 이름을 정리해 줘' } }),
+    line({ type: 'assistant', requestId: 'r2sub', timestamp: at(6), isSidechain: true, agentId: 'agent-2', parent_tool_use_id: 'toolu2', message: { id: 'side2', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'ok' }], usage: usage(8, 1, 0, 0) } }),
+    user(10, '두번째'),
+    assistant('m2', 'r2', 11, usage(30, 9, 0, 0)),
+    state
+  ]);
+  const subFile = path.join(root, 'subagents', 'agent-1.jsonl');
+  await mkdir(path.dirname(subFile), { recursive: true });
+  await writeFile(subFile, [
+    line({ type: 'user', timestamp: at(2), isSidechain: true, agentId: 'agent-1', message: { role: 'user', content: '저장소에서 그래프 코드를 찾아 줘' } }),
+    line({ type: 'assistant', requestId: 'rs', timestamp: at(3), isSidechain: true, agentId: 'agent-1', parent_tool_use_id: 'toolu', message: { id: 'sub', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'sub' }], usage: usage(4, 6, 0, 0) } }),
+    line({ type: 'system', subtype: 'compact_boundary', timestamp: at(4) })
+  ].join('\n') + '\n');
+  try {
+    const stats = await readSessionStats([file, subFile]);
+    assert.equal(stats.subRequests, 3);
+    assert.equal(stats.peakContext, 30);
+    assert.equal(stats.compactions, 0);
+    assert.deepEqual(stats.timeline.map(point => [point.ctx, point.sub]), [[10, false], [30, false]]);
+    assert.equal(stats.subagents.length, 2);
+    const [explore, named] = stats.subagents;
+    assert.equal(explore.label, '코드 탐색');
+    assert.equal(explore.type, 'Explore');
+    assert.equal(explore.requests, 2);
+    assert.equal(explore.peak, 900000);
+    assert.equal(explore.turn, 1);
+    assert.equal(explore.points.length, 2);
+    assert.equal(named.label, '테스트 이름을 정리해 줘');
+    assert.equal(named.requests, 1);
+    assert.equal(named.turn, 1);
+    const first = stats.turnSeries.find(turn => turn.index === 1);
+    const second = stats.turnSeries.find(turn => turn.index === 2);
+    assert.equal(first.requests, 1);
+    assert.equal(first.output, 5);
+    assert.equal(first.subRequests, 3);
+    assert.equal(first.subPeak, 900000);
+    assert.ok(first.costUsd < first.subCostUsd, `main ${first.costUsd} sub ${first.subCostUsd}`);
+    assert.equal(second.requests, 1);
+    assert.equal(second.subRequests, 0);
+    assert.equal(second.output, 9);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -165,5 +222,26 @@ test('stats: session files are found under the config dir by cwd, with sub-agent
     assert.deepEqual(files.map(file => path.basename(file)), [`${id}.jsonl`, 'agent-1.jsonl']);
     assert.deepEqual(await sessionFiles({ sessionId: '../escape', configDirs: [root], cwds: [cwd] }), []);
     assert.deepEqual(await sessionFiles({ sessionId: id, configDirs: [root], cwds: ['C:/other'] }), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('stats: a subagent tool call and its failed result count together, and its prompt does not open a turn', async () => {
+  const { root, file } = await fixture([
+    user(0, '질문'),
+    assistant('m1', 'r1', 1, usage(10, 5, 0, 0)),
+    line({ type: 'assistant', requestId: 'rside', timestamp: at(2), isSidechain: true, agentId: 'agent-1', message: { id: 'side', model: 'claude-haiku-5-5', content: [{ type: 'tool_use', id: 'ts1', name: 'Grep', input: {} }], usage: usage(1, 2, 0, 0) } }),
+    line({ type: 'user', timestamp: at(3), isSidechain: true, agentId: 'agent-1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ts1', content: 'boom', is_error: true }] } })
+  ]);
+  const subFile = path.join(root, 'subagents', 'agent-2.jsonl');
+  await mkdir(path.dirname(subFile), { recursive: true });
+  await writeFile(subFile, [
+    line({ type: 'user', timestamp: at(4), isSidechain: true, agentId: 'agent-2', message: { role: 'user', content: '찾아 줘' } }),
+    line({ type: 'assistant', requestId: 'rs', timestamp: at(5), isSidechain: true, agentId: 'agent-2', message: { id: 'sub', model: 'claude-haiku-5-5', content: [{ type: 'tool_use', id: 'ts2', name: 'Grep', input: {} }], usage: usage(1, 2, 0, 0) } }),
+    line({ type: 'user', timestamp: at(6), isSidechain: true, agentId: 'agent-2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ts2', content: 'boom', is_error: true }] } })
+  ].join('\n') + '\n');
+  try {
+    const stats = await readSessionStats([file, subFile]);
+    assert.deepEqual(stats.tools, [{ name: 'Grep', count: 2, errors: 2 }]);
+    assert.equal(stats.turns, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

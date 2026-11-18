@@ -1,7 +1,20 @@
 // One tooltip for the whole app. Any element with a `title` (the browser's slow, unstyled tooltip), an SVG `<title>` child (chart points) or a `data-tip` shows this one instead, so no
 // component has to opt in and a new `title` is covered automatically. It lives in the top layer (popover), so it also sits above dialogs and
 // is never clipped by an `overflow: hidden` parent, and it keeps itself inside the window (flipping above the element when there is no room below).
-const SHOW_DELAY = 150, GAP = 6, MARGIN = 6;
+const SHOW_DELAY = 0, GAP = 6, MARGIN = 6;
+
+// "라벨 (⌘⇧G)" / "라벨 (Ctrl+Shift+G)": a trailing parenthesis that holds only key names is drawn as keycaps (the app's showCombo/showAppKey format, so a custom binding shows as set).
+// Anything else in parentheses ("(Fetch)", "(/clear)") stays text. Every line of the tooltip is checked on its own.
+const KEY = /^(?:[⌘⌃⌥⇧↑↓←→]|Ctrl|Shift|Alt|Win|Meta|Esc|Tab|Enter|Space|Backspace|Delete|Home|End|PageUp|PageDown|Insert|F\d{1,2}|화살표|[A-Za-z0-9`\\,./;'\[\]=-])$/;
+const keysOf = (combo: string) => { const parts = combo.includes('+') && combo.length > 1 ? combo.split('+') : [...combo.match(/^[⌘⌃⌥⇧]*/)![0], combo.replace(/^[⌘⌃⌥⇧]*/, '')].filter(Boolean); return parts.length && parts.every(part => KEY.test(part)) ? parts : null; };
+function fill(box: HTMLElement, text: string) {
+  box.replaceChildren(...text.split('\n').flatMap((line, index) => {
+    const found = /^(.*?)\s*\(([^()]+)\)$/.exec(line), keys = found ? keysOf(found[2]) : null;
+    const nodes: (Node | string)[] = index ? ['\n'] : [];
+    if (!found || !keys) return [...nodes, line];
+    return [...nodes, found[1], ...keys.map(key => Object.assign(document.createElement('kbd'), { textContent: key }))];
+  }));
+}
 
 let installed = false;
 export function installTooltips() {
@@ -10,11 +23,12 @@ export function installTooltips() {
   const tip = document.createElement('div');
   tip.className = 'app-tooltip'; tip.id = 'app-tooltip'; tip.setAttribute('popover', 'manual'); tip.setAttribute('role', 'tooltip');
   document.body.append(tip);
-  let anchor: Element | null = null, taken: string | null = null, takenNode: Element | null = null, timer = 0, frame = 0;
+  let anchor: Element | null = null, muted: Element | null = null, taken: string | null = null, takenNode: Element | null = null, timer = 0, frame = 0;
 
   const svgTitle = (node: Element) => node instanceof SVGElement ? [...node.children].find(child => child.localName === 'title' && child instanceof SVGElement) ?? null : null;
   const sourceOf = (element: Element | null): Element | null => {
-    for (let node = element; node; node = node.parentElement) if ((node as HTMLElement).dataset?.tip || node.getAttribute('title') || svgTitle(node)) return node;
+    // The anchor's own title is held back while its tooltip is up, so it no longer shows an attribute: without this a move onto its icon child (or any move at all) finds no source, hides, gives the title back and shows again = flicker.
+    for (let node = element; node; node = node.parentElement) if (node === anchor || (node as HTMLElement).dataset?.tip || node.getAttribute('title') || svgTitle(node)) return node;
     return null;
   };
   // The native tooltip must not also appear: the title is held back while ours is up (or pending) and put back afterwards, unless the app has set a new one meanwhile.
@@ -23,9 +37,9 @@ export function installTooltips() {
     if (anchor && takenNode && !takenNode.isConnected) anchor.prepend(takenNode); // the same node goes back, so React keeps its reference
     taken = null; takenNode = null;
   };
-  const hide = () => {
+  const hide = (keepOpen = false) => {
     clearTimeout(timer); cancelAnimationFrame(frame);
-    if (tip.matches(':popover-open')) tip.hidePopover();
+    if (!keepOpen && tip.matches(':popover-open')) tip.hidePopover();
     release(); anchor = null;
   };
   const place = (element: Element) => {
@@ -38,8 +52,8 @@ export function installTooltips() {
   const reveal = (element: Element) => {
     if (anchor !== element || !element.isConnected) return;
     const text = (element as HTMLElement).dataset?.tip ?? taken ?? takenNode?.textContent ?? '';
-    if (!text) return;
-    tip.textContent = text;
+    if (!text) { hide(); return; }
+    fill(tip, text);
     if (!tip.matches(':popover-open')) tip.showPopover();
     place(element);
     // An element that is re-rendered away while its tooltip is showing never fires a leave event.
@@ -48,7 +62,7 @@ export function installTooltips() {
   };
   const open = (element: Element, delay: number) => {
     if (element === anchor) return;
-    hide();
+    hide(delay === 0); // moving straight to another element: the box stays up and only changes text and place
     anchor = element;
     if (!(element as HTMLElement).dataset?.tip) {
       if (element.hasAttribute('title')) { taken = element.getAttribute('title'); element.removeAttribute('title'); }
@@ -57,18 +71,24 @@ export function installTooltips() {
     if (delay) timer = window.setTimeout(() => reveal(element), delay); else reveal(element);
   };
 
-  document.addEventListener('pointerover', event => {
+  // pointermove, not pointerover: after a hide (scroll, key, the element re-rendered away) the pointer is still on the element and no new pointerover would come.
+  document.addEventListener('pointermove', event => {
     if (event.pointerType === 'touch') return;
     const element = sourceOf(event.target as Element | null);
-    if (element === anchor) return;
+    if (element !== muted) muted = null;
+    if (element === anchor || (element && element === muted)) return;
     if (!element) { hide(); return; }
     // Moving between children of one element keeps its tooltip; moving to another element's replaces it at once if one is already showing.
     open(element, tip.matches(':popover-open') ? 0 : SHOW_DELAY);
   }, true);
-  document.documentElement.addEventListener('pointerleave', hide);
-  for (const type of ['pointerdown', 'keydown', 'wheel', 'contextmenu', 'dragstart', 'scroll'] as const) document.addEventListener(type, hide, { capture: true, passive: true });
-  window.addEventListener('blur', hide);
+  document.documentElement.addEventListener('pointerleave', () => hide());
+  // A press (click, drag, context menu) hides it until the pointer has left that element; scrolling, keys and the like only hide it and the next move brings it back.
+  for (const type of ['pointerdown', 'contextmenu', 'dragstart'] as const) document.addEventListener(type, event => { muted = sourceOf(event.target as Element | null); hide(); }, { capture: true, passive: true });
+  for (const type of ['keydown', 'wheel'] as const) document.addEventListener(type, () => hide(), { capture: true, passive: true });
+  // Only a scroll that moves the anchor hides it: a chat streaming in or a list refreshing elsewhere must not keep killing the tooltip under the pointer.
+  document.addEventListener('scroll', event => { if (anchor && (event.target as Node).contains?.(anchor)) hide(); }, { capture: true, passive: true });
+  window.addEventListener('blur', () => hide());
   // Keyboard users get it too, but only for keyboard focus (a click focuses a button as well, and must not pop a tooltip).
   document.addEventListener('focusin', event => { const element = sourceOf(event.target as Element | null); if (element && (event.target as Element).matches(':focus-visible')) open(element, 0); }, true);
-  document.addEventListener('focusout', hide, true);
+  document.addEventListener('focusout', () => hide(), true);
 }

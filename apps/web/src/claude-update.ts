@@ -44,7 +44,8 @@ export async function updateClaude() {
 export const dismissUpdateRun = () => set({ run: { phase: 'idle' } });
 export const recheckClaude = () => check(true);
 
-// "나중에" hides the notice for that release only; a newer one shows it again.
-const SKIPPED = 'ade.claudeUpdateSkipped';
-export const skippedVersion = () => { try { return localStorage.getItem(SKIPPED); } catch { return null; } };
-export const skipVersion = (version: string) => { try { localStorage.setItem(SKIPPED, version); } catch { /* private mode */ } set({}); };
+// "나중에" hides the notice for 12 hours, whatever the version; the periodic check re-renders it once the time is up.
+const SKIPPED = 'ade.claudeUpdateSnoozeUntil';
+const SNOOZE_MS = 12 * 60 * 60_000;
+export const snoozed = () => { try { return Number(localStorage.getItem(SKIPPED)) > Date.now(); } catch { return false; } };
+export const snooze = () => { try { localStorage.setItem(SKIPPED, String(Date.now() + SNOOZE_MS)); } catch { /* private mode */ } set({}); };
