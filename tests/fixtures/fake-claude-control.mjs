@@ -26,6 +26,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
     return;
   }
+  if (message.type === 'control_response') { // the host's answer to a can_use_tool request: what it decided is the next assistant text
+    const answer = message.response?.response;
+    send({ type: 'assistant', message: { id: `a${Date.now()}`, content: [{ type: 'text', text: `${message.response?.request_id}=${answer?.behavior}` }] } });
+    result();
+    return;
+  }
   if (message.type !== 'user') return;
   if (message.uuid && running) return; // a steering line is held behind the running turn
   if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message });
@@ -43,6 +49,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (text.includes('다시 실행해')) { send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `allow=${JSON.stringify(allow)}` }] } }); result(); return; }
+  if (text === 'bypass') { send({ type: 'system', subtype: 'status', permissionMode: 'bypassPermissions', session_id: 'control-session' }); result(); return; }
+  if (text === 'mcpask') { send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__tool', input: { a: 1 }, tool_use_id: 'toolu_m' } }); return; }
+  if (text === 'plainask') { send({ type: 'control_request', request_id: 'req-ask', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }
   if (text === 'approve') {
     send({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' } });
     setTimeout(() => process.exit(1), 150);

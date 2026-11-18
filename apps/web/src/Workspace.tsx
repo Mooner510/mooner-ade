@@ -55,7 +55,7 @@ const shortPath = (path: string) => { const clean = path.replace(/\\/g, '/'), pa
 const Clock = memo(function Clock({ hour12, seconds }: { hour12: boolean; seconds: boolean }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), seconds ? 1000 : 15000); return () => clearInterval(timer); }, [seconds]);
-  return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(seconds && { second: '2-digit' }), hour12 })}</span>;
+  return <span className="stat"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(seconds && { second: '2-digit' }), hour12 })}</span>;
 });
 // CPU and memory, sampled every 5 s while a status item shows them and the window is visible. A store of its own, so a sample
 // re-renders only these items instead of the whole workspace; one shared poll, since the server reports CPU since the previous call.
@@ -118,7 +118,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     </button>
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
-        <button className="icon-btn" title="새로고침" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
+        <button className="icon-btn" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
       {windows.length > 0 && <UsageRows windows={windows} colors={colors} />}
       {credit && <CreditRow credit={credit} colors={colors} />}
       {codexCredits && <CodexCreditRow value={codexCredits} colors={colors} />}

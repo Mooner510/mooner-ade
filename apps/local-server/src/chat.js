@@ -239,7 +239,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // ponytail: no estimate before the first result of this process (no price known yet); a built-in price table would give one.
   const shown = () => {
     const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens);
-    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' && costPerUnit && live > 0 ? state.costUsd + live * costPerUnit : state.costUsd, pending: approvals.size, recoverable: canRetryTurn() };
+    const inflight = typeof state.costUsd === 'number' && costPerUnit && live > 0 ? live * costPerUnit : 0;
+    // The API Usage figure grows with the running turn too (the in-flight part is billed to the key), so it moves live like the session cost.
+    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' ? state.costUsd + inflight : state.costUsd, apiCostUsd: state.apiKey ? (state.apiCostUsd ?? 0) + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn() };
   };
   const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
@@ -391,10 +393,20 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const slim = Object.fromEntries(Object.entries(call.input ?? {}).slice(0, 12).map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 1200) : typeof value === 'number' || typeof value === 'boolean' ? value : undefined]));
     emit({ kind: 'auto_denied', toolUseId: result.toolUseId, tool: call.name, input: slim, reason, rule: sessionRule(call.name, call.input) });
   }
+  // bypassPermissions never asks: every tool request is allowed on the spot. Only a question to the user (AskUserQuestion) or a plan to approve
+  // (ExitPlanMode) still reaches the user, since an answer is the point there. Codex does the same inside its protocol (chat-rpc.js).
+  const bypassAllows = event => agent === 'claude' && state.permissionMode === 'bypassPermissions' && event.phase === 'request' && !event.questions && event.tool !== 'AskUserQuestion' && event.tool !== 'ExitPlanMode';
+  const bypassAllow = event => write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
+  // Requests that were already waiting when the chat switched into bypass.
+  function bypassPending() {
+    for (const event of [...approvals.values()]) if (bypassAllows(event)) { approvals.delete(event.requestId); emit({ kind: 'approval', phase: 'cancel', requestId: event.requestId }); void bypassAllow(event); }
+    setStatus();
+  }
   function handleEvent(event) {
       eventCount += 1;
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (agent === 'claude' && event.kind === 'tool_result' && event.isError) noteAutoDenied(event);
+      if (event.kind === 'approval' && bypassAllows(event)) { void bypassAllow(event); return; }
       if (event.kind === 'approval') {
         // A Write request says whether it creates the file or replaces one, so its card can read "새 파일" or "덮어쓰기".
         if (event.phase === 'request' && event.tool === 'Write' && typeof event.input?.file_path === 'string') event.exists = existsSync(path.resolve(cwd, event.input.file_path));
@@ -1013,6 +1025,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         }
         if (permissionMode === 'plan' && state.permissionMode !== 'plan') meta.prePlanMode = prePlanMode = state.permissionMode;
         meta.permissionMode = state.permissionMode = permissionMode;
+        if (child && !protocol) bypassPending();
       }
       if (model !== undefined) {
         if (model !== null && !(typeof model === 'string' && /^[\w.\[\]-]{1,100}$/.test(model))) throw fault('INVALID_INPUT', '잘못된 모델입니다.');

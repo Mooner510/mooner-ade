@@ -126,7 +126,7 @@ type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(
 export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot }: IconButtonProps) {
   const text = keys ? `${label} (${keys})` : label;
   // dot: a small red mark for something unread behind the button (the label should say so too).
-  return <button type="button" className={`icon-btn ${className}`} title={tip ? undefined : text} data-tip={tip === 'header' ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
+  return <button type="button" className={`icon-btn ${className}`} title={tip || icon === 'x' ? undefined : text} data-tip={tip === 'header' ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
 }
 
 // One split button for every pane header: it opens a small popover with the two directions. Native popover (top layer), so the pane edges never clip it.

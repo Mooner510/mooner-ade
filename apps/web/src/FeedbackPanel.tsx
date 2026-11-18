@@ -151,7 +151,7 @@ function FeedbackAi({ hidden, items, available, onDone, fail, aiContext, aiModel
         <Dropdown className="chat-model" label="AI 모델" value={model} options={AI_MODELS} onChange={value => onAiChange({ feedbackAiModel: value as AiModel })} />
         <Dropdown className={`chat-effort effort-${effort}`} label="Effort" value={effort} options={AI_EFFORTS} onChange={value => onAiChange({ feedbackAiEffort: value as AiEffort })} />
         <span className="drag-space" />
-        <button type="button" className="chat-send" title="AI로 작성 (Enter)" aria-label="AI로 작성" disabled={!text.trim() || busy} onClick={send}><Icon name="arrowUp" size={16} /></button>
+        <button type="button" className="chat-send" aria-label="AI로 작성" disabled={!text.trim() || busy} onClick={send}><Icon name="arrowUp" size={16} /></button>
       </div>
     </div>
   </div>;
@@ -203,8 +203,8 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
                 <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>
                 {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
                 {item.types.map(typeId => <span key={typeId} className="feedback-tag">{typeTag(typeId)}</span>)}
-                {item.source !== 'human' && <span className="feedback-source" title={sourceLabels[item.source]}><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
-                {item.images.length > 0 && <span className="feedback-count" title={`이미지 ${item.images.length}장`}><Icon name="image" size={12} />{item.images.length}</span>}
+                {item.source !== 'human' && <span className="feedback-source"><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
+                {item.images.length > 0 && <span className="feedback-count"><Icon name="image" size={12} />{item.images.length}</span>}
                 <time dateTime={new Date(item.updatedAt).toISOString()} title={new Date(item.updatedAt).toLocaleString('ko-KR')}>{ago(item.updatedAt, stamp)}</time>
               </small>
             </span>

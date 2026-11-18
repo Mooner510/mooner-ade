@@ -35,9 +35,9 @@ function LimitTile({ item, colors, now }: { item: UsageWindow; colors: boolean; 
       <b>{item.label}</b>
       {item.resetsAt ? <span>{untilReset(item.resetsAt)} 후 초기화</span> : <span>초기화 시각 없음</span>}
       {item.resetsAt && <small>{new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })}</small>}
-      {tone && <em className={`uc-pace ${tone}`} title={`기간의 ${Math.round(elapsed! * 100)}%가 지났습니다`}>{tone === 'fast' ? '빠르게 소모 중' : tone === 'slow' ? '여유 있음' : '페이스 적정'}</em>}
+      {tone && <em className={`uc-pace ${tone}`}>{tone === 'fast' ? '빠르게 소모 중' : tone === 'slow' ? '여유 있음' : '페이스 적정'}</em>}
     </div>
-    {elapsed !== null && <div className="uc-time" title="기간 경과"><i style={{ width: `${elapsed * 100}%` }} /></div>}
+    {elapsed !== null && <div className="uc-time"><i style={{ width: `${elapsed * 100}%` }} /></div>}
   </div>;
 }
 
@@ -64,7 +64,7 @@ export function UsageCard({ snap, projectId, colors, showSession }: { snap: Usag
           {usage?.plan && <span className="uc-badge plan">{usage.plan}</span>}
           {snap.apiKey && <span className="uc-badge key">API 키</span>}
         </span>
-        <button type="button" className="icon-btn" title="한도 새로고침" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button>
+        <button type="button" className="icon-btn" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button>
       </header>
 
       <section className="uc-section">
@@ -104,7 +104,7 @@ export function BtwCard({ item, onClose, onRetry }: { item: BtwItem; onClose(): 
       <header className="bc-head">
         <span className="bc-tag"><Icon name="sparkles" size={13} />BTW</span>
         <span className="bc-question" title={item.question}>{item.question}</span>
-        <button type="button" className="icon-btn" title={item.status === 'pending' ? '취소' : '닫기'} aria-label={item.status === 'pending' ? '질문 취소' : '닫기'} onClick={onClose}><Icon name="x" size={13} /></button>
+        <button type="button" className="icon-btn" aria-label={item.status === 'pending' ? '질문 취소' : '닫기'} onClick={onClose}><Icon name="x" size={13} /></button>
       </header>
       {item.status === 'pending' && <div className="bc-wait" role="status"><i className="chat-spin" /><span>대화를 훑어보고 답하는 중…</span></div>}
       {item.status === 'done' && <div className="bc-answer"><Markdown text={item.answer ?? ''} /></div>}

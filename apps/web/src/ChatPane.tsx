@@ -281,7 +281,7 @@ function ToolResult({ label, text, isError, prose = false }: { label: string; te
   const toggle = () => { capture(); setFull(value => !value); };
   return <div className={`chat-tool-result ${isError ? 'error' : ''}`}>
     <div className="chat-tool-result-head"><small>{label}{lines > 1 && ` · ${lines.toLocaleString()}줄`}</small>
-      {body && <button type="button" className="chat-tool-copy" title="결과 복사" aria-label="결과 복사" onClick={() => copyText(body)}><Icon name="copy" size={13} />복사</button>}</div>
+      {body && <button type="button" className="chat-tool-copy" aria-label="결과 복사" onClick={() => copyText(body)}><Icon name="copy" size={13} />복사</button>}</div>
     {prose ? <div ref={pre} className={`chat-tool-prose${full ? ' full' : ''}`}><Markdown text={clip(body)} /></div>
       : <pre ref={pre} className={full ? 'full' : undefined}>{clip(body) || '(출력 없음)'}</pre>}
     {(tall || full) && <button type="button" className="chat-command-more" onClick={toggle}>{full ? '접기' : '전체 보기'}</button>}
@@ -435,7 +435,7 @@ function StopTask({ id }: { id: string }) {
 }
 function AgentState({ status, waiting, id }: { status: AgentStatus; waiting?: boolean; id?: string }) {
   const stoppable = useContext(AgentsContext).agents.get(id ?? '')?.background === true;
-  if (waiting && status === 'running') return <span className="chat-agent-state" data-status="approval" title="승인 카드에서 답을 기다리는 중"><Icon name="alert" size={12} />승인 대기</span>;
+  if (waiting && status === 'running') return <span className="chat-agent-state" data-status="approval"><Icon name="alert" size={12} />승인 대기</span>;
   return <span className="chat-agent-state" data-status={status} role={id && stoppable && status === 'running' ? undefined : 'img'} aria-label={AGENT_STATUS[status]} title={AGENT_STATUS[status]}>{status === 'running' ? <>{id && stoppable && <StopTask id={id} />}<i className="chat-spin" /></> : <Icon name={status === 'done' ? 'check' : status === 'error' ? 'x' : 'stop'} size={13} />}</span>;
 }
 const dotStyle = (color?: string) => (color ? { '--agent-color': color } : undefined) as CSSProperties | undefined;
@@ -811,7 +811,7 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
       onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
     <div className="plan-actions">
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
-      <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
+      <button type="button" onClick={() => onAnswer(false)}>의견 없이 반려</button>
       <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>의견 보내고 다시 계획</button>
     </div>
   </footer>;
@@ -821,8 +821,8 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   // Cursor's plan has no permission mode to pick and no revision message: just approve or turn it down.
   if (!choices) return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
-    <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인</button>
+    <button type="button" className="secondary" onClick={() => onAnswer(false)}>거부</button>
+    <button type="button" className="primary" onClick={() => onAnswer(true)}>승인</button>
   </footer>;
   return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
@@ -932,7 +932,7 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
           else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && instead) { event.preventDefault(); onAnswer(false, false, undefined, { message: instead }); }
         }} />
       <div className="plan-actions">
-        <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)} title="원래 버튼으로 돌아갑니다 (Esc)">취소</button>
+        <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)}>취소</button>
         <button type="button" className="primary" disabled={!instead} onClick={() => onAnswer(false, false, undefined, { message: instead })} title="Ctrl+Enter">거부하고 지시 보내기</button>
       </div>
     </footer> : <footer>
@@ -1719,7 +1719,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span>{greeting}</h2></div></div>
     </div>
     <div className="chat-dock">
-      {away && <button type="button" className="chat-jump" title="맨 아래로" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
+      {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
@@ -1800,8 +1800,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className={`chat-model${hint === 'keymodel' ? ' hint-anchor' : ''}`} value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).then(pickedBy('keymodel'), ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
         <ContextRing state={state} ctx={ctx} active={visible} agent={agent} chatId={id} />
-        {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={15} /></button>
-          : <button type="button" className="chat-send" title="보내기 (Enter)" aria-label="보내기" disabled={!view.ready || (!text.trim() && !images.length)} onClick={() => void submit()}><Icon name="arrowUp" size={16} /></button>}
+        {busy ? <button type="button" className="chat-send stop" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={15} /></button>
+          : <button type="button" className="chat-send" aria-label="보내기" disabled={!view.ready || (!text.trim() && !images.length)} onClick={() => void submit()}><Icon name="arrowUp" size={16} /></button>}
       </div>
       </div>
       <div className="chat-start-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
@@ -1843,8 +1843,7 @@ function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boo
   // The red rises in 10% steps every 5 s, not 2% every second: each change restarts the label's .6s colour transition, which repainted the row nearly nonstop.
   const deep = active && !label && thinking >= 8, red = Math.min(100, Math.max(0, Math.floor((thinking - 8) / 5) * 10));
   return <div className="chat-status-row" data-active={active || undefined} aria-hidden={!active}>
-    <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}
-      title={thought ? undefined : '모델이 추론 내용은 보내지 않아, 경과 시간과 추정 토큰만 표시합니다.'}>
+    <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}>
       <i className="chat-spin" /><span className="chat-working-label">{label || (deep ? `${effort ? `${effortLabel(effort)} Effort로 ` : ''}깊게 생각하는 중…` : '생각하는 중…')}</span>
       <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small>{thought && <em>{thought}</em>}</div></div>
   </div>;
@@ -1863,11 +1862,8 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
   const compacting = gauge.autoCompact;
   const ink = compacting ? 'var(--term-magenta)' : `hsl(${usageHue(percent)} 62% var(--usage-l, 52%))`;
   const basisLabel = compacting ? `Auto Compact 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`;
-  const ringTitle = !supported ? 'CLI가 컨텍스트 사용량을 제공하지 않습니다'
-    : waiting ? '첫 응답 후 컨텍스트 사용량이 표시됩니다'
-    : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`} · 클릭하면 상세`;
   return <>
-    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
+    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         <circle cx="14" cy="14" r={radius} className="track" />
         {shown && compacting && gauge.used > 0 && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
@@ -1883,7 +1879,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
         {percent > 100 ? '창을 넘었습니다. ' : ''}창 {compact(gauge.basis)}, 최대 {compact(gauge.max)}. 가득 차기 전에 자동으로 요약합니다.
       </p>}
       <header className="chat-usage-title"><strong>사용 한도</strong>{usage?.plan && <span className="plan">{usage.plan}</span>}
-        <button type="button" className="icon-btn" title="새로고침" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
+        <button type="button" className="icon-btn" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
       {usage ? <UsageRows windows={windows} colors={settings.usageColors} /> : <p className="usage-note">{loading ? '불러오는 중…' : '표시할 한도 정보가 없습니다.'}</p>}
       {usage?.error && <p className="usage-note warn">{usage.error}</p>}
     </div>

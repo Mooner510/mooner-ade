@@ -10,7 +10,7 @@ export function AppVersion() {
   }, []);
   const { version, dev } = info, beta = version.includes('-'); // 0.4.1-beta1 is a prerelease: shown in sky blue so it is never mistaken for a stable build
   // `pnpm dev` runs the working tree, not an installed release, so it says so: "v0.4.1 (dev)".
-  return version ? <span className={`app-version${beta ? ' beta' : ''}`} title={dev ? '무너에이드 개발 실행 (pnpm dev)' : beta ? '무너에이드 베타 버전' : '무너에이드 버전'}>v{version}{dev && ' (dev)'}</span> : null;
+  return version ? <span className={`app-version${beta ? ' beta' : ''}`} > v{version}{dev && ' (dev)'}</span> : null;
 }
 
 export type Ask = { input(title: string, initial?: string): Promise<string | null>; confirm(message: string): Promise<boolean> };
@@ -74,7 +74,7 @@ export function Dropdown({ value, options, onChange, label, className = '', plac
     observer.observe(root.current!, { attributes: true, attributeFilter: ['open'] });
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('scroll', scroll, true); removeEventListener('resize', resize); observer.disconnect(); };
   }, []);
-  return <details className={`dropdown ${className}`} ref={root} data-locked={locked ? '' : undefined} title={locked || `${label}: ${options.find(option => option.value === value)?.label ?? placeholder ?? ''}`}
+  return <details className={`dropdown ${className}`} ref={root} data-locked={locked ? '' : undefined} title={locked || undefined}
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.open = false; }}
     onKeyDown={event => {
       if (event.key === 'Escape' && root.current!.open) { event.preventDefault(); event.stopPropagation(); close(); }

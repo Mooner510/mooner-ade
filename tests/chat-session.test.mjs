@@ -188,6 +188,26 @@ test('Codex: switching to Bypass accepts the requests already waiting and the on
   assert.ok(!sent.some(message => message.id === 'c3'), 'back to asking once Bypass is off');
 });
 
+test('Codex: in Bypass an MCP tool approval (question or elicitation) is allowed once, a server\'s own form still reaches the user', async () => {
+  const events = [], sent = [];
+  let protocol;
+  const answers = { initialize: {}, 'model/list': { data: [] }, 'skills/list': { data: [] }, 'thread/start': { thread: { id: 't1' }, model: 'm' } };
+  const write = async line => { const message = JSON.parse(line); sent.push(message); if (message.method in answers) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] })); };
+  protocol = createChatProtocol('codex', { write, emit: event => events.push(event) });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [] }, '/repo');
+  const question = { id: 'm1', method: 'item/tool/requestUserInput', params: { threadId: 't1', questions: [{ id: 'mcp_tool_call_approval_x', question: 'Allow?', options: [{ label: 'Allow for this session' }, { label: 'Allow' }, { label: 'Cancel' }] }] } };
+  const elicitation = { id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', mode: 'form', message: 'Allow the tool?', requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call' } } };
+  protocol.handle(question);
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 1, 'asked while the mode is default');
+  await protocol.setPermissions({ permissionMode: 'bypassPermissions' });
+  assert.deepEqual(sent.find(message => message.id === 'm1').result, { answers: { mcp_tool_call_approval_x: { answers: ['Allow'] } } });
+  protocol.handle({ ...elicitation });
+  protocol.handle({ id: 'f1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', mode: 'form', message: 'Your name?', requestedSchema: {} } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent.find(message => message.id === 'e1').result, { action: 'accept', content: null });
+  assert.ok(!sent.some(message => message.id === 'f1' && message.result), 'a form the server asks is not an approval');
+});
+
 test('Codex reports the effective Effort on start, resume and fork without overriding the CLI default', async t => {
   for (const method of ['thread/start', 'thread/resume', 'thread/fork']) {
     for (const [effort, reported] of [[undefined, 'high'], ['low', 'low'], [undefined, undefined]]) {
@@ -687,6 +707,21 @@ async function controlSession(t) {
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { session, events };
 }
+
+test('Claude Bypass: tool requests (MCP included) are allowed without a card, a question still waits for the user', async t => {
+  const { session, events } = await controlSession(t);
+  const cards = () => events.filter(event => event.kind === 'approval' && event.phase === 'request').map(event => event.tool);
+  await session.send('mcpask'); await until(() => cards().length === 1);
+  assert.deepEqual(cards(), ['mcp__srv__tool'], 'asked while the mode is not bypass');
+  await session.approve('req-mcp', { allow: false }); await until(() => session.state().status === 'idle');
+  await session.send('bypass'); await until(() => session.state().permissionMode === 'bypassPermissions' && session.state().status === 'idle');
+  await session.send('mcpask');
+  await until(() => events.some(event => event.kind === 'message' && JSON.stringify(event).includes('req-mcp=allow')));
+  assert.deepEqual(cards(), ['mcp__srv__tool'], 'no new card in bypass');
+  await until(() => session.state().status === 'idle');
+  await session.send('plainask'); await until(() => cards().length === 2);
+  assert.equal(cards()[1], 'AskUserQuestion', 'a question is never answered for the user');
+});
 
 test('an interrupted Claude turn stays open until its own result, so that result cannot end the next turn', async t => {
   const { session, events } = await controlSession(t);

@@ -58,7 +58,7 @@ function useColored(code: string, hint?: string) {
 // lang is the header label; syntax (default: lang) picks the colours, so a header like "src/a.ts · 새 파일 · 7줄" can still colour as TypeScript.
 export function CodeBlock({ code, lang, syntax }: { code: string; lang?: string; syntax?: string }) {
   const colored = useColored(code, syntax ?? lang);
-  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" title="코드 복사" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header>
+  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header>
     <pre><code>{colored ? <><span dangerouslySetInnerHTML={{ __html: colored.html }} />{code.slice(colored.code.length)}</> : code}</code></pre></div>;
 }
 

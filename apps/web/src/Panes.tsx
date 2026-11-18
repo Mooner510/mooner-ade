@@ -665,7 +665,7 @@ function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Le
     <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(path =>
       <div key={path} role="tab" aria-selected={path === active} title={path} className={`tab ${path === active ? 'active' : ''}`}
         onClick={() => ctx.onSelectTab(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
-        <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} title="닫기" onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
+        <Icon name="diff" size={13} /><span>{label(path)}</span><button aria-label={`${path} 닫기`} onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
       <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} onClick={() => onZoom(leaf.id)} /><IconButton icon="x" tip="none" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
     {active ? <DiffTab key={active} spec={active} ctx={ctx} />
       : <div className="empty"><h2>열린 diff가 없습니다</h2><p>오른쪽 변경사항 패널에서 파일을 선택하세요.</p></div>}

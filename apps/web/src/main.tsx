@@ -143,8 +143,8 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
   const row = (item: Recent) => { const isOpen = open.has(item.root); return <div className={`recent${item.pinned ? ' pinned' : ''}${isOpen ? ' open' : ''}`} key={item.root}>
     <button type="button" className="recent-open" title={isOpen ? `${item.root}
 열려 있음 · 누르면 이 프로젝트로 이동` : item.root} onClick={() => void onOpen(item.root)}><strong><span className="recent-name">{shortName(item.root)}</span>{isOpen && <span className="open-badge">열림</span>}</strong><small>{item.root}</small></button>
-    <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} title={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
-    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => setRemoving(item.root)}><Icon name="x" size={14} /></button></div>; };
+    <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
+    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} disabled={!ready} onClick={() => setRemoving(item.root)}><Icon name="x" size={14} /></button></div>; };
   const submitLabel = tab === 'open' ? (busy ? '여는 중…' : '열기') : tab === 'create' ? (busy ? '만드는 중…' : '만들고 열기') : (busy ? '클론 중…' : '클론하고 열기');
   const createTarget = joinPath(parent.trim(), name.trim()), cloneTarget = joinPath(parent.trim(), folder.trim() || repoName(url));
   return <><div className="welcome-card picker"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
@@ -529,7 +529,7 @@ function Shell() {
               {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
-                <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showAppKey(settings.appKeys, 'closeProject')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
+                <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
@@ -552,7 +552,7 @@ function Shell() {
                   else return;
                   event.preventDefault();
                 };
-                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
+                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
                 // Edges of a row reorder (a line shows where); the middle merges, labelled so it is never a surprise.
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
@@ -590,7 +590,7 @@ function Shell() {
                 const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <span className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}><i /><i /><i /><i /></span>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
@@ -600,19 +600,18 @@ function Shell() {
                 // A split tab: a header that drags the whole tab, and one row per terminal that drags just that terminal.
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tab.label} · 분할 ${tab.panes.length}개\n끌어서 탭 전체 이동 · 아래 항목을 끌면 그 항목만 이동\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head"
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
-                      title={`${pane.label}\n끌어서 다른 탭으로 이동 · 탭 사이나 빈 곳에 놓으면 새 탭으로 분리\n우클릭: 메뉴`}
                       draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
-                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} title={pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기'} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
+                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>; })}
                   </ul>{dropHint}
                 </li>;
