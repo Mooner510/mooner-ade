@@ -360,7 +360,7 @@ test('Claude model catalog refresh keeps Effort choices', async t => {
   assert.deepEqual(session.state().capabilities.efforts, chatCapabilities('claude').efforts);
 });
 
-test('Claude: sub-agent output after a turn result keeps the chat working until the hand-back turn ends', async t => {
+test('Claude: sub-agent output after a turn result leaves the main chat idle until the hand-back turn', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-bg-'));
   const statuses = [], events = [];
   const session = await openChatSession({ directory, id: 'bg', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))],
@@ -368,12 +368,27 @@ test('Claude: sub-agent output after a turn result keeps the chat working until 
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   await session.send('background');
   await until(() => events.filter(event => event.kind === 'result').length === 1);
-  // The first result has landed, yet the sub-agent is still producing output: the chat must not read as idle.
-  await until(() => events.some(event => event.kind === 'message' && event.id === 'sub1'));
-  assert.equal(session.state().status, 'working');
+  // The sub-agent is still producing output, including a tool result. That is not this conversation's turn.
+  await until(() => events.some(event => event.kind === 'tool_result' && event.parentToolUseId === 'toolu_agent'));
+  assert.equal(session.state().status, 'idle');
+  const at = statuses.length;
   await until(() => events.filter(event => event.kind === 'result').length === 2);
   await until(() => session.state().status === 'idle');
-  assert.ok(statuses.includes('working'));
+  assert.ok(statuses.slice(at).includes('working'), 'the hand-back is the main agent answering');
+});
+
+test('Claude: a running subagent does not take a new message as a steer', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-subrun-'));
+  const events = [];
+  const session = await openChatSession({ directory, id: 'subrun', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('subrun');
+  await until(() => events.some(event => event.parentToolUseId === 'toolu_agent' && event.kind === 'tool_result') && session.state().status === 'idle');
+  assert.equal(session.state().status, 'idle');
+  // The client would ask to steer because it thought the chat was working. The main turn is not open, so this is an ordinary send.
+  await session.send('while-sub', [], { steer: true });
+  await until(() => events.some(event => event.kind === 'user' && event.text === 'while-sub') && session.state().status === 'idle');
+  assert.equal(events.some(event => event.kind === 'steer'), false);
 });
 
 test('Claude: an empty result that answered nothing resends the message once instead of leaving the chat silent', async t => {
@@ -453,12 +468,13 @@ test('Claude: a silent reopened turn falls back to idle, and the next output reo
   const events = [];
   const session = await openChatSession({ directory, id: 'quiet', cwd: directory, quietMs: 60, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-stream.mjs', import.meta.url))], onEvent: event => events.push(event) });
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
-  await session.send('background');
-  await until(() => events.some(event => event.kind === 'message' && event.id === 'sub1'));
+  await session.send('reopen');
+  await until(() => events.some(event => event.kind === 'message' && event.id === 'later1'));
+  assert.equal(session.state().status, 'working'); // the main agent's hand-back, not a subagent
+  await until(() => session.state().status === 'idle'); // no output for quietMs (the next main-thread line is 300 ms away)
+  await until(() => events.some(event => event.kind === 'message' && event.id === 'later2'));
   assert.equal(session.state().status, 'working');
-  await until(() => session.state().status === 'idle'); // no output for quietMs (the next sub-agent event is 150 ms away)
-  await until(() => events.filter(event => event.kind === 'result').length === 2);
-  await until(() => session.state().status === 'idle');
+  await until(() => events.filter(event => event.kind === 'result').length === 2 && session.state().status === 'idle');
 });
 
 test('worktree cwd survives restart and is retained when the chat is forgotten', async t => {

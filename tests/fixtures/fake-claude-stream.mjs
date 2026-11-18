@@ -1,6 +1,10 @@
 // Minimal fake `claude -p` stream-json child: prints init, then answers every user line with one text message and a result.
 import readline from 'node:readline';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
+let subTimer = null;
+const stopSub = () => { clearInterval(subTimer); subTimer = null; };
+const usage = { input_tokens: 1, output_tokens: 1 };
+const result = (text, cost = 0.01) => send({ type: 'result', is_error: false, result: text, session_id: 'fake-session', total_cost_usd: cost, duration_ms: 5, num_turns: 1 });
 send({ type: 'system', subtype: 'init', session_id: 'fake-session', model: 'fake-model', permissionMode: 'default', slash_commands: ['compact'], tools: ['Bash'] });
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
@@ -16,6 +20,33 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (message.type !== 'user') return;
+  const said = message.message?.content?.find?.(part => part.type === 'text')?.text;
+  // A subagent that keeps emitting after the main turn has ended, until the next user line. The main thread is idle the whole time.
+  if (said === 'subrun') {
+    stopSub();
+    if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message });
+    send({ type: 'assistant', message: { id: 'main-sub', content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: {} }], usage } });
+    result('waiting');
+    let n = 0;
+    subTimer = setInterval(() => {
+      n += 1;
+      send({ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { id: `live${n}`, content: [{ type: 'tool_use', id: `toolu_live_${n}`, name: 'Bash', input: {} }], usage } });
+      // The first result omits parent_tool_use_id; it still belongs to the subagent because the call did.
+      send({ type: 'user', ...(n > 1 ? { parent_tool_use_id: 'toolu_agent' } : {}), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_live_${n}`, content: 'tick' }] } });
+    }, 40);
+    return;
+  }
+  stopSub();
+  // A main-thread hand-back that arrives after the user's turn, then goes quiet, then speaks again. Not a subagent.
+  if (said === 'reopen') {
+    if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message });
+    send({ type: 'assistant', message: { id: 'r0', content: [{ type: 'text', text: 'ok' }], usage } });
+    result('ok');
+    setTimeout(() => send({ type: 'assistant', message: { id: 'later1', content: [{ type: 'text', text: 'back' }], usage } }), 30);
+    setTimeout(() => send({ type: 'assistant', message: { id: 'later2', content: [{ type: 'text', text: 'again' }], usage } }), 300);
+    setTimeout(() => result('done', 0.02), 340);
+    return;
+  }
   // A resumed child whose first turn (an old-task notice) ends empty while the user's line is lost; the resend is answered normally.
   if (message.message?.content?.some(part => part.text === 'swallow') && !globalThis.swallowed) {
     globalThis.swallowed = true;

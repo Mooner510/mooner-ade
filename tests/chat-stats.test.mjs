@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { chatEventStats, readSessionStats, sessionFiles } from '../apps/local-server/src/chat-stats.js';
+import { chatEventStats, eventWeightSince, readSessionStats, sessionFiles, subagentExtra, weightSince, withSubagents } from '../apps/local-server/src/chat-stats.js';
 
 test('ADE statistics difference cumulative tokens once per response and leave missing usage unavailable', () => {
   const stats = chatEventStats([
@@ -19,6 +19,12 @@ test('ADE statistics difference cumulative tokens once per response and leave mi
   assert.equal(stats.turns, 2); assert.equal(stats.requests, 2); assert.equal(stats.activeMs, 150);
   assert.deepEqual(stats.turnSeries.map(row => row.output), [4, 6]);
   assert.equal(stats.tokens.input, 30); assert.equal(stats.tokens.read, 300); assert.equal(stats.tokens.output, 10);
+  const withSub = chatEventStats([
+    { kind: 'user', at: 1 }, { kind: 'result', at: 2, costUsd: 0.5 },
+    { kind: 'message', id: 'sub', parentToolUseId: 'agent', at: 3, usage: { input: 8, output: 2, cacheRead: 4, cacheCreate: 1 } }
+  ]);
+  assert.equal(withSub.subRequests, 1);
+  assert.equal(withSub.tokens.input, 8); assert.equal(withSub.tokens.output, 2); assert.equal(withSub.tokens.read, 4);
   assert.equal(stats.cost, null); assert.equal(stats.tokensAvailable, true); assert.equal(stats.contextAvailable, true);
   assert.deepEqual(stats.tools, [{ name: 'Bash', count: 1, errors: 1 }]);
   const cursor = chatEventStats([{ kind: 'user', at: 1 }, { kind: 'result', at: 2 }]);
@@ -92,6 +98,61 @@ test('stats: spentSince is what the requests from a time on cost (the usage shar
     assert.ok(Math.abs(live - 2) < 1e-9 && liveLate > 0 && liveLate < 2, 'a live session: the chat total split by token weight');
     assert.deepEqual((await readSessionStats([file])).spentSince, []);
   } finally { await rm(root, { recursive: true, force: true }); await rm(bare.root, { recursive: true, force: true }); }
+});
+
+test('stats: a sidechain request and a subagent file count toward tokens, cost split and the sub request total', async () => {
+  const subLine = line({ type: 'assistant', requestId: 'rs', timestamp: at(2), parent_tool_use_id: 'toolu', message: { id: 'sub', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'sub' }], usage: usage(4, 6, 0, 0) } });
+  const { root, file } = await fixture([
+    user(0, '질문'),
+    assistant('m1', 'r1', 1, usage(10, 5, 0, 0)),
+    line({ type: 'assistant', requestId: 'rside', timestamp: at(1), isSidechain: true, message: { id: 'side', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'side' }], usage: usage(1, 2, 0, 0) } })
+  ]);
+  const subFile = path.join(root, 'subagents', 'agent-1.jsonl');
+  await mkdir(path.dirname(subFile), { recursive: true });
+  await writeFile(subFile, subLine + '\n');
+  try {
+    const stats = await readSessionStats([file, subFile]);
+    assert.equal(stats.subRequests, 2);
+    assert.equal(stats.tokens.output, 5 + 2 + 6);
+    assert.equal(stats.requests, 3);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('subagent usage after the last result is priced on top of the session total; usage already in the transcript is not added twice', () => {
+  const covered = { seq: 1, kind: 'message', id: 's', parentToolUseId: 'a', at: 1_000, usage: { input: 100, output: 0, cacheRead: 0, cacheCreate: 0 } };
+  const result = { seq: 2, kind: 'result', costUsd: 1, at: 2_000 };
+  const later = { seq: 3, kind: 'message', id: 's2', parentToolUseId: 'b', at: 3_000, usage: { input: 0, output: 4, cacheRead: 0, cacheCreate: 0 } };
+  const extra = subagentExtra([covered, result, later], { unitPrice: 0.01, since: [0] });
+  assert.equal(extra.cost, 0.2); // 4 output × 5 × $0.01; the earlier call is already inside total_cost_usd
+  assert.equal(extra.tokens.input, 100);
+  assert.deepEqual(extra.spent, [0.2]);
+  const seen = { subRequests: 2, endedAt: 2_000, tokens: { input: 10, output: 5, thinking: 0, read: 0, write5m: 0, write1h: 0 }, cost: { totalUsd: 1, toolMs: 0, linesAdded: 0, linesRemoved: 0 }, spentSince: [1] };
+  const merged = withSubagents(seen, [covered, result, later], 0.01, [0]);
+  assert.equal(merged.tokens.output, 9);
+  assert.equal(merged.subRequests, 3);
+  assert.equal(merged.cost.totalUsd, 1);
+  assert.equal(merged.spentSince[0], 1.2);
+  const hidden = withSubagents({ ...seen, subRequests: 0, endedAt: null }, [covered, result], 0.01, [0]);
+  assert.equal(hidden.tokens.input, 110); // the transcript never saw the subagent, so its tokens are added
+  assert.equal(hidden.spentSince[0], 1); // and its dollars are already in the session total, so they are not added again
+});
+
+test('spend: Codex and Cursor usage snapshots are differenced, a clear starts over, and a context-only line does not reset the total', async () => {
+  const tokens = (input, output = 0) => ({ input, output, cacheRead: 0, cacheCreate: 0 });
+  const events = [
+    { seq: 1, kind: 'usage', at: 1_000, tokens: tokens(10) },
+    { seq: 2, kind: 'usage', at: 1_500, contextTokens: 9 },
+    { seq: 3, kind: 'usage', at: 2_000, tokens: tokens(10, 2) },
+    { seq: 4, kind: 'divider', at: 2_500 },
+    { seq: 5, kind: 'usage', at: 3_000, tokens: tokens(4) }
+  ];
+  assert.deepEqual(weightSince(events, [0, 2_500]), [24, 4]);
+  const root = await mkdtemp(path.join(tmpdir(), 'ade-spend-')), file = path.join(root, 'events.jsonl');
+  try {
+    await writeFile(file, events.slice(0, 3).map(event => JSON.stringify(event)).join('\n') + '\n');
+    assert.deepEqual(await eventWeightSince(file, events, [0]), [24], 'a line on disk and still in memory counts once; the tail still in memory is included');
+    assert.deepEqual(await eventWeightSince(path.join(root, 'missing.jsonl'), [], [0]), [0]);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('stats: session files are found under the config dir by cwd, with sub-agent files, and only for a plain session id', async () => {

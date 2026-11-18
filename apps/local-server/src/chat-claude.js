@@ -392,6 +392,8 @@ export function normalizeClaude(raw, mainModel = null) {
         kind: "tool_result",
         toolUseId: block.tool_use_id,
         isError: block.is_error === true,
+        // A subagent's own tool result names its Agent call. The main thread stays idle while that runs.
+        ...(raw.parent_tool_use_id ? { parentToolUseId: raw.parent_tool_use_id } : {}),
         content:
           typeof block.content === "string"
             ? block.content

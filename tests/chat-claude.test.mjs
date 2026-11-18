@@ -62,6 +62,9 @@ test('init, text delta, assistant message, tool result and result normalize', ()
   assert.equal(message.blocks[1].name, 'Bash'); assert.equal(message.usage.output, 4);
   const [result] = normalizeClaude({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'out' }] }] } });
   assert.deepEqual([result.toolUseId, result.content, result.isError], ['t', 'out', false]);
+  assert.equal(result.parentToolUseId, undefined);
+  const [subResult] = normalizeClaude({ type: 'user', parent_tool_use_id: 'toolu_agent', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'done' }] } });
+  assert.equal(subResult.parentToolUseId, 'toolu_agent');
   assert.equal(normalizeClaude({ type: 'result', is_error: true, result: 'boom', total_cost_usd: 0.1 })[0].status, 'failed');
 });
 

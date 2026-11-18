@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { formMessage, niceTicks, type Field, type Spec } from './ui-spec';
+import { FORM_BUTTON, formMessage, niceTicks, type Field, type Spec } from './ui-spec';
 import { MAX_SEND } from './ui-frame-protocol';
 import { Tick } from './Icon';
 import { Dropdown } from './views';
@@ -65,7 +65,8 @@ function Control({ f, value, set }: { f: Field; value: string; set: (value: stri
 
 function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form' }> }) {
   const [values, setValues] = useState(() => Object.fromEntries(spec.fields.map(f => [f.k, f.value]))), [sent, setSent] = useState(false);
-  const submit = () => { window.dispatchEvent(new CustomEvent(spec.fill ? 'ade:ui-prefill' : 'ade:ui-send', { detail: { chatId, text: formMessage(spec, values).slice(0, MAX_SEND) } })); setSent(true); };
+  // Fills the composer (replace, so a second click updates it instead of stacking a copy). The user edits and sends.
+  const submit = () => { window.dispatchEvent(new CustomEvent('ade:ui-prefill', { detail: { chatId, text: formMessage(spec, values).slice(0, MAX_SEND), replace: true } })); setSent(true); };
   return <form className="ui-card ui-form" onSubmit={event => { event.preventDefault(); submit(); }} onChange={() => setSent(false)}>
     {spec.title && <h4>{spec.title}</h4>}
     {spec.fields.map(f => {
@@ -76,7 +77,7 @@ function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form
         : f.type === 'select' ? <div key={f.k} className="ui-field ui-select" role="group" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : <label key={f.k} className={`ui-field ui-${f.type}`}><span>{f.label}</span>{control}</label>;
     })}
-    <button type="submit" className="primary">{sent ? '✓ ' : ''}{spec.submit}</button>
+    <button type="submit" className="primary" title="입력창에 넣습니다. 고친 뒤 직접 보내세요">{sent ? '✓ ' : ''}{FORM_BUTTON}</button>
   </form>;
 }
 

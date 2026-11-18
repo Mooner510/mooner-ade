@@ -198,7 +198,9 @@ export function chatDemo(emit: Emit, pane: () => HTMLElement | null, cursor: HTM
     for (const range of form.querySelectorAll<HTMLInputElement>('input[type=range]')) {
       await point(range); setValue(range, String(Math.round(between(Number(range.min), Number(range.max))))); await wait(400);
     }
+    // The button only fills the composer; the tour then sends it, as a person would.
     await click(form.querySelector('button[type=submit]'));
+    await click(find('button.chat-send:not(.stop)'));
   }
   // The question card: an option per question (a pick moves on to the next one), then "답변 보내기".
   async function answerQuestions() {

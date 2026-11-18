@@ -123,8 +123,8 @@ try {
   await click('.tour .folder-tabs [data-agent-state="attention"]'); await pause(900);
   await click('.tour [data-agent="claude"] .xterm'); await pause(400); await key('1', 'Digit1', 49, 0, '1'); await pause(300); await enter(); await next();
   say('6 / 11 Diff');
-  await click('.tour .app:not([hidden]) .tabbar [aria-label="변경사항 Diff 패널"]'); await pause(3000);
-  await click('.tour .app:not([hidden]) .tabbar [aria-label="변경사항 Diff 패널"]'); await next();
+  await click('.tour .app:not([hidden]) .tabbar [aria-label="Git 커밋 그래프"]'); await pause(3000);
+  await click('.tour .app:not([hidden]) .tabbar [aria-label="Git 커밋 그래프"]'); await next();
   say('7 / 11 분할');
   await click(`${shown} .terminal-pane [aria-label="분할"]`); await pause(300); await click(`${shown} [aria-label="좌우 분할"]`); await pause(900); await clickText(`${shown} .launcher-pane .launchers button`, '터미널'); await pause(900);
   await click(`${shown} .terminal-pane.focused [aria-label="분할"]`); await pause(300); await click(`${shown} .terminal-pane.focused [aria-label="상하 분할"]`); await pause(600);

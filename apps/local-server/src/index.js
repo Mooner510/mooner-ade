@@ -14,6 +14,7 @@ import { codexAuthenticated } from './agents.js';
 import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
+import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
 import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
@@ -29,7 +30,7 @@ import { readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaud
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
 import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
-import { readSessionStats, sessionFiles } from './chat-stats.js';
+import { readSessionStats, sessionFiles, withSubagents } from './chat-stats.js';
 import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
@@ -214,7 +215,8 @@ function send(socket, value) {
 }
 // Every outbound message carries its project so a socket subscribed to several projects can route it.
 function broadcast(project, value) { for (const socket of clients) if (socket.projects.has(project.id)) send(socket, { ...value, projectId: project.id }); }
-const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.' });
+// `files`: the paths a Git operation stopped on (local changes in the way), listed in the dialog that offers to work around them.
+const errorValue = error => ({ code: error.code || 'OPERATION_FAILED', message: error.message || '작업에 실패했습니다.', ...(Array.isArray(error.files) && { files: error.files }) });
 
 // A live pid alone does not prove ownership: Windows reuses pids quickly, so a crashed server's lock can name an unrelated process.
 // Running servers refresh their locks' mtime; a lock left untouched past LOCK_STALE_MS is abandoned.
@@ -901,12 +903,14 @@ async function route(action, input, project) {
       if (stamp) project.gitStatus.set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
       return result;
     }
-    case 'git/show': {
-      text(input.path, '경로'); await workspace.resolve(input.path);
-      if (input.working) return { content: await readText(workspace, input.path).catch(() => '') };
-      const result = await runtime.processes.exec('git', ['--literal-pathspecs', 'show', `${input.staged ? '' : 'HEAD'}:${input.path}`]);
-      return { content: result.exitCode === 0 ? result.stdout : '' };
-    }
+    // The Git tool window: history graph, one commit, a file of a commit, and the operations its menus run.
+    case 'git/log': return readLog(runtime, input);
+    case 'git/paths': return pathCommits(runtime, input);
+    case 'git/commit-details': return commitDetails(runtime, input);
+    case 'git/commit-file': return commitFile(runtime, input);
+    case 'git/compare': return compareFiles(runtime, input);
+    case 'git/patch': return commitPatch(runtime, input);
+    case 'git/op': return project.mutation(() => runOperation(runtime, input));
     case 'git/branches': {
       const result = await runtime.processes.exec('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
       if (result.exitCode !== 0) throw new Error(result.stderr);
@@ -997,23 +1001,25 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const ref = chat.sessionRef();
-      if (ref.agent !== 'claude') {
-        if (action === 'chat/spend') throw fault('CHAT_UNSUPPORTED', '플랜 비용 기여도는 Claude 채팅에서만 볼 수 있습니다.', 409);
-        return chat.stats();
-      }
+      const since = (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite);
+      // chat/spend: what this chat consumed from the given times on (each plan window's start).
+      // Claude: dollars from its transcript, subagent files included. Codex and Cursor: token weight from the usage events ADE stored.
+      if (action === 'chat/spend' && ref.agent !== 'claude') return { spent: await chat.spendSince(since) };
+      if (ref.agent !== 'claude') return chat.stats();
       if (!ref.sessionId) throw fault('NOT_FOUND', '아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.', 404);
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
       if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
-      // chat/spend: what this chat cost from the given times on (the 5h / weekly window starts), straight from its transcript
-      if (action === 'chat/spend') return { spent: (await readSessionStats(files, (Array.isArray(input.since) ? input.since : []).map(Number).filter(Number.isFinite), ref.costUsd)).spentSince };
-      return { sessionId: ref.sessionId, ...await readSessionStats(files) };
+      const base = await readSessionStats(files, action === 'chat/spend' ? since : [], ref.costUsd);
+      const stats = withSubagents(base, chat.storedEvents(), chat.tokenPrice(), action === 'chat/spend' ? since : []);
+      if (action === 'chat/spend') return { spent: stats.spentSince };
+      return { sessionId: ref.sessionId, ...stats };
     }
-    // Dollars per 1%p learned for the Plan Usage share, kept with the app data (the web page's origin changes with every launch's port, so localStorage cannot hold it).
+    // Meter per 1%p learned for the Plan Usage share (dollars for Claude, token weight for Codex and Cursor). Kept with the app data: the page's origin changes with every launch's port, so localStorage cannot hold it.
     case 'usage/k': {
       const file = path.join(dataRoot, 'usage-k.json'), all = await readJson(file, {}).catch(() => ({}));
       const { key, usd, dUtil } = input;
-      if (typeof key === 'string' && key.length <= 64 && Number.isFinite(usd) && Number.isFinite(dUtil) && usd > 0 && dUtil >= 0) {
+      if (typeof key === 'string' && key.length <= 128 && Number.isFinite(usd) && Number.isFinite(dUtil) && usd > 0 && dUtil >= 0) {
         all[key] = { usd: (all[key]?.usd ?? 0) + usd, dUtil: (all[key]?.dUtil ?? 0) + dUtil };
         await writeJson(file, all).catch(() => {});
       }

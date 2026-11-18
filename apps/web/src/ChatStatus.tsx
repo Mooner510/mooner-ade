@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type 
 import { api } from './api';
 import { placeAbove } from './Usage';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
 export type ChatStatusContext = { state: ChatState; share?: string | null };
@@ -25,7 +25,7 @@ export const chatStatusDefs: Record<string, Def> = {
     tip: ({ state }) => `진행 상태\n에이전트가 지금 하는 일입니다. ${state.pending ? `승인을 기다리는 요청이 ${state.pending}개 있습니다.` : '대기 중 · 응답 중 · 승인 대기 중 하나로 표시됩니다.'}` },
   model: { label: '모델', icon: 'smart_toy', format: '{model}', values: ({ state }) => ({ model: displayModel(state.model, state.agent), id: state.model ?? '' }), hint: '{model} 짧은 이름 · {id} 전체 모델 ID', color: ({ state }) => modelAppearance(state.model, state.agent).color,
     tip: ({ state }) => `모델\n이 채팅이 쓰는 모델입니다.${state.model ? `\n${state.model}` : ''}` },
-  mode: { label: '권한 모드', icon: 'shield', format: '{mode}', values: ({ state }) => ({ mode: permissionLabels[state.permissionMode] ?? state.permissionMode, id: state.permissionMode }),
+  mode: { label: '권한 모드', icon: 'shield', format: '{mode}', values: ({ state }) => ({ mode: permissionLabel(state.permissionMode, state.agent), id: state.permissionMode }),
     color: ({ state }) => permissionModeColor(state.permissionMode),
     tip: () => '권한 모드\n도구 실행과 파일 수정을 어디까지 자동으로 허용할지 정합니다.' },
   context: { label: '컨텍스트 사용률', icon: 'data_usage', format: '{percent}% · {used}/{window}',
@@ -43,18 +43,18 @@ export const chatStatusDefs: Record<string, Def> = {
     hint: '이 채팅의 누적 토큰. 캐시 아이콘 뒤는 ↑캐시 쓰기 ↓캐시 읽기. {input} {output} {cache}(캐시 읽기) {cacheWrite}(캐시 쓰기) {total}' },
   cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)',
     tip: () => '비용\nCLI가 보고한 이 채팅의 누적 비용(USD)입니다.' },
-  // Until a turn has been measured (and always on an API key, or for Codex/Cursor) the item names what this chat is billed against; the measured share replaces it.
+  // Until a turn has been measured (and always on an API key) the item names what this chat is billed against; the measured share replaces it.
   share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ state, share }) => ({ share: usageBasis(state, share) }),
     tip: ({ state, share }) => state.apiKey ? 'API Usage\n이 채팅은 API 키로 실행돼 토큰만큼 API로 과금됩니다. 플랜 한도는 쓰지 않습니다.'
-      : share ? `사용량 기여도\n이 채팅이 플랜 한도(5시간·주간)에서 차지한 비율(%p)의 추정치입니다.` : 'Plan Usage\nCLI 로그인 플랜의 한도를 씁니다. 한 턴이 측정되면 이 채팅이 차지한 비율로 바뀝니다.',
-    hint: 'API 키 채팅은 ‘API Usage’(토큰 과금), CLI 로그인 채팅은 측정 전 ‘Plan Usage’로 표시하고, 측정되면 이 채팅이 플랜 한도(5h·주)에서 차지한 %p(추정)로 바뀝니다.' },
+      : share ? `사용량 기여도\n이 채팅이 플랜 한도에서 차지한 비율(%p)의 추정치입니다. 괄호 안은 한도 창입니다.` : 'Plan Usage\nCLI 로그인 플랜의 한도를 씁니다. 한 턴이 측정되면 이 채팅이 차지한 비율로 바뀝니다.',
+    hint: 'API 키 채팅은 ‘API Usage’(토큰 과금), CLI 로그인 채팅은 측정 전 ‘Plan Usage’로 표시하고, 측정되면 이 채팅이 플랜 한도에서 차지한 %p(추정)로 바뀝니다. Claude·Codex는 5시간과 주간, Cursor는 이 채팅 모델의 풀과 전체입니다.' },
   turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }), tip: () => '턴 수\n사용자가 보내고 답변이 끝난 횟수입니다.' },
   duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }), tip: () => '누적 소요 시간\n답변을 만드는 데 걸린 시간의 합계입니다. 사용자가 입력하는 시간은 빠집니다.' },
   session: { label: '세션 ID', icon: 'tag', format: '{short}', values: ({ state }) => state.sessionId ? { short: state.sessionId.slice(0, 8), id: state.sessionId } : null,
     tip: ({ state }) => `세션 ID\nCLI가 이 대화에 붙인 ID입니다.${state.sessionId ? `\n${state.sessionId}` : ''}` },
 };
 // What a chat's usage is counted against: an API key's tokens, or the CLI login's plan (its measured share once there is one).
-// Until a turn has been measured the item names what the chat is billed against; the measured share (of the 5h / weekly limits) replaces it.
+// Until a turn has been measured the item names what the chat is billed against; the measured share of the plan limits replaces it.
 export const usageBasis = (state: ChatState, share?: string | null) => state.apiKey ? 'API Usage' : share || 'Plan Usage';
 export const chatStatusLabels: Record<string, string> = Object.fromEntries(Object.entries(chatStatusDefs).map(([id, def]) => [id, def.label]));
 

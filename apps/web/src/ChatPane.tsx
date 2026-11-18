@@ -5,7 +5,7 @@ import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
 import { QuestionCard, QuestionList, usePlayedEntrance } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
-import { useUsageShare } from './use-usage-share';
+import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
@@ -18,7 +18,7 @@ import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
 import { FileIcon } from './FileIcon';
-import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabels, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -1093,7 +1093,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => () => { const at = drainAt.current; cancelAnimationFrame(at.frame); if (at.timer) clearTimeout(at.timer); cancelAnimationFrame(follow.current); cancelAnimationFrame(pinFrame.current); }, []);
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
-  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
+  const share = useUsageShare({ id, agent, enabled: visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, model: view.state.model, meter: agent === 'claude' ? view.state.costUsd ?? 0 : tokenWeight(view.state.tokens) });
   const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
@@ -1342,16 +1342,18 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     void transmit(next.text, next.images).finally(() => setQueueSending(false));
   }, [state.status, queue, view.ready, queueSending]);
   // Interactive UIs in a reply (ade-ui blocks) reach this chat through window events carrying the chat id. `ade.send` goes out like a typed message
-  // (queued as a follow-up while the agent works, so it never steers a running turn); `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
-  const fromUi = useRef<(kind: 'send' | 'prefill', message: string) => void>(() => {});
-  fromUi.current = (kind, message) => {
-    if (kind === 'prefill') { setText(current => current.trim() ? `${current}\n${message}` : message); box.current?.focus(); return; }
+  // (queued as a follow-up only while this agent is in a turn, so it never steers a running turn; a subagent running on its own does not count).
+  // `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
+  const fromUi = useRef<(kind: 'send' | 'prefill', message: string, replace?: boolean) => void>(() => {});
+  fromUi.current = (kind, message, replace) => {
+    // replace: a form writes the whole next message, so it overwrites the box instead of appending under what was already typed.
+    if (kind === 'prefill') { setText(current => replace || !current.trim() ? message : `${current}\n${message}`); box.current?.focus(); return; }
     if (!view.ready) return;
     if (busy || queue.length || queueSending) setQueue(items => [...items, { text: message, images: [] }]);
     else void transmit(message, []);
   };
   useEffect(() => {
-    const on = (kind: 'send' | 'prefill') => (event: Event) => { const { chatId, text: message } = (event as CustomEvent<{ chatId: string; text: string }>).detail; if (chatId === id) fromUi.current(kind, message); };
+    const on = (kind: 'send' | 'prefill') => (event: Event) => { const { chatId, text: message, replace } = (event as CustomEvent<{ chatId: string; text: string; replace?: boolean }>).detail; if (chatId === id) fromUi.current(kind, message, replace); };
     const send = on('send'), prefill = on('prefill');
     window.addEventListener('ade:ui-send', send); window.addEventListener('ade:ui-prefill', prefill);
     return () => { window.removeEventListener('ade:ui-send', send); window.removeEventListener('ade:ui-prefill', prefill); };
@@ -1461,8 +1463,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         return true;
       }
       case 'permissions': {
-        const value = argument || await ctx.pick('권한 모드', modes.map(mode => ({ id: mode, label: permissionLabels[mode] ?? mode })));
-        if (value) { if (!modes.includes(value)) note(`알 수 없는 권한 모드: ${value}`); else { await setChat({ id, permissionMode: value }); changed({ mode: { value: `${permissionLabels[value] ?? value} 모드`, color: permissionModeColor(value), icon: MODE_ICONS[value] ?? 'tune' } }); } }
+        const value = argument || await ctx.pick('권한 모드', modes.map(mode => ({ id: mode, label: permissionLabel(mode, agent) })));
+        if (value) { if (!modes.includes(value)) note(`알 수 없는 권한 모드: ${value}`); else { await setChat({ id, permissionMode: value }); changed({ mode: { value: `${permissionLabel(value, agent)} 모드`, color: permissionModeColor(value), icon: MODE_ICONS[value] ?? 'tune' } }); } }
         return true;
       }
       case 'autocompact': {
@@ -1503,7 +1505,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         const rows: [string, string][] = name === 'cost'
           ? [['모델', model], ['비용', `${cost} · ${state.turns}턴`],
             ...(caps?.tokens === false ? [['토큰', 'CLI가 토큰 사용량을 제공하지 않습니다'] as [string, string]] : [['입력 토큰', n(tokens.input)], ['출력 토큰', n(tokens.output)], ['캐시 읽기', n(tokens.cacheRead)], ['캐시 쓰기', n(tokens.cacheCreate)]] as [string, string][])]
-          : [['모델', model], ['Effort', effortLabel(state.effort ?? 'medium')], ['권한 모드', permissionLabels[state.permissionMode] ?? state.permissionMode],
+          : [['모델', model], ['Effort', effortLabel(state.effort ?? 'medium')], ['권한 모드', permissionLabel(state.permissionMode, agent)],
             ['비용', `${cost} · ${state.turns}턴`], ...(contextRow ? [contextRow] : []), ['세션', state.sessionId ? `\`${state.sessionId}\`` : '아직 없음']];
         info(`### ${name === 'cost' ? '비용' : '상태'}\n\n| 항목 | 값 |\n|---|---|\n${rows.map(([label, value]) => `| ${label} | ${value} |`).join('\n')}`);
         return true;
@@ -1660,7 +1662,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const otherCursorOptions = agent === 'cursor' ? cursorOptions.filter(option => !isCursorEffort(option)) : [];
   // Cursor models can come with many options: from two on (besides model and Effort) they all live behind one settings button.
   const forcePanel = otherCursorOptions.length >= 2;
-  const modeDd = <Dropdown locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabels[mode] ?? mode, icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
+  const modeDd = <Dropdown locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabel(mode, agent), icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
   const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || 'Bypass(Run Everything): 허용 목록에 없는 명령도 묻지 않고 실행'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
   const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status" title="샌드박스 변경은 진행 중인 응답이 끝난 뒤 Cursor를 다시 시작하며 적용됩니다.">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
@@ -1848,7 +1850,7 @@ function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boo
     <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}
       title={thought ? undefined : '모델이 추론 내용은 보내지 않아, 경과 시간과 추정 토큰만 표시합니다.'}>
       <i className="chat-spin" /><span className="chat-working-label">{label || (deep ? `${effort ? `${effortLabel(effort)} Effort로 ` : ''}깊게 생각하는 중…` : '생각하는 중…')}</span>
-      <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small>{thought && <em>{thought}</em>}</div></div>
+      <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small></div></div>
   </div>;
 }
 
