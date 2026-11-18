@@ -1090,7 +1090,7 @@ async function route(action, input, project) {
     case 'chat/approve': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.trim().slice(0, 4000) || undefined : undefined, mode: typeof input.mode === 'string' ? input.mode : undefined });
+      await chat.approve(text(input.requestId, '승인 ID', 200), { allow: input.allow === true, always: input.always === true, allowTool: input.allowTool === true, answers: input.answers, message: typeof input.message === 'string' ? input.message.trim().slice(0, 4000) || undefined : undefined, mode: typeof input.mode === 'string' ? input.mode : undefined });
       return {};
     }
     case 'chat/set': {

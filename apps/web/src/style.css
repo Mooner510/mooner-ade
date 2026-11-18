@@ -1699,7 +1699,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-blocked-note { margin: 8px 0 0; color: var(--faint); font-size: 11.5px; }
 .chat-approval-body { padding: 0 12px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
-.chat-approval footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
+.chat-approval footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
 /* The decision (거부·항상 허용·허용) sits at the right, the main one last; "다르게 하기…" (refuse and say what to do instead) sits apart at the
    left end; once open, 취소 takes the same spot and look, so the same click goes back. */
 .chat-approval footer .approval-explain, .chat-approval .plan-revise .approval-explain { margin-right: auto; }

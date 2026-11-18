@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { alwaysSuggestions, ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, resultContextWindow, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
+import { alwaysSuggestions, sessionRuleStrings, toolAllowable, toolSuggestions, ASK_SKIPPED, askUserInput, claudeQuestions, approvalLine, buildClaudeArgs, cliPermissionMode, normalizeClaude, resultContextWindow, transcriptEvents, userLine, wantsArtifact } from '../apps/local-server/src/chat-claude.js';
 
 const askInput = { questions: [
   { question: 'Roufin 웹 서비스 중 만들 프로젝트를 골라 주세요.', header: '웹 서비스', multiSelect: true, options: [{ label: 'Project Manager', description: 'CRDT 문서, 이슈, 일정' }, { label: 'DONGPO', description: '' }] },
@@ -73,6 +73,20 @@ test('approval request and its answers', () => {
   assert.deepEqual([request.kind, request.requestId, request.tool], ['approval', 'r1', 'Bash']);
   assert.equal(JSON.parse(approvalLine('r1', { allow: true, input: { a: 1 } })).response.response.behavior, 'allow');
   assert.equal(JSON.parse(approvalLine('r1', { allow: false })).response.response.behavior, 'deny');
+});
+
+test('"allow this tool" is one rule for the whole tool, and session rules become rule strings for the chat to keep', () => {
+  assert.deepEqual(toolSuggestions('Bash'), [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }]);
+  assert.deepEqual([toolAllowable('ExitPlanMode'), toolAllowable('AskUserQuestion'), toolAllowable(''), toolAllowable(undefined), toolAllowable('mcp__a__b')], [false, false, false, false, true]);
+  assert.deepEqual(toolSuggestions('ExitPlanMode'), []);
+  const mixed = [
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }, { toolName: 'mcp__a__b' }], behavior: 'allow', destination: 'session' },
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'rm:*' }], behavior: 'allow', destination: 'localSettings' }, // the CLI keeps this one in a file itself
+    { type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'deny', destination: 'session' },
+    { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+  ];
+  assert.deepEqual(sessionRuleStrings(mixed), ['Bash(ls:*)', 'mcp__a__b']);
+  assert.deepEqual(sessionRuleStrings(undefined), []);
 });
 
 test('"always allow" falls back to a session allow rule for an MCP tool that came without suggestions', () => {
