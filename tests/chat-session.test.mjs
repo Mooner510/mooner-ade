@@ -950,6 +950,11 @@ test('Claude: "allow this tool always" is a rule for the whole tool that the cha
   await session.approve(first.requestId, { allow: true, allowTool: true });
   await until(() => session.state().status === 'idle');
   assert.equal(said(), 'grants=[{"type":"addRules","rules":[{"toolName":"mcp__srv__run"}],"behavior":"allow","destination":"session"}]');
+  // The CLI asks again (an `ask` rule in the user's settings beats any allow rule): the chat answers it itself, so no card appears.
+  await session.send('askmcp'); await until(() => said() === 'grants=[]');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.replay().approvals.length, 0, 'no card for a tool allowed for this chat');
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 1, 'only the first request ever became a card');
   await session.send('이걸 다시 실행해 줘'); await until(() => session.state().status === 'idle');
   assert.equal(said(), 'allow=["mcp__srv__run"]', 'the running child got the rule as flag settings too');
   await session.set({ effort: 'high' }); // a launch flag: the child is replaced and has forgotten its own session rules
