@@ -46,6 +46,8 @@ export type PluginTool = { name: string; title: string; description: string; rea
 export type PluginTools = { enabled: boolean; offered: boolean; status: 'idle' | 'loading' | 'ok' | 'error'; error: string | null; checkedAt: number | null; list: PluginTool[] | null; disabled: string[] };
 export type PluginInfo = {
   folder: string; id: string | null; name: string; version: string | null; description: string; hash: string | null;
+  // plugin.json `icon`: the SVG text (PluginIcon), null without one.
+  icon?: string | null;
   state: 'invalid' | 'new' | 'changed' | 'off' | 'starting' | 'running' | 'error' | 'stopped';
   error: string | null; terminal: boolean; mcp: string | null; mcpChatOnly?: boolean; workspace?: boolean; view: PluginView | null; badge?: PluginBadge | null;
   // A plugin that ships with the app: no approval, no "plugins on" switch, only its own on/off (`builtinEnabled`).
@@ -92,33 +94,61 @@ export function usePluginsState() {
 // A plugin's notification was clicked: the app asks for the plugins page.
 export function onPluginsOpen(listener: () => void) { return pluginsBridge()?.onOpen?.(listener) ?? (() => {}); }
 
+// A plugin's own icon (plugin.json `icon`, one SVG): drawn as a CSS mask filled with the text colour, so it follows the theme and the
+// state of the button it sits in like the app's line icons. An image used as a mask runs no script and loads nothing.
+// Without one, the generic plugin icon.
+// `size` as for Icon (drawn 2px larger, the material glyph's box).
+export function PluginIcon({ plugin, size = 16 }: { plugin: Pick<PluginInfo, 'icon'>; size?: number }) {
+  const mask = useMemo(() => plugin.icon ? `url("data:image/svg+xml,${encodeURIComponent(plugin.icon)}")` : null, [plugin.icon]);
+  if (!mask) return <Icon name="plugin" size={size} />;
+  return <span className="plugin-icon" style={{ width: size + 2, height: size + 2, maskImage: mask, WebkitMaskImage: mask }} aria-hidden="true" />;
+}
+// The icon on a tile, for the plugins list and a plugin's page.
+export function PluginMark({ plugin, size = 'md' }: { plugin: Pick<PluginInfo, 'icon'>; size?: 'md' | 'lg' }) {
+  return <span className={`plugin-mark ${size}`} aria-hidden="true"><PluginIcon plugin={plugin} size={size === 'lg' ? 22 : 16} /></span>;
+}
+
+// What the plugin says about itself right now, one line: a dot while all is well, an icon when it needs a look.
+function StatusLine({ status }: { status: { tone: Tone; text: string } }) {
+  return <p className="plugin-status" data-tone={status.tone} role="status">
+    {status.tone === 'ok' ? <i className="plugin-status-dot" aria-hidden="true" /> : <Icon name={toneIcon[status.tone]} size={15} />}
+    <span>{status.text}</span>
+  </p>;
+}
+
 // A header plugin's panel (opened from its top-bar button, in the right-panel slot): the plugin's view, drawn like its settings.
+// Its buttons sit in a bar along the bottom like the other right panels', the main one at the right.
 export function PluginPanel({ plugin, wide, toggleWide, onSettings, onClose }: { plugin: PluginInfo; wide: boolean; toggleWide(): void; onSettings(): void; onClose(): void }) {
   const bridge = pluginsBridge(), view = plugin.view?.panel ?? plugin.view;
-  const [values, setValue] = useFieldValues(view), [busy, setBusy] = useState(''), [notice, setNotice] = useState('');
+  const [values, setValue] = useFieldValues(view), [busy, setBusy] = useState(''), [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   if (!bridge || !view || !plugin.id) return null;
   const act = (action: string, item?: string) => {
     if (busy) return;
     const submitted = { ...values };
     for (const field of view.fields) if (field.type === 'password') setValue(field.key, '');
-    setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`); setNotice('');
-    void bridge.action(plugin.id!, action, submitted, item).then(result => setNotice(result.message ?? ''), error => setNotice(errorText(error))).finally(() => setBusy(''));
+    setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`); setNotice(null);
+    void bridge.action(plugin.id!, action, submitted, item).then(result => setNotice(result.message ? { text: result.message, error: false } : null), error => setNotice({ text: errorText(error), error: true })).finally(() => setBusy(''));
   };
+  const actions = [...view.actions.filter(action => !action.primary), ...view.actions.filter(action => action.primary)];
   return <div className="review-panel plugin-panel plugins">
     <header className="panel-head">
-      <Icon name="plugin" /><strong>{plugin.name}</strong><span className="spacer" />
+      <PluginIcon plugin={plugin} /><strong>{plugin.name}</strong><span className="spacer" />
       <IconButton icon="settings" tip="header" label="플러그인 설정" onClick={onSettings} />
       <IconButton icon={wide ? 'minimize' : 'maximize'} tip="header" label={wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={toggleWide} />
       <IconButton icon="x" tip="none" label={`${plugin.name} 닫기`} onClick={onClose} />
     </header>
     <div className="plugin-panel-body">
-      {view.status && <p className="plugin-status" data-tone={view.status.tone} role="status">{view.status.text}</p>}
-      {notice && <p className="setting-note" role="status">{notice}</p>}
+      {view.status && <StatusLine status={view.status} />}
+      {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
       <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
-      {view.document && <section className="plugin-document"><h3>{view.document.title}</h3><pre>{view.document.text}</pre></section>}
+      {view.document && <section className="plugin-document"><h3><Icon name="book" size={14} />{view.document.title}</h3><pre>{view.document.text}</pre></section>}
     </div>
+    {actions.length > 0 && <footer className="plugin-panel-foot">
+      {actions.map(action => <BusyButton key={action.id} className={actionClass(action)} busy={Boolean(busy)} running={busy === `${plugin.folder}:action-${action.id}`} onClick={() => act(action.id)}>{action.label}</BusyButton>)}
+    </footer>}
   </div>;
 }
+const actionClass = (action: ViewAction) => [action.primary && 'primary', action.danger && 'danger'].filter(Boolean).join(' ') || undefined;
 
 // Status-bar items of running plugins. Always shown (not part of the status bar layout) so that a plugin cannot work unseen.
 export function PluginBadges({ onOpen }: { onOpen(): void }) {
@@ -392,7 +422,7 @@ function StatePill({ state }: { state: State }) {
 function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
   const left = setupLeft(plugin);
   return <button type="button" className="plugin-row setting-hit" data-tone={stateTone(plugin.state)} onClick={onOpen} aria-label={`${plugin.name} 열기`}>
-    <span className="plugin-mark" data-builtin={plugin.builtin || undefined}><Icon name={plugin.builtin ? 'sparkles' : 'plugin'} size={18} /></span>
+    <PluginMark plugin={plugin} />
     <span className="plugin-row-text">
       <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
         {left > 0 && <span className="plugin-tag" data-tone="warn">설정 {left}단계 남음</span>}
@@ -459,7 +489,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <button ref={backRef} type="button" className="plugin-back" onClick={onBack}><Icon name="arrowLeft" size={16} />플러그인</button>
     </nav>
     <header className="plugin-detail-head" data-tone={tone}>
-      <span className="plugin-mark large" data-builtin={plugin.builtin || undefined}><Icon name={plugin.builtin ? 'sparkles' : 'plugin'} size={24} /></span>
+      <PluginMark plugin={plugin} size="lg" />
       <div className="plugin-title">
         <div>
           <strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
@@ -472,7 +502,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     </header>
     {plugin.state === 'invalid' && <Callout tone="error">{plugin.error ?? '플러그인을 읽을 수 없습니다.'}<small>plugin.json과 폴더 구성을 고친 뒤 목록의 다시 읽기를 누르세요.</small></Callout>}
     {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
-    {view?.status && <p className="plugin-status plugin-status-line" data-tone={view.status.tone}><Icon name={toneIcon[view.status.tone]} size={14} />{view.status.text}</p>}
+    {view?.status && <StatusLine status={view.status} />}
 
     {steps.length > 0 && <SetupGuide key={plugin.folder} steps={steps} complete={complete} adeButton={adeButton}
       content={step => step.view && view ? <ViewParts view={view} parts={step.view} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} /> : null} />}
@@ -482,7 +512,7 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <p className="plugin-muted">플러그인이 실행 중일 때 바꿀 수 있는 설정이 여기에 나옵니다.</p>
     </Section>}
 
-    {plugin.state !== 'invalid' && <Section title="제공하는 기능">
+    {plugin.state !== 'invalid' && (plugin.terminal || plugin.mcp || plugin.workspace) && <Section title="제공하는 기능">
       <Provides plugin={plugin} busy={busy} run={run} bridge={bridge} />
     </Section>}
 
@@ -566,7 +596,8 @@ function SetupGuide({ steps, complete, adeButton, content }: { steps: GuideStep[
 }
 
 // The parts of the view a step names (`parts`), or everything else (`hide`). Enter in an input runs the one primary button.
-function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { view: PluginView; parts?: ViewStep; hide?: Parts | null; values: Record<string, string>; setValue(key: string, value: string): void; busy: string; where: string; act(action: string, item?: string): void }) {
+// `noActions`: the buttons are drawn elsewhere (the header panel's bottom bar); Enter still runs the primary one.
+function ViewParts({ view, parts, hide, values, setValue, busy, where, act, noActions = false }: { view: PluginView; parts?: ViewStep; hide?: Parts | null; values: Record<string, string>; setValue(key: string, value: string): void; busy: string; where: string; act(action: string, item?: string): void; noActions?: boolean }) {
   const [copied, setCopied] = useState('');
   useEffect(() => {
     if (!copied) return;
@@ -579,8 +610,8 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
     : items.filter(item => { const name = key(item); return !hide || !name || !hide[from].has(name); });
   const fields = pick(view.fields, field => field.key, 'fields'), info = pick(view.info, item => item.key, 'info'), actions = pick(view.actions, item => item.id, 'actions');
   const qr = view.qr && (parts ? parts.qr === true : !hide?.qr) ? view.qr : null;
-  const primary = actions.filter(action => action.primary);
-  if (!fields.length && !info.length && !actions.length && !qr) return null;
+  const primary = actions.filter(action => action.primary), buttons = noActions ? [] : actions;
+  if (!fields.length && !info.length && !buttons.length && !qr) return null;
   return <div className="plugin-parts">
     {qr && <div className="plugin-qr-row"><QrCode text={qr.value} label={qr.label} size={168} />{qr.label && <p>{qr.label}</p>}</div>}
     {info.length > 0 && <dl className="plugin-info">{info.map(item => <div key={item.label}>
@@ -589,7 +620,7 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
         {item.copy && item.value && <IconButton icon={copied === item.label ? 'check' : 'copy'} label={copied === item.label ? '복사했습니다' : `${item.label} 복사`} onClick={() => { copyText(item.value); setCopied(item.label); }} />}
       </dd>
     </div>)}</dl>}
-    {(fields.length > 0 || actions.length > 0) && <form className="plugin-form" onSubmit={event => { event.preventDefault(); if (primary.length === 1 && !busy) act(primary[0].id); }}>
+    {(fields.length > 0 || buttons.length > 0) && <form className="plugin-form" onSubmit={event => { event.preventDefault(); if (primary.length === 1 && !busy) act(primary[0].id); }}>
       {fields.map(field => {
         const value = values[field.key] ?? '', set = (next: string) => setValue(field.key, next);
         const label = <span>{field.label}{field.required && <em className="plugin-required">필수</em>}</span>;
@@ -598,17 +629,18 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
           <input type="checkbox" role="switch" aria-label={field.label} checked={value === 'true'} onChange={event => set(String(event.target.checked))} />
           {text}
         </label>;
-        return <label key={field.key} className="plugin-field">
+        // A folder path or a long text needs the width: its title goes above it.
+        return <label key={field.key} className={`plugin-field${field.type === 'folder' || field.type === 'textarea' ? ' wide' : ''}`}>
           {text}
-          {field.type === 'folder' ? <span className="plugin-folder"><input value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} /><button type="button" className="plugin-button" onClick={() => { void chooseFolder(field.label, value).then(path => { if (path) set(path); }).catch(() => {}); }}>폴더 선택</button></span>
+          {field.type === 'folder' ? <span className="plugin-folder"><input value={value} placeholder={field.placeholder} spellCheck={false} onChange={event => set(event.target.value)} /><button type="button" className="plugin-button" onClick={() => { void chooseFolder(field.label, value).then(path => { if (path) set(path); }).catch(() => {}); }}>폴더 선택</button></span>
             : field.type === 'textarea' ? <textarea rows={5} value={value} placeholder={field.placeholder} onChange={event => set(event.target.value)} />
             : field.type === 'select' && field.options
             ? <select value={value} onChange={event => set(event.target.value)}>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
             : <input type={field.type === 'number' ? 'number' : field.type === 'password' ? 'password' : 'text'} autoComplete={field.type === 'password' ? 'new-password' : undefined} inputMode={field.type === 'number' ? 'numeric' : undefined} value={value} placeholder={field.placeholder} spellCheck={false} aria-required={field.required || undefined} onChange={event => set(event.target.value)} />}
         </label>;
       })}
-      {actions.length > 0 && <div className="plugin-actions">
-        {actions.map(action => <BusyButton key={action.id} className={action.primary ? 'primary' : action.danger ? 'danger' : undefined} busy={Boolean(busy)} running={busy === `${where}:action-${action.id}`} onClick={() => act(action.id)}>{action.label}</BusyButton>)}
+      {buttons.length > 0 && <div className="plugin-actions">
+        {buttons.map(action => <BusyButton key={action.id} className={actionClass(action)} busy={Boolean(busy)} running={busy === `${where}:action-${action.id}`} onClick={() => act(action.id)}>{action.label}</BusyButton>)}
       </div>}
     </form>}
   </div>;
@@ -616,10 +648,10 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act }: { 
 
 // What can be changed while the plugin runs: what the setup steps do not show, and the plugin's lists.
 function SettingsSection({ view, hide, values, setValue, busy, where, act, standalone = false }: { view: PluginView; hide: Parts | null; values: Record<string, string>; setValue(key: string, value: string): void; busy: string; where: string; act(action: string, item?: string): void; standalone?: boolean }) {
-  const parts = <ViewParts view={view} hide={hide} values={values} setValue={setValue} busy={busy} where={where} act={act} />;
+  const parts = <ViewParts view={view} hide={hide} values={values} setValue={setValue} busy={busy} where={where} act={act} noActions={standalone} />;
   const lists = view.lists ?? [];
   const rest = Boolean(hide ? view.fields.some(field => !hide.fields.has(field.key)) || view.actions.some(action => !hide.actions.has(action.id)) || view.info.some(item => !item.key || !hide.info.has(item.key)) || (view.qr && !hide.qr)
-    : view.fields.length || view.actions.length || view.info.length || view.qr);
+    : view.fields.length || (!standalone && view.actions.length) || view.info.length || view.qr);
   if (!rest && !lists.length) return null;
   return <Section title={standalone ? '' : '설정'} hint={standalone ? undefined : hide ? '설정 단계 밖에서 바꿀 수 있는 것입니다.' : '바꿀 수 있는 설정입니다. 바꾼 뒤 저장 버튼을 누르세요.'}>
     {rest && <div className="plugin-body">{parts}</div>}
@@ -632,7 +664,7 @@ function SettingsSection({ view, hide, values, setValue, busy, where, act, stand
             {item.detail && <small>{item.detail}</small>}
           </div>
           {item.actions.length > 0 && <div className="plugin-item-actions">{item.actions.map(action =>
-            <BusyButton key={action.id} className={action.primary ? 'primary' : action.danger ? 'danger' : undefined} busy={Boolean(busy)} running={busy === `${where}:action-${action.id}-${item.id}`} onClick={() => act(action.id, item.id)}>{action.label}</BusyButton>)}</div>}
+            <BusyButton key={action.id} className={actionClass(action)} busy={Boolean(busy)} running={busy === `${where}:action-${action.id}-${item.id}`} onClick={() => act(action.id, item.id)}>{action.label}</BusyButton>)}</div>}
         </li>)}</ul>}
     </div>)}
   </Section>;
