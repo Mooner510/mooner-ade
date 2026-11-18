@@ -15,11 +15,13 @@ import { UiSpecView } from './UiBlocks';
 // and links go through the app's own "open external link?" dialog (ade:link).
 // shortcut: no nested lists beyond two levels, no HTML; code is coloured by Monaco's tokenizer (CodeBlock). Add a library only if replies need more.
 
-// A file or folder of the project ([[file:src/a.ts:42]], or a link whose target is a path): its Material file icon and relative path; a click asks which editor to open it in.
+// A file or folder of the project: a click asks which editor to open it in.
 function FileChip({ file }: { file: FileRef }) {
-  const chatId = useContext(ChatUiContext)?.chatId, name = file.path.split('/').pop() || file.path;
-  const shown = file.line ? `${file.path}:${file.line}${file.column ? `:${file.column}` : ''}` : file.folder ? `${file.path}/` : file.path;
-  return <button type="button" className="md-file" title={`${shown}\n클릭하면 어떻게 열지 고릅니다`} onClick={() => requestOpen({ ...file, chatId })}><FileIcon name={name} size={15} folder={file.folder} /><span>{shown}</span></button>;
+  const chat = useContext(ChatUiContext);
+  const name = file.path.split('/').pop() || file.path;
+  const suffix = file.line ? `:${file.line}${file.column ? `:${file.column}` : ''}` : file.folder ? '/' : '';
+  const fullLabel = file.path + suffix;
+  return <button type="button" className="md-file" title={`${fullLabel}\n클릭하여 열기`} aria-label={`${fullLabel} 열기`} onClick={() => requestOpen({ ...file, chatId: chat?.chatId })}><FileIcon name={name} folder={file.folder} /><span>{chat?.fileChipLabel === 'name' ? name + suffix : fullLabel}</span></button>;
 }
 function link(href: string, label: ReactNode, key: number) {
   const file = /^https?:\/\//i.test(href) ? null : fileHref(href);
@@ -58,7 +60,7 @@ function useColored(code: string, hint?: string) {
 // lang is the header label; syntax (default: lang) picks the colours, so a header like "src/a.ts · 새 파일 · 7줄" can still colour as TypeScript.
 export function CodeBlock({ code, lang, syntax }: { code: string; lang?: string; syntax?: string }) {
   const colored = useColored(code, syntax ?? lang);
-  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" title="코드 복사" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header>
+  return <div className="md-code"><header><span>{lang || 'text'}</span><button type="button" aria-label="코드 복사" onClick={() => copyText(code)}><Icon name="copy" size={13} />복사</button></header>
     <pre><code>{colored ? <><span dangerouslySetInnerHTML={{ __html: colored.html }} />{code.slice(colored.code.length)}</> : code}</code></pre></div>;
 }
 

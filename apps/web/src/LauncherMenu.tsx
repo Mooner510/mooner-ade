@@ -5,7 +5,7 @@ import type { AgentMode, launchersFor } from './launchers';
 // `nudge`: Chat was never opened, so its button carries a "써 보기" dot while CLI is selected.
 export function LauncherModes({ mode, onChange, nudge }: { mode: AgentMode; onChange(mode: AgentMode): void; nudge?: boolean }) {
   return <div className="launcher-modes" data-mode={mode} role="group" aria-label="실행 모드">
-    {(['chat', 'cli'] as const).map(value => <button key={value} type="button" data-mode={value} aria-pressed={mode === value} title={value === 'chat' && nudge ? '아직 써 보지 않았어요. 대화 화면에서 요청하고 코드 변경을 바로 확인해 보세요.' : undefined} onClick={() => onChange(value)}>
+    {(['chat', 'cli'] as const).map(value => <button key={value} type="button" data-mode={value} aria-pressed={mode === value} onClick={() => onChange(value)}>
       <Icon name={value === 'chat' ? 'chat' : 'terminal'} size={13} />{value === 'chat' ? 'Chat 모드' : 'CLI 모드'}{value === 'chat' && nudge && mode === 'cli' && <i className="mode-nudge" aria-label="써 보기" />}</button>)}
   </div>;
 }

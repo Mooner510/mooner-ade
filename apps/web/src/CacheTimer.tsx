@@ -24,19 +24,16 @@ export const CacheTimer = memo(function CacheTimer({ cache, working, warn = 20 }
   const seconds = Math.ceil(left / 1000), ttl = cache.ttl >= 3600 ? '1시간' : `${Math.round(cache.ttl / 60)}분`;
   const write = cache.ttl >= 3600 ? 2 : 1.25, read = cacheReadShare(cache.model), ratio = Math.round(write / read), tokens = formatTokens(cache.tokens);
   const done = cache.compacted, title = (state === 'compacted' && done ? [
-    `Claude Code가 ${clockTime(done.at)}에 대화를 compact했습니다 (${done.trigger === 'manual' ? '수동' : '자동'})${done.before && done.after ? ` · ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}`,
-    '요약된 대화로 이어가므로 다음 요청 비용이 작습니다.'
+    `${done.trigger === 'manual' ? '수동' : '자동'} Compact · ${clockTime(done.at)}${done.before && done.after ? ` · ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}`
   ] : state === 'cold' ? [
-    `프롬프트 캐시가 식었습니다 · ${clockTime(expires)} 만료 (${ttl} 유지)`,
-    `다음 요청은 대화 ${tokens} 토큰을 다시 기록해 평소보다 약 ${ratio}배의 비용·사용량이 듭니다.`,
-    '이전 맥락이 필요 없다면 /clear로 새 대화를 시작하세요.'
+    `프롬프트 캐시 만료 · ${clockTime(expires)}`,
+    `다음 요청: ${tokens} 토큰 다시 기록 · 비용·사용량 약 ${ratio}배`
   ] : state === 'using' ? [
-    `프롬프트 캐시 사용 중 · 요청마다 ${ttl} 유지 시간이 다시 시작됩니다.`,
+    `프롬프트 캐시 사용 중 · 요청마다 ${ttl} 갱신`,
     `마지막 응답 ${clockTime(cache.at)} · 대화 ${tokens} 토큰`
   ] : [
-    `프롬프트 캐시 · ${ttl} 유지${state === 'warm' ? compacts ? ' · 곧 자동 compact' : ' · 곧 식음' : ''}`,
-    `마지막 요청 ${clockTime(cache.at)} → ${clockTime(expires)}${compacts ? '경 자동 compact' : '에 식음'}`,
-    compacts ? `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다. 그 전에 보내지 않으면 요약됩니다.` : `지금 보내면 대화 ${tokens} 토큰을 캐시에서 읽습니다. 식은 뒤에는 약 ${ratio}배의 비용·사용량이 듭니다.`
+    `프롬프트 캐시 · ${ttl} 유지 · ${tokens} 토큰`,
+    `마지막 요청 ${clockTime(cache.at)} · ${compacts ? '자동 Compact 예정' : '만료 예정'} ${clockTime(expires)}`
   ]).join('\n');
   return <span className={`cache-timer ${state}`} title={title} aria-label={title} style={{ '--left': working ? 1 : left / total } as CSSProperties}>
     {(state === 'hot' || state === 'using') && <Icon name="flame" size={12} />}

@@ -99,6 +99,9 @@ const glyphs = {
   statusBar: 'call_to_action'
 } as const;
 
+// VS Code's ribbon, shared by Insiders and VSCodium (the tint is in CSS).
+const VSCODE = 'M23.15 2.587 18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.948-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z';
+
 // Agent CLIs: Claude Code's radial burst, Codex's hexagon with a prompt and Cursor's filled cube logo.
 const brands = {
   claude: <path d="M12 12 12 3M12 12l3.3-6.2M12 12l7.8-5.4M12 12l7.4-1M12 12l8.5 3.1M12 12l4.7 5.2M12 12l2.5 9.2M12 12l-2.1 7.7M12 12l-6.4 7.1M12 12l-7.1 2.6M12 12l-8.9-1.2M12 12 5.9 7.7M12 12 8 3.4" />,
@@ -108,7 +111,14 @@ const brands = {
   // A chat tab: a speech bubble holding Claude's asterisk, so it reads differently from a file or a terminal tab.
   'claude-chat': <><path d="M6.5 3.5h11A2.5 2.5 0 0 1 20 6v8a2.5 2.5 0 0 1-2.5 2.5H11.5L7 20.5v-4h-.5A2.5 2.5 0 0 1 4 14V6a2.5 2.5 0 0 1 2.5-2.5z" /><path d="M12 6.6v6.8M9 8.3l6 3.4M15 8.3l-6 3.4" /></>,
   // The cube fills the whole 24 box (the other glyphs keep a margin), so shrink it about the centre.
-  cursor: <g transform="translate(2.4 2.4) scale(.8)"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" /></g>
+  cursor: <g transform="translate(2.4 2.4) scale(.8)"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23" /></g>,
+  // Editors opened from the project menu. The VS Code ribbon is one shape, tinted per product in CSS.
+  vscode: <path d={VSCODE} />,
+  'vscode-insiders': <path d={VSCODE} />,
+  vscodium: <path d={VSCODE} />,
+  zed: <path d="M4.2 4h15.6L11.2 11.1H19.8V20H4.2l8.6-7.1H4.2V4z" />,
+  windsurf: <path d="M2.4 15.2c2.1-3.6 3.7-5.4 6-5.4 1.8 0 2.5 2.1 4.3 2.1 2.5 0 3.5-3.8 8.9-6.4v3.1c-3.6 1.8-4.4 4.6-7.2 4.6-1.9 0-2.7-2-4.6-2-1.7 0-2.9 1.5-4.6 4H2.4z" />,
+  jetbrains: <path fillRule="evenodd" d="M5 3.2h14a2 2 0 0 1 2 2v13.6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5.2a2 2 0 0 1 2-2zm2.4 2.6h8.8v2.15h-6.55v2.05h5.15v2.15H9.65V18.2H7.4V5.8z" />
 } satisfies Record<string, ReactNode>;
 
 const effortBars = [{ x: 2.5, h: 6 }, { x: 7.5, h: 9.5 }, { x: 12.5, h: 13 }, { x: 17.5, h: 16.5 }] as const;
@@ -138,13 +148,11 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 }
 
 type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none'; dot?: boolean; action?: string };
-// Icon-only button: the label is both the tooltip and the accessible name, so no glyph has to be guessed.
-// Always the styled tooltip (data-tip, tooltip.ts; a title would be taken off and put back on every hover); tip='none' skips it for glyphs nobody has to guess (the close X), unless the button has a shortcut: then it shows the same
-// styled tooltip with the key. action: the id of the app shortcut this button triggers (its current binding is appended to the label).
+// Close buttons keep their accessible name without adding a tooltip to the familiar X.
 
 export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot, action }: IconButtonProps) {
   const actionKeys = useActionKeys(action), shown = keys ?? actionKeys;
-  const text = shown ? `${label} (${shown})` : label, styled = tip !== 'none' || !!shown;
+  const text = shown ? `${label} (${shown})` : label, styled = icon !== 'x' && tip !== 'none';
   // dot: a small red mark for something unread behind the button (the label should say so too).
   return <button type="button" className={`icon-btn ${className}`} data-tip={styled ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
 }

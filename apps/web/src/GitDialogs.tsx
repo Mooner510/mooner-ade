@@ -61,8 +61,8 @@ export function MessageDialog({ title, initial, submit, note, onSubmit, onClose 
 
 type RebaseAction = 'pick' | 'reword' | 'edit' | 'squash' | 'fixup' | 'drop';
 const ACTIONS: { id: RebaseAction; label: string; hint: string }[] = [
-  { id: 'pick', label: 'Pick', hint: '그대로 씁니다' }, { id: 'reword', label: 'Reword', hint: '메시지를 고칩니다' }, { id: 'edit', label: 'Edit', hint: '이 커밋에서 멈춥니다 (고친 뒤 계속)' },
-  { id: 'squash', label: 'Squash', hint: '아래(이전) 커밋에 합치고 메시지도 합칩니다' }, { id: 'fixup', label: 'Fixup', hint: '아래(이전) 커밋에 합치고 이 메시지는 버립니다' }, { id: 'drop', label: 'Drop', hint: '이 커밋을 버립니다' }
+  { id: 'pick', label: 'Pick', hint: '커밋 유지' }, { id: 'reword', label: 'Reword', hint: '커밋 메시지 편집' }, { id: 'edit', label: 'Edit', hint: '이 커밋에서 일시 정지' },
+  { id: 'squash', label: 'Squash', hint: '이전 커밋에 통합 · 메시지 병합' }, { id: 'fixup', label: 'Fixup', hint: '이전 커밋에 통합 · 현재 메시지 삭제' }, { id: 'drop', label: 'Drop', hint: '현재 커밋 삭제' }
 ];
 export type RebaseRow = { sha: string; subject: string; message: string };
 // Newest on top, like the log; the list is applied bottom-up. Alt+↑/↓ moves the focused row.
@@ -118,9 +118,9 @@ export function ConflictsDialog({ state, onResolve, onContinue, onAbort, onClose
         <ul role="listbox" aria-label="충돌 파일">{state.conflicts.map(path => <li key={path} role="option" aria-selected={path === file} className={path === file ? 'selected' : ''} onClick={() => setSelected(path)}><Icon name="error" size={13} />{path}</li>)}
           {!state.conflicts.length && <li className="done"><Icon name="check" size={13} />모든 충돌을 해결했습니다.</li>}</ul>
         <div className="git-conflict-actions">
-          <button disabled={!file || busy} onClick={() => void resolve(side.yours)} title={`${side.yoursText}의 내용으로 해결합니다`}>내 것 적용<small>{side.yoursText}</small></button>
-          <button disabled={!file || busy} onClick={() => void resolve(side.theirs)} title={`${side.theirsText}의 내용으로 해결합니다`}>상대 것 적용<small>{side.theirsText}</small></button>
-          <button disabled={!file || busy} onClick={() => void resolve('mark')} title="파일을 직접(또는 에이전트가) 고친 뒤 해결됨으로 표시합니다">해결됨으로 표시<small>직접 고친 뒤</small></button>
+          <button disabled={!file || busy} onClick={() => void resolve(side.yours)}>내 것 적용<small>{side.yoursText}</small></button>
+          <button disabled={!file || busy} onClick={() => void resolve(side.theirs)}>상대 것 적용<small>{side.theirsText}</small></button>
+          <button disabled={!file || busy} onClick={() => void resolve('mark')}>해결됨으로 표시<small>직접 고친 뒤</small></button>
         </div>
       </div>
       <div className="actions">{state.op && <button className="danger" onClick={onAbort}>{opName(state.op)} 중단</button>}<span className="spacer" /><button onClick={onClose}>닫기</button>
@@ -136,7 +136,7 @@ export function LocalChangesDialog({ action, files, onChoose, onClose }: { actio
       <h3 id={id}>Git {action} 문제</h3>
       <p>커밋하지 않은 로컬 변경이 {action}(으)로 덮어써집니다. 먼저 커밋하거나, 스마트 {action}으로 변경을 잠시 보관했다가 되돌리세요.</p>
       {files.length > 0 && <ul className="git-file-list">{files.map(file => <li key={file}>{file}</li>)}</ul>}
-      <div className="actions"><button className="danger" onClick={() => onChoose('force')} title="로컬 변경을 버리고 진행합니다">강제 {action}</button><span className="spacer" /><button onClick={onClose}>취소</button>
+      <div className="actions"><button className="danger" onClick={() => onChoose('force')} title="로컬 변경 삭제">강제 {action}</button><span className="spacer" /><button onClick={onClose}>취소</button>
         <button className="primary" autoFocus onClick={() => onChoose('smart')}>스마트 {action}</button></div>
     </div>
   </Modal>;

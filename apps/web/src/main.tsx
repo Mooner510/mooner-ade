@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
 import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
+import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
@@ -15,8 +16,9 @@ import { Splash } from './Splash';
 import { Hint } from './Hint';
 import { Changelog, entries as changelogEntries, hasUnreadChangelog, syncChangelogVersion } from './Changelog';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
+import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
-import { byLastUsed, ideList, rememberIde, type IdeList } from './ide-open';
+import { byLastUsed, ideIcon, ideList, rememberIde, type IdeList } from './ide-open';
 import { copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
@@ -32,6 +34,7 @@ import '@fontsource-variable/jetbrains-mono/wght.css';
 const syncFocus = () => document.documentElement.toggleAttribute('data-blurred', !document.hasFocus() && !document.documentElement.hasAttribute('data-keep-anim'));
 addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(syncFocus)); syncFocus();
 import './style.css';
+installThemes();
 
 type Entry = { root: string; id: string };
 type Recent = { id?: string; root: string; pinned?: boolean };
@@ -142,10 +145,9 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
   const favorites = recent.filter(item => item.pinned), others = recent.filter(item => !item.pinned);
   // Already-open projects stand out; choosing one just switches to it.
   const row = (item: Recent) => { const isOpen = open.has(item.root); return <div className={`recent${item.pinned ? ' pinned' : ''}${isOpen ? ' open' : ''}`} key={item.root}>
-    <button type="button" className="recent-open" title={isOpen ? `${item.root}
-열려 있음 · 누르면 이 프로젝트로 이동` : item.root} onClick={() => void onOpen(item.root)}><strong><span className="recent-name">{shortName(item.root)}</span>{isOpen && <span className="open-badge">열림</span>}</strong><small>{item.root}</small></button>
+    <button type="button" className="recent-open" onClick={() => void onOpen(item.root)}><strong><span className="recent-name">{shortName(item.root)}</span>{isOpen && <span className="open-badge">열림</span>}</strong><small data-tip-overflow="">{item.root}</small></button>
     <button type="button" className="recent-pin" aria-pressed={!!item.pinned} aria-label={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} title={item.pinned ? '즐겨찾기 해제' : '즐겨찾기에 추가'} onClick={() => onPin(item.root, !item.pinned)}>{item.pinned ? '★' : '☆'}</button>
-    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} title="최근 프로젝트에서 삭제" disabled={!ready} onClick={() => setRemoving(item.root)}><Icon name="x" size={14} /></button></div>; };
+    <button type="button" className="recent-remove" aria-label={`${shortName(item.root)} 최근 프로젝트에서 삭제`} disabled={!ready} onClick={() => setRemoving(item.root)}><Icon name="x" size={14} /></button></div>; };
   const submitLabel = tab === 'open' ? (busy ? '여는 중…' : '열기') : tab === 'create' ? (busy ? '만드는 중…' : '만들고 열기') : (busy ? '클론 중…' : '클론하고 열기');
   const createTarget = joinPath(parent.trim(), name.trim()), cloneTarget = joinPath(parent.trim(), folder.trim() || repoName(url));
   return <><div className="welcome-card picker"><h1 id="picker-title" className="picker-title">프로젝트 추가</h1>
@@ -168,7 +170,7 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
             <p className="hint">선택한 위치에 빈 폴더를 만들고 바로 엽니다.</p>
             <FolderField label="만들 위치" ariaLabel="새 프로젝트를 만들 위치" title="새 프로젝트를 만들 위치 선택" value={parent} placeholder="프로젝트를 만들 상위 폴더를 선택하세요" onChange={setParent} {...fieldState} />
             <div className="field"><span className="field-label">프로젝트 이름</span>
-              <input aria-label="새 프로젝트 이름" value={name} onChange={event => setName(event.target.value)} placeholder="my-project" pattern="[A-Za-z0-9_.\-]+" title="영문, 숫자, . _ - 만 쓸 수 있습니다." required disabled={busy} autoFocus /></div>
+              <input aria-label="새 프로젝트 이름" value={name} onChange={event => setName(event.target.value)} placeholder="my-project" pattern="[A-Za-z0-9_.\-]+" title="허용 문자: 영문, 숫자, . _ -" required disabled={busy} autoFocus /></div>
             <label className="check"><input type="checkbox" checked={git} onChange={event => setGit(event.target.checked)} disabled={busy} />git 저장소로 초기화 (git init)</label>
             {createTarget && <p className="picker-target">만들 경로 <code>{createTarget}</code></p>}</form>}
           {tab === 'clone' && <form id="picker-form" className="picker-form" onSubmit={event => { event.preventDefault(); if (parent) run(() => onClone(url.trim(), parent, folder.trim())); }}>
@@ -177,7 +179,7 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
               <input aria-label="GitHub 저장소" value={url} onChange={event => setUrl(event.target.value)} placeholder="owner/repo 또는 https://github.com/owner/repo" required disabled={busy} autoFocus /></div>
             <FolderField label="클론할 위치" ariaLabel="클론할 위치(루트 경로)" title="클론할 위치 선택" value={parent} placeholder="저장소를 받을 상위 폴더를 선택하세요" onChange={setParent} {...fieldState} />
             <div className="field"><span className="field-label">폴더 이름 <small>(선택)</small></span>
-              <input aria-label="클론할 폴더 이름" value={folder} onChange={event => setFolder(event.target.value)} placeholder={repoName(url) || '저장소 이름'} pattern="[A-Za-z0-9_.\-]+" title="영문, 숫자, . _ - 만 쓸 수 있습니다." disabled={busy} /></div>
+              <input aria-label="클론할 폴더 이름" value={folder} onChange={event => setFolder(event.target.value)} placeholder={repoName(url) || '저장소 이름'} pattern="[A-Za-z0-9_.\-]+" title="허용 문자: 영문, 숫자, . _ -" disabled={busy} /></div>
             {cloneTarget && <p className="picker-target">클론 경로 <code>{cloneTarget}</code></p>}</form>}
         </div>
       </section>
@@ -197,6 +199,12 @@ function PickerCard({ ready, recent, open, errorScope, onOpen, onCreate, onClone
           void onRemove(removing).then(() => setRemoving('')).catch(cause => fail(errorText(cause))).finally(() => setDeleting(false));
         }}>{deleting ? '삭제 중…' : '삭제'}</button></div>
     </Modal>}</>;
+}
+
+// "⌘⇧T" / "Ctrl+Shift+T" / "F2": one keycap per key, the same split the tooltip uses.
+function MenuKeys({ keys }: { keys: string }) {
+  const parts = keys.includes('+') && keys.length > 1 ? keys.split('+') : [...keys.match(/^[⌘⌃⌥⇧]*/)?.[0] ?? '', keys.replace(/^[⌘⌃⌥⇧]*/, '')].filter(Boolean);
+  return <>{parts.map((part, index) => <kbd key={index}>{part}</kbd>)}</>;
 }
 
 // Arrow-key walk through a popup menu's enabled buttons, Escape closes it (shared by the tab and project menus).
@@ -222,19 +230,18 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, [Boolean(list)]);
   const fail = (cause: unknown) => pushError(target.root, errorText(cause));
   const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: '.' }).catch(fail); };
-  const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span></button>;
+  const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span></button>;
   const ides = byLastUsed(list?.ides ?? []);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
     <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.max(8, Math.min(target.y, innerHeight - 150 - 30 * Math.max(1, ides.length))) }}>
-      <small className="menu-title" title={target.root}>{shortName(target.root)}</small>
-      <button role="menuitem" onClick={() => open('files')}><Icon name="folderOpen" size={15} /><span className="menu-label">{list ? `${list.fileManager}에서 폴더 열기` : '폴더 열기'}</span></button>
+      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.max(8, Math.min(target.y, innerHeight - 120 - 28 * Math.max(1, ides.length))) }}>
+      <button role="menuitem" onClick={() => open('files')}><Icon name="folderOpen" size={14} /><span className="menu-label">{list ? `${list.fileManager}에서 폴더 열기` : '폴더 열기'}</span></button>
       {item('fileOpen', '파일 열기…', onPickFile)}
-      <hr />
-      <small className="menu-title">편집기로 프로젝트 열기</small>
-      {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><Icon name="code" size={15} /><span className="menu-label">{ide.label}</span></button>)}
-      {!list && <small className="menu-title">편집기를 찾는 중…</small>}
-      {list && !ides.length && <small className="menu-title">이 컴퓨터에서 감지된 편집기가 없습니다</small>}
+      {(!list || ides.length > 0) && <>
+        <hr />
+        {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><Icon name={ideIcon(ide)} size={14} /><span className="menu-label">{ide.label}에서 열기</span></button>)}
+        {!list && <button role="menuitem" disabled>편집기를 찾는 중…</button>}
+      </>}
       <hr />
       {item('copy', '경로 복사', () => copyText(target.root))}
     </div></>;
@@ -248,18 +255,16 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
   if (!tab || !handle) return null;
   const pane = tab.panes.find(item => item.id === target.paneId);
   const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
-    <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={15} /><span className="menu-label">{label}</span>{keys && <kbd>{keys}</kbd>}</button>;
+    <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span>{keys && <MenuKeys keys={keys} />}</button>;
   const onKey = menuKeys(ref, onClose);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
     <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 200 : 130)) }}>
+      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 180 : 120)) }}>
       {pane && <>
-        <small className="menu-title">{pane.label}</small>
         {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
         {item('x', pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
         <hr />
       </>}
-      <small className="menu-title">{pane ? `탭: ${tab.label}` : tab.label}</small>
       {item('edit', '이름 바꾸기', () => handle.renameTab(tab.id), 'F2')}
       {item('x', '탭 닫기', () => handle.closeTab(tab.id), pane ? undefined : 'Del')}
     </div></>;
@@ -302,6 +307,13 @@ function Shell() {
   const { hub, connection } = useHub(ready);
   const entriesRef = useRef(entries); entriesRef.current = entries;
   const handles = useRef(new Map<string, WorkspaceHandle>());
+  // One ref callback per project, kept: a new function every render makes the memoized Workspace re-render each time, for every open project.
+  const handleRefs = useRef(new Map<string, (handle: WorkspaceHandle | null) => void>());
+  const handleRef = (root: string) => {
+    let ref = handleRefs.current.get(root);
+    if (!ref) handleRefs.current.set(root, ref = handle => { if (handle) handles.current.set(root, handle); else { handles.current.delete(root); handleRefs.current.delete(root); } });
+    return ref;
+  };
   const statusRef = useRef(status); statusRef.current = status;
   const globalSettings = useRef(false);
   const current = entries.some(entry => entry.root === activeRoot) ? activeRoot : entries[0]?.root ?? '';
@@ -338,7 +350,10 @@ function Shell() {
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
     }).catch(cause => setBootError(errorText(cause)));
   }, []);
-  useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
+  useEffect(() => {
+    const theme = themeById(settings.theme), root = document.documentElement;
+    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme;
+  }, [settings.theme]);
   useEffect(() => { document.documentElement.toggleAttribute('data-keep-anim', settings.animateInBackground); syncFocus(); }, [settings.animateInBackground]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
   useEffect(() => { (window as unknown as { adeDesktop?: { setZoom?(percent: number): void } }).adeDesktop?.setZoom?.(settings.uiZoom); }, [settings.uiZoom]);
@@ -522,15 +537,15 @@ function Shell() {
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
           </div>;
           return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} {...projectTarget}>
-            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={`${hint}\n우클릭: 폴더·파일·편집기로 열기`} {...projectSource} onContextMenu={openProjectMenu}
+            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" {...projectSource} onContextMenu={openProjectMenu}
               onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openProjectMenu(event); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
-              <span className="folder-name">{name}</span>
-              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
+              <span className="folder-name" data-tip-overflow="">{name}</span>
+              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
-                <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showAppKey(settings.appKeys, 'closeProject')})`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
+                <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
@@ -553,7 +568,7 @@ function Shell() {
                   else return;
                   event.preventDefault();
                 };
-                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
+                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
                 // Edges of a row reorder (a line shows where); the middle merges, labelled so it is never a surprise.
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
@@ -591,29 +606,28 @@ function Shell() {
                 const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <span className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}><i /><i /><i /><i /></span>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)} title={`${tab.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                    <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{tab.label}</span>{trail(tab)}
+                    <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span>{trail(tab)}
                     {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
                     {alert(tab)}{close}
                   </div>{dropHint}</li>;
                 // A split tab: a header that drags the whole tab, and one row per terminal that drags just that terminal.
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tab.label} · 분할 ${tab.panes.length}개\n끌어서 탭 전체 이동 · 아래 항목을 끌면 그 항목만 이동\n우클릭: 메뉴 · 더블클릭: 이름 바꾸기`}
+                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head"
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
-                    <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
+                    <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
-                      title={`${pane.label}\n끌어서 다른 탭으로 이동 · 탭 사이나 빈 곳에 놓으면 새 탭으로 분리\n우클릭: 메뉴`}
                       draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
-                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label">{pane.label}</span>{trail(pane)}
+                      <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
-                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} title={pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기'} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
+                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
                     </li>; })}
                   </ul>{dropHint}
                 </li>;
@@ -640,7 +654,7 @@ function Shell() {
         onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setWidth(clampWidth(settings.sidebarWidth + (event.key === 'ArrowLeft' ? -16 : 16))); } }} />}
     </nav>
     <div className="ws-stack">
-      {entries.map(entry => <Workspace key={entry.root} ref={handle => { if (handle) handles.current.set(entry.root, handle); else handles.current.delete(entry.root); }}
+      {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
@@ -654,4 +668,4 @@ function Shell() {
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
 installTooltips();
-void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<Shell />));
+void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<ErrorBoundary><Shell /></ErrorBoundary>));

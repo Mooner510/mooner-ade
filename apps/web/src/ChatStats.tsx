@@ -110,8 +110,8 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
   return <div className="stats-body">
     {stats.source === 'ade' && <p className="stats-note">ADE에 보관된 대화 범위의 통계입니다. 완료 응답은 모델 API 호출 수와 다릅니다. 누적 토큰·비용은 CLI 세션 전체 값일 수 있으며 제공되지 않은 값은 —로 표시합니다.</p>}
     <div className="stats-tiles">
-      <Tile label="총 비용" value={stats.cost ? money(stats.cost.totalUsd) : money(costUsd)} hint={stats.cost ? '에이전트가 보고한 이 세션의 누적 비용' : costUsd !== null ? '에이전트가 보고한 누적 비용을 보여 줍니다' : '에이전트가 이 세션의 비용을 제공하지 않았습니다'} />
-      <Tile label={stats.source === 'ade' ? '완료 응답' : '요청'} value={`${stats.requests.toLocaleString('ko-KR')}${stats.subRequests ? ` (서브 ${stats.subRequests})` : ''}`} hint={stats.source === 'ade' ? '완료·중단·오류로 종료된 응답 수' : '모델 API 호출 수. 같은 호출은 한 번만 셉니다'} />
+      <Tile label="총 비용" value={stats.cost ? money(stats.cost.totalUsd) : money(costUsd)} hint={stats.cost || costUsd !== null ? '에이전트 보고 비용' : '비용 미제공'} />
+      <Tile label={stats.source === 'ade' ? '완료 응답' : '요청'} value={`${stats.requests.toLocaleString('ko-KR')}${stats.subRequests ? ` (서브 ${stats.subRequests})` : ''}`} hint={stats.source === 'ade' ? '완료·중단·오류로 종료된 응답 수' : '모델 API 호출 수 · 중복 제외'} />
       <Tile label="턴" value={String(stats.turns)} hint="내가 보낸 메시지 수" />
       <Tile label="캐시 적중률" value={percent(stats.cacheHitRate)} hint="입력 중 캐시에서 읽은 비율" />
       <Tile label="최대 컨텍스트" value={stats.contextAvailable === false ? '—' : compact(stats.peakContext)} hint={subagents.length ? `이 대화의 최대 컨텍스트 · 서브에이전트 최대 ${compact(subPeak)}` : undefined} />

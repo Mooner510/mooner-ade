@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { AgentMode } from './launchers';
+import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
 
 export type Settings = {
-  theme: 'dark' | 'light'; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
+  theme: ThemeId; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
   terminalFont: string; lineHeight: number; scrollback: number; cursorStyle: 'bar' | 'block' | 'underline'; cursorBlink: boolean; copyOnSelect: boolean;
   sidebarWidth: number; statusItems: string[]; statusLeft: string[]; statusRight: string[]; usageColors: boolean; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; soundVolumeExtended: boolean; diffRefresh: number; wakatime: boolean; wakatimeBackground: boolean;
   terminalShell: string; claudeSession: boolean;
@@ -32,6 +33,7 @@ export type Settings = {
   chatStatusItems: string[]; chatStatusLeft: string[]; chatStatusRight: string[]; chatStatusSeparator: string;
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
   chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatToolDisplay: 'summary' | 'detail'; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
+  chatFileChipLabel: 'path' | 'name';
   chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean; animateInBackground: boolean;
@@ -81,6 +83,7 @@ export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, M
 export const TOUR_VERSION = 2;
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
+  if (typeof next.theme !== 'string' || !isThemeId(next.theme)) next.theme = 'dark';
   if (saved.onboarded === undefined) next.onboarded = true;
   // New chats start in auto mode now. A saved 'cli' from before that is the old default, not a choice (the marker is set once this ran), so it moves to 'auto' one time.
   if (saved.chatPermissionAutoSet !== true) { next.chatPermissionAutoSet = true; if (saved.chatDefaultPermission === undefined || saved.chatDefaultPermission === 'cli') next.chatDefaultPermission = 'auto'; }
@@ -120,6 +123,7 @@ export const defaultSettings: Settings = {
   clock12h: false, clockSeconds: false, systemRefresh: 5, reviewWidth: 480, onboarded: false, tourVersion: 0,
   chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
+  chatFileChipLabel: 'path',
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
@@ -136,7 +140,7 @@ export const defaultSettings: Settings = {
 const systemMono = /Mac|iPhone|iPad/.test(navigator.platform) ? "Menlo, Monaco, monospace" : /Windows/.test(navigator.userAgent) ? "'Cascadia Mono', Consolas, monospace" : "'DejaVu Sans Mono', ui-monospace, monospace";
 export const terminalFontStack = (name: string) => name.trim() ? `${name.trim()}, ${systemMono}` : systemMono;
 const diffFontFamily = (settings: Pick<Settings, 'diffFont' | 'terminalFont'>) => terminalFontStack(settings.diffFont.trim() || settings.terminalFont);
-const themeName = (theme: Settings['theme']) => theme === 'dark' ? 'ade-dark' : 'ade-light';
+const themeName = (theme: Settings['theme']) => `ade-${themeById(theme).id}`;
 
 let monacoPromise: Promise<typeof Monaco> | null = null;
 function loadMonaco() { return monacoPromise ||= init(); }
@@ -158,16 +162,8 @@ async function init() {
     defaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true, noSuggestionDiagnostics: true });
     defaults.setModeConfiguration({ completionItems: false, hovers: false, documentSymbols: false, definitions: false, references: false, documentHighlights: false, rename: false, diagnostics: false, documentRangeFormattingEdits: false, signatureHelp: false, onTypeFormattingEdits: false, codeActions: false, inlayHints: false });
   }
-  // Matches the app surfaces in style.css so editors and diffs blend into panes.
-  monaco.editor.defineTheme('ade-dark', { base: 'vs-dark', inherit: true, rules: [], colors: {
-    'editor.background': '#141518', 'editorGutter.background': '#141518', 'minimap.background': '#141518', 'editor.lineHighlightBackground': '#1c1e22', 'editorLineNumber.foreground': '#4b4f57',
-    'editorLineNumber.activeForeground': '#a9adb5', 'editorWidget.background': '#1b1d21', 'editorWidget.border': '#2a2d33', 'diffEditor.insertedLineBackground': '#2ea04324', 'diffEditor.removedLineBackground': '#f8514924',
-    'diffEditor.insertedTextBackground': '#2ea04340', 'diffEditor.removedTextBackground': '#f8514940', 'diffEditor.unchangedRegionBackground': '#18191c', 'scrollbarSlider.background': '#ffffff18', 'scrollbarSlider.hoverBackground': '#ffffff28'
-  } });
-  monaco.editor.defineTheme('ade-light', { base: 'vs', inherit: true, rules: [], colors: {
-    'editor.background': '#ffffff', 'editorGutter.background': '#ffffff', 'editor.lineHighlightBackground': '#f4f5f7', 'diffEditor.insertedLineBackground': '#2ea04318', 'diffEditor.removedLineBackground': '#cf222e18',
-    'diffEditor.unchangedRegionBackground': '#f6f7f9'
-  } });
+  // Chrome follows the app theme. Token colours stay Monaco's own (vs / vs-dark) so every language stays readable.
+  for (const theme of APP_THEMES) monaco.editor.defineTheme(`ade-${theme.id}`, { base: theme.scheme === 'light' ? 'vs' : 'vs-dark', inherit: true, rules: [], colors: theme.monaco as Monaco.editor.IColors });
   return monaco;
 }
 
@@ -190,7 +186,7 @@ export async function colorize(code: string, hint: string): Promise<string | nul
   const monaco = await loadMonaco(), id = languageOf(monaco, hint);
   if (!id) return null;
   // The token colours (.mtk*) are global CSS that follows the theme, so set it to the app's own before colouring.
-  monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'ade-light' : 'ade-dark');
+  monaco.editor.setTheme(themeName(themeById(document.documentElement.dataset.theme).id));
   return monaco.editor.colorize(code, id, { tabSize: 2 });
 }
 export function DiffView({ original, modified, path, settings, compact = false, minHeight = 60, onHeight }: { original: string; modified: string; path: string; settings: Settings; compact?: boolean; minHeight?: number; onHeight?(height: number): void }) {

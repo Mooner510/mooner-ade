@@ -4,13 +4,14 @@ import { Icon, IconButton, type IconName } from './Icon';
 import { Markdown } from './Markdown';
 import { toast } from './toast';
 import { Dropdown, type Ask } from './views';
-import { effortLabel, effortStyle, modelColor } from './chat-model';
+import { effortLabel, effortStyle, modelColor, showCombo } from './chat-model';
 import { AnnotateImage } from './AnnotateImage';
 import { ago, base64Bytes, canSubmit, displayTitle, feedbackGroup, feedbackTypes, groupLabels, toggleType, typeTag, feedbackEffort, feedbackModelId, isEditable, isEmptyDraft, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackGroup, type FeedbackQueue, type FeedbackSource } from './feedback-model';
 import { canCapture, ensureDraft, feedbackCall, openFeedback, removeLocal, requestCapture, startDraft, useFeedback, useQueueClock, type CaptureMode } from './feedback-store';
 
 export const feedbackFileUrl = (item: Pick<Feedback, 'id' | 'updatedAt'>, name: string) => `/feedback-file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}?v=${item.updatedAt}`;
 const sourceIcons: Record<FeedbackSource, IconName> = { human: 'person', ai: 'sparkles', agent: 'bot' };
+const feedbackTypeOptions = feedbackTypes.filter(({ id }) => id !== 'question' && id !== 'praise');
 
 const readDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
@@ -82,11 +83,11 @@ export function FeedbackPanel(props: PanelProps) {
       {!history && mode !== 'start' && <IconButton icon="chevronLeft" tip="header" label="처음으로" onClick={() => setMode('start')} />}
       <Icon name="feedback" /><strong className="feedback-panel-title">피드백 요청</strong><QueueChip queue={queue} />
       <span className="spacer" />
-      <button type="button" className="feedback-history-btn" aria-pressed={history} title={history ? '돌아가기' : '보낸 피드백 보기'} onClick={() => setHistory(value => !value)}>
+      <button type="button" className="feedback-history-btn" aria-pressed={history} onClick={() => setHistory(value => !value)}>
         {history ? <><Icon name="arrowLeft" size={13} />돌아가기</> : <><Icon name="clock" size={13} />내역{sent.length > 0 && <b>{sent.length}</b>}</>}
       </button>
       <IconButton icon={props.wide ? 'minimize' : 'maximize'} tip="header" label={props.wide ? '패널 크기 줄이기' : '패널 넓게 보기'} onClick={props.toggleWide} />
-      <IconButton icon="x" tip="none" label="피드백 요청 닫기" action="feedback" onClick={props.onClose} />
+      <IconButton icon="x" label="피드백 요청 닫기" onClick={props.onClose} />
     </header>
     {error && <p className="feedback-note warn" role="alert">{error}</p>}
     {/* The AI screen stays mounted so a run in progress (and what was typed) survives a look at another screen. */}
@@ -101,17 +102,15 @@ export function FeedbackPanel(props: PanelProps) {
 // What the panel opens on: only the choice of how to write. Everything after it is the chosen screen.
 function FeedbackStart({ onAi, onWrite }: { onAi(): void; onWrite(): void }) {
   return <div className="feedback-start">
-    <h3>어떻게 작성할까요?</h3>
-    <button type="button" className="feedback-choice" onClick={onAi}>
-      <span className="feedback-choice-mark"><Icon name="sparkles" size={20} /></span>
-      <span className="feedback-choice-text"><strong>AI로 작성</strong><small>짧게 적으면 AI가 정리해 줘요</small></span>
-      <Icon name="chevronRight" size={16} />
-    </button>
-    <button type="button" className="feedback-choice" onClick={onWrite}>
-      <span className="feedback-choice-mark"><Icon name="edit" size={20} /></span>
-      <span className="feedback-choice-text"><strong>직접 작성</strong><small>제목과 내용을 직접 써요</small></span>
-      <Icon name="chevronRight" size={16} />
-    </button>
+    <h3>작성 방식</h3>
+    <div className="feedback-choices">
+      <button type="button" className="feedback-choice" onClick={onWrite}>
+        <Icon name="edit" size={16} /><span>직접 작성</span><Icon name="chevronRight" size={14} />
+      </button>
+      <button type="button" className="feedback-choice" onClick={onAi}>
+        <Icon name="chat" size={16} /><span>AI로 초안 작성</span><Icon name="chevronRight" size={14} />
+      </button>
+    </div>
   </div>;
 }
 
@@ -163,7 +162,7 @@ function AvailabilityNote({ available }: { available: FeedbackAvailability | nul
 }
 
 // "전송 대기 n건" next to the panel title while the server still has items to send.
-const QueueChip = ({ queue }: { queue: FeedbackQueue }) => queue.size > 0 ? <span className="feedback-queue-chip" title="제출한 피드백이 순서대로 자동 전송됩니다">전송 대기 {queue.size}건</span> : null;
+const QueueChip = ({ queue }: { queue: FeedbackQueue }) => queue.size > 0 ? <span className="feedback-queue-chip">전송 대기 {queue.size}건</span> : null;
 
 const groups: FeedbackGroup[] = ['todo', 'sending', 'done'];
 
@@ -203,7 +202,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
                 <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>
                 {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
                 {item.types.map(typeId => <span key={typeId} className="feedback-tag">{typeTag(typeId)}</span>)}
-                {item.source !== 'human' && <span className="feedback-source" title={sourceLabels[item.source]}><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
+                {item.source !== 'human' && <span className="feedback-source"><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
                 {item.images.length > 0 && <span className="feedback-count" title={`이미지 ${item.images.length}장`}><Icon name="image" size={12} />{item.images.length}</span>}
                 <time dateTime={new Date(item.updatedAt).toISOString()} title={new Date(item.updatedAt).toLocaleString('ko-KR')}>{ago(item.updatedAt, stamp)}</time>
               </small>
@@ -328,7 +327,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={onDrop}>
       {dragging && <div className="feedback-drop" aria-hidden="true"><Icon name="image" size={28} /><strong>여기에 놓으면 이미지가 추가됩니다</strong></div>}
       {editable && <div className="feedback-types" role="group" aria-label="피드백 유형 (여러 개 선택 가능)">
-        {feedbackTypes.map(type => <button key={type.id} type="button" className="chat-chip" aria-pressed={types.includes(type.id)} disabled={drafting} onClick={() => toggle(type.id)}><Icon name={type.icon as IconName} size={13} />{type.tag}</button>)}
+        {feedbackTypeOptions.map(type => <button key={type.id} type="button" className="chat-chip" aria-pressed={types.includes(type.id)} disabled={drafting} onClick={() => toggle(type.id)}>{type.tag}</button>)}
       </div>}
       {(item.status === 'queued' || item.status === 'submitting') && <div className="feedback-note queued" role="status">
         <Icon name={item.status === 'submitting' ? 'send' : 'clock'} size={14} />
@@ -346,7 +345,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
       <section className={`feedback-card${drafting ? ' drafting' : ''}`} data-feedback-region="피드백 작성 카드">
         <div className="feedback-title-row">
           <input className="feedback-title" aria-label="피드백 제목 (선택)" placeholder="제목 (선택)" maxLength={MAX_TITLE} value={title} readOnly={!editable || drafting} onChange={event => edit({ title: event.target.value })} />
-          {editable && types.length > 0 && /\[[^\]]*\]/.test(title) && <span className="feedback-title-warn" title="고른 유형이 제목 앞에 [버그]처럼 자동으로 붙어서, 제목에 직접 쓴 [ ]와 중복될 수 있어요."><Icon name="alert" size={12} />[ ] 중복 주의</span>}
+          {editable && types.length > 0 && /\[[^\]]*\]/.test(title) && <span className="feedback-title-warn" title="선택한 유형과 제목의 [ ] 중복"><Icon name="alert" size={12} />[ ] 중복 주의</span>}
         </div>
         {tab === 'edit' && editable
           ? <textarea className="feedback-body" aria-label="피드백 내용 (마크다운)" autoFocus={!body} placeholder={drafting ? 'AI가 다듬는 중…' : '내용'} value={body} readOnly={drafting} onChange={event => edit({ body: event.target.value })}
@@ -354,7 +353,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
           : <div className="feedback-preview">{body.trim() ? <Markdown text={body} /> : <p className="hint">내용이 없습니다.</p>}</div>}
 
         {item.images.length > 0 && <ol className="feedback-strip" aria-label={`이미지 ${item.images.length}/${MAX_IMAGES}`}>{item.images.map((image, index) => <li key={image.name} style={{ '--i': index } as CSSProperties}>
-          <button type="button" className="feedback-strip-image" title={editable ? '눌러서 표시하기' : image.name} disabled={!editable} onClick={() => setAnnotating(image.name)}>
+          <button type="button" className="feedback-strip-image" title={editable ? '이미지에 표시' : image.name} disabled={!editable} onClick={() => setAnnotating(image.name)}>
             <img src={feedbackFileUrl(item, image.name)} alt={`이미지 ${index + 1}`} loading="lazy" />{image.annotated && <span className="feedback-annotated">표시됨</span>}
           </button>
           {editable && <span className="feedback-strip-tools">
@@ -388,7 +387,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
     </div>
     <AvailabilityNote available={editable ? available : null} />
     {editable && <>
-      {item.source !== 'human' && <p className="feedback-reason"><Icon name={sourceIcons[item.source]} size={13} />{item.source === 'ai' ? 'AI가 작성한' : '에이전트가 넣은'} 초안이에요. 내용을 확인하고 고친 뒤 제출하세요.</p>}
+      {item.source !== 'human' && <p className="feedback-reason"><Icon name="info" size={13} />{item.source === 'ai' ? 'AI 초안입니다.' : '에이전트가 작성한 초안입니다.'} 내용을 확인한 뒤 제출하세요.</p>}
       {!verdict.ok && <p className="feedback-reason" role="status"><Icon name="info" size={13} />{verdict.reason}</p>}
       <footer className="feedback-actions">
         <span className="feedback-pick">
@@ -396,8 +395,8 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
           <Dropdown className={`chat-effort effort-${effort}`} label="Effort" value={effort} options={AI_EFFORTS} onChange={value => onAiChange({ feedbackAiEffort: value as AiEffort })} />
         </span>
         <span className="spacer" />
-        <button type="button" className={`feedback-ai-btn${drafting ? ' busy' : ''}`} disabled={!canDraft} aria-label="AI로 다듬기" title={canDraft ? 'AI로 다듬기: 쓴 내용을 문제·기대 동작·제안으로 다듬고 유형도 골라 줍니다 (⌘/Ctrl+Enter)' : 'AI로 다듬기: 내용을 적거나 이미지를 넣어 주세요'} onClick={draft}><Icon name="sparkles" size={14} /><span className="feedback-btn-text">{drafting ? '다듬는 중…' : 'AI로 다듬기'}</span></button>
-        <span title={verdict.ok ? (available?.mode === 'anonymous' ? '로그인 없이 제출' : '제출') : verdict.reason}>
+        <button type="button" className="feedback-ai-btn" disabled={!canDraft} aria-label="AI로 다듬기" title={canDraft ? `AI로 다듬기 (${showCombo(/Mac|iPhone|iPad/.test(navigator.platform) ? 'meta+enter' : 'ctrl+enter')})` : '내용 또는 이미지 필요'} onClick={draft}><Icon name="edit" size={14} /><span className="feedback-btn-text">{drafting ? '다듬는 중…' : 'AI로 다듬기'}</span></button>
+        <span title={verdict.ok && available?.mode === 'anonymous' ? '익명 제출' : undefined}>
           <button type="button" className="primary feedback-submit" disabled={!verdict.ok || !!busy} onClick={submit}><Icon name="send" size={14} />{busy === 'submit' ? '제출 중…' : item.status === 'failed' ? '다시 제출' : '제출'}</button>
         </span>
       </footer>

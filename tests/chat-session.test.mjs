@@ -748,6 +748,38 @@ test('Cursor: text before a tool keeps the id it streamed with, later text gets 
 });
 
 
+for (const [label, dropped, detail] of [
+  ['unavailable', '\n\nError: RetriableError: [unavailable] HTTP 503', /HTTP 503/],
+  ['stream closed before turnEnded', '\n\nError: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream', /turnEnded/],
+]) {
+  test(`Cursor continues the same turn once when the agent ends it with a retriable backend drop (${label})`, async () => {
+    const lines = [], events = [];
+    const protocol = createChatProtocol('cursor', { write: line => { lines.push(line); return Promise.resolve(); }, emit: event => events.push(event) });
+    const update = text => protocol.handle({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+    const finish = async () => { protocol.handle({ jsonrpc: '2.0', id: JSON.parse(lines.at(-1)).id, result: { stopReason: 'end_turn' } }); await new Promise(resolve => setImmediate(resolve)); };
+    await protocol.send('hello', []);
+    update('작업 중');
+    update(dropped);
+    await finish();
+    const prompts = lines.filter(line => line.includes('session/prompt'));
+    assert.equal(prompts.length, 2, 'the dropped turn is resumed once');
+    assert.equal(events.filter(event => event.kind === 'result').length, 0, 'the turn stays open across the resume');
+    assert.ok(!events.some(event => JSON.stringify(event).includes('RetriableError')), 'the raw error is not stored');
+    assert.ok(events.some(event => event.kind === 'message' && event.blocks?.[0]?.text === '작업 중'));
+    update('이어서 끝');
+    await finish();
+    assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'success');
+    await protocol.send('again', []);
+    update(dropped);
+    await finish();
+    update(dropped);
+    await finish();
+    const failed = events.filter(event => event.kind === 'result').at(-1);
+    assert.equal(failed.status, 'failed');
+    assert.match(failed.text, detail);
+  });
+}
+
 test('Claude: the picked model and Effort survive a reopen, and a chat keeps the model it ran with when the global default changes', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-pin-')), configDir = path.join(directory, 'claude-config'), folder = chatFolder(directory, 'pin'), launches = [];
   await mkdir(configDir, { recursive: true }); await mkdir(folder, { recursive: true });

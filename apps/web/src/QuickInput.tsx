@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Icon, type IconName } from './Icon';
 
-export type QuickItem = { id: string; label: string; detail?: string; keys?: string };
+export type QuickItem = { id: string; label: string; detail?: string; keys?: string; icon?: IconName };
 export type QuickRequest =
   | { kind: 'pick'; title: string; items: QuickItem[]; resolve(value: string | null): void }
   | { kind: 'input'; title: string; initial?: string; resolve(value: string | null): void };
@@ -56,7 +57,7 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
       <div className="quick-head"><p className={sentence ? 'quick-message' : 'quick-title'}>{first}</p>{detail && <p className="quick-note">{detail}</p>}</div>
       {typed && <input ref={input} value={value} aria-label={first} placeholder={request.kind === 'input' ? '' : '검색'} onChange={event => setValue(event.target.value)} />}
       {request.kind !== 'input' && <ul role="listbox">{items.map((item, position) => <li key={item.id} role="option" aria-selected={position === index} className={position === index ? 'selected' : ''} onMouseMove={() => setIndex(position)} onMouseDown={event => { event.preventDefault(); finish(item.id); }}>
-        <span>{item.label}</span>{item.detail && <small>{item.detail}</small>}{item.keys && <kbd>{item.keys}</kbd>}</li>)}{!items.length && <li className="none">일치하는 항목이 없습니다.</li>}</ul>}
+        {item.icon && <Icon name={item.icon} size={14} />}<span>{item.label}</span>{item.detail && <small>{item.detail}</small>}{item.keys && <kbd>{item.keys}</kbd>}</li>)}{!items.length && <li className="none">일치하는 항목이 없습니다.</li>}</ul>}
     </div>
   </div>;
 }

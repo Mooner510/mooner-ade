@@ -77,7 +77,7 @@ function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form
         : f.type === 'select' ? <div key={f.k} className="ui-field ui-select" role="group" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : <label key={f.k} className={`ui-field ui-${f.type}`}><span>{f.label}</span>{control}</label>;
     })}
-    <button type="submit" className="primary" title="입력창에 넣습니다. 고친 뒤 직접 보내세요">{sent ? '✓ ' : ''}{FORM_BUTTON}</button>
+    <button type="submit" className="primary">{sent ? '✓ ' : ''}{FORM_BUTTON}</button>
   </form>;
 }
 
@@ -86,7 +86,7 @@ export function UiSpecView({ chatId, specs }: { chatId: string; specs: Spec[] })
     switch (spec.t) {
       // One strip of figures split by hairlines (not a box per number); a tone is a small dot by the label.
       case 'stats': return <div key={i} className="ui-stats">{spec.items.map((item, j) => <div key={j} className="ui-stat" data-tone={item.tone || undefined}>
-        <small className="ui-stat-label">{item.label}</small><strong>{item.value}</strong>{item.sub && <small className="ui-stat-sub" title={item.sub}>{item.sub}</small>}</div>)}</div>;
+        <small className="ui-stat-label">{item.label}</small><strong>{item.value}</strong>{item.sub && <small className="ui-stat-sub">{item.sub}</small>}</div>)}</div>;
       // A timeline: the same check / number badges as the question card's tabs, joined by a line, the current step in the accent colour.
       case 'steps': return <ol key={i} className="ui-steps">{spec.items.map(([name, state, detail], j) => <li key={j} data-state={state}>
         <span className="ui-step-mark">{state === 'done' ? <Tick size={11} /> : j + 1}</span><span className="ui-step-text"><span className="ui-step-name">{name}</span>{detail && <span className="ui-step-detail">{detail}</span>}</span></li>)}</ol>;

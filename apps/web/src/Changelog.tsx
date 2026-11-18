@@ -60,11 +60,11 @@ export function Changelog({ onClose }: { onClose(): void }) {
   useEffect(() => { if (entry) view(entry.version); }, [entry?.version]);
   const close = () => { try { if (entries[0]) localStorage.setItem(SEEN, entries[0].version); } catch {} onClose(); };
   return <Modal className="project-modal changelog" labelledBy="changelog-title" onClose={close} region="변경 내역">
-    <header className="changelog-head"><h2 id="changelog-title">변경 내역</h2><button className="icon-btn" aria-label="닫기" title="닫기" onClick={close}><Icon name="x" size={16} /></button></header>
+    <header className="changelog-head"><h2 id="changelog-title">변경 내역</h2><button className="icon-btn" aria-label="닫기" onClick={close}><Icon name="x" size={16} /></button></header>
     <div className="changelog-main">
       <nav className="changelog-nav" aria-label="버전">
         {entries.map(item => <button key={item.version} aria-pressed={item.version === entry?.version} data-read={!isNew(item.version)} onClick={() => view(item.version)}>
-          <span className="changelog-nav-version">v{item.version}</span><time className="changelog-nav-date" dateTime={item.date} title={item.time ? `${item.date} ${item.time}` : item.date}>{item.time ? ago(item.date, item.time) : item.date}</time>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
+          <span className="changelog-nav-version">v{item.version}</span><time className="changelog-nav-date" dateTime={item.date} title={item.time ? `${item.date} ${item.time}` : undefined}>{item.time ? ago(item.date, item.time) : item.date}</time>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
         </button>)}
       </nav>
       <div className="changelog-body">

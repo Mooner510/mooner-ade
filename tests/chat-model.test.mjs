@@ -383,7 +383,7 @@ test('Cursor First Party stays white and has a readable background in the light 
   const { readFile } = await import('node:fs/promises');
   const css = await readFile(new URL('../apps/web/src/style.css', import.meta.url), 'utf8');
   assert.match(css, /--provider-cursor: #fff/);
-  assert.match(css, /:root\[data-theme=light\].*--provider-cursor.*background: #292b30/);
+  assert.match(css, /:root\[data-scheme=light\].*--provider-cursor.*background: #292b30/);
 });
 
 

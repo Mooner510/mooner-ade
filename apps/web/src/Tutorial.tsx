@@ -134,7 +134,7 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
   if (leaf.kind === 'launcher') return <section className={`terminal-pane launcher-pane ${focused ? 'focused' : ''}`} onMouseDownCapture={pick}>
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
-      <span className="pane-actions"><IconButton icon="x" tip="none" label="pane 닫기" keys="Esc" onClick={close} /></span></div>
+      <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={close} /></span></div>
     <Launchers mode={ctx.mode} onModeChange={ctx.setMode} shell={settings.terminalShell} autoFocus={focused} onLaunch={command => dispatch(launchOf(id, command))} />
   </section>;
   if (leaf.kind === 'chat') return <ChatPane leaf={leaf} focused={focused} zoomed={zoomed} visible={ctx.visible(id)} ctx={ctx.chat} onFocus={pick} onZoom={() => dispatch({ type: 'zoom' })} onSplit={(_, dir) => dispatch({ type: 'split', dir })} />;
@@ -144,11 +144,11 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {claude && agent === 'claude' && settings.cacheTimer && <CacheTimer cache={{ at: claude.at, ttl: 300, tokens: 18_400, model: 'claude-opus-5-5' }} working={claude.state === 'working'} warn={settings.cacheWarn} />}
       <span className="pane-title"><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{tour.labels[id]}</span>
-        {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span>}</span>
+        {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
         <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={dir => dispatch({ type: 'split', dir })} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
-        <IconButton icon="x" tip="none" label="터미널 종료" action="closePane" onClick={close} /></span></div>
+        <IconButton icon="x" label="터미널 종료" onClick={close} /></span></div>
     <TourTerminal lines={tour.lines[id] ?? []} prompt={ctx.prompt(id)} settings={settings} focused={focused} focusKey={ctx.focusKey} onSubmit={text => ctx.submit(id, text)} onTab={text => ctx.tab(id, text)} />
     {claude && claude.queue.length > 0 && <div className="claude-follow-up">
       <div className="follow-up-heading" role="status">Follow-up {claude.queue.length}개 · 현재 작업 완료 후 순서대로 전송</div>
@@ -313,20 +313,20 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
   const leafState = (id: string) => claude?.leaf !== id ? undefined : claude.state === 'asking' ? 'attention' : claude.state === 'done' ? 'done' : claude.state === 'working' ? 'working' : undefined;
   const alertOf = (state?: string) => state === 'attention' ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : state === 'done' ? <i className="attn-dot" aria-label="확인 필요" /> : null;
   const closeTab = (item: TourTab) => closable(tour, item.id) ? dispatch({ type: 'closeTab', id: item.id }) : note(`‘${item.label}’ 탭은${refuse}`);
-  const folder = (item: TourProject, index: number) => {
+  const folder = (item: TourProject) => {
     const selected = item.id === tour.current, open = !folded.has(item.id), name = item.name;
     const states = item.tabs.flatMap(t => leafList(t.pane).map(leaf => leafState(leaf.id)));
     const choose = () => dispatch({ type: 'project', id: item.id });
     return <section key={item.id} data-project={item.id} className={`folder ${selected ? 'active' : ''}`}>
-      <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" title={`${name}\n${item.root}\n${showKeys(`mod+alt+${index + 1}`)}`}
+      <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head"
         onClick={choose} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') choose(); }}>
         <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const set = new Set(previous); if (!set.delete(item.id)) set.add(item.id); return set; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
         <span className="folder-icon"><Icon name="folder" size={15} /></span>
-        <span className="folder-name">{name}</span>
-        {states.includes('attention') ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 또는 승인을 처리해 주세요"><Icon name="alert" size={15} /></span> : states.includes('done') && <i className="attn-dot" aria-label="확인 필요" />}
+        <span className="folder-name" data-tip-overflow="">{name}</span>
+        {states.includes('attention') ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span> : states.includes('done') && <i className="attn-dot" aria-label="확인 필요" />}
         <span className="folder-actions">
           <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); if (!selected) choose(); dispatch({ type: 'newTab' }); }}><Icon name="plus" size={14} /></button>
-          <button aria-label={`${name} 프로젝트 닫기`} title={`프로젝트 닫기 (${showKeys('mod+alt+w')})`} onClick={event => { event.stopPropagation(); note('연습용 프로젝트는 닫을 수 없어요. 실제로는 이 버튼으로 닫습니다.'); }}><Icon name="x" size={14} /></button>
+          <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); note('연습용 프로젝트는 닫을 수 없어요. 실제로는 이 버튼으로 닫습니다.'); }}><Icon name="x" size={14} /></button>
         </span>
       </div>
       {open && <ul className="folder-tabs" role="group" data-dragging={drag && selected ? '' : undefined}>
@@ -335,7 +335,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           const state = (['attention', 'done', 'working'] as const).find(value => leaves.some(leaf => leafState(leaf.id) === value && (value !== 'done' || !on)));
           const select = () => { if (!selected) choose(); dispatch({ type: 'tab', id: tabItem.id }); };
           const mine = claude && leaves.some(leaf => leaf.id === claude.leaf), cache = mine && tour.agents[claude!.leaf] === 'claude' && settings.cacheTimer && !on && <CacheTimer cache={{ at: claude!.at, ttl: 300, tokens: 18_400, model: 'claude-opus-5-5' }} working={claude!.state === 'working'} warn={settings.cacheWarn} />;
-          const close = <button className="ptab-close" aria-label={`${tabItem.label} 탭 닫기`} title="탭 닫기" onClick={event => { event.stopPropagation(); closeTab(tabItem); }}><Icon name="x" size={12} /></button>;
+          const close = <button className="ptab-close" aria-label={`${tabItem.label} 탭 닫기`} onClick={event => { event.stopPropagation(); closeTab(tabItem); }}><Icon name="x" size={12} /></button>;
           const mode = selected && dropAt?.id === tabItem.id ? dropAt.mode : null;
           const dnd = {
             draggable: selected,
@@ -361,21 +361,21 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">분할로 합치기</span>;
           if (leaves.length < 2) return <li key={tabItem.id} data-tab={tabItem.id} role="none" className={`${drag === tabItem.id ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
             <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-agent={agent} data-agent-state={state}
-              title={`${tabItem.label}\n끌어서 순서 변경 · 다른 탭 위에 놓으면 분할`} onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
-              <span className="folder-tab-mark" aria-hidden="true"><Icon name={agent || 'terminal'} size={13} /></span><span className="folder-tab-label">{tabItem.label}</span>
+              onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
+              <span className="folder-tab-mark" aria-hidden="true"><Icon name={agent || 'terminal'} size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tabItem.label}</span>
               {cache}{alertOf(state)}{close}
             </div>{dropHint}</li>;
           return <li key={tabItem.id} data-tab={tabItem.id} role="none" className={`folder-group ${on ? 'active' : ''} ${drag === tabItem.id ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-            <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" title={`${tabItem.label} · 분할 ${leaves.length}개`} onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
-              <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label">{tabItem.label}</span><small className="group-count">{leaves.length}</small>{close}
+            <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head" onClick={select} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') select(); }}>
+              <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tabItem.label}</span><small className="group-count">{leaves.length}</small>{close}
             </div>
             <ul className="group-panes" role="group" aria-label={`분할 ${leaves.length}개`}>
               {leaves.map(leaf => { const focus = () => { select(); dispatch({ type: 'pick', id: leaf.id }); }, paneState = leafState(leaf.id), focusedHere = on && tour.focus === leaf.id;
                 return <li key={leaf.id} role="treeitem" aria-selected={focusedHere} tabIndex={0} className={`group-pane ${focusedHere ? 'focused' : ''}`} data-agent={tour.agents[leaf.id]} data-agent-state={paneState}
                   onClick={focus} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') focus(); }}>
-                  <span className="folder-tab-mark" aria-hidden="true"><Icon name={leaf.kind === 'launcher' ? 'plus' : tour.agents[leaf.id] || 'terminal'} size={13} /></span><span className="folder-tab-label">{tour.labels[leaf.id]}</span>
+                  <span className="folder-tab-mark" aria-hidden="true"><Icon name={leaf.kind === 'launcher' ? 'plus' : tour.agents[leaf.id] || 'terminal'} size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tour.labels[leaf.id]}</span>
                   {alertOf(paneState === 'done' && on ? undefined : paneState)}
-                  <button className="ptab-close" aria-label={`${tour.labels[leaf.id]} 닫기`} title="이 터미널 닫기" onClick={event => { event.stopPropagation(); if (closable(tour, leaf.id)) dispatch({ type: 'closePane', id: leaf.id }); else note(`이 터미널은${refuse}`); }}><Icon name="x" size={12} /></button>
+                  <button className="ptab-close" aria-label={`${tour.labels[leaf.id]} 닫기`} onClick={event => { event.stopPropagation(); if (closable(tour, leaf.id)) dispatch({ type: 'closePane', id: leaf.id }); else note(`이 터미널은${refuse}`); }}><Icon name="x" size={12} /></button>
                 </li>; })}
             </ul>{dropHint}
           </li>;
@@ -402,13 +402,13 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     return <main key={item.id} className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!on}>
       <header className="tabbar">
         <div className="split-button">
-          <button className="bar-button new-tab" data-tip={`새 터미널 탭 (${showKeys('mod+shift+t')})`} aria-label="새 터미널 탭" onClick={() => dispatch({ type: 'newTab' })}><Icon name="plus" /><span>새 탭</span></button>
-          <button className="bar-button caret" data-tip={`모드와 Provider를 선택해 새 탭 열기 (${showKeys('mod+shift+n')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
+          <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => dispatch({ type: 'newTab' })}><Icon name="plus" /><span>새 탭</span></button>
+          <button className="bar-button caret" data-tip={`새 탭 종류 선택 (${showKeys('mod+shift+n')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu(value => !value)}><Icon name="chevronDown" size={14} /></button>
           {menu && on && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={() => setMenu(false)} />
             <LauncherMenu mode={mode} items={launchersFor(mode, shellLabel(shells, settings.terminalShell))} onModeChange={setMode} onClose={() => setMenu(false)} onLaunch={command => { setMenu(false); dispatch(launchOf('', command)); }} /></>}
         </div>
         <span className="drag-space" />
-        <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} title={`명령 팔레트 (${showKeys('mod+shift+p')})`}><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
+        <button className="palette-button" onClick={() => { setPaletteKey(key => key + 1); dispatch({ type: 'palette', open: true }); }} aria-label="명령 팔레트"><Icon name="search" /><span>{item.name}</span><kbd>{showKeys('mod+shift+p')}</kbd></button>
         <div className="bar-tools" role="group" aria-label="패널과 설정">
           <button className={`bar-button ${tour.diff ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showKeys('mod+shift+g')})`} aria-label="Git 커밋 그래프" aria-pressed={tour.diff} onClick={() => dispatch({ type: 'diff' })}>
             <Icon name="graph" />{changes > 0 && <span className="diffstat"><ins>+1</ins><del>−1</del></span>}</button>
@@ -436,7 +436,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         </div>
         <div className="status-right">
           {usage('claude', 23, 41)}{usage('codex', 8, 17)}
-          <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: settings.clock12h })}</span>
+          <span className="stat"><Icon name="clock" size={13} />{new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: settings.clock12h })}</span>
           <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={() => note('둘러보기를 마치면 내 프로젝트를 열 수 있어요.')}><Icon name="folderPlus" size={14} /></button>
         </div>
       </footer>
@@ -482,10 +482,10 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       {!hero && <p className={`tour-feedback ${done ? 'ok' : ''}`} role="status" aria-live="polite">{done ? step.after ?? '다 했어요. ‘다음’을 누르세요.' : feedback}</p>}
       {hero && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
       <footer>
-        {!last && <button type="button" className="tour-skip" onClick={skip} title="건너뛰어도 사이드바 아래 책 버튼으로 다시 볼 수 있어요">건너뛰기</button>}
+        {!last && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
         <span className="spacer" />
         {at > 1 && <button type="button" onClick={() => setAt(at - 1)}>이전</button>}
-        <button ref={next} type="button" className="primary" disabled={!done} title={done ? '' : '해 볼 것을 모두 마치면 넘어갈 수 있어요'} onClick={() => last ? leave() : setAt(at + 1)}>
+        <button ref={next} type="button" className="primary" disabled={!done} onClick={() => last ? leave() : setAt(at + 1)}>
           {last ? '시작하기' : at === 0 ? '둘러보기 시작' : '다음'}<Icon name="arrowRight" size={14} /></button>
       </footer>
     </section>}

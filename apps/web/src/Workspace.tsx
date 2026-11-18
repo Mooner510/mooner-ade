@@ -3,6 +3,7 @@ export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
+import { nextTheme } from './themes';
 import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, CodexCreditRow, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
 import type { ChatCtx } from './ChatPane';
@@ -22,7 +23,7 @@ import { GitLog } from './GitLog';
 import { loadSpec } from './git-graph';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
-import { byLastUsed, FILE_EVENT, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
+import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -56,7 +57,7 @@ const shortPath = (path: string) => { const clean = path.replace(/\\/g, '/'), pa
 const Clock = memo(function Clock({ hour12, seconds }: { hour12: boolean; seconds: boolean }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), seconds ? 1000 : 15000); return () => clearInterval(timer); }, [seconds]);
-  return <span className="stat" title="현재 시각"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(seconds && { second: '2-digit' }), hour12 })}</span>;
+  return <span className="stat"><Icon name="clock" size={13} />{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(seconds && { second: '2-digit' }), hour12 })}</span>;
 });
 // CPU and memory, sampled every 5 s while a status item shows them and the window is visible. A store of its own, so a sample
 // re-renders only these items instead of the whole workspace; one shared poll, since the server reports CPU since the previous call.
@@ -89,7 +90,7 @@ const WakaTimeStat = memo(function WakaTimeStat() {
   }, []);
   if (!status) return null;
   const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
-  return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? `\n${status.lastError}` : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
+  return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? '\n전송 오류' : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
 });
 const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
@@ -220,8 +221,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const last = lastIde(), where = target.line ? `${target.path}:${target.line}` : target.path, kind = target.folder ? '폴더를' : '파일을';
     const choice = await pick(`${kind} 열까요?
 ${where}`, [
-      ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, ...(ide.id === last && { detail: '마지막 사용' }) })),
-      { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기` }, { id: 'copy', label: '경로 복사' }, { id: 'cancel', label: '취소' }]);
+      ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, icon: ideIcon(ide), ...(ide.id === last && { detail: '마지막 사용' }) })),
+      { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기`, icon: 'folderOpen' },
+      { id: 'copy', label: '경로 복사', icon: 'copy' }, { id: 'cancel', label: '취소' }]);
     if (choice === 'copy') copyText(target.path);
     else if (choice === 'files' || choice?.startsWith('ide:')) {
       const ide = choice === 'files' ? 'files' : choice.slice(4);
@@ -901,7 +903,7 @@ ${where}`, [
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', run: switchBranch },
-    { id: 'theme', label: '색 테마 전환', run: () => setSettings(previous => ({ ...previous, theme: previous.theme === 'dark' ? 'light' : 'dark' })) },
+    { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
     ...projectCommands
   ];
   // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
@@ -998,7 +1000,7 @@ ${where}`, [
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
-    connection: connection !== '연결됨' && <span className="conn" role="status" title="로컬 서버와 연결이 끊겼습니다. 자동으로 다시 연결합니다."><Icon name="wifi" size={13} />{connection}</span>,
+    connection: connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>,
     path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
@@ -1007,8 +1009,9 @@ ${where}`, [
     claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
     codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
     cursorusage: <UsageStat provider="cursor" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
-    wakatime: settings.wakatime && <WakaTimeStat />,
-    clock: <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
+    // Only the project on screen: every open project keeps its status bar mounted (hidden), and each would otherwise poll and tick.
+    wakatime: settings.wakatime && active && <WakaTimeStat />,
+    clock: active && <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
     readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
     openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
   };
@@ -1023,13 +1026,13 @@ ${where}`, [
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar" data-feedback-region="상단 바">
       <div className="split-button">
-        <button className="bar-button new-tab" data-tip={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
-        <button ref={launcherButton} className="bar-button caret" data-tip={`모드와 Provider를 선택해 새 탭 열기 (${showAppKey(settings.appKeys, 'launcher')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
+        <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
+        <button ref={launcherButton} className="bar-button caret" data-tip={`새 탭 종류 선택 (${showAppKey(settings.appKeys, 'launcher')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
           <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
       <span className="drag-space" />
-      <button className="palette-button" onClick={() => run(openPalette)} title={`명령 팔레트 (${showAppKey(settings.appKeys, 'palette')})`}><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
+      <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${gitOpen ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})${git.additions || git.deletions ? `\n커밋하지 않은 변경: +${git.additions} −${git.deletions}` : ''}`} aria-label="Git 커밋 그래프" aria-pressed={gitOpen} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleGit}>

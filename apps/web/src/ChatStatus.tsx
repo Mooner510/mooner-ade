@@ -10,8 +10,7 @@ type Def = {
   label: string; hint?: string; icon: string; format: string;
   // A second icon + text group after the main one (tokens: the cache icon with cache writes ↑ and reads ↓). Hidden when `show` says no.
   extra?: { icon: string; format: string; tip: string; show?(context: ChatStatusContext): boolean };
-  // The tooltip: its first line is the title, the rest says what the value means.
-  tip(context: ChatStatusContext): string;
+  tip?(context: ChatStatusContext): string;
   // `{token}` values for the template; the item is hidden when this returns null.
   values(context: ChatStatusContext): Record<string, string> | null;
   // 0 (green) to 120 (red) hue, for items that grade like the usage windows.
@@ -21,13 +20,12 @@ type Def = {
 
 export const chatStatusDefs: Record<string, Def> = {
   status: { label: '진행 상태', icon: 'bolt', format: '{status}', values: ({ state }) => ({ status: state.pending ? `승인 대기 ${state.pending}` : statusLabelsKo[state.status] }),
-    hint: '대기 중 · 응답 중 · 승인 대기',
-    tip: ({ state }) => `진행 상태\n에이전트가 지금 하는 일입니다. ${state.pending ? `승인을 기다리는 요청이 ${state.pending}개 있습니다.` : '대기 중 · 응답 중 · 승인 대기 중 하나로 표시됩니다.'}` },
+    hint: '대기 중 · 응답 중 · 승인 대기' },
   model: { label: '모델', icon: 'smart_toy', format: '{model}', values: ({ state }) => ({ model: displayModel(state.model, state.agent), id: state.model ?? '' }), hint: '{model} 짧은 이름 · {id} 전체 모델 ID', color: ({ state }) => modelAppearance(state.model, state.agent).color,
-    tip: ({ state }) => `모델\n이 채팅이 쓰는 모델입니다.${state.model ? `\n${state.model}` : ''}` },
+    tip: ({ state }) => state.model ? `모델 ID\n${state.model}` : '모델' },
   mode: { label: '권한 모드', icon: 'shield', format: '{mode}', values: ({ state }) => ({ mode: permissionLabel(state.permissionMode, state.agent), id: state.permissionMode }),
     color: ({ state }) => permissionModeColor(state.permissionMode),
-    tip: () => '권한 모드\n도구 실행과 파일 수정을 어디까지 자동으로 허용할지 정합니다.' },
+    tip: () => '권한 모드' },
   context: { label: '컨텍스트 사용률', icon: 'data_usage', format: '{percent}% · {used}/{window}',
     values: ({ state }) => {
       const gauge = contextGauge(state);
@@ -36,29 +34,27 @@ export const chatStatusDefs: Record<string, Def> = {
     hue: ({ state }) => usageHue(contextPercent(state)),
     color: ({ state }) => contextGauge(state).autoCompact ? 'var(--term-magenta)' : undefined,
     hint: '마지막 응답까지 쌓인 토큰 ÷ 기준 창(Auto Compact 창, 없으면 최대 컨텍스트). {percent} {used} {window}',
-    tip: ({ state }) => { const gauge = contextGauge(state); return `컨텍스트 사용률\n마지막 응답까지 대화에 쌓인 ${compact(gauge.used)} 토큰이 기준 창 ${compact(gauge.basis)} 토큰에서 차지하는 비율입니다. 가득 차면 대화가 압축됩니다.`; } },
+    tip: () => '컨텍스트 사용률\n사용 토큰 / 기준 창' },
   tokens: { label: '토큰', icon: 'token', format: '↑{input} ↓{output}', values: ({ state }) => ({ input: compact(state.tokens.input), output: compact(state.tokens.output), cache: compact(state.tokens.cacheRead), cacheWrite: compact(state.tokens.cacheCreate), total: compact(state.tokens.input + state.tokens.output) }),
-    extra: { icon: 'database', format: '↑{cacheWrite} ↓{cache}', tip: '프롬프트 캐시 (누적)\n↑ 쓰기: 캐시에 새로 저장한 토큰\n↓ 읽기: 캐시에서 다시 읽은 토큰 (훨씬 저렴)\n이 채팅 전체의 합계입니다.', show: ({ state }) => state.tokens.cacheRead + state.tokens.cacheCreate > 0 },
-    tip: () => '토큰 (누적)\n↑ 입력: 모델에 보낸 토큰\n↓ 출력: 모델이 답하며 만든 토큰\n이 채팅 전체의 합계입니다.',
+    extra: { icon: 'database', format: '↑{cacheWrite} ↓{cache}', tip: '누적 캐시 토큰\n↑ 쓰기 · ↓ 읽기', show: ({ state }) => state.tokens.cacheRead + state.tokens.cacheCreate > 0 },
+    tip: () => '누적 토큰\n↑ 입력 · ↓ 출력',
     hint: '이 채팅의 누적 토큰. 캐시 아이콘 뒤는 ↑캐시 쓰기 ↓캐시 읽기. {input} {output} {cache}(캐시 읽기) {cacheWrite}(캐시 쓰기) {total}' },
   cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)',
-    tip: () => '비용\nCLI가 보고한 이 채팅의 누적 비용(USD)입니다.' },
+    tip: () => '누적 비용 (USD)' },
   // Until a turn has been measured (and always on an API key) the item names what this chat is billed against; the measured share replaces it.
   share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ state, share }) => ({ share: usageBasis(state, share) }),
-    tip: ({ state, share }) => state.apiKey ? 'API Usage\n이 채팅은 API 키로 실행돼 토큰만큼 API로 과금됩니다. 플랜 한도는 쓰지 않습니다.'
-      : share ? `사용량 기여도\n이 채팅이 플랜 한도에서 차지한 비율(%p)의 추정치입니다. 괄호 안은 한도 창입니다.` : 'Plan Usage\nCLI 로그인 플랜의 한도를 씁니다. 한 턴이 측정되면 이 채팅이 차지한 비율로 바뀝니다.',
     hint: 'API 키 채팅은 ‘API Usage’(토큰 과금), CLI 로그인 채팅은 측정 전 ‘Plan Usage’로 표시하고, 측정되면 이 채팅이 플랜 한도에서 차지한 %p(추정)로 바뀝니다. Claude·Codex는 5시간과 주간, Cursor는 이 채팅 모델의 풀과 전체입니다.' },
-  turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }), tip: () => '턴 수\n사용자가 보내고 답변이 끝난 횟수입니다.' },
-  duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }), tip: () => '누적 소요 시간\n답변을 만드는 데 걸린 시간의 합계입니다. 사용자가 입력하는 시간은 빠집니다.' },
+  turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }) },
+  duration: { label: '누적 소요 시간', icon: 'timer', format: '{time}', values: ({ state }) => ({ time: duration(state.durationMs) }), tip: () => '누적 응답 시간' },
   session: { label: '세션 ID', icon: 'tag', format: '{short}', values: ({ state }) => state.sessionId ? { short: state.sessionId.slice(0, 8), id: state.sessionId } : null,
-    tip: ({ state }) => `세션 ID\nCLI가 이 대화에 붙인 ID입니다.${state.sessionId ? `\n${state.sessionId}` : ''}` },
+    tip: ({ state }) => `세션 ID\n${state.sessionId}` },
 };
 // What a chat's usage is counted against: an API key's tokens, or the CLI login's plan (its measured share once there is one).
 // Until a turn has been measured the item names what the chat is billed against; the measured share of the plan limits replaces it.
 export const usageBasis = (state: ChatState, share?: string | null) => state.apiKey ? 'API Usage' : share || 'Plan Usage';
 export const chatStatusLabels: Record<string, string> = Object.fromEntries(Object.entries(chatStatusDefs).map(([id, def]) => [id, def.label]));
 
-export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string; tip: string; extra?: { text: string; icon: string; tip: string } } | null => {
+export const chatItemView = (id: string, context: ChatStatusContext): { text: string; icon: string; color?: string; tip?: string; extra?: { text: string; icon: string; tip: string } } | null => {
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
@@ -66,66 +62,65 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon, tip: def.extra.tip } : undefined;
-  return { text: fillFormat(def.format, values), icon: def.icon, extra, tip: def.tip(context), color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };
+  return { text: fillFormat(def.format, values), icon: def.icon, extra, tip: def.tip?.(context), color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };
 };
 
 // One box of the status line. Hover or focus lights it and opens a tooltip in the top layer (the line clips its own overflow) that says what the value means.
-function StatBox({ cls, icon, text, tip, color, align, swap }: { cls: string; icon: string; text: string; tip: string; color?: string; align: 'left' | 'right'; swap?: boolean }) {
-  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [title, ...lines] = tip.split('\n');
+function StatBox({ cls, icon, text, tip, color, align }: { cls: string; icon: string; text: string; tip?: string; color?: string; align: 'left' | 'right' }) {
+  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [title, ...lines] = tip?.split('\n') ?? [];
   const open = () => { const el = pop.current; if (!el || el.matches(':popover-open')) return; el.showPopover(); placeAbove({ newState: 'open', currentTarget: el }, align, 6); };
   const close = () => { try { pop.current?.hidePopover(); } catch { /* already closed */ } };
   return <>
-    <span className={`stat chat-stat ${cls}`} tabIndex={0} aria-describedby={popId} style={color ? { color } as CSSProperties : undefined} onMouseEnter={open} onMouseLeave={close} onFocus={open} onBlur={close}>
+    <span className={`stat chat-stat ${cls}`} tabIndex={tip ? 0 : undefined} aria-describedby={tip ? popId : undefined} style={color ? { color } as CSSProperties : undefined} onMouseEnter={tip ? open : undefined} onMouseLeave={tip ? close : undefined} onFocus={tip ? open : undefined} onBlur={tip ? close : undefined}>
       <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{icon}</span>
-      {/* The usage item turns from its label into the measured share: a new key fades the new text in. */}
-      {swap ? <span key={text} className="chat-stat-swap">{text}</span> : text}
+      {text}
     </span>
-    <span ref={pop} id={popId} popover="manual" role="tooltip" className="chat-stat-tip"><strong>{title}</strong>{lines.map((line, at) => <span key={at}>{line}</span>)}</span>
+    {tip && <span ref={pop} id={popId} popover="manual" role="tooltip" className="chat-stat-tip"><strong>{title}</strong>{lines.map((line, at) => <span key={at}>{line}</span>)}</span>}
   </>;
 }
 
 // The usage item is a button and the switch: it names what this chat is billed against (Plan Usage, or API Usage with the money it has cost) and,
 // pressed, lets a Claude chat go on with the CLI plan or the API key. Switching is silent; the composer asks before the first message that would
 // change the login of a chat that has had a turn (the two logins do not share a prompt cache). The key itself is registered in Settings > AI 툴.
-function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
+function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth(auth: 'login' | 'key'): void }) {
   const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null);
-  const key = state.apiKey === true, claude = state.agent === 'claude', locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
-  useEffect(() => { if (open && claude) void api<{ claude?: { key: string } }>('agent-keys/status').then(status => setKeyReady(Boolean(status.claude?.key)), () => setKeyReady(null)); }, [open, claude]);
-  const choose = (auth: 'login' | 'key') => { if (!locked && onAuth && (auth === 'login') === key) onAuth(auth); };
+  const key = state.apiKey === true, locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
+  const needsKey = !key && keyReady === false;
+  useEffect(() => { if (open) void api<{ claude?: { key: string } }>('agent-keys/status').then(status => setKeyReady(Boolean(status.claude?.key)), () => setKeyReady(null)); }, [open]);
+  const choose = (auth: 'login' | 'key') => { if (!locked && (auth === 'login') === key) onAuth(auth); };
+  const openSettings = () => { pop.current?.hidePopover(); onSettings?.(); };
   return <>
-    <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId} title={claude ? '이 채팅이 어느 쪽 한도·요금을 쓰는지 보고 바꾸기' : '이 채팅이 어느 쪽 한도·요금을 쓰는지 보기'}>
+    <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId}>
       <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{key ? 'key' : 'speed'}</span>
-      {key ? <span className="chat-stat-swap">API Usage <b className="usage-money" title="API 키로 보낸 턴에 든 비용(실제로 청구됩니다)">${dollars(spent)}</b></span> : <span key={share ?? ''} className="chat-stat-swap">{share || 'Plan Usage'}</span>}
+      {key ? <span className="chat-stat-swap">API Usage <b className="usage-money">${dollars(spent)}</b></span> : <span key={share ?? ''} className="chat-stat-swap">{share || 'Plan Usage'}</span>}
       <span className="icon material-symbols-outlined usage-caret" style={{ fontSize: 14 }} aria-hidden="true">expand_less</span>
     </button>
-    <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="사용량 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
-      <span className="usage-head"><strong>이 채팅은 무엇으로 실행할까요</strong><span className="usage-sub">요금·한도를 어디에 쓸지 고릅니다</span></span>
-      {claude ? <>
-        <span className="usage-options" role="radiogroup" aria-label="로그인 방식">
-          <button type="button" role="radio" aria-checked={!key} className="usage-option plan" disabled={locked && key} onClick={() => choose('login')}>
-            <span className="usage-radio" aria-hidden="true" />
-            <span className="usage-option-body"><b>Plan Usage</b><small>CLI 로그인 플랜 · 5시간·주간 한도를 씁니다</small></span>
+    <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="채팅 사용 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
+      <strong className="usage-head">채팅 사용 방식</strong>
+      <span role="radiogroup" aria-label="로그인 방식">
+        <button type="button" role="radio" aria-checked={!key} className="usage-option plan" disabled={locked && key} onClick={() => choose('login')}>
+          <span>구독 플랜<small>5시간·주간 한도</small></span>
+          {!key && <span className="icon material-symbols-outlined usage-check" aria-hidden="true">check</span>}
+        </button>
+        <span className="usage-api-row">
+          <button type="button" role="radio" aria-checked={key} className="usage-option api" disabled={(locked && !key) || needsKey} onClick={() => choose('key')}>
+            <span>API 키<small>토큰 사용량에 따라 과금</small></span>
+            {key && <span className="icon material-symbols-outlined usage-check" aria-hidden="true">check</span>}
           </button>
-          <button type="button" role="radio" aria-checked={key} className="usage-option api" disabled={(locked && !key) || (!key && keyReady === false)} onClick={() => choose('key')}>
-            <span className="usage-radio" aria-hidden="true" />
-            <span className="usage-option-body"><b>API Usage</b><small>API 키 · 토큰만큼 요금이 청구됩니다</small></span>
-            {!key && keyReady === false && <span className="usage-badge">키 미등록</span>}
-          </button>
+          {needsKey && (onSettings ? <button type="button" className="usage-panel-action" onClick={openSettings}>키 등록</button> : <span className="usage-note">키 필요</span>)}
         </span>
-        {key && <span className="usage-spent"><span>이 채팅에서 API로 보낸 턴의 요금</span><b>${dollars(spent)}</b></span>}
-        {locked && <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">lock</span>응답이 끝난 뒤 바꿀 수 있습니다.</span>}
-        <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>전환하면 기존 캐시를 쓸 수 없어 비용이 더 발생할 수 있습니다.</span>
-      </> : <span className="usage-note"><span className="icon material-symbols-outlined" aria-hidden="true">info</span>이 에이전트의 로그인 방식은 채팅을 시작할 때 정해집니다.</span>}
-      {onSettings && <button type="button" className={`usage-panel-action${!key && keyReady === false && claude ? ' primary' : ''}`} onClick={() => { pop.current?.hidePopover(); onSettings(); }}>
-        <span className="icon material-symbols-outlined" aria-hidden="true">{!key && keyReady === false && claude ? 'key' : 'settings'}</span>{!key && keyReady === false && claude ? 'API 키 등록하기' : '설정 열기'}</button>}
+      </span>
+      {locked && <span className="usage-note">응답이 끝난 뒤 바꿀 수 있습니다.</span>}
+      {onSettings && !needsKey && <button type="button" className="usage-panel-action usage-settings" onClick={openSettings}>설정</button>}
     </span>
   </>;
 }
 
 function ChatItem({ id, view, align, state, share, onSettings, onAuth }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>>; align: 'left' | 'right'; state: ChatState; share?: string | null; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
+  const apiUsage = id === 'share' && state.apiKey;
   return <>
-    {id === 'share' ? <UsageButton state={state} share={share} align={align} onSettings={onSettings} onAuth={onAuth} />
-      : <StatBox cls={`chat-stat-${id}`} icon={view.icon} text={view.text} tip={view.tip} color={view.color} align={align} />}
+    {id === 'share' && state.agent === 'claude' && onAuth ? <UsageButton state={state} share={share} align={align} onSettings={onSettings} onAuth={onAuth} />
+      : <StatBox cls={`chat-stat-${id}`} icon={apiUsage ? 'key' : view.icon} text={apiUsage ? `${view.text} $${dollars(state.apiCostUsd ?? 0)}` : view.text} tip={view.tip} color={view.color} align={align} />}
     {view.extra && <StatBox cls={`chat-stat-${id}-extra`} icon={view.extra.icon} text={view.extra.text} tip={view.extra.tip} color={view.color} align={align} />}
   </>;
 }

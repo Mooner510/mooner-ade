@@ -2,6 +2,7 @@ import { appKey, appKeyDefs, appKeyInTerminalByDefault, combosOverlap, showAppKe
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
+import { themeById, themeChoices } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -143,13 +144,13 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
       const hint = id === 'wakatime' && !settings.wakatime ? 'WakaTime 작업 시간 기록을 켜야 표시됩니다.' : chat ? chatStatusDefs[id]?.hint ?? statusHints[id] : statusHints[id];
       if (!queryHit(query, `${labels[id] ?? id} ${hint ?? ''}`)) return null;
       return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} draggable className={`setting-hit ${shown.has(id) || (chat && id === 'share') ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${marker}`}
-        title="끌어서 순서와 위치를 바꿉니다 (Alt+화살표)"
+        title="순서 · 위치 변경 (Alt+화살표)"
         onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', id); setDragging(id); }}
         onDragOver={event => { const box = event.currentTarget.getBoundingClientRect(); over(event, side, event.clientY < box.top + box.height / 2 ? index : index + 1); }}
         onDrop={finish} onDragEnd={() => { setDragging(''); setDrop(null); }} onKeyDown={event => keys(event, id, side, index)}>
         <Icon name="grip" size={14} />
         <span><strong>{labels[id] ?? id}</strong><span className="statusbar status-sample" aria-hidden="true">{sample(id)}</span>{hint && <small>{hint}</small>}</span>
-        <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${labels[id] ?? id} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '어느 로그인(플랜·API 키)이 쓰이는지 늘 보여야 해서 끌 수 없습니다.' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
+        <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${labels[id] ?? id} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '플랜 · API 키 구분 상시 표시' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
       </li>;
     })}</ul>
   </section>;
@@ -158,7 +159,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
   return <div className="setting-block">
     <div className="status-intro">
       <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. 키보드는 Alt+화살표.</p>
-      <button disabled={isDefault} title="배치와 표시 항목을 처음 상태로 되돌립니다" onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
+      <button disabled={isDefault} onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
     </div>
     {chat && <Row title="항목 구분자" hint="항목 사이에 넣을 문자입니다 (최대 8자, 비우면 간격만).">
       <input type="text" maxLength={8} value={settings.chatStatusSeparator} aria-label="항목 구분자" onChange={event => onChange({ ...settings, chatStatusSeparator: event.target.value })} /></Row>}
@@ -368,10 +369,6 @@ function dragSettings(event: PointerEvent<HTMLElement>) {
   handle.addEventListener('lostpointercapture', end);
 }
 
-const lookThemes = {
-  dark: { bg: '#0c0d0f', surface: '#141518', line: '#24262b', fg: '#e4e6ea', muted: '#8b9099', accent: '#5ec8e5' },
-  light: { bg: '#eceef1', surface: '#ffffff', line: '#dfe2e7', fg: '#1d2127', muted: '#626a75', accent: '#0b8db3' }
-};
 const lookNames: Record<string, string> = {
   theme: '색 테마', accent: '강조 색', dim: '비활성 pane', zoom: '화면 배율', sidebar: '사이드바 접기', sidebarWidth: '사이드바 너비',
   termSize: '글꼴 크기', termFont: '글꼴', termWeight: '글꼴 굵기', termCursor: '커서 모양', termBlink: '커서 깜빡임',
@@ -389,15 +386,15 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
     return () => clearInterval(timer);
   }, [id, settings.clockSeconds]);
   if (!id || id === 'none') return <aside className="look-preview" aria-label="설정 미리보기"><p className="look-empty">미리보기가 없습니다</p></aside>;
-  const paint = lookThemes[settings.theme];
-  const accent = settings.accentColor || paint.accent;
+  const paint = themeById(settings.theme).vars;
+  const accent = settings.accentColor || paint['--accent'];
   const mono = terminalFontStack;
   const family = id.startsWith('term') ? 'term' : id.startsWith('chat') ? 'chat' : id.startsWith('diff') ? 'diff' : id;
   const shell = family === 'theme' || family === 'accent' || family === 'dim' || family === 'zoom' || family === 'sidebar' || family === 'sidebarWidth';
   return <aside className="look-preview" aria-label="설정 미리보기">
     <h4>{lookNames[id] ?? '미리보기'}</h4>
     {shell && <div className="look-zoom">
-      <div className="look-app" style={{ '--l-bg': paint.bg, '--l-surface': paint.surface, '--l-line': paint.line, '--l-fg': paint.fg, '--l-muted': paint.muted, '--l-accent': accent, ...(id === 'zoom' ? { transform: `scale(${settings.uiZoom / 100})`, transformOrigin: 'top left' } : {}) } as CSSProperties}>
+      <div className="look-app" style={{ '--l-bg': paint['--bg'], '--l-surface': paint['--surface'], '--l-line': paint['--border'], '--l-fg': paint['--fg'], '--l-muted': paint['--muted'], '--l-accent': accent, ...(id === 'zoom' ? { transform: `scale(${settings.uiZoom / 100})`, transformOrigin: 'top left' } : {}) } as CSSProperties}>
         <div className={`look-side${settings.sidebarCompact && id !== 'sidebarWidth' ? ' compact' : ''}`} style={!settings.sidebarCompact || id === 'sidebarWidth' ? { width: 22 + (settings.sidebarWidth - 160) / 8 } : undefined}>
           <i className="on" /><i /><i />
         </div>
@@ -522,16 +519,16 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <header className="settings-drag" onPointerDown={dragSettings}>
         <h3>{searching ? '검색' : sections.find(item => item.id === section)?.label}</h3>
         <input type="search" className="settings-search" placeholder="설정 검색" aria-label="설정 검색" value={query} onChange={event => setQuery(event.target.value)} />
-        <IconButton icon="x" label="설정 닫기" keys="Esc" onClick={onClose} />
+        <IconButton icon="x" label="설정 닫기" onClick={onClose} />
       </header>
       <div className="settings-content">
       <div className="settings-body">
         {searching && <p className="search-empty">일치하는 설정이 없습니다.</p>}
         {(searching || section === 'appearance') && <SectionFrame label="외관" searching={searching}>
           <Group title="전체">
-            <Row title="색 테마" preview="theme"><Dropdown label="색 테마" value={settings.theme} options={[{ value: 'dark', label: '어둡게' }, { value: 'light', label: '밝게' }]} onChange={value => set('theme', value as Settings['theme'])} /></Row>
+            <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다." preview="theme"><Dropdown className="theme-picker" label="색 테마" value={settings.theme} options={themeChoices()} onChange={value => set('theme', value as Settings['theme'])} /></Row>
             <Row title="강조 색" hint="버튼, 선택, 포커스 표시에 쓰는 색입니다. 기본은 테마 색을 씁니다." preview="accent">
-              <input type="color" value={settings.accentColor || '#5ec8e5'} aria-label="강조 색" onChange={event => set('accentColor', event.target.value)} />
+              <input type="color" value={settings.accentColor || themeById(settings.theme).vars['--accent']} aria-label="강조 색" onChange={event => set('accentColor', event.target.value)} />
               <button disabled={!settings.accentColor} onClick={() => set('accentColor', '')}>기본</button>
             </Row>
             <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
@@ -563,6 +560,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="글꼴 크기" hint="대화 본문 크기입니다. (11–20px)" preview="chatSize">{number('chatFontSize', 11, 20)}</Row>
             <Row title="대화 너비" hint="대화와 입력창의 최대 너비입니다." preview="chatWidth">
               <Dropdown label="대화 너비" value={settings.chatWidth} options={[{ value: 'narrow', label: '좁게' }, { value: 'default', label: '기본' }, { value: 'wide', label: '넓게' }, { value: 'full', label: '가득' }]} onChange={value => set('chatWidth', value as Settings['chatWidth'])} /></Row>
+            <Row title="파일 칩 표시" hint="답변에 나온 파일을 프로젝트 상대 경로 또는 파일 이름으로 표시합니다. 칩에 마우스를 올리면 전체 경로를 볼 수 있습니다." preview={false}>
+              <Dropdown label="파일 칩 표시" value={settings.chatFileChipLabel} options={[{ value: 'path', label: '상대 경로' }, { value: 'name', label: '파일 이름만' }]} onChange={value => set('chatFileChipLabel', value as Settings['chatFileChipLabel'])} /></Row>
             <Row title="생각 과정 표시" hint="‘응답 중에만’은 생각이 스트리밍되는 동안만 펼치고 끝나면 접습니다." preview="chatThink">
               <Dropdown label="생각 과정 표시" value={settings.chatThinkingOpen} options={[{ value: 'live', label: '응답 중에만 펼침' }, { value: 'always', label: '항상 펼침' }, { value: 'never', label: '항상 접음' }]} onChange={value => set('chatThinkingOpen', value as Settings['chatThinkingOpen'])} /></Row>
             <Row title="도구 호출 표시" hint="요약: 도구를 3개 이상 연달아 부르면 한 상자에 묶습니다. 상세: 도구마다 한 줄씩 보여 줍니다." preview="chatToolMode">
@@ -761,7 +760,7 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
       {items.map(def => {
         const id = `${def.scope}:${def.id}`, custom = !combosOverlap(current(def), def.keys) || (def.scope === 'appKeys' && settings.termKeys?.[def.id] !== undefined);
         return <div key={id} className="setting-hit"><span>{def.label}</span><span className="key-edit">
-          {def.scope === 'appKeys' && <label className="key-term" title="켜면 터미널에 포커스가 있어도 이 단축키가 ADE 동작으로 실행됩니다. 끄면 셸·CLI가 키를 받습니다."><input type="checkbox" checked={inTerminal(def)} onChange={event => setInTerminal(def, event.target.checked)} />터미널에서도</label>}
+          {def.scope === 'appKeys' && <label className="key-term"><input type="checkbox" checked={inTerminal(def)} onChange={event => setInTerminal(def, event.target.checked)} />터미널에서도</label>}
           <button type="button" className="kbd-edit" aria-label={`${def.label} 단축키 변경`} aria-pressed={editing === id} onClick={() => { setEditing(id); setNote(''); }} onKeyDown={event => editing === id && capture(event, def)} onBlur={() => setEditing('')}>
             {editing === id ? '키를 누르세요…' : <kbd>{def.scope === 'appKeys' ? showAppKey(settings.appKeys, def.id) : showCombo(current(def))}</kbd>}
           </button>

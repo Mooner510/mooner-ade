@@ -31,7 +31,7 @@ function Entry({ plugin, busy, run, bridge }: { plugin: HubPlugin; busy: string;
   const key = `market:${plugin.id}`, working = Boolean(busy), grants = grantList(plugin.grants);
   const install = () => run(key, () => bridge.hubInstall!(plugin.id));
   let action: ReactNode;
-  if (plugin.reserved) action = <span className="plugin-pill" data-tone="info" title="MoonerADE에 들어 있는 플러그인이 이 id를 씁니다"><i aria-hidden="true" />설치할 수 없음</span>;
+  if (plugin.reserved) action = <span className="plugin-pill" data-tone="info" title="기본 플러그인 ID와 충돌"><i aria-hidden="true" />설치할 수 없음</span>;
   else if (plugin.installed && plugin.updateAvailable) action = <Button className="primary" busy={working} running={busy === key} icon="download" onClick={install}>업데이트 v{plugin.version}</Button>;
   else if (plugin.installed) action = <span className="plugin-pill" data-tone="ok"><i aria-hidden="true" />설치됨</span>;
   else action = <Button className="primary" busy={working} running={busy === key} icon="download" onClick={install}>설치</Button>;

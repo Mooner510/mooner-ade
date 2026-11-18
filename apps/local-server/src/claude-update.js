@@ -1,12 +1,14 @@
-// Is the installed Claude Code CLI behind the newest release, and update it from ADE (`claude update`).
+// Is an installed agent CLI behind its newest npm release, and update it from ADE.
+// Claude Code runs `claude update`. Codex runs `codex update`, which picks the install channel (standalone script, npm, or Homebrew).
 //
-// Why updating is safe while chats and terminals are running: the native installer (and `claude update`) writes the new
-// binary next to the old ones and swaps `claude.exe` by renaming the one in use to `claude.exe.old.<time>`. A running
-// session keeps its own process and binary until it ends; only sessions started afterwards run the new version.
-// (On Windows an exe in use cannot be overwritten, only renamed, which is why those `.old.*` files exist.)
-// A package-manager install (npm, brew, winget) can fail while a session runs; the CLI's own message is passed on as is.
+// A chat or terminal that is already running keeps the process it started; only a session started afterwards uses the new binary.
+// Claude's native installer swaps `claude.exe` by renaming the one in use to `claude.exe.old.<time>` (on Windows an exe in use
+// cannot be overwritten, only renamed). A package-manager install can still fail while a session runs; the CLI's own message is passed on as is.
 
-const REGISTRY = 'https://registry.npmjs.org/@anthropic-ai/claude-code/latest';
+const CLIS = {
+  claude: { command: 'claude', registry: 'https://registry.npmjs.org/@anthropic-ai/claude-code/latest' },
+  codex: { command: 'codex', registry: 'https://registry.npmjs.org/@openai/codex/latest' },
+};
 const FRESH_MS = 30 * 60_000, RETRY_MS = 5 * 60_000;
 
 // "2.1.326 (Claude Code)" or "2.1.326" -> [2, 1, 326]; null when no version is in the text.
@@ -21,7 +23,7 @@ export function isNewer(latest, current) {
   return false;
 }
 
-export async function fetchLatestVersion({ fetchImpl = fetch, url = REGISTRY, timeoutMs = 8000 } = {}) {
+export async function fetchLatestVersion({ fetchImpl = fetch, url = CLIS.claude.registry, timeoutMs = 8000 } = {}) {
   const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(`버전 조회 실패 (HTTP ${response.status})`);
   const version = (await response.json())?.version;
@@ -30,19 +32,22 @@ export async function fetchLatestVersion({ fetchImpl = fetch, url = REGISTRY, ti
 }
 
 // `exec(file, args, { timeoutMs })` resolves { exitCode, stdout, stderr } (LocalProcesses.exec). `onUpdated` runs after a successful update
-// so the caller can drop what it cached about the old CLI (readiness, model catalog).
-export function createClaudeUpdater({ exec, fetchLatest = fetchLatestVersion, onUpdated = () => {}, now = Date.now } = {}) {
+// so the caller can drop what it cached about the old CLI (readiness, model catalog). `agent` is `claude` or `codex`.
+export function createCliUpdater({ agent = 'claude', exec, fetchLatest, fetchImpl, onUpdated = () => {}, now = Date.now } = {}) {
+  const cli = CLIS[agent];
+  if (!cli) throw new Error(`지원하지 않는 CLI입니다: ${agent}`);
+  const lookup = fetchLatest ?? (() => fetchLatestVersion({ url: cli.registry, fetchImpl }));
   let cached = null, pending = null, updating = null;
 
   async function read() {
     let current = null, installed = true;
     try {
-      const result = await exec('claude', ['--version'], { timeoutMs: 20_000 });
+      const result = await exec(cli.command, ['--version'], { timeoutMs: 20_000 });
       current = result.exitCode === 0 ? parseVersion(result.stdout)?.join('.') ?? null : null;
     } catch (error) { if (error?.code === 'ENOENT') installed = false; }
     if (!installed) return { installed: false, current: null, latest: null, outdated: false, checkedAt: now() };
     try {
-      const latest = await fetchLatest();
+      const latest = await lookup();
       return { installed: true, current, latest, outdated: isNewer(latest, current), checkedAt: now() };
     } catch (error) {
       // A failed lookup (offline) must not read as "up to date" nor hide the installed version; it is retried sooner.
@@ -56,14 +61,14 @@ export function createClaudeUpdater({ exec, fetchLatest = fetchLatestVersion, on
     return pending;
   }
 
-  // Runs `claude update` once at a time; a second call while one is running shares it.
+  // Runs `<command> update` once at a time; a second call while one is running shares it.
   function update() {
     updating ??= (async () => {
       const before = (await check(true)).current;
       let result;
-      try { result = await exec('claude', ['update'], { timeoutMs: 10 * 60_000 }); }
+      try { result = await exec(cli.command, ['update'], { timeoutMs: 10 * 60_000 }); }
       catch (error) {
-        const message = error?.code === 'ENOENT' ? 'claude 실행 파일을 PATH에서 찾을 수 없습니다.' : `업데이트를 실행하지 못했습니다: ${error?.message ?? error}`;
+        const message = error?.code === 'ENOENT' ? `${cli.command} 실행 파일을 PATH에서 찾을 수 없습니다.` : `업데이트를 실행하지 못했습니다: ${error?.message ?? error}`;
         return { ok: false, before, after: before, message, status: await check(true) };
       }
       const output = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -76,4 +81,8 @@ export function createClaudeUpdater({ exec, fetchLatest = fetchLatestVersion, on
   }
 
   return { check, update };
+}
+
+export function createClaudeUpdater(options = {}) {
+  return createCliUpdater({ agent: 'claude', ...options });
 }

@@ -24,6 +24,9 @@ const agentTitle = value => { const text = cleanChatTitle(value); return text ? 
 // permission requests itself, so it can be switched at any time.
 export const CURSOR_SANDBOXES = ['enabled', 'disabled'];
 const modeOf = mode => mode === 'default' ? 'agent' : mode;
+// cursor-agent appends this and ends the turn (stopReason end_turn) when the backend drops the stream.
+// `[unavailable] HTTP 503` is the server form; `Stream ended without turnEnded — connection likely dropped mid-stream` is the client form when the stream closes before turnEnded. The useful answer is whatever came before it.
+const CURSOR_TRANSPORT_DROP = /(?:^|\n{1,2})Error: RetriableError: ([^\n]*)\s*$/;
 // Cursor sends boolean parameters and select groups. Thinking shares the thought_level category with Effort, so Effort is identified by id.
 export function normalizeCursorOptions(options = []) {
   return options.flatMap(option => {
@@ -54,6 +57,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
   let cursorTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
+  // cursor-agent prints `Error: RetriableError: ...` and ends the turn when the backend drops the stream (HTTP 503, or the stream closing before turnEnded). It does not retry (enableAgentRetries stays off). One resume of the same turn covers that drop.
+  let transportResumes = 0, transportDropped = false, dropDetail = '';
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
@@ -154,8 +159,19 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     if (type === 'agent_message_chunk' || type === 'agent_thought_chunk') {
       const phase = type === 'agent_thought_chunk' ? 'thinking' : 'text', messageId = cursorTextId(phase);
       const text = update.content?.text ?? '';
-      const old = chunks.get(messageId) ?? ''; chunks.set(messageId, old + text);
-      emit({ kind: 'delta', phase, index: 0, messageId, text });
+      const old = chunks.get(messageId) ?? '';
+      const combined = old + text;
+      const drop = phase === 'text' ? combined.match(CURSOR_TRANSPORT_DROP) : null;
+      if (drop) {
+        transportDropped = true; dropDetail = (drop[1] ?? '').trim();
+        const cleaned = combined.replace(CURSOR_TRANSPORT_DROP, '');
+        if (cleaned) chunks.set(messageId, cleaned); else chunks.delete(messageId);
+        const keep = text.slice(0, Math.max(0, cleaned.length - old.length));
+        if (keep) emit({ kind: 'delta', phase, index: 0, messageId, text: keep });
+      } else {
+        chunks.set(messageId, combined);
+        emit({ kind: 'delta', phase, index: 0, messageId, text });
+      }
     } else if (type === 'tool_call' || type === 'tool_call_update') {
       // Text and thoughts said before this tool are stored under the id they streamed with (so the screen keeps the same item) and later text starts a new one.
       if (cursorFlush()) textSerial += 1;
@@ -200,9 +216,29 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     const option = raw.params?.options?.find(o => o.kind === 'allow_once'); if (!option) return false;
     void send({ id: raw.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } }); return true;
   }
+  function resumeCursorTurn() {
+    promptId = nextId + 1;
+    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: '연결이 잠깐 끊겼습니다. 끊긴 지점부터 이어서 진행하고, 이미 끝낸 작업은 반복하지 마세요.' }] }, 0).then(promptDone, promptFailed);
+  }
   function promptDone(response) {
     if (disposed) return;
-    promptId = null; cursorFlush();
+    const dropped = agent === 'cursor' && response.stopReason !== 'cancelled' && (transportDropped || CURSOR_TRANSPORT_DROP.test(chunks.get(cursorTextId('text')) ?? ''));
+    const detail = dropDetail || (String(chunks.get(cursorTextId('text')) ?? '').match(CURSOR_TRANSPORT_DROP)?.[1] ?? '').trim();
+    if (dropped) {
+      const id = cursorTextId('text'), content = chunks.get(id);
+      if (typeof content === 'string') {
+        const cleaned = content.replace(CURSOR_TRANSPORT_DROP, '');
+        if (cleaned) chunks.set(id, cleaned); else chunks.delete(id);
+      }
+    }
+    transportDropped = false; dropDetail = '';
+    promptId = null;
+    if (cursorFlush()) textSerial += 1;
+    if (dropped) {
+      if (transportResumes >= 1) { result('failed', `Cursor 연결이 잠깐 끊겼습니다 (${detail || 'unavailable'}). 같은 내용을 다시 보내면 이어서 진행됩니다.`); return; }
+      transportResumes += 1; resumeCursorTurn(); return;
+    }
+    transportResumes = 0;
     const hasOutput = said || [...chunks.values()].some(value => typeof value === 'object');
     const status = response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'end_turn' && hasOutput ? 'success' : 'failed';
     const u = response.usage;
@@ -214,7 +250,14 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     }
     result(status, status === 'failed' ? `${hasOutput ? 'Cursor 응답이 완료되지 않았습니다' : 'Cursor가 표시할 응답 없이 종료되었습니다'} (${response.stopReason}). 다시 시도하세요.` : '');
   }
-  function promptFailed(error) { if (disposed) return; promptId = null; result('failed', error.message); fail?.(error); }
+  function promptFailed(error) {
+    if (disposed) return;
+    promptId = null;
+    const message = error?.message ?? '';
+    const drop = agent === 'cursor' ? message.match(/RetriableError: ([^\n]*)/) : null;
+    if (drop && transportResumes < 1) { transportResumes += 1; dropDetail = ''; cursorFlush(); resumeCursorTurn(); return; }
+    result('failed', message); fail?.(error);
+  }
   function serverRequest(raw) {
     const p = raw.params ?? {};
     if (agent === 'codex') {
@@ -377,6 +420,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         else { startedAt = Date.now(); const response = await request('turn/start', { threadId: sessionId, input, ...codexPermissions(config.permissionMode, config.cwd, config.addDirs, config.sandbox, config.network), ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }) }); turnId = response.turn.id; }
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
+        transportResumes = 0; transportDropped = false; dropDetail = '';
         startedAt = Date.now(); turnId = `cursor-${randomUUID()}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
         promptId = nextId + 1; // the id request() is about to use
         void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(promptDone, promptFailed);

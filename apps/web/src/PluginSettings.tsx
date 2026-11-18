@@ -93,20 +93,28 @@ const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: Plu
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // The plugin state for components outside the settings page (status bar, notification clicks).
+// One IPC listener for every subscriber: each open project's workspace uses this, and Electron warns past 10 listeners on one channel.
+let pluginsShared: PluginsState | null = null;
+let pluginsOff: (() => void) | undefined;
+const pluginsSubs = new Set<(state: PluginsState) => void>();
+const publishPlugins = (value: PluginsState) => { pluginsShared = value; for (const sub of pluginsSubs) sub(value); };
+function attachPlugins() {
+  const bridge = pluginsBridge();
+  if (!bridge || !pluginsSubs.size) return;
+  pluginsOff?.();
+  void bridge.state().then(publishPlugins, () => {});
+  pluginsOff = bridge.onState(publishPlugins);
+}
 export function usePluginsState() {
-  const [state, setState] = useState<PluginsState | null>(null);
+  const [state, setState] = useState<PluginsState | null>(pluginsShared);
   useEffect(() => {
-    let live = true;
-    let off: (() => void) | undefined;
-    const attach = () => {
-      const bridge = pluginsBridge();
-      if (!bridge) return;
-      off?.();
-      void bridge.state().then(value => { if (live) setState(value); }, () => {});
-      off = bridge.onState(value => { if (live) setState(value); });
+    pluginsSubs.add(setState);
+    if (pluginsSubs.size === 1) attachPlugins(); else if (pluginsShared) setState(pluginsShared);
+    window.addEventListener('ade:verify-plugins-ready', attachPlugins);
+    return () => {
+      pluginsSubs.delete(setState); window.removeEventListener('ade:verify-plugins-ready', attachPlugins);
+      if (!pluginsSubs.size) { pluginsOff?.(); pluginsOff = undefined; }
     };
-    attach(); window.addEventListener('ade:verify-plugins-ready', attach);
-    return () => { live = false; off?.(); window.removeEventListener('ade:verify-plugins-ready', attach); };
   }, []);
   return state;
 }
@@ -389,10 +397,10 @@ export function PluginSettings({ query = '' }: { query?: string }) {
       <div className="plugin-tabs" role="tablist" aria-label="플러그인 종류">
         {([['installed', '설치한 플러그인', installed], ['builtin', '내장 플러그인', builtins]] as const).map(([id, label, items]) =>
           <button key={id} type="button" role="tab" aria-selected={shownTab === id} onClick={() => setTab(id)}>
-            {label}<small>{items.length}</small>{shownTab !== id && items.some(needsUser) && <i className="plugin-tab-alert" title="확인이 필요한 플러그인이 있습니다" />}
+            {label}<small>{items.length}</small>{shownTab !== id && items.some(needsUser) && <i className="plugin-tab-alert" title="플러그인 확인 필요" />}
           </button>)}
         {hub && <button type="button" role="tab" aria-selected={shownTab === 'market'} onClick={() => setTab('market')}>
-          마켓{hub.catalog && hub.catalog.plugins.length > 0 && <small>{hub.catalog.plugins.length}</small>}{shownTab !== 'market' && marketUpdates > 0 && <i className="plugin-tab-alert" title="Hub에 새 버전이 있는 플러그인이 있습니다" />}
+          마켓{hub.catalog && hub.catalog.plugins.length > 0 && <small>{hub.catalog.plugins.length}</small>}{shownTab !== 'market' && marketUpdates > 0 && <i className="plugin-tab-alert" title="플러그인 업데이트 있음" />}
         </button>}
       </div>
       {shownTab === 'installed' && <div className="plugin-toolbar">

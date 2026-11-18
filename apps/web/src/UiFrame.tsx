@@ -3,11 +3,11 @@ import { MIN_HEIGHT, parseFrameMessage, sendGate, THEME_VARS } from './ui-frame-
 
 // Interactive UI blocks (```ade-ui fences) in a chat reply: model-written HTML/JS that runs in a sandboxed iframe, see apps/local-server/src/ui-frame.js.
 // The chat pane provides its id (so `ade.send` reaches the right chat) and whether the feature is on; without it a block stays a plain code block.
-export const ChatUiContext = createContext<{ chatId: string; enabled: boolean } | null>(null);
+export const ChatUiContext = createContext<{ chatId: string; enabled: boolean; fileChipLabel: 'path' | 'name' } | null>(null);
 
 const themeNow = () => {
   const root = document.documentElement, css = getComputedStyle(root);
-  return { ...Object.fromEntries(THEME_VARS.map(name => [name, css.getPropertyValue(name).trim()])), '--scheme': root.dataset.theme === 'light' ? 'light' : 'dark' };
+  return { ...Object.fromEntries(THEME_VARS.map(name => [name, css.getPropertyValue(name).trim()])), '--scheme': root.dataset.scheme === 'light' ? 'light' : 'dark' };
 };
 
 // The app's own type (Inter + Noto Sans KR) for the frame: their @font-face rules, file URLs made absolute. The frame's CSP allows fonts from this

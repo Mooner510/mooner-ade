@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeUpdater, fetchLatestVersion, isNewer, parseVersion } from '../apps/local-server/src/claude-update.js';
+import { createClaudeUpdater, createCliUpdater, fetchLatestVersion, isNewer, parseVersion } from '../apps/local-server/src/claude-update.js';
 
 test('versions parse out of the CLI banner and compare numerically', () => {
   assert.deepEqual(parseVersion('2.1.326 (Claude Code)\n'), [2, 1, 326]);
@@ -80,6 +80,32 @@ test('a failed update says so, keeps the version and does not clear caches', asy
   assert.equal(result.ok, false);
   assert.equal(result.changed, false);
   assert.equal(updated(), 0);
+});
+
+test('codex checks its own command and registry, then runs `codex update`', async () => {
+  const seen = [];
+  let installed = 0;
+  const exec = async (file, args) => {
+    seen.push(`${file} ${args.join(' ')}`);
+    if (args[0] === '--version') return { exitCode: 0, stdout: `${installed ? '0.169.0' : '0.160.0'}\n`, stderr: '' };
+    installed++;
+    return { exitCode: 0, stdout: 'Updated\n', stderr: '' };
+  };
+  const updater = createCliUpdater({
+    agent: 'codex',
+    exec,
+    fetchImpl: async url => { seen.push(url); return { ok: true, status: 200, json: async () => ({ version: '0.169.0' }) }; },
+  });
+  const status = await updater.check();
+  assert.equal(status.outdated, true);
+  assert.equal(status.current, '0.160.0');
+  assert.ok(seen.includes('codex --version'));
+  assert.ok(seen.includes('https://registry.npmjs.org/@openai/codex/latest'));
+  const result = await updater.update();
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.deepEqual([result.before, result.after], ['0.160.0', '0.169.0']);
+  assert.ok(seen.includes('codex update'));
 });
 
 test('two update requests at once run one update', async () => {

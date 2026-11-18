@@ -1,19 +1,55 @@
 // One tooltip for the whole app. Any element with a `title` (the browser's slow, unstyled tooltip), an SVG `<title>` child (chart points) or a `data-tip` shows this one instead, so no
-// component has to opt in and a new `title` is covered automatically. It lives in the top layer (popover), so it also sits above dialogs and
+// component has to opt in and a new `title` is covered automatically. `data-tip-overflow` shows clipped text in full. It lives in the top layer (popover), so it also sits above dialogs and
 // is never clipped by an `overflow: hidden` parent, and it keeps itself inside the window (flipping above the element when there is no room below).
+// Write tooltip copy as short labels, values and shortcuts.
 const SHOW_DELAY = 0, GAP = 6, MARGIN = 6;
 
 // "라벨 (⌘⇧G)" / "라벨 (Ctrl+Shift+G)": a trailing parenthesis that holds only key names is drawn as keycaps (the app's showCombo/showAppKey format, so a custom binding shows as set).
 // Anything else in parentheses ("(Fetch)", "(/clear)") stays text. Every line of the tooltip is checked on its own.
 const KEY = /^(?:[⌘⌃⌥⇧↑↓←→]|Ctrl|Shift|Alt|Win|Meta|Esc|Tab|Enter|Space|Backspace|Delete|Home|End|PageUp|PageDown|Insert|F\d{1,2}|화살표|[A-Za-z0-9`\\,./;'\[\]=-])$/;
 const keysOf = (combo: string) => { const parts = combo.includes('+') && combo.length > 1 ? combo.split('+') : [...combo.match(/^[⌘⌃⌥⇧]*/)![0], combo.replace(/^[⌘⌃⌥⇧]*/, '')].filter(Boolean); return parts.length && parts.every(part => KEY.test(part)) ? parts : null; };
+const shortcut = /^(.*?)\s*\(([^()]+)\)$/;
+const normalized = (text: string) => text.trim().replace(/\s+/g, ' ');
+
+export function tooltipCopy(text: string, visible: string) {
+  const seen = new Set([normalized(visible), ...visible.split('\n').map(normalized)]);
+  const lines: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || seen.has(normalized(line))) continue;
+    const keys = shortcut.exec(line);
+    const copy = keys && keysOf(keys[2]) && seen.has(normalized(keys[1])) ? `(${keys[2]})` : line;
+    if (seen.has(normalized(copy))) continue;
+    lines.push(copy);
+    seen.add(normalized(copy));
+  }
+  return lines.join('\n');
+}
+
 function fill(box: HTMLElement, text: string) {
   box.replaceChildren(...text.split('\n').flatMap((line, index) => {
-    const found = /^(.*?)\s*\(([^()]+)\)$/.exec(line), keys = found ? keysOf(found[2]) : null;
+    const found = shortcut.exec(line), keys = found ? keysOf(found[2]) : null;
     const nodes: (Node | string)[] = index ? ['\n'] : [];
     if (!found || !keys) return [...nodes, line];
     return [...nodes, found[1], ...keys.map(key => Object.assign(document.createElement('kbd'), { textContent: key }))];
   }));
+}
+
+const clipsText = (element: Element) => element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight;
+
+function renderedText(element: Element, includeOverflow = false) {
+  // Text ranges exclude labels hidden by responsive styles without reading decorative icon glyphs as labels.
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT), range = document.createRange();
+  const labels: string[] = [];
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    const parent = text.parentElement;
+    if (!text.textContent?.trim() || !parent || parent.closest('[aria-hidden="true"]')) continue;
+    const overflow = parent.closest('[data-tip-overflow]');
+    if (!includeOverflow && overflow && element.contains(overflow) && clipsText(overflow)) continue;
+    range.selectNodeContents(text);
+    if ([...range.getClientRects()].some(rect => rect.width > 0 && rect.height > 0) && getComputedStyle(parent).visibility === 'visible') labels.push(text.textContent);
+  }
+  return labels;
 }
 
 let installed = false;
@@ -28,7 +64,11 @@ export function installTooltips() {
   const svgTitle = (node: Element) => node instanceof SVGElement ? [...node.children].find(child => child.localName === 'title' && child instanceof SVGElement) ?? null : null;
   const sourceOf = (element: Element | null): Element | null => {
     // The anchor's own title is held back while its tooltip is up, so it no longer shows an attribute: without this a move onto its icon child (or any move at all) finds no source, hides, gives the title back and shows again = flicker.
-    for (let node = element; node; node = node.parentElement) if (node === anchor || (node as HTMLElement).dataset?.tip || node.getAttribute('title') || svgTitle(node)) return node;
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute('data-tip-overflow')) {
+        if (node.scrollWidth > node.clientWidth) return node;
+      } else if (node === anchor || (node as HTMLElement).dataset?.tip || node.getAttribute('title') || svgTitle(node)) return node;
+    }
     return null;
   };
   // The native tooltip must not also appear: the title is held back while ours is up (or pending) and put back afterwards, unless the app has set a new one meanwhile.
@@ -51,9 +91,16 @@ export function installTooltips() {
   };
   const reveal = (element: Element) => {
     if (anchor !== element || !element.isConnected) return;
-    const text = (element as HTMLElement).dataset?.tip ?? taken ?? takenNode?.textContent ?? '';
+    const overflow = element.hasAttribute('data-tip-overflow');
+    const text = overflow ? renderedText(element, true).join(' ') : (element as HTMLElement).dataset?.tip ?? taken ?? takenNode?.textContent;
     if (!text) { hide(); return; }
-    fill(tip, text);
+    const copy = tooltipCopy(text, overflow || clipsText(element) ? '' : renderedText(element).join('\n'));
+    if (!copy) {
+      // Keep the native title suspended on this anchor until the pointer or focus leaves it.
+      if (tip.matches(':popover-open')) tip.hidePopover();
+      return;
+    }
+    fill(tip, copy);
     if (!tip.matches(':popover-open')) tip.showPopover();
     place(element);
     // An element that is re-rendered away while its tooltip is showing never fires a leave event.
@@ -64,10 +111,8 @@ export function installTooltips() {
     if (element === anchor) return;
     hide(delay === 0); // moving straight to another element: the box stays up and only changes text and place
     anchor = element;
-    if (!(element as HTMLElement).dataset?.tip) {
-      if (element.hasAttribute('title')) { taken = element.getAttribute('title'); element.removeAttribute('title'); }
-      else { takenNode = svgTitle(element); takenNode?.remove(); }
-    }
+    if (element.hasAttribute('title')) { taken = element.getAttribute('title'); element.removeAttribute('title'); }
+    else { takenNode = svgTitle(element); takenNode?.remove(); }
     if (delay) timer = window.setTimeout(() => reveal(element), delay); else reveal(element);
   };
 

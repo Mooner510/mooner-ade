@@ -9,7 +9,7 @@ import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
-import { ClaudeUpdateNotice } from './ClaudeUpdateNotice';
+import { CliUpdateNotice } from './ClaudeUpdateNotice';
 import { cacheSendWarning, cacheSendWarningText } from './claude-cache-warning';
 import { authSendWarning, authSendWarningText, authWords } from './claude-auth-warning';
 import { Hint } from './Hint';
@@ -19,6 +19,7 @@ import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
 import { FileIcon } from './FileIcon';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -116,8 +117,8 @@ function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude
       <label className="models-search"><Icon name="search" size={15} /><input ref={search} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="대화 제목 검색" aria-label="대화 제목 검색" /></label>
     </div>
     <div className="models-list resume-list" role="listbox" aria-label="이전 대화">
-      {rows?.map(item => <button type="button" role="option" aria-selected={false} key={item.key} className="resume-row" title={item.title} aria-disabled={item.running || undefined} data-blocked={item.running || undefined} onClick={() => { if (!item.running) onPick(item.choice); }}>
-        <span className="resume-name">{item.title}</span>
+      {rows?.map(item => <button type="button" role="option" aria-selected={false} key={item.key} className="resume-row" aria-disabled={item.running || undefined} data-blocked={item.running || undefined} onClick={() => { if (!item.running) onPick(item.choice); }}>
+        <span className="resume-name" data-tip-overflow="">{item.title}</span>
         <span className="resume-info"><span>{when(item.updatedAt)}</span>{item.detail && <span>{item.detail}</span>}{item.running && <span className="resume-badge">터미널에서 실행 중</span>}<span className="resume-code">{item.code}</span></span>
       </button>)}
       {loading && <p className="models-empty" role="status">대화를 불러오는 중…</p>}
@@ -128,42 +129,6 @@ function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude
 }
 
 // "더 많은 모델": every model the CLI lists (read fresh on open), newest version first, the current one checked.
-type Optimistic = { model?: string; effort?: string | null; permissionMode?: string; runEverything?: boolean; sandbox?: string | null; options?: Record<string, string> };
-// What a Cursor setting call is about to change, keyed so a later call on the same setting supersedes an earlier one.
-function optimisticPatch(input: any): Optimistic {
-  const patch: Optimistic = {};
-  if (typeof input.model === 'string') patch.model = input.model;
-  if (input.effort !== undefined) patch.effort = input.effort;
-  if (typeof input.permissionMode === 'string') patch.permissionMode = input.permissionMode;
-  if (typeof input.runEverything === 'boolean') patch.runEverything = input.runEverything;
-  if (input.sandbox !== undefined) patch.sandbox = input.sandbox;
-  if (input.configOption) patch.options = { [input.configOption.configId]: input.configOption.value };
-  return patch;
-}
-const mergeOptimistic = (current: Optimistic, patch: Optimistic): Optimistic => ({ ...current, ...patch, ...(patch.options && { options: { ...current.options, ...patch.options } }) });
-const optimisticKeys = (patch: Optimistic) => Object.keys(patch).flatMap(key => key === 'options' ? Object.keys(patch.options!).map(id => `opt:${id}`) : [key]);
-function dropOptimistic(current: Optimistic, keys: string[]): Optimistic {
-  const next: any = { ...current, options: current.options && { ...current.options } };
-  for (const key of keys) { if (key.startsWith('opt:')) delete next.options[key.slice(4)]; else delete next[key]; }
-  if (next.options && !Object.keys(next.options).length) delete next.options;
-  return next;
-}
-function optimisticSettled(state: ChatState, current: Optimistic, key: string) {
-  if (key.startsWith('opt:')) { const id = key.slice(4); return state.capabilities?.configOptions?.find(option => option.id === id)?.currentValue === current.options?.[id]; }
-  if (key === 'model') return state.model === current.model;
-  if (key === 'effort') return state.effort === current.effort;
-  if (key === 'permissionMode') return state.permissionMode === current.permissionMode;
-  if (key === 'runEverything') return state.runEverything === current.runEverything;
-  if (key === 'sandbox') return (state.sandbox ?? null) === (current.sandbox ?? null);
-  return false;
-}
-function withOptimistic(state: ChatState, o: Optimistic): ChatState {
-  if (!Object.keys(o).length) return state;
-  const caps = state.capabilities;
-  return { ...state, ...(o.model !== undefined && { model: o.model }), ...(o.effort !== undefined && { effort: o.effort }), ...(o.permissionMode !== undefined && { permissionMode: o.permissionMode }),
-    ...(o.runEverything !== undefined && { runEverything: o.runEverything }), ...(o.sandbox !== undefined && { sandbox: o.sandbox }),
-    ...(caps && o.options && { capabilities: { ...caps, configOptions: caps.configOptions?.map((option: any) => o.options![option.id] !== undefined ? { ...option, currentValue: o.options![option.id] } : option) } }) };
-}
 function ModelsModal({ current, call, agent, fallback, aliases, settings, onSettingsChange, onPick, onClose, id }: { current: string; agent: 'claude' | 'codex' | 'cursor'; fallback: CatalogModel[]; aliases: Record<string, string>; settings: Settings; onSettingsChange: ChatCtx['onSettingsChange']; call: ChatCtx['call']; onPick(value: string): void; onClose(): void; id?: string }) {
   const [catalog, setCatalog] = useState<CatalogModel[] | null>(null);
   const [party, setParty] = useState(modelProvider(current)?.party ?? 'First Party');
@@ -255,8 +220,8 @@ function ChatDiff({ from, to, path, settings, named = false }: { from: string; t
       <span className="chat-diff-title">{named && <span className="chat-diff-path" title={path}>{relativePath(path, cwd)}</span>}
         <span className="chat-diff-count"><span className="add">+{added}</span><span className="del">−{removed}</span></span></span>
       <span className="chat-diff-views" role="group" aria-label="diff 보기 방식">
-        <button type="button" aria-pressed={!split} title="바뀐 줄을 한 열에 위아래로 봅니다" onClick={() => set(false)}>합쳐 보기</button>
-        <button type="button" aria-pressed={split} title="이전과 이후를 좌우로 나눠 봅니다" onClick={() => set(true)}>나눠 보기</button>
+        <button type="button" aria-pressed={!split} onClick={() => set(false)}>합쳐 보기</button>
+        <button type="button" aria-pressed={split} onClick={() => set(true)}>나눠 보기</button>
       </span>
     </div>
     <div className="chat-diff"><DiffView original={from} modified={to} path={path} settings={shown} compact minHeight={0} /></div>
@@ -282,7 +247,7 @@ function ToolResult({ label, text, isError, prose = false }: { label: string; te
   const toggle = () => { capture(); setFull(value => !value); };
   return <div className={`chat-tool-result ${isError ? 'error' : ''}`}>
     <div className="chat-tool-result-head"><small>{label}{lines > 1 && ` · ${lines.toLocaleString()}줄`}</small>
-      {body && <button type="button" className="chat-tool-copy" title="결과 복사" aria-label="결과 복사" onClick={() => copyText(body)}><Icon name="copy" size={13} />복사</button>}</div>
+      {body && <button type="button" className="chat-tool-copy" aria-label="결과 복사" onClick={() => copyText(body)}><Icon name="copy" size={13} />복사</button>}</div>
     {prose ? <div ref={pre} className={`chat-tool-prose${full ? ' full' : ''}`}><Markdown text={clip(body)} /></div>
       : <pre ref={pre} className={full ? 'full' : undefined}>{clip(body) || '(출력 없음)'}</pre>}
     {(tall || full) && <button type="button" className="chat-command-more" onClick={toggle}>{full ? '접기' : '전체 보기'}</button>}
@@ -342,7 +307,7 @@ const ToolCard = memo(function ToolCard({ block, result, settings, running }: { 
     <button type="button" className="chat-tool-head" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">{TOOL_ICONS[block.name] ?? (mcpTool(block.name) ? 'extension' : 'build')}</span>
       <strong>{toolLabel(block.name)}</strong><span className="chat-tool-summary">{toolSummary(block.name, input, cwd)}</span>
-      {job?.job && <span className="chat-tool-job" role="link" tabIndex={-1} title="오른쪽에서 이 작업을 봅니다" onClick={event => { event.stopPropagation(); agents.open(block.id); }}>{jobRunning ? '백그라운드 실행 중' : '백그라운드'}</span>}
+      {job?.job && <span className="chat-tool-job" role="link" tabIndex={-1} onClick={event => { event.stopPropagation(); agents.open(block.id); }}>{jobRunning ? '백그라운드 실행 중' : '백그라운드'}</span>}
       <span className="chat-tool-state" aria-label={{ running: '실행 중', done: '완료', error: '오류', blocked: '자동 모드가 차단함', refused: '거부됨', pending: '대기', approval: '승인 대기' }[state]}>{state === 'approval' ? <><Icon name="alert" size={12} />승인 대기</> : state === 'refused' ? <><Icon name="block" size={12} />거부됨</> : state === 'running' ? <>{jobRunning && <StopTask id={block.id} />}<i className="chat-spin" /></> : state === 'done' ? <Icon name="check" size={13} /> : state === 'blocked' ? <Icon name="block" size={13} /> : state === 'error' ? <Icon name="x" size={13} /> : null}</span>
       <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
     </button>
@@ -436,7 +401,7 @@ function StopTask({ id }: { id: string }) {
 }
 function AgentState({ status, waiting, id }: { status: AgentStatus; waiting?: boolean; id?: string }) {
   const stoppable = useContext(AgentsContext).agents.get(id ?? '')?.background === true;
-  if (waiting && status === 'running') return <span className="chat-agent-state" data-status="approval" title="승인 카드에서 답을 기다리는 중"><Icon name="alert" size={12} />승인 대기</span>;
+  if (waiting && status === 'running') return <span className="chat-agent-state" data-status="approval"><Icon name="alert" size={12} />승인 대기</span>;
   return <span className="chat-agent-state" data-status={status} role={id && stoppable && status === 'running' ? undefined : 'img'} aria-label={AGENT_STATUS[status]} title={AGENT_STATUS[status]}>{status === 'running' ? <>{id && stoppable && <StopTask id={id} />}<i className="chat-spin" /></> : <Icon name={status === 'done' ? 'check' : status === 'error' ? 'x' : 'stop'} size={13} />}</span>;
 }
 const dotStyle = (color?: string) => (color ? { '--agent-color': color } : undefined) as CSSProperties | undefined;
@@ -444,7 +409,7 @@ const dotStyle = (color?: string) => (color ? { '--agent-color': color } : undef
 function AgentCard({ id, fallback }: { id: string; fallback: ReactNode }) {
   const { agents, colors, opened, waiting, open } = useContext(AgentsContext), agent = agents.get(id), now = useTick(agent?.status === 'running');
   if (!agent) return <>{fallback}</>;
-  return <button type="button" className="chat-agent-card" data-status={agent.status} aria-pressed={opened === id} style={dotStyle(colors.get(id))} onClick={() => open(id)} title="이 에이전트의 진행을 오른쪽에서 봅니다">
+  return <button type="button" className="chat-agent-card" data-status={agent.status} aria-pressed={opened === id} style={dotStyle(colors.get(id))} onClick={() => open(id)}>
     <span className="chat-agent-line"><i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
       {agent.background && <span className="chat-agent-tag">백그라운드</span>}{!agent.now && <small className="chat-agent-meta">{agentMeta(agent, now)}</small>}<AgentState id={id} status={agent.status} waiting={waiting.has(id)} /><Icon name="chevronRight" size={14} /></span>
     {agent.now && <span className="chat-agent-sub"><span className="chat-agent-now">{agent.now}</span><small>{agentMeta(agent, now)}</small></span>}
@@ -457,7 +422,7 @@ function AgentEnd({ id, enter }: { id: string; enter?: boolean }) {
   if (!agent) return null;
   const meta = agentMeta(agent, 0);
   return <div className="chat-divider agent-end" role="separator" data-status={agent.status} data-enter={enter || undefined} style={dotStyle(colors.get(id))}>
-    <button type="button" onClick={() => open(id)} title="이 에이전트의 진행을 오른쪽에서 봅니다"><i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
+    <button type="button" onClick={() => open(id)}><i className="chat-agent-dot" /><span className="chat-agent-type">{agent.type}</span><strong>{agent.description || '서브에이전트'}</strong>
       <span>{AGENT_STATUS[agent.status]}</span>{meta && <small>{meta}</small>}<AgentState status={agent.status} /></button>
   </div>;
 }
@@ -490,7 +455,7 @@ function AgentTracker({ list: all, colors, opened, waiting, onOpen, onHide }: { 
   // One row: [state] 서브에이전트 N개 · tally ... [dots when folded] [fold] [close]. Fold and close are separate, same-size buttons on the right edge.
   return <div className="chat-agents" data-running={running > 0 || undefined} data-fading={list.every(agent => fading.has(agent.id)) || undefined} role="region" aria-label="서브에이전트">
     <div className="chat-agents-head">
-      <button type="button" className="chat-agents-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} title={expanded ? '목록 접기' : '목록 펼치기'}>
+      <button type="button" className="chat-agents-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
         {running && asking === running ? <span className="chat-agents-done" data-outcome="approval"><Icon name="alert" size={13} /></span> : running ? <i className="chat-spin" /> : <span className="chat-agents-done" data-outcome={count('error') ? 'error' : done !== list.length ? 'stopped' : undefined}><Icon name={count('error') ? 'x' : done !== list.length ? 'stop' : 'check'} size={13} /></span>}
         <strong>{list.every(agent => agent.job) ? '백그라운드 작업' : list.some(agent => agent.job) ? '백그라운드' : '서브에이전트'} {list.length}개</strong><span className="chat-agents-tally">{tally}</span>
         {!expanded && <span className="chat-agents-dots" aria-hidden="true">{list.map(agent => <i key={agent.id} className="chat-agent-dot" data-status={agent.status} style={dotStyle(colors.get(agent.id))} />)}</span>}
@@ -812,7 +777,7 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
       onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
     <div className="plan-actions">
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
-      <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
+      <button type="button" onClick={() => onAnswer(false)}>의견 없이 반려</button>
       <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>의견 보내고 다시 계획</button>
     </div>
   </footer>;
@@ -822,14 +787,14 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   // Cursor's plan has no permission mode to pick and no revision message: just approve or turn it down.
   if (!choices) return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
-    <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인</button>
+    <button type="button" className="secondary" onClick={() => onAnswer(false)}>거부</button>
+    <button type="button" className="primary" onClick={() => onAnswer(true)}>승인</button>
   </footer>;
   return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)} title="계획을 반려하고 고칠 내용을 전달합니다. Claude가 계획을 다시 세웁니다.">수정 요청…</button>
-    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="계획대로 실행하고, 파일 편집은 묻지 않고 허용합니다. 명령은 계속 묻습니다(편집 허용 모드).">편집 허용으로 승인</button>
-    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="계획대로 실행하고, 허용 여부는 CLI가 판단합니다(자동 모드).">자동 모드로 승인</button>}
+    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…</button>
+    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="파일 편집 자동 허용 · 명령 실행 확인">편집 허용으로 승인</button>
+    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="CLI 자동 승인 판단">자동 모드로 승인</button>}
   </footer>;
 }
 // The dialog of a long plan lists its `##` sections down the side (the one in view is lit) so it can be jumped through; the card itself is just the plan.
@@ -855,7 +820,7 @@ function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: str
   const dialog = usePlanSpy(sections.length);
   const decide = (allow: boolean, extra?: PlanAnswer) => onAnswer(allow, false, undefined, extra);
   return <div className="chat-approval chat-plan" {...played} role="alertdialog" aria-label="계획 검토">
-    <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong></span><span className="plan-title" title={title.replaceAll('`', '') || undefined}>{title ? inline(title) : '이 계획대로 진행할까요?'}</span>
+    <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong></span><span className="plan-title" data-tip-overflow="">{title ? inline(title) : '이 계획대로 진행할까요?'}</span>
       <span className="plan-head-end"><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="maximize" label="크게 보기" onClick={() => setOpen(true)} /></span></header>
     <div className="chat-plan-body"><Markdown text={body} /></div>
     <PlanActions modes={modes} choices={choices} onAnswer={decide} />
@@ -901,9 +866,9 @@ function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: 
       <p className="chat-blocked-note">승인은 이 채팅에서만 적용되고 설정 파일에는 저장되지 않습니다.</p>
     </div>
     <footer>
-      <button type="button" className="secondary approval-explain" disabled={busy} onClick={() => setHidden(current => new Set([...current, ...shown.map(item => item.toolUseId)]))} title="이 카드를 닫습니다. 차단은 그대로입니다">무시</button>
-      <button type="button" disabled={busy || !canRule} onClick={() => void run(false)} title={canRule ? '이 채팅에서만 허용합니다. 다시 실행은 직접 요청하세요' : '규칙으로 만들 수 없는 작업이 있어 "승인하고 다시 시도"만 쓸 수 있습니다'}>승인만</button>
-      <button type="button" className="primary" disabled={busy || !chosen.length} onClick={() => void run(true)} title="이 채팅에서 허용하고, 에이전트에게 다시 실행하라고 알립니다">승인하고 다시 시도</button>
+      <button type="button" className="secondary approval-explain" disabled={busy} onClick={() => setHidden(current => new Set([...current, ...shown.map(item => item.toolUseId)]))} title="카드 닫기 · 차단 유지">무시</button>
+      <button type="button" disabled={busy || !canRule} onClick={() => void run(false)} title={canRule ? '이 채팅에서만 허용 · 자동 재시도 없음' : '규칙 등록 불가 · 승인 후 재시도 필요'}>승인만</button>
+      <button type="button" className="primary" disabled={busy || !chosen.length} onClick={() => void run(true)}>승인하고 다시 시도</button>
     </footer>
   </div>;
 }
@@ -920,7 +885,7 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
   return <div ref={card} className="chat-approval" {...played} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
     <header><Icon name="alert" size={15} /><strong>{approval.tool}</strong><span>실행하려면 허용이 필요합니다</span>
-      {asker && <span className="chat-approval-agent" style={dotStyle(askerColor)} title="이 서브에이전트가 요청했습니다"><i className="chat-agent-dot" /><span className="chat-agent-type">{asker.type}</span><span className="chat-approval-agent-name"><b>{asker.description || '서브에이전트'}</b>의 요청</span></span>}</header>
+      {asker && <span className="chat-approval-agent" style={dotStyle(askerColor)}><i className="chat-agent-dot" /><span className="chat-agent-type">{asker.type}</span><span className="chat-approval-agent-name"><b>{asker.description || '서브에이전트'}</b>의 요청</span></span>}</header>
     <div className="chat-approval-body">{SHELLS[approval.tool] ? <>{typeof input.description === 'string' && input.description && <p className="chat-approval-desc">{input.description}</p>}<CodeBlock code={String(input.command ?? '')} lang={SHELLS[approval.tool]} /></> : written === null && changed === null && <p className="chat-approval-line">{summary}</p>}
       {approval.tool === 'NotebookEdit' && notebookCell(input) && <div className="chat-approval-preview"><CodeBlock code={clip(notebookCell(input)!.code)} lang={notebookCell(input)!.label} syntax={notebookCell(input)!.syntax} /></div>}
       {written !== null && <div className="chat-approval-preview"><CodeBlock code={clip(written)} lang={writeLabel(summary, written, approval.exists)} syntax={filePath} /></div>}
@@ -933,13 +898,13 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
           else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && instead) { event.preventDefault(); onAnswer(false, false, undefined, { message: instead }); }
         }} />
       <div className="plan-actions">
-        <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)} title="원래 버튼으로 돌아갑니다 (Esc)">취소</button>
+        <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)}>취소</button>
         <button type="button" className="primary" disabled={!instead} onClick={() => onAnswer(false, false, undefined, { message: instead })} title="Ctrl+Enter">거부하고 지시 보내기</button>
       </div>
     </footer> : <footer>
-      {explain && <button type="button" className="secondary approval-explain" onClick={() => explainOpen(true)} title="실행하지 않고, 대신 어떻게 할지 Claude에게 알려 줍니다">다르게 하기…</button>}
+      {explain && <button type="button" className="secondary approval-explain" onClick={() => explainOpen(true)}>다르게 하기…</button>}
       <button type="button" onClick={() => onAnswer(false, false)}>거부</button>
-      {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="비슷한 요청을 이 세션에서 계속 허용합니다">항상 허용</button>}
+      {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="이 세션의 유사 요청 허용">항상 허용</button>}
       <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
     </footer>}
   </div>;
@@ -1358,7 +1323,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     window.addEventListener('ade:ui-send', send); window.addEventListener('ade:ui-prefill', prefill);
     return () => { window.removeEventListener('ade:ui-send', send); window.removeEventListener('ade:ui-prefill', prefill); };
   }, [id]);
-  const uiBlocks = useMemo(() => ({ chatId: id, enabled: ctx.settings.interactiveUi }), [id, ctx.settings.interactiveUi]);
+  const uiBlocks = useMemo(() => ({ chatId: id, enabled: ctx.settings.interactiveUi, fileChipLabel: ctx.settings.chatFileChipLabel }), [id, ctx.settings.interactiveUi, ctx.settings.chatFileChipLabel]);
 
   const available = useMemo(() => {
     const names = new Map<string, CommandInfo>();
@@ -1664,10 +1629,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const forcePanel = otherCursorOptions.length >= 2;
   const modeDd = <Dropdown locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabel(mode, agent), icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
-  const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || 'Bypass(Run Everything): 허용 목록에 없는 명령도 묻지 않고 실행'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
-  const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status" title="샌드박스 변경은 진행 중인 응답이 끝난 뒤 Cursor를 다시 시작하며 적용됩니다.">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
+  const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || '명령 실행 확인 생략'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
+  const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
   const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}${hint === 'keyeffort' ? ' hint-anchor' : ''}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).then(pickedBy('keyeffort'), ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
-  const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || option.description || (option.id === 'fast' ? 'Fast 모드' : option.name)} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || maxOption.description || 'MAX 모드'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id} title={option.description}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
+  const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || undefined} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || '최대 컨텍스트'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
   const hasMore = forcePanel || Boolean(bypassBtn) || (!empty && state.addDirs.length > 0) || (agent === 'cursor' && state.restartPending) || cursorOptions.some(option => isCursorSwitch(option) || (!isCursorEffort(option) && !(maxOption && option.id === maxOption.id))) || Boolean(maxOption || maxContext);
   const panelItems = <>{bypassBtn}{optionItems}{noteItems}</>;
   const tuneButton = <span className={`tune-wrap${forcePanel ? ' forced' : ''}${hasMore ? ' more' : ''}`}>
@@ -1686,8 +1651,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? `클릭하여 세션 ID 복사\n${view.state.sessionId}\n${cwd}` : cwd} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
-        {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인이 필요합니다"><Icon name="alert" size={12} /></span>}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? `세션 ID 복사\n${view.state.sessionId}\n${cwd}` : cwd} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+        {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인 대기"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
         {view.state.sessionId && <IconButton icon="chart" tip="header" label="세션 통계 (/stats)" className={hint === 'stats' ? 'hint-anchor' : ''} onClick={() => { hintSeen('stats'); setStatsOpen(true); }} />}
@@ -1696,8 +1661,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <IconButton icon="plus" tip="header" label="새 대화 (/clear)" onClick={() => void resetChat().catch(ctx.fail)} />
         <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(id)} />
-        <IconButton icon="x" tip="none" label="채팅 닫기" action="closePane" onClick={() => ctx.onClose(id)} /></span></div>
-    {agent === 'claude' && <ClaudeUpdateNotice />}
+        <IconButton icon="x" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
+    {(agent === 'claude' || agent === 'codex') && <CliUpdateNotice agent={agent} />}
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
       onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
@@ -1706,7 +1671,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label || (state.configuring ? '설정을 적용하는 중' : '')} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer" title="응답이 이 메시지를 받아들이면 일반 대화로 바뀝니다. ↑로 입력창에서 수정하거나, Esc로 지금 작업을 멈추고 바로 보낼 수 있습니다.">스티어링 · ↑ 수정 · Esc 바로 보내기</small>{item.text}</div></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer">스티어링 · ↑ 수정 · Esc 바로 보내기</small>{item.text}</div></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1796,7 +1761,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           }} />
         </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
-        <button type="button" className="chat-attach" title="첨부 (이미지·파일을 끌어놓을 수도 있습니다)" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', detail: 'PNG·JPEG·GIF·WebP를 그림으로 보냅니다' }, { id: 'file', label: '파일', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
+        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', detail: 'PNG·JPEG·GIF·WebP를 그림으로 보냅니다' }, { id: 'file', label: '파일', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
@@ -1813,7 +1778,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     </div>
     <div className="chat-bottom-space" aria-hidden="true" />
     {providers.length > 1 && <div className="chat-start-slot chat-provider-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
-      <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} title={item === agent ? undefined : `${PROVIDER_LABELS[item]}로 전환`} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
+      <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
     {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onStop={stopTask} onClose={() => setAgentOpen(null)} />}
   </section></LocalCardsContext.Provider></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></DiffLayoutContext.Provider></ChatUiContext.Provider>;
@@ -1848,7 +1813,7 @@ function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boo
   const deep = active && !label && thinking >= 8, red = Math.min(100, Math.max(0, Math.floor((thinking - 8) / 5) * 10));
   return <div className="chat-status-row" data-active={active || undefined} aria-hidden={!active}>
     <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}
-      title={thought ? undefined : '모델이 추론 내용은 보내지 않아, 경과 시간과 추정 토큰만 표시합니다.'}>
+      title={thought ? undefined : '추론 내용 미제공'}>
       <i className="chat-spin" /><span className="chat-working-label">{label || (deep ? `${effort ? `${effortLabel(effort)} Effort로 ` : ''}깊게 생각하는 중…` : '생각하는 중…')}</span>
       <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small></div></div>
   </div>;
@@ -1867,9 +1832,9 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
   const compacting = gauge.autoCompact;
   const ink = compacting ? 'var(--term-magenta)' : `hsl(${usageHue(percent)} 62% var(--usage-l, 52%))`;
   const basisLabel = compacting ? `Auto Compact 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`;
-  const ringTitle = !supported ? 'CLI가 컨텍스트 사용량을 제공하지 않습니다'
-    : waiting ? '첫 응답 후 컨텍스트 사용량이 표시됩니다'
-    : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`} · 클릭하면 상세`;
+  const ringTitle = !supported ? '컨텍스트 사용량 미제공'
+    : waiting ? '컨텍스트 집계 대기'
+    : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`}`;
   return <>
     <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">

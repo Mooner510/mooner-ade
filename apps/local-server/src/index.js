@@ -11,6 +11,7 @@ import { WebSocketServer } from 'ws';
 import { createLocalRuntime, LocalProcesses, LocalWorkspace } from './runtime.js';
 import { listIdes, openPath } from './ide.js';
 import { codexAuthenticated } from './agents.js';
+import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
@@ -19,7 +20,7 @@ import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
 import { createProcessTable } from './process-table.js';
 import { uploadOverSsh } from './ssh-upload.js';
-import { createClaudeUpdater } from './claude-update.js';
+import { createCliUpdater } from './claude-update.js';
 import { createRemoteAgent } from './remote-agent.js';
 import { createRemoteClaude, parseRemote, remoteScript, runRemote } from './remote-claude.js';
 import { createTerminalStatus } from './terminal-status.js';
@@ -91,6 +92,7 @@ const pty = ptyHost
   : localPty;
 const ptyFactory = pty || { spawn() { throw fault('PTY_UNAVAILABLE', 'node-pty 설치 또는 네이티브 빌드를 확인하세요.'); } };
 await fs.mkdir(dataRoot, { recursive: true, mode: 0o700 });
+const recordClientError = createClientErrorLog({ file: path.join(dataRoot, 'client-error.log') });
 // Chat agents (not terminals) commit through a git hooks dir that strips agent signatures from commit messages.
 const signatureEnv = await signatureGuard(dataRoot);
 const installationUUID = await deviceUUID(dataRoot);
@@ -543,12 +545,19 @@ async function readiness(root) {
 // is shared by all projects for a while; the "다시 확인" button forces a fresh one.
 const READINESS_TTL = 10 * 60_000;
 let agentReadiness = null;
-// The Claude Code CLI's own update (the chat's "새 버전" notice and its 업데이트 button). A new CLI changes the readiness reading and may change
+// Claude Code and Codex CLI updates (the chat notice and its 업데이트 button). A new CLI changes the readiness reading and may change
 // the model catalog and slash commands, so those are asked again afterwards; running chats keep the binary they started with (see claude-update.js).
-const claudeUpdater = createClaudeUpdater({
-  exec: (file, args, options) => new LocalProcesses({ cwd: os.homedir() }).exec(file, args, options),
-  onUpdated: () => { agentReadiness = null; initProbes.clear(); modelsProbe = null; }
-});
+const dropCliCaches = () => { agentReadiness = null; initProbes.clear(); modelsProbe = null; };
+const execCli = (file, args, options) => new LocalProcesses({ cwd: os.homedir() }).exec(file, args, options);
+const cliUpdaters = {
+  claude: createCliUpdater({ agent: 'claude', exec: execCli, onUpdated: dropCliCaches }),
+  codex: createCliUpdater({ agent: 'codex', exec: execCli, onUpdated: dropCliCaches }),
+};
+function cliUpdater(agent) {
+  const updater = cliUpdaters[agent ?? 'claude'];
+  if (!updater) throw fault('INVALID_INPUT', '업데이트할 CLI가 올바르지 않습니다.');
+  return updater;
+}
 async function cachedReadiness(root, force) {
   if (force || !agentReadiness || (agentReadiness.done && Date.now() - agentReadiness.at > READINESS_TTL)) {
     const entry = { at: Date.now(), done: false, value: readiness(root) };
@@ -825,8 +834,8 @@ async function route(action, input, project) {
     await closeProject(project, { force: input.force === true });
     return {};
   }
-  if (action === 'agent/update-check') return claudeUpdater.check(input.force === true);
-  if (action === 'agent/update') return claudeUpdater.update();
+  if (action === 'agent/update-check') return cliUpdater(input.agent).check(input.force === true);
+  if (action === 'agent/update') return cliUpdater(input.agent).update();
   if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
@@ -1283,7 +1292,7 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
-  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     if (closing) throw fault('SHUTTING_DOWN', '서버가 종료 중입니다.', 503);
     if (!trusted(request, false)) throw fault('UNTRUSTED_HOST', '잘못된 Host입니다.', 403);
@@ -1299,6 +1308,9 @@ const server = http.createServer(async (request, response) => {
           response.setHeader('Set-Cookie', `ade_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
         }
         value = verifyPlugins ? { verifyPlugins: true } : {};
+      } else if (url.pathname === '/api/client/error') {
+        // A render crash can happen before sign-in. Same-origin (checked above) is what keeps the report on this app; the body is clipped and a repeat is dropped.
+        value = await recordClientError(input);
       } else {
         if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
         value = await route(url.pathname.slice(5), input, projects.get(input.projectId));

@@ -28,6 +28,8 @@ test('new users start in Chat and are invited until they open it; old users reta
   assert.equal(old.defaultMode, 'cli');
   assert.equal(old.chatTipPending, true);
   assert.equal(old.theme, 'light');
+  assert.equal(migrateSettings({ theme: 'nord' }).theme, 'nord');
+  assert.equal(migrateSettings({ theme: 'nope' }).theme, 'dark');
   assert.equal(migrateSettings({ onboarded: false }).chatTipPending, false);
   assert.deepEqual(migrateSettings(old), old);
 });

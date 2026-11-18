@@ -1,8 +1,17 @@
 import { api } from './api';
+import type { IconName } from './Icon';
 
 // "Open in IDE": the editors this computer has (found by the local server), what to open, and the event a clicked file chip raises.
 export type IdeInfo = { id: string; label: string; kind: string };
 export type IdeList = { ides: IdeInfo[]; fileManager: string };
+export const ideIcon = (ide: Pick<IdeInfo, 'id' | 'kind'>): IconName =>
+  ide.id === 'cursor' ? 'cursor'
+    : ide.id === 'vscode-insiders' ? 'vscode-insiders'
+      : ide.id === 'vscodium' ? 'vscodium'
+        : ide.id === 'windsurf' ? 'windsurf'
+          : ide.id === 'zed' || ide.kind === 'zed' ? 'zed'
+            : ide.kind === 'jetbrains' ? 'jetbrains'
+              : ide.kind === 'vscode' ? 'vscode' : 'code';
 // path is relative to the project (or to the chat's own folder when chatId is given); the server refuses anything outside it.
 export type OpenTarget = { path: string; line?: number; column?: number; folder?: boolean; chatId?: string };
 

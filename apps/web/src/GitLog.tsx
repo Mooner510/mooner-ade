@@ -275,12 +275,12 @@ export function GitLog(props: GitLogProps) {
   const toggleFavorite = (ref: Ref) => set('gitFavorites', settings.gitFavorites.includes(ref.name) ? settings.gitFavorites.filter(name => name !== ref.name) : [...settings.gitFavorites, ref.name]);
   const filterBranch = (name: string) => setFilters(previous => ({ ...previous, branches: previous.branches.length === 1 && previous.branches[0] === name ? [] : [name] }));
   const editable = (commit: Commit, many = false) => {
-    if (!fullGraph || !inHead) return '저장소를 불러오는 중입니다.';
+    if (!fullGraph || !inHead) return '저장소 로딩 중';
     const index = fullGraph.index.get(commit.h) ?? -1;
-    if (!current) return 'HEAD가 브랜치에 있지 않습니다.';
-    if (!inHead[index]) return '현재 브랜치에 없는 커밋입니다.';
-    if (commit.p.length > 1) return `선택한 커밋의 부모가 ${commit.p.length}개입니다. (머지 커밋)`;
-    if (remoteReach.guarded?.[index]) return '보호된 브랜치에 이미 push된 커밋입니다.';
+    if (!current) return 'Detached HEAD';
+    if (!inHead[index]) return '현재 브랜치 밖의 커밋';
+    if (commit.p.length > 1) return `머지 커밋 · 부모 ${commit.p.length}개`;
+    if (remoteReach.guarded?.[index]) return '보호 브랜치에 Push된 커밋';
     if (many) return '';
     return '';
   };
@@ -322,7 +322,7 @@ export function GitLog(props: GitLogProps) {
       !isCurrent && current && { label: `'${currentName}'을(를) '${other}'에 리베이스`, run: () => void op({ op: 'rebase', onto: ref.ref }, '리베이스', `${currentName}을(를) ${other} 위로 리베이스했습니다.`) },
       !isCurrent && current && { label: `'${other}'을(를) '${currentName}'에 머지`, icon: 'merge', run: () => void op({ op: 'merge', ref: ref.ref }, '머지', `${other}을(를) ${currentName}에 머지했습니다.`) },
       'separator',
-      ref.kind === 'local' && { label: '업데이트', icon: 'sync', disabled: !ref.upstream, hint: ref.upstream ? undefined : '연결된 원격 브랜치가 없습니다', run: () => update(ref) },
+      ref.kind === 'local' && { label: '업데이트', icon: 'sync', disabled: !ref.upstream, hint: ref.upstream ? undefined : '원격 브랜치 미연결', run: () => update(ref) },
       ref.kind === 'local' && { label: 'Push…', icon: 'push', run: () => push(ref) },
       'separator',
       ref.kind === 'local' && { label: '이름 바꾸기…', icon: 'edit', run: () => void renameBranch(ref) },
@@ -338,14 +338,14 @@ export function GitLog(props: GitLogProps) {
     const refsHere = one ? refsOf(one.h) : [];
     const branches = refsHere.filter(ref => ref.kind !== 'tag' && !(ref.kind === 'local' && ref.current)), tags = refsHere.filter(ref => ref.kind === 'tag');
     const isHead = one?.h === data?.head.sha;
-    const editProblem = one ? editable(data!.commits[fullGraph!.index.get(one.h)!]) : '커밋 하나만 고를 수 있습니다.';
+    const editProblem = one ? editable(data!.commits[fullGraph!.index.get(one.h)!]) : '커밋 하나 선택 필요';
     const manyProblem = selection.map(commit => editable(data!.commits[fullGraph!.index.get(commit.h)!], true)).find(Boolean) ?? '';
     const children = one ? (fullGraph!.children[fullGraph!.index.get(one.h)!] ?? []).map(i => fullGraph!.commits[i].h) : [];
     const parents = one ? data!.commits[fullGraph!.index.get(one.h)!].p : [];
     return [
       { label: '리비전 번호 복사', icon: 'copy', keys: 'Ctrl+Alt+Shift+C', run: () => copyText(selection.map(commit => commit.h).join(' ')) },
       { label: '패치 만들기 (클립보드로)', icon: 'patch', run: () => { if (demo) { demo.note('실제 저장소에서는 패치가 클립보드로 복사됩니다.'); return; } void call<{ patch: string }>('git/patch', { shas: oldestFirst.map(commit => commit.h) }).then(value => { copyText(value.patch); notify(`커밋 ${selection.length}개의 패치를 복사했습니다.`); }, fail); } },
-      { label: '체리픽', icon: 'cherry', disabled: merges || !data?.head.sha, hint: merges ? '머지 커밋은 체리픽할 수 없습니다' : undefined, run: () => void op({ op: 'cherry-pick', shas: oldestFirst.map(commit => commit.h) }, '체리픽', `커밋 ${selection.length}개를 체리픽했습니다.`) },
+      { label: '체리픽', icon: 'cherry', disabled: merges || !data?.head.sha, hint: merges ? '머지 커밋 체리픽 불가' : undefined, run: () => void op({ op: 'cherry-pick', shas: oldestFirst.map(commit => commit.h) }, '체리픽', `커밋 ${selection.length}개를 체리픽했습니다.`) },
       'separator',
       one && (branches.length ? { label: '체크아웃', icon: 'branch', items: [...branches.map(ref => ({ label: ref.name, icon: 'branch' as IconName, run: () => void checkout(ref) })), 'separator' as const, { label: `리비전 '${short(one.h)}'`, run: () => void checkout(one.h) }] }
         : { label: `리비전 '${short(one.h)}' 체크아웃`, icon: 'branch', run: () => void checkout(one.h) }),
@@ -354,7 +354,7 @@ export function GitLog(props: GitLogProps) {
       'separator',
       one && { label: '현재 브랜치를 여기로 리셋…', icon: 'reset', disabled: !data?.head.sha, run: () => setDialog(<ResetDialog branch={currentName} target={short(one.h)} onClose={() => setDialog(null)} onSubmit={mode => { setDialog(null); void op({ op: 'reset', sha: one.h, mode }, '리셋', `${currentName}을(를) ${short(one.h)}(으)로 리셋했습니다. (${mode})`); }} />) },
       { label: selection.length > 1 ? '커밋 되돌리기 (Revert)' : '커밋 되돌리기 (Revert)', icon: 'undo', disabled: merges, run: () => void op({ op: 'revert', shas: selection.map(commit => commit.h) }, '되돌리기', `커밋 ${selection.length}개를 되돌렸습니다.`) },
-      one && { label: '커밋 실행 취소…', icon: 'undo', disabled: !isHead, hint: isHead ? '변경은 스테이징된 채로 남습니다' : '선택한 커밋이 현재 브랜치의 마지막 커밋이 아닙니다', run: async () => { if (await confirmRewrite([one])) void op({ op: 'undo-commit', sha: one.h }, '커밋 실행 취소', '마지막 커밋을 취소했습니다. 변경은 스테이징되어 있습니다.'); } },
+      one && { label: '커밋 실행 취소…', icon: 'undo', disabled: !isHead, hint: isHead ? '스테이징 유지' : '현재 브랜치의 마지막 커밋만 가능', run: async () => { if (await confirmRewrite([one])) void op({ op: 'undo-commit', sha: one.h }, '커밋 실행 취소', '마지막 커밋을 취소했습니다. 변경은 스테이징되어 있습니다.'); } },
       'separator',
       { label: '커밋 메시지 편집…', icon: 'edit', disabled: Boolean(editProblem), hint: editProblem || undefined, run: async () => {
         if (!one || !(await confirmRewrite([one]))) return;
@@ -365,7 +365,7 @@ export function GitLog(props: GitLogProps) {
         if (!(await confirmRewrite(selection))) return;
         if (await ask.confirm(`커밋 ${selection.length}개를 기록에서 지울까요?`)) void op({ op: 'drop', shas: selection.map(commit => commit.h) }, '커밋 삭제', `커밋 ${selection.length}개를 지웠습니다.`);
       } },
-      { label: '커밋 스쿼시…', icon: 'merge', disabled: selection.length < 2 || Boolean(manyProblem), hint: selection.length < 2 ? '커밋을 두 개 이상 고르세요' : manyProblem || undefined, run: async () => {
+      { label: '커밋 스쿼시…', icon: 'merge', disabled: selection.length < 2 || Boolean(manyProblem), hint: selection.length < 2 ? '커밋 두 개 이상 선택 필요' : manyProblem || undefined, run: async () => {
         if (!(await confirmRewrite(selection))) return;
         const messages = await Promise.all(oldestFirst.map(commit => details(commit.h).then(value => value.message, () => commit.s)));
         setDialog(<MessageDialog title={`커밋 ${selection.length}개 스쿼시`} submit="스쿼시" initial={messages.join('\n\n')} onClose={() => setDialog(null)} onSubmit={message => { setDialog(null); void op({ op: 'squash', shas: selection.map(commit => commit.h), message }, '스쿼시', `커밋 ${selection.length}개를 하나로 합쳤습니다.`); }} />);
@@ -433,11 +433,11 @@ export function GitLog(props: GitLogProps) {
     } }];
   const graphMenu = (): MenuEntry[] => [
     { header: '정렬' },
-    { label: '커밋 날짜순', radio: true, checked: settings.gitSort === 'date', hint: '커밋을 위상 순서와 커밋 날짜로 정렬합니다', run: () => set('gitSort', 'date') },
-    { label: '위상 정렬', radio: true, checked: settings.gitSort === 'topo', hint: '머지에서 들어온 커밋을 머지 커밋 바로 아래에 먼저 보여 줍니다', run: () => set('gitSort', 'topo') },
+    { label: '커밋 날짜순', radio: true, checked: settings.gitSort === 'date', hint: '위상 · 커밋 날짜 기준', run: () => set('gitSort', 'date') },
+    { label: '위상 정렬', radio: true, checked: settings.gitSort === 'topo', hint: '머지 커밋 아래에 병합된 커밋 우선 표시', run: () => set('gitSort', 'topo') },
     { header: '옵션' },
-    { label: '머지 선형화', checked: settings.gitLinear, hint: '들어온 커밋을 리베이스한 것처럼 메인 브랜치 커밋 위에 보여 줍니다', keep: true, run: () => set('gitLinear', !settings.gitLinear) },
-    { label: '첫 부모만', checked: settings.gitFirstParent, hint: '머지 커밋에서 첫 번째 부모만 따라갑니다', keep: true, run: () => set('gitFirstParent', !settings.gitFirstParent) },
+    { label: '머지 선형화', checked: settings.gitLinear, hint: '메인 브랜치 위에 병합된 커밋 표시', keep: true, run: () => set('gitLinear', !settings.gitLinear) },
+    { label: '첫 부모만', checked: settings.gitFirstParent, hint: '머지 커밋의 첫 번째 부모만 표시', keep: true, run: () => set('gitFirstParent', !settings.gitFirstParent) },
     { label: '머지 커밋 숨기기', checked: settings.gitNoMerges, keep: true, run: () => set('gitNoMerges', !settings.gitNoMerges) },
     'separator',
     { label: '선형 브랜치 모두 접기', run: collapseAll },
@@ -535,10 +535,10 @@ export function GitLog(props: GitLogProps) {
       <div className="git-cell subject" role="gridcell">
         <GraphCell layout={layout} row={row} color={palette} hover={hover} fullIndex={i => fullGraph!.index.get(graph.commits[layout.commitAt[i]].h)!} isHead={isHeadRow}
           onHoverEdge={hoverEdge} onClickEdge={clickEdge} onArrow={arrowJump} describe={target => { const c = graph.commits[layout.commitAt[target]]; return `${c.s} — ${c.an}, ${absoluteDate(c.at)}`; }} />
-        {settings.gitRefsLeft && labels}<span className="git-text" title={commit.s}>{commit.s}</span>{!settings.gitRefsLeft && labels}
+        {settings.gitRefsLeft && labels}<span className="git-text" data-tip-overflow="">{commit.s}</span>{!settings.gitRefsLeft && labels}
       </div>
       {columns.includes('author') && <div className="git-cell author" role="gridcell" title={commit.cn ? `작성: ${commit.an} <${commit.ae}>\n커밋: ${commit.cn} <${commit.ce}>` : `${commit.an} <${commit.ae}>`}>{commit.an}{commit.cn && commit.cn !== commit.an ? '*' : ''}</div>}
-      {columns.includes('date') && <div className="git-cell date" role="gridcell" title={absoluteDate(time)}>{settings.gitPrettyDate ? prettyDate(time) : absoluteDate(time)}</div>}
+      {columns.includes('date') && <div className="git-cell date" role="gridcell" title={settings.gitPrettyDate ? absoluteDate(time) : undefined}>{settings.gitPrettyDate ? prettyDate(time) : absoluteDate(time)}</div>}
       {columns.includes('hash') && <div className="git-cell hash" role="gridcell">{short(commit.h)}</div>}
     </div>);
   }
@@ -586,10 +586,10 @@ export function GitLog(props: GitLogProps) {
       <IconButton icon="regex" label="정규식으로 검색" pressed={filters.regex} className={filters.regex ? 'on' : ''} onClick={() => setFilters(previous => ({ ...previous, regex: !previous.regex }))} />
       <IconButton icon="matchCase" label="대소문자 구분" pressed={filters.matchCase} className={filters.matchCase ? 'on' : ''} onClick={() => setFilters(previous => ({ ...previous, matchCase: !previous.matchCase }))} />
     </div>
-    <button data-tip="표시할 브랜치 선택" className={`git-filter ${filters.branches.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'branchFilter', '브랜치 필터')}>{filterLabel('브랜치', filters.branches)}<Icon name="chevronDown" size={12} /></button>
-    <button data-tip="작성자로 필터" className={`git-filter ${filters.users.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'user', '사용자 필터')}>{filterLabel('사용자', filters.users)}<Icon name="chevronDown" size={12} /></button>
-    <button data-tip="기간으로 필터" className={`git-filter ${filters.since !== null || filters.until !== null ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'date', '날짜 필터')}>{filters.since !== null || filters.until !== null ? `날짜: ${filters.since ? absoluteDate(filters.since).slice(0, 10) : '…'} ~ ${filters.until ? absoluteDate(filters.until).slice(0, 10) : '…'}` : '날짜'}<Icon name="chevronDown" size={12} /></button>
-    <button data-tip="파일·폴더로 필터" className={`git-filter ${filters.paths.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'path', '경로 필터')}>{filterLabel('경로', filters.paths)}<Icon name="chevronDown" size={12} /></button>
+    <button className={`git-filter ${filters.branches.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'branchFilter', '브랜치 필터')}>{filterLabel('브랜치', filters.branches)}<Icon name="chevronDown" size={12} /></button>
+    <button className={`git-filter ${filters.users.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'user', '사용자 필터')}>{filterLabel('사용자', filters.users)}<Icon name="chevronDown" size={12} /></button>
+    <button className={`git-filter ${filters.since !== null || filters.until !== null ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'date', '날짜 필터')}>{filters.since !== null || filters.until !== null ? `날짜: ${filters.since ? absoluteDate(filters.since).slice(0, 10) : '…'} ~ ${filters.until ? absoluteDate(filters.until).slice(0, 10) : '…'}` : '날짜'}<Icon name="chevronDown" size={12} /></button>
+    <button className={`git-filter ${filters.paths.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'path', '경로 필터')}>{filterLabel('경로', filters.paths)}<Icon name="chevronDown" size={12} /></button>
     <span className="git-sep" />
     <IconButton icon="graph" label="그래프 정렬·표시 옵션" dot={settings.gitSort !== 'date' || settings.gitLinear || settings.gitFirstParent || settings.gitNoMerges} onClick={event => openMenu(...under(event), 'graph', '그래프 옵션')} />
     <IconButton icon="refresh" label="기록 새로고침" onClick={() => void load(true)} />
@@ -680,7 +680,7 @@ export function GitLog(props: GitLogProps) {
       {props.controls}
       {busy && <span className="git-busy" role="status"><span className="spinner" />{busy}…</span>}
       <span className="spacer" />
-      {data && current && <span className="git-head-branch" title="현재 브랜치"><Icon name="branch" size={13} />{current.name}{current.ahead ? <small className="out">↑{current.ahead}</small> : null}{current.behind ? <small className="in">↓{current.behind}</small> : null}</span>}
+      {data && current && <span className="git-head-branch"><Icon name="branch" size={13} />{current.name}{current.ahead ? <small className="out">↑{current.ahead}</small> : null}{current.behind ? <small className="in">↓{current.behind}</small> : null}</span>}
       {data && !current && data.head.sha && <span className="git-head-branch warn"><Icon name="alert" size={13} />Detached HEAD</span>}
       {data && data.remotes.length > 0 && <IconButton icon="fetch" label="원격 변경 가져오기 (Fetch)" onClick={fetchAll} />}
       {data && current?.upstream && <IconButton icon="sync" label={`업데이트 (${settings.gitUpdateMethod === 'rebase' ? '리베이스' : '머지'})`} onClick={() => update(null)} />}
@@ -741,7 +741,7 @@ const GraphCell = memo(function GraphCell({ layout, row, color, hover, fullIndex
 function RefLabels({ refs, detached, compact, tagNames }: { refs: Ref[]; detached: boolean; compact: boolean; tagNames: boolean }) {
   const groups = refGroups(refs);
   return <span className="git-refs">
-    {detached && <span className="git-ref detached" title="HEAD가 브랜치에 있지 않습니다"><Icon name="alert" size={12} />Detached HEAD</span>}
+    {detached && <span className="git-ref detached"><Icon name="alert" size={12} />Detached HEAD</span>}
     {groups.map(group => {
       const [main] = group, colorOf = (ref: Ref) => ref.kind === 'local' && ref.current ? REF_COLORS.head : REF_COLORS[ref.kind];
       const shown = compact ? [main] : group;
