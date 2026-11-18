@@ -39,9 +39,9 @@ export const chatStatusDefs: Record<string, Def> = {
     extra: { icon: 'database', format: '↑{cacheWrite} ↓{cache}', tip: '누적 캐시 토큰\n↑ 쓰기 · ↓ 읽기', show: ({ state }) => state.tokens.cacheRead + state.tokens.cacheCreate > 0 },
     tip: () => '누적 토큰\n↑ 입력 · ↓ 출력',
     hint: '이 채팅의 누적 토큰. 캐시 아이콘 뒤는 ↑캐시 쓰기 ↓캐시 읽기. {input} {output} {cache}(캐시 읽기) {cacheWrite}(캐시 쓰기) {total}' },
-  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: 'CLI가 보고한 세션 비용(USD)',
-    tip: () => '누적 비용 (USD)' },
-  // Until a turn has been measured (and always on an API key) the item names what this chat is billed against; the measured share replaces it.
+  cost: { label: '비용', icon: 'payments', format: '${cost}', values: ({ state }) => state.costUsd === null ? { cost: '미제공' } : ({ cost: dollars(state.costUsd) }), hint: '이 채팅에서 든 비용(USD) · CLI가 보고한 세션 비용' ,
+    tip: () => '이 채팅에서 든 비용 (USD)' },
+  // Until a turn has been measured (and always on an API key, or for Codex/Cursor) the item names what this chat is billed against; the measured share replaces it.
   share: { label: '사용량 기여도', icon: 'speed', format: '{share}', values: ({ state, share }) => ({ share: usageBasis(state, share) }),
     hint: 'API 키 채팅은 ‘API Usage’(토큰 과금), CLI 로그인 채팅은 측정 전 ‘Plan Usage’로 표시하고, 측정되면 이 채팅이 플랜 한도에서 차지한 %p(추정)로 바뀝니다. Claude·Codex는 5시간과 주간, Cursor는 이 채팅 모델의 풀과 전체입니다.' },
   turns: { label: '턴 수', icon: 'forum', format: '{turns}턴', values: ({ state }) => ({ turns: String(state.turns) }) },
@@ -58,8 +58,7 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
-  // On an API key the money sits inside the API Usage item (same dollars() format), so the separate cost item would show it twice.
-  if (id === 'cost' && (state.costUsd === null || state.apiKey === true && state.agent === 'claude') || id === 'tokens' && state.capabilities?.tokens === false) return null;
+  if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon, tip: def.extra.tip } : undefined;
