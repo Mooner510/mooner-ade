@@ -11,6 +11,10 @@ export const CODEX_PROVIDER = 'ade-openai-key';
 export const CODEX_KEY_ENV = 'ADE_CODEX_OPENAI_API_KEY';
 const codexArgs = ['-c', `model_provider="${CODEX_PROVIDER}"`, '-c', `model_providers.${CODEX_PROVIDER}={name="OpenAI (API key)",base_url="https://api.openai.com/v1",env_key="${CODEX_KEY_ENV}",wire_api="responses"}`];
 
+// Claude's prompt-cache lifetime: 'auto' leaves it to the CLI (5 minutes on an API key, 1 hour on a subscription login), the others force it with the CLI's own switches.
+export const CACHE_TTLS = ['auto', '5m', '1h'];
+const cacheEnv = { '5m': { FORCE_PROMPT_CACHING_5M: '1' }, '1h': { ENABLE_PROMPT_CACHING_1H: '1' } };
+
 export const maskAgentKey = key => key ? `${'•'.repeat(8)}${key.slice(-4)}` : '';
 const validKey = key => typeof key === 'string' && key.length >= 8 && key.length <= 512 && /^[\x21-\x7e]+$/.test(key);
 
@@ -25,21 +29,25 @@ function clean(raw) {
 
 // `launch(agent)` is synchronous (it runs inside the chat's spawn), so `load()` must have finished once before the first chat starts.
 export function createAgentKeys({ file }) {
-  let data = clean(null);
+  let data = clean(null), cacheTtl = 'auto';
   const save = async () => {
     const tmp = `${file}.${randomUUID()}.tmp`;
-    try { await fs.writeFile(tmp, JSON.stringify({ version: 1, ...data }), { flag: 'wx', mode: 0o600 }); await fs.rename(tmp, file); }
+    try { await fs.writeFile(tmp, JSON.stringify({ version: 1, ...data, cacheTtl }), { flag: 'wx', mode: 0o600 }); await fs.rename(tmp, file); }
     finally { await fs.unlink(tmp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   };
   return {
     async load() {
-      try { data = clean(JSON.parse(await fs.readFile(file, 'utf8'))); }
+      try { const raw = JSON.parse(await fs.readFile(file, 'utf8')); data = clean(raw); cacheTtl = CACHE_TTLS.includes(raw?.cacheTtl) ? raw.cacheTtl : 'auto'; }
       catch (error) { if (error.code !== 'ENOENT') console.error('agent-keys.json를 읽지 못했습니다:', error.message); }
     },
-    status() { return Object.fromEntries(KEY_AGENTS.map(agent => [agent, { use: data[agent].use, key: maskAgentKey(data[agent].key) }])); },
+    status() { return { ...Object.fromEntries(KEY_AGENTS.map(agent => [agent, { use: data[agent].use, key: maskAgentKey(data[agent].key) }])), cacheTtl }; },
     // { agent, key?: string (set; '' removes it), use?: boolean }. A new key is used right away; removing the key goes back to the login.
-    async write({ agent, key, use } = {}) {
+    async write({ agent, key, use, cacheTtl: ttl } = {}) {
       if (!KEY_AGENTS.includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
+      if (ttl !== undefined) {
+        if (agent !== 'claude' || !CACHE_TTLS.includes(ttl)) throw fault('INVALID_INPUT', '잘못된 캐시 시간입니다.');
+        cacheTtl = ttl;
+      }
       const next = { ...data[agent] };
       if (key !== undefined) {
         if (typeof key !== 'string') throw fault('INVALID_INPUT', 'API 키 형식이 올바르지 않습니다.');
@@ -56,12 +64,12 @@ export function createAgentKeys({ file }) {
       await save();
       return this.status();
     },
-    // What a chat of `agent` adds to its launch: { env, args } (args go before the subcommand). Empty when the login is used.
+    // What a chat of `agent` adds to its launch: { env, args } (args go before the subcommand). The login adds nothing, except Claude's cache lifetime switch when one is set.
     // `auth` is the chat's own choice ('key' | 'login'); without one the setting for new chats decides (chats from before the choice existed).
     launch(agent, auth) {
-      const entry = data[agent];
-      if (!(auth === 'key' ? Boolean(entry?.key) : auth === 'login' ? false : entry?.use === true)) return { env: {}, args: [] };
-      if (agent === 'claude') return { env: { ANTHROPIC_API_KEY: entry.key }, args: [] };
+      const entry = data[agent], extra = agent === 'claude' ? cacheEnv[cacheTtl] ?? {} : {};
+      if (!(auth === 'key' ? Boolean(entry?.key) : auth === 'login' ? false : entry?.use === true)) return { env: { ...extra }, args: [] };
+      if (agent === 'claude') return { env: { ANTHROPIC_API_KEY: entry.key, ...extra }, args: [] };
       if (agent === 'codex') return { env: { [CODEX_KEY_ENV]: entry.key }, args: codexArgs };
       return { env: { CURSOR_API_KEY: entry.key }, args: [] };
     },
@@ -69,6 +77,6 @@ export function createAgentKeys({ file }) {
     // What a new chat starts on: the setting under Settings > AI 툴. An open chat keeps its own choice.
     defaultAuth(agent) { return data[agent]?.use === true ? 'key' : 'login'; },
     // Changes whenever what `launch` returns would change, without carrying the key itself (for cache keys).
-    signature(agent) { return data[agent]?.use ? `key:${createHash('sha256').update(data[agent].key).digest('hex').slice(0, 12)}` : 'login'; },
+    signature(agent) { return (data[agent]?.use ? `key:${createHash('sha256').update(data[agent].key).digest('hex').slice(0, 12)}` : 'login') + (agent === 'claude' && cacheTtl !== 'auto' ? `:${cacheTtl}` : ''); },
   };
 }

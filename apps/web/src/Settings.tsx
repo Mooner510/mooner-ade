@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type C
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { themeById, themeChoices } from './themes';
-import { chatItemView, chatStatusDefs, chatStatusLabels } from './ChatStatus';
+import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
 import { PluginSettings } from './PluginSettings';
@@ -214,7 +214,7 @@ function WakaTimeSettings({ settings, set, onChange }: { settings: Settings; set
 
 // API key the chat mode runs this agent with instead of the CLI's login. The key stays on the local server; only its last four characters come back.
 type KeyAgent = 'claude' | 'codex' | 'cursor';
-type AgentKeyStatus = Record<KeyAgent, { use: boolean; key: string }>;
+type AgentKeyStatus = Record<KeyAgent, { use: boolean; key: string }> & { cacheTtl: CacheTtl };
 const keySources: Record<KeyAgent, { placeholder: string; where: string; billing: string }> = {
   claude: { placeholder: 'sk-ant-…', where: 'console.anthropic.com의 API Keys', billing: 'Anthropic API 사용량' },
   codex: { placeholder: 'sk-…', where: 'platform.openai.com의 API keys', billing: 'OpenAI API 사용량' },
@@ -223,7 +223,7 @@ const keySources: Record<KeyAgent, { placeholder: string; where: string; billing
 function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
   const [status, setStatus] = useState<AgentKeyStatus | null>(null), [key, setKey] = useState(''), [message, setMessage] = useState('');
   useEffect(() => { void api<AgentKeyStatus>('agent-keys/status').then(setStatus, () => {}); }, []);
-  const save = (input: { key?: string; use?: boolean }, done: string) => api<AgentKeyStatus>('agent-keys/config', { agent, ...input }).then(next => { setStatus(next); setKey(''); setMessage(done); }, (error: Error) => setMessage(error.message));
+  const save = (input: { key?: string; use?: boolean; cacheTtl?: CacheTtl }, done: string) => api<AgentKeyStatus>('agent-keys/config', { agent, ...input }).then(next => { setStatus(next); setKey(''); setMessage(done); }, (error: Error) => setMessage(error.message));
   const entry = status?.[agent], source = keySources[agent];
   return <>
     <h4 className="setting-group">채팅 인증</h4>
@@ -238,6 +238,11 @@ function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
       <button disabled={!key.trim()} onClick={() => void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.')}>저장</button>
       {entry?.key && <button onClick={() => void save({ key: '' }, '삭제했습니다. CLI 로그인으로 실행합니다.')}>삭제</button>}
     </Row>
+    {agent === 'claude' && <Row title="프롬프트 캐시 유지 시간" hint="자동은 CLI 기본값(API 키는 5분, 구독 로그인은 1시간)을 따릅니다. 1시간은 캐시 쓰기 요금이 입력의 2배(5분은 1.25배)지만 오래 쉬었다 이어도 캐시를 씁니다. 열려 있는 Claude 채팅은 응답이 끝나면 다시 시작해 적용하고, 채팅 상태바의 사용 방식 창에서도 바꿀 수 있습니다.">
+      {status && <Dropdown label="프롬프트 캐시 유지 시간" value={status.cacheTtl ?? 'auto'}
+        options={[{ value: 'auto', label: '자동' }, { value: '5m', label: '5분 강제' }, { value: '1h', label: '1시간 강제' }]}
+        onChange={value => void save({ cacheTtl: value as CacheTtl }, value === 'auto' ? '캐시 유지 시간을 CLI 기본값에 맡깁니다.' : `캐시 유지 시간을 ${value === '5m' ? '5분' : '1시간'}으로 강제합니다.`)} />}
+    </Row>}
     {message && <p className="setting-note" role="status">{message}</p>}
   </>;
 }

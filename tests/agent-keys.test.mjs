@@ -59,6 +59,29 @@ test('agent keys: codex gets an env-key provider through -c overrides, cursor ge
   } finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
 });
 
+test('agent keys: Claude cache lifetime is auto by default and forces 5m or 1h through the CLI switches, on a key and on the login', async () => {
+  const { dir, file, keys } = await store();
+  try {
+    assert.equal(keys.status().cacheTtl, 'auto');
+    assert.deepEqual(keys.launch('claude'), { env: {}, args: [] });
+    await keys.write({ agent: 'claude', key: 'sk-ant-api03-abcdefgh1234' });
+    assert.equal((await keys.write({ agent: 'claude', cacheTtl: '1h' })).cacheTtl, '1h');
+    assert.deepEqual(keys.launch('claude', 'key').env, { ANTHROPIC_API_KEY: 'sk-ant-api03-abcdefgh1234', ENABLE_PROMPT_CACHING_1H: '1' });
+    assert.deepEqual(keys.launch('claude', 'login').env, { ENABLE_PROMPT_CACHING_1H: '1' });
+    assert.ok(keys.signature('claude').endsWith(':1h'));
+    await keys.write({ agent: 'claude', cacheTtl: '5m' });
+    assert.deepEqual(keys.launch('claude', 'login').env, { FORCE_PROMPT_CACHING_5M: '1' });
+    // Other agents never get it, and it survives a restart.
+    assert.deepEqual(keys.launch('codex', 'login'), { env: {}, args: [] });
+    const again = createAgentKeys({ file }); await again.load();
+    assert.equal(again.status().cacheTtl, '5m');
+    await keys.write({ agent: 'claude', cacheTtl: 'auto' });
+    assert.deepEqual(keys.launch('claude', 'login'), { env: {}, args: [] });
+    await assert.rejects(keys.write({ agent: 'claude', cacheTtl: '2h' }));
+    await assert.rejects(keys.write({ agent: 'codex', cacheTtl: '1h' }));
+  } finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
+});
+
 test('agent keys: bad input is rejected', async () => {
   const { dir, keys } = await store();
   try {

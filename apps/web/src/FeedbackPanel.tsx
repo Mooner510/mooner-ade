@@ -150,7 +150,7 @@ function FeedbackAi({ hidden, items, available, onDone, fail, aiContext, aiModel
         <Dropdown className="chat-model" label="AI 모델" value={model} options={AI_MODELS} onChange={value => onAiChange({ feedbackAiModel: value as AiModel })} />
         <Dropdown className={`chat-effort effort-${effort}`} label="Effort" value={effort} options={AI_EFFORTS} onChange={value => onAiChange({ feedbackAiEffort: value as AiEffort })} />
         <span className="drag-space" />
-        <button type="button" className="chat-send" title="AI로 작성 (Enter)" aria-label="AI로 작성" disabled={!text.trim() || busy} onClick={send}><Icon name="arrowUp" size={16} /></button>
+        <button type="button" className="chat-send" aria-label="AI로 작성" disabled={!text.trim() || busy} onClick={send}><Icon name="arrowUp" size={16} /></button>
       </div>
     </div>
   </div>;

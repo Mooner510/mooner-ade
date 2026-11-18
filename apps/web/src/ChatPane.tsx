@@ -1689,7 +1689,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span>{greeting}</h2></div></div>
     </div>
     <div className="chat-dock">
-      {away && <button type="button" className="chat-jump" title="맨 아래로" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
+      {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
@@ -1837,7 +1837,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
     : waiting ? '컨텍스트 집계 대기'
     : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`}`;
   return <>
-    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
+    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         <circle cx="14" cy="14" r={radius} className="track" />
         {shown && compacting && gauge.used > 0 && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
@@ -1853,7 +1853,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
         {percent > 100 ? '창을 넘었습니다. ' : ''}창 {compact(gauge.basis)}, 최대 {compact(gauge.max)}. 가득 차기 전에 자동으로 요약합니다.
       </p>}
       <header className="chat-usage-title"><strong>사용 한도</strong>{usage?.plan && <span className="plan">{usage.plan}</span>}
-        <button type="button" className="icon-btn" title="새로고침" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
+        <button type="button" className="icon-btn" aria-label="사용 한도 새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
       {usage ? <UsageRows windows={windows} colors={settings.usageColors} /> : <p className="usage-note">{loading ? '불러오는 중…' : '표시할 한도 정보가 없습니다.'}</p>}
       {usage?.error && <p className="usage-note warn">{usage.error}</p>}
     </div>

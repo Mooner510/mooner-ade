@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { agentExitBenign, chatFolder, openChatSession, seedChat, probeAgentModels } from '../apps/local-server/src/chat.js';
+import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
 
@@ -186,6 +187,26 @@ test('Codex: switching to Bypass accepts the requests already waiting and the on
   await protocol.setPermissions({ permissionMode: 'default' });
   protocol.handle({ id: 'c3', method: 'item/commandExecution/requestApproval', params: { threadId: 't1', itemId: 'i3', command: 'rm' } });
   assert.ok(!sent.some(message => message.id === 'c3'), 'back to asking once Bypass is off');
+});
+
+test('Codex: in Bypass an MCP tool approval (question or elicitation) is allowed once, a server\'s own form still reaches the user', async () => {
+  const events = [], sent = [];
+  let protocol;
+  const answers = { initialize: {}, 'model/list': { data: [] }, 'skills/list': { data: [] }, 'thread/start': { thread: { id: 't1' }, model: 'm' } };
+  const write = async line => { const message = JSON.parse(line); sent.push(message); if (message.method in answers) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] })); };
+  protocol = createChatProtocol('codex', { write, emit: event => events.push(event) });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [] }, '/repo');
+  const question = { id: 'm1', method: 'item/tool/requestUserInput', params: { threadId: 't1', questions: [{ id: 'mcp_tool_call_approval_x', question: 'Allow?', options: [{ label: 'Allow for this session' }, { label: 'Allow' }, { label: 'Cancel' }] }] } };
+  const elicitation = { id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', mode: 'form', message: 'Allow the tool?', requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call' } } };
+  protocol.handle(question);
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 1, 'asked while the mode is default');
+  await protocol.setPermissions({ permissionMode: 'bypassPermissions' });
+  assert.deepEqual(sent.find(message => message.id === 'm1').result, { answers: { mcp_tool_call_approval_x: { answers: ['Allow'] } } });
+  protocol.handle({ ...elicitation });
+  protocol.handle({ id: 'f1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', mode: 'form', message: 'Your name?', requestedSchema: {} } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent.find(message => message.id === 'e1').result, { action: 'accept', content: null });
+  assert.ok(!sent.some(message => message.id === 'f1' && message.result), 'a form the server asks is not an approval');
 });
 
 test('Codex reports the effective Effort on start, resume and fork without overriding the CLI default', async t => {
@@ -704,6 +725,21 @@ async function controlSession(t) {
   return { session, events };
 }
 
+test('Claude Bypass: tool requests (MCP included) are allowed without a card, a question still waits for the user', async t => {
+  const { session, events } = await controlSession(t);
+  const cards = () => events.filter(event => event.kind === 'approval' && event.phase === 'request').map(event => event.tool);
+  await session.send('mcpask'); await until(() => cards().length === 1);
+  assert.deepEqual(cards(), ['mcp__srv__tool'], 'asked while the mode is not bypass');
+  await session.approve('req-mcp', { allow: false }); await until(() => session.state().status === 'idle');
+  await session.send('bypass'); await until(() => session.state().permissionMode === 'bypassPermissions' && session.state().status === 'idle');
+  await session.send('mcpask');
+  await until(() => events.some(event => event.kind === 'message' && JSON.stringify(event).includes('req-mcp=allow')));
+  assert.deepEqual(cards(), ['mcp__srv__tool'], 'no new card in bypass');
+  await until(() => session.state().status === 'idle');
+  await session.send('plainask'); await until(() => cards().length === 2);
+  assert.equal(cards()[1], 'AskUserQuestion', 'a question is never answered for the user');
+});
+
 test('an interrupted Claude turn stays open until its own result, so that result cannot end the next turn', async t => {
   const { session, events } = await controlSession(t);
   await session.send('slow');
@@ -913,6 +949,34 @@ test('Claude: a chat switches between the CLI login and an API key; only the tur
   await assert.rejects(reopened.set({ auth: 'key' }), /API 키가 등록되어 있지 않습니다/);
   await assert.rejects(reopened.set({ auth: 'nope' }), /잘못된 로그인 방식/);
   await assert.rejects(reopened.set({ auth: 'login', model: 'haiku' }), /다른 설정과 함께/);
+});
+
+test('Claude: the API Usage figure is what the key cost across every chat, and a chat on the key repaints when another one spends', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-keyspend-'));
+  const spend = createApiSpend({ file: path.join(directory, 'api-key-spend.json') });
+  const sessions = [], seenB = [];
+  const open = async (id, key, onState) => {
+    const session = await openChatSession({
+      directory, id, cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-cost-stream.mjs', import.meta.url))],
+      env: () => ({ FAKE_COST_FILE: path.join(directory, `turns-${id}`), ANTHROPIC_API_KEY: key }), keyAvailable: () => true, defaults: { auth: 'key' }, spend, onState
+    });
+    sessions.push(session); return session;
+  };
+  t.after(async () => { for (const session of sessions) await session.close(); await rm(directory, { recursive: true, force: true }); });
+  const turn = async (session, text) => { await session.send(text); await until(() => session.state().status === 'idle'); };
+  const a = await open('a', 'sk-ant-shared-12345678901234567890'), b = await open('b', 'sk-ant-shared-12345678901234567890', state => seenB.push(state.apiCostUsd));
+  const other = await open('c', 'sk-ant-other-12345678901234567890');
+  await turn(a, 'one');
+  assert.ok(Math.abs(a.state().apiCostUsd - 0.1) < 1e-9);
+  assert.ok(Math.abs(b.state().apiCostUsd - 0.1) < 1e-9, 'b never ran a turn but shows what the key cost');
+  await until(() => seenB.some(value => Math.abs(value - 0.1) < 1e-9)); // b was told, not only able to be asked
+  await turn(b, 'two');
+  assert.ok(Math.abs(a.state().apiCostUsd - 0.2) < 1e-9);
+  assert.ok(Math.abs(b.state().costUsd - 0.1) < 1e-9, 'the own cost of the chat stays its own');
+  assert.equal(other.state().apiCostUsd, 0, 'another key keeps its own total');
+  await spend.flush();
+  const again = createApiSpend({ file: path.join(directory, 'api-key-spend.json') }); await again.load();
+  assert.ok(Math.abs(again.total('claude', 'sk-ant-shared-12345678901234567890') - 0.2) < 1e-9, 'the total survives a restart');
 });
 
 test('Claude: an action auto mode blocked is recorded with its call, can be allowed for the chat, and retried by message', async t => {
