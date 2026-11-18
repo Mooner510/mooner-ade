@@ -4,7 +4,7 @@ import { fault } from './files.js';
 export const validAgentArgs = value => typeof value === 'string' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
 
 function validateSettings(settings, invalid) {
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 16384) invalid();
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 32768) invalid();
   if (settings.theme !== undefined && !['dark', 'light'].includes(settings.theme)) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
   for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'interactiveUi', 'artifactAlways', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'animateInBackground', 'confirmCloseChat', 'confirmCloseProject', 'chatPermissionAutoSet', 'feedbackAgentTool', 'feedbackAiContext']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
@@ -43,6 +43,15 @@ function validateSettings(settings, invalid) {
   for (const [name, min, max] of [['chatFontSize', 11, 20], ['chatComposerMax', 120, 600], ['uiZoom', 80, 150], ['diffComputeMs', 1000, 20000]])
     if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= min && settings[name] <= max)) invalid();
   if (settings.diffFont !== undefined && !(typeof settings.diffFont === 'string' && settings.diffFont.length <= 200)) invalid();
+  // Git tool window
+  for (const name of ['gitLogDock', 'gitLinear', 'gitFirstParent', 'gitNoMerges', 'gitCompactRefs', 'gitTagNames', 'gitLongEdges', 'gitCommitTime', 'gitRefsLeft', 'gitMine', 'gitMerges', 'gitCurrent', 'gitPrettyDate', 'gitDetails', 'gitDiffPreview', 'gitFilesByDir', 'gitBranchesPane', 'gitBranchDirs', 'gitBranchTags', 'gitFetchPrune', 'gitTipPending'])
+    if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const [name, min, max] of [['gitLogHeight', 120, 2000], ['gitLogLimit', 1000, 50000], ['gitBranchesWidth', 120, 800], ['gitDetailsWidth', 200, 1200], ['gitSaturation', 0, 100], ['gitBrightness', 20, 100]])
+    if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= min && settings[name] <= max)) invalid();
+  for (const [name, values] of [['gitSort', ['date', 'topo']], ['gitBranchClick', ['none', 'filter', 'navigate']], ['gitUpdateMethod', ['merge', 'rebase']]]) if (settings[name] !== undefined && !values.includes(settings[name])) invalid();
+  if (settings.gitColumns !== undefined && !(Array.isArray(settings.gitColumns) && settings.gitColumns.length <= 3 && settings.gitColumns.every(item => ['author', 'date', 'hash'].includes(item)))) invalid();
+  if (settings.gitFavorites !== undefined && !(Array.isArray(settings.gitFavorites) && settings.gitFavorites.length <= 64 && settings.gitFavorites.every(item => typeof item === 'string' && item.length <= 250))) invalid();
+  if (settings.gitProtected !== undefined && !(typeof settings.gitProtected === 'string' && settings.gitProtected.length <= 500)) invalid();
   if (settings.chatModelPins !== undefined) {
     if (!settings.chatModelPins || typeof settings.chatModelPins !== 'object' || Array.isArray(settings.chatModelPins)) invalid();
     if (Object.keys(settings.chatModelPins).length > 3) invalid();
