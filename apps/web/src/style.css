@@ -1720,7 +1720,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
    by keyboard also gets a faint tint so it is still findable. */
 .chat-q-option:has(> input:focus-visible), .chat-q-option:has(.chat-q-input:focus) { border-color: var(--agent); outline: none; }
 .chat-q-option:not(.on):has(> input:focus-visible) { background: color-mix(in srgb, var(--agent) 6%, var(--raised)); }
-.chat-q-option > input[type="radio"], .chat-q-option > input[type="checkbox"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+/* The hidden input covers the whole row (border included): focusing it scrolls the option list to reveal the row, not a point inside it that left the top border cut off. */
+.chat-q-option > input[type="radio"], .chat-q-option > input[type="checkbox"] { position: absolute; inset: -1px; width: calc(100% + 2px); height: calc(100% + 2px); margin: 0; opacity: 0; pointer-events: none; }
 .chat-q-mark { flex: none; width: 15px; height: 15px; margin-top: 2px; border: 2px solid var(--border-strong, var(--muted)); border-radius: 50%; display: inline-grid; place-items: center; transition: border-color .15s ease, background .15s ease; }
 .chat-q-option:has(input[type="checkbox"]) .chat-q-mark { border-radius: 4px; }
 .chat-q-option:has(input:checked) .chat-q-mark { border-color: var(--agent); background: var(--agent); box-shadow: inset 0 0 0 2.5px var(--raised); }
@@ -1769,10 +1770,10 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
    a transform animation on that element off the compositor for good (restyling the document every frame for the whole turn). */
 .chat-send.stop::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
-/* Thumbnails are 80px tall and as wide as the picture (56-240px, never past the composer): an extreme shape is cropped (object-fit) instead of overflowing or shrinking to a sliver. */
-.chat-attachments > span { position: relative; min-width: min(56px, 100%); max-width: min(240px, 100%); }
-.chat-attachments .chat-attachment-open { display: block; width: 100%; padding: 0; border: 0; border-radius: 8px; cursor: zoom-in; }
-.chat-attachments img { display: block; width: 100%; height: 80px; object-fit: cover; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
+/* Thumbnails keep the picture's own shape inside 240×80 (never past the composer): nothing is cropped, so a wide screenshot is not cut to a scrap of text. */
+.chat-attachments > span { position: relative; max-width: 100%; }
+.chat-attachments .chat-attachment-open { display: block; padding: 0; border: 0; border-radius: 8px; cursor: zoom-in; }
+.chat-attachments img { display: block; width: auto; height: auto; max-width: min(240px, 100%); max-height: 80px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
 .chat-attachments .chat-attachment-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; box-sizing: border-box; display: grid; place-items: center; padding: 0; border-radius: 50%; background: var(--overlay); color: var(--muted); border: 1px solid var(--border-strong); line-height: 0; }
 .chat-attachments .chat-attachment-remove:hover { background: var(--raised); color: var(--fg); }
 .chat-attachments .chat-attachment-remove .icon { font-size: 12px !important; line-height: 1; }
@@ -2419,6 +2420,8 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .chat-divider.agent-end button:hover { background: none; color: var(--fg); }
 .chat-divider.agent-end strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
 .chat-divider.agent-end small { white-space: nowrap; color: var(--faint); font-size: 11px; }
+/* The state word and the type tag keep their width ("완료" broke into "완 / 료" in a narrow row); only the title shrinks to an ellipsis. */
+.chat-divider.agent-end button > :not(strong) { flex: none; white-space: nowrap; }
 .chat-divider.agent-end[data-status="error"] > button > span:not(.chat-agent-type) { color: var(--error); }
 .chat-agent-state { display: inline-flex; flex: none; color: var(--muted); }
 .chat-agent-state[data-status="done"] { color: var(--add); } .chat-agent-state[data-status="error"] { color: var(--error); } .chat-agent-state[data-status="stopped"] { color: var(--faint); }
