@@ -1814,6 +1814,12 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-stat-tip.usage-panel { box-sizing: border-box; width: 228px; max-width: calc(100vw - 16px); padding: 6px; }
 .chat-stat-tip.usage-panel:popover-open { display: grid; gap: 2px; pointer-events: auto; }
 .usage-panel strong.usage-head { margin: 0; padding: 4px 8px; color: var(--muted); }
+.usage-panel .usage-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.usage-panel .usage-head-row .usage-settings { padding: 3px 4px; line-height: 0; }
+.usage-panel .usage-ttl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin: 0 8px; padding: 2px; border-radius: 6px; background: var(--hover); }
+.usage-panel .usage-ttl-option { padding: 4px 0; text-align: center; color: var(--muted); font: inherit; font-size: 12px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.usage-panel .usage-ttl-option[aria-checked=true] { color: var(--fg); background: var(--overlay); box-shadow: 0 0 0 1px var(--border-strong); }
+.usage-panel .usage-ttl-option:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .usage-panel .usage-api-row { display: flex; align-items: center; }
 .usage-panel .usage-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; text-align: left; color: var(--fg); font-size: 12px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .usage-panel .usage-option small { display: block; color: var(--muted); font-size: 11px; }
