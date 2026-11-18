@@ -83,12 +83,21 @@ function StatBox({ cls, icon, text, tip, color, align }: { cls: string; icon: st
 // The usage item is a button and the switch: it names what this chat is billed against (Plan Usage, or API Usage with the money it has cost) and,
 // pressed, lets a Claude chat go on with the CLI plan or the API key. Switching is silent; the composer asks before the first message that would
 // change the login of a chat that has had a turn (the two logins do not share a prompt cache). The key itself is registered in Settings > AI 툴.
+// Claude's prompt-cache lifetime (Settings > AI 툴 too): 자동 leaves it to the CLI, the others force it. It applies to chats started or relaunched afterwards.
+export const cacheTtlOptions: { value: CacheTtl; label: string; hint: string }[] = [
+  { value: 'auto', label: '자동', hint: 'CLI 기본값 (API 키 5분, 구독 1시간)' },
+  { value: '5m', label: '5분', hint: '캐시 쓰기 요금이 가장 낮음' },
+  { value: '1h', label: '1시간', hint: '쓰기 요금 2배, 오래 쉬어도 캐시 유지' },
+];
+export type CacheTtl = 'auto' | '5m' | '1h';
+
 function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth(auth: 'login' | 'key'): void }) {
-  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null);
+  const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null), [ttl, setTtl] = useState<CacheTtl>('auto');
   const key = state.apiKey === true, locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
   const needsKey = !key && keyReady === false;
-  useEffect(() => { if (open) void api<{ claude?: { key: string } }>('agent-keys/status').then(status => setKeyReady(Boolean(status.claude?.key)), () => setKeyReady(null)); }, [open]);
   const choose = (auth: 'login' | 'key') => { if (!locked && (auth === 'login') === key) { onAuth(auth); pop.current?.hidePopover(); } };
+  useEffect(() => { if (open) void api<{ claude?: { key: string }; cacheTtl?: CacheTtl }>('agent-keys/status').then(status => { setKeyReady(Boolean(status.claude?.key)); setTtl(status.cacheTtl ?? 'auto'); }, () => setKeyReady(null)); }, [open]);
+  const chooseTtl = (value: CacheTtl) => { const before = ttl; setTtl(value); void api('agent-keys/config', { agent: 'claude', cacheTtl: value }).catch(() => setTtl(before)); };
   const openSettings = () => { pop.current?.hidePopover(); onSettings?.(); };
   return <>
     <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId}>
@@ -97,7 +106,10 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
       <span className="icon material-symbols-outlined usage-caret" style={{ fontSize: 14 }} aria-hidden="true">expand_less</span>
     </button>
     <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="채팅 사용 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
-      <strong className="usage-head">채팅 사용 방식</strong>
+      <span className="usage-head-row">
+        <strong className="usage-head">채팅 사용 방식</strong>
+        {onSettings && <button type="button" className="usage-panel-action usage-settings" aria-label="설정" title="설정" onClick={openSettings}><span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">settings</span></button>}
+      </span>
       <span role="radiogroup" aria-label="로그인 방식">
         <button type="button" role="radio" aria-checked={!key} className="usage-option plan" disabled={locked && key} onClick={() => choose('login')}>
           <span>구독 플랜<small>5시간·주간 한도</small></span>
@@ -111,8 +123,12 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
           {needsKey && (onSettings ? <button type="button" className="usage-panel-action" onClick={openSettings}>키 등록</button> : <span className="usage-note">키 필요</span>)}
         </span>
       </span>
-      {locked && <span className="usage-note">응답이 끝난 뒤 바꿀 수 있습니다.</span>}
-      {onSettings && !needsKey && <button type="button" className="usage-panel-action usage-settings" onClick={openSettings}>설정</button>}
+      <strong className="usage-head">캐시 유지 시간</strong>
+      <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
+        {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} title={option.hint} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
+      </span>
+      <span className="usage-note">{cacheTtlOptions.find(option => option.value === ttl)?.hint}. 다음 응답부터 적용됩니다.</span>
+      {locked && <span className="usage-note">로그인 방식은 응답이 끝난 뒤 바꿀 수 있습니다.</span>}
     </span>
   </>;
 }
