@@ -645,7 +645,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .look-pane b.short { width: 55%; }
 .look-pane.on { box-shadow: inset 2px 0 var(--l-accent); }
 .look-pane.dim { opacity: .4; }
-.look-term, .look-diff { margin: 0; overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); white-space: pre; }
+.look-term, .look-diff { margin: 0; overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 8px; white-space: pre; }
+.look-term { background: var(--term-bg); color: var(--term-fg); }
+.look-diff { background: var(--surface); color: var(--fg); }
 .look-term .dim, .look-term .faint { color: var(--faint); }
 .look-term .bright { color: var(--accent); }
 .look-caret { display: inline-block; height: 1em; vertical-align: text-bottom; }
@@ -671,8 +673,8 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .look-compose { overflow: hidden; min-height: 28px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
 .look-diff.split { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .look-diff.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
-.look-diff .add { background: color-mix(in srgb, #3dbe7a 28%, transparent); }
-.look-diff .del { background: color-mix(in srgb, #e25b5b 28%, transparent); }
+.look-diff .add { background: color-mix(in srgb, var(--add) 28%, transparent); }
+.look-diff .del { background: color-mix(in srgb, var(--del) 28%, transparent); }
 .look-diff .fold { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
 .look-diff > i { grid-column: 1 / -1; display: block; height: 4px; min-width: 12%; margin-top: 8px; border-radius: 99px; background: var(--accent); }
 .look-usage { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
