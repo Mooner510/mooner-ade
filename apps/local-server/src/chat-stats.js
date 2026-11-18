@@ -9,6 +9,9 @@ import readline from 'node:readline';
 
 const HOUR = 3_600_000, BLOCK = 5 * HOUR, MAX_LINE = 16 * 1024 * 1024, MAX_POINTS = 240, MAX_TURNS = 200;
 const weight = u => u.input + u.output * 5 + u.read * 0.1 + u.w5 * 1.25 + u.w1 * 2;
+// One number for a cumulative token snapshot (Codex thread totals, Cursor session totals). Same ratios as Claude's live cost estimate.
+// Keep in step with tokenWeight in apps/web/src/usage-share.ts.
+export const tokenWeight = tokens => num(tokens?.input) + num(tokens?.output) * 5 + num(tokens?.cacheRead) * 0.1 + num(tokens?.cacheCreate) * 1.25;
 const num = value => Number.isFinite(value) ? value : 0;
 const usageOf = raw => {
   const created = raw.cache_creation ?? {}, split = num(created.ephemeral_5m_input_tokens) + num(created.ephemeral_1h_input_tokens), total = num(raw.cache_creation_input_tokens);
@@ -55,8 +58,12 @@ export function chatEventStats(events) {
   }
   tokens.input = Math.max(tokens.input, num(current.input)); tokens.output = Math.max(tokens.output, num(current.output));
   tokens.read = Math.max(tokens.read, num(current.cacheRead)); tokens.write5m = Math.max(tokens.write5m, num(current.cacheCreate));
+  // Subagent messages carry their own usage. Cumulative snapshots above are the main thread (Claude's result usage omits subagents), so these are added, not differenced.
+  const subs = new Map();
+  for (const event of kept) if (event.kind === 'message' && event.parentToolUseId && event.usage && event.id) subs.set(event.id, event.usage);
+  for (const usage of subs.values()) { tokens.input += num(usage.input); tokens.output += num(usage.output); tokens.read += num(usage.cacheRead); tokens.write5m += num(usage.cacheCreate); tokensAvailable = true; }
   const input = tokens.input + tokens.read + tokens.write5m;
-  return { source: 'ade', tokensAvailable, contextAvailable: kept.some(event => event.kind === 'usage' && Number.isFinite(event.contextTokens)), requests: turnSeries.length, subRequests: 0, turns: turn, compactions: compactionAt.length, compactionAt,
+  return { source: 'ade', tokensAvailable, contextAvailable: kept.some(event => event.kind === 'usage' && Number.isFinite(event.contextTokens)), requests: turnSeries.length, subRequests: subs.size, turns: turn, compactions: compactionAt.length, compactionAt,
     startedAt: kept[0]?.at ?? null, endedAt: kept.at(-1)?.at ?? null, activeMs: turnSeries.reduce((sum, row) => sum + row.ms, 0), tokens,
     cacheHitRate: tokensAvailable && input > 0 ? tokens.read / input : null, peakContext: Math.max(0, ...timeline.map(row => row.ctx)),
     cost: cost === null ? null : { totalUsd: cost, toolMs: 0, linesAdded: 0, linesRemoved: 0 }, models: [...models.values()],
@@ -67,6 +74,7 @@ export async function readSessionStats(files, since = [], total = null) {
   const requests = new Map(), tools = new Map(), toolName = new Map(), turns = [{ at: null, ms: 0 }], compactions = [];
   let costState = null;
   for (const file of files) {
+    const fromSubagent = file.split(path.sep).includes('subagents');
     const lines = readline.createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
     for await (const line of lines) {
       if (line.length > MAX_LINE) continue;
@@ -82,7 +90,7 @@ export async function readSessionStats(files, since = [], total = null) {
           toolName.set(block.id, block.name);
           const row = tools.get(block.name) ?? { name: block.name, count: 0, errors: 0 }; row.count += 1; tools.set(block.name, row);
         }
-        if (!found) requests.set(key, { at, model: message.model || 'unknown', usage, turn: turns.length - 1, sub: entry.isSidechain === true });
+        if (!found) requests.set(key, { at, model: message.model || 'unknown', usage, turn: turns.length - 1, sub: fromSubagent || entry.isSidechain === true || Boolean(entry.parent_tool_use_id) });
         else if (usage.output >= found.usage.output) { found.usage = usage; if (message.model) found.model = message.model; }
       } else if (entry.type === 'user' && !entry.isSidechain && !entry.isMeta) {
         const content = entry.message?.content;
@@ -150,6 +158,70 @@ export async function readSessionStats(files, since = [], total = null) {
     models, tools: [...tools.values()].sort((a, b) => b.count - a.count).slice(0, 12), toolCalls: sum([...tools.values()], row => row.count),
     timeline, turnSeries: perTurn, blocks: blocks.map(({ lastAt, ...rest }) => ({ ...rest, end: rest.start + BLOCK }))
   };
+}
+
+// How much token-weight a Codex or Cursor chat added from each time on. Their CLIs report a running token total (kind `usage`), not a dollar cost.
+// A /clear (`divider`) starts a new total from zero. Subagent calls are included only when that running total includes them.
+export function weightSince(events, since) {
+  let previous = 0;
+  const points = [];
+  for (const event of [...events].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))) {
+    if (event.kind === 'divider') { previous = 0; continue; }
+    if (event.kind !== 'usage' || !event.tokens) continue;
+    const now = tokenWeight(event.tokens), delta = now - previous;
+    if (delta > 0 && Number.isFinite(event.at)) points.push({ at: event.at, weight: delta });
+    previous = now;
+  }
+  return since.map(from => points.reduce((sum, point) => point.at >= from ? sum + point.weight : sum, 0));
+}
+
+// The chat's event log plus anything stored in memory but not flushed yet (keyed by seq, so a line read twice counts once).
+export async function eventWeightSince(file, pending, since) {
+  const bySeq = new Map();
+  try {
+    const lines = readline.createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (line.length > MAX_LINE || (!line.includes('"kind":"usage"') && !line.includes('"kind":"divider"'))) continue;
+      let event; try { event = JSON.parse(line); } catch { continue; }
+      if (event.seq != null) bySeq.set(event.seq, event);
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  for (const event of pending) if ((event.kind === 'usage' || event.kind === 'divider') && event.seq != null) bySeq.set(event.seq, event);
+  return weightSince([...bySeq.values()], since);
+}
+
+// Subagent calls of this chat (Claude streams them with parentToolUseId). `total_cost_usd` already includes the ones that finished before the last result;
+// usage that arrived after that result is not in the total yet. The transcript counts a sidechain request once; anything only in the event log is added here.
+export function subagentExtra(events, { unitPrice = 0, since = [], transcriptSawSubagents = false, endedAt = null } = {}) {
+  const byId = new Map();
+  let coveredSeq = -1;
+  for (const event of events ?? []) {
+    if (event.kind === 'divider') { byId.clear(); coveredSeq = -1; continue; }
+    if (event.kind === 'message' && event.parentToolUseId && event.usage && event.id) byId.set(String(event.id), event);
+    if (event.kind === 'result' && Number.isFinite(event.costUsd)) coveredSeq = Number.isFinite(event.seq) ? event.seq : coveredSeq;
+  }
+  let messages = [...byId.values()];
+  if (transcriptSawSubagents) messages = messages.filter(message => Number.isFinite(message.at) && endedAt != null && message.at > endedAt);
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  let cost = 0;
+  const spent = since.map(() => 0);
+  for (const message of messages) {
+    const usage = message.usage;
+    tokens.input += num(usage.input); tokens.output += num(usage.output); tokens.read += num(usage.cacheRead); tokens.cacheCreate += num(usage.cacheCreate);
+    const uncovered = !Number.isFinite(message.seq) || message.seq > coveredSeq;
+    const dollars = uncovered && unitPrice > 0 ? tokenWeight(usage) * unitPrice : 0;
+    cost += dollars;
+    since.forEach((from, index) => { if (dollars > 0 && Number.isFinite(message.at) && message.at >= from) spent[index] += dollars; });
+  }
+  return { count: messages.length, tokens, cost, spent };
+}
+
+export function withSubagents(stats, events, unitPrice = 0, since = []) {
+  const extra = subagentExtra(events, { unitPrice, since, transcriptSawSubagents: stats.subRequests > 0, endedAt: stats.endedAt });
+  if (!extra.count) return stats;
+  const tokens = { ...stats.tokens, input: stats.tokens.input + extra.tokens.input, output: stats.tokens.output + extra.tokens.output, read: stats.tokens.read + extra.tokens.read, write5m: stats.tokens.write5m + extra.tokens.cacheCreate };
+  const spentSince = Array.isArray(stats.spentSince) ? stats.spentSince.map((value, index) => value === null || value === undefined ? value : value + (extra.spent[index] ?? 0)) : stats.spentSince;
+  return { ...stats, subRequests: stats.subRequests + extra.count, tokens, ...(spentSince && { spentSince }) };
 }
 
 // The transcript files of a session: the main one plus its sub-agents (<session>/subagents/*.jsonl), in the first config dir/cwd that has it.
