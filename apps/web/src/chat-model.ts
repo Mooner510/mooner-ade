@@ -401,7 +401,7 @@ export function reduce(view: ChatView, event: any): ChatView {
         return append(view, { kind: 'note', key, text: `${name} 모델로 자동 전환되었습니다.${why}`, tones: [{ value: name, color: modelColor(event.model) ?? 'var(--fg)' }], fresh });
       }
       if (typeof event.permissionMode !== 'string') return view;
-      const mode = event.permissionMode, label = `${permissionLabels[mode] ?? mode} 모드`;
+      const mode = event.permissionMode, label = `${permissionLabel(mode, view.state.agent)} 모드`;
       return append(view, { kind: 'note', key, text: `AI가 ${label}로 변경했습니다.`, tones: [{ value: label, color: permissionModeColor(mode), icon: modeIcons[mode] ?? 'tune' }], fresh });
     }
     // The agent moved the session into a worktree or back out: file paths and the branch it works on differ from here on.
@@ -633,7 +633,10 @@ export function limitLine(event: { status?: string; limit?: string | null; utili
   const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${share != null ? `${Math.round(share * 100)}%를 사용했습니다` : '대부분을 사용했습니다'}${when}`;
   return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
 }
-export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문 전용' };
+export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문' };
+// Cursor's default mode is the Agent mode (ACP id `agent`, stored as `default`). Claude and Codex keep "기본".
+const cursorPermissionLabels: Record<string, string> = { default: '에이전트' };
+export const permissionLabel = (mode: string, agent?: string) => (agent === 'cursor' ? cursorPermissionLabels[mode] : undefined) ?? permissionLabels[mode] ?? mode;
 export const modeIcons: Record<string, string> = { default: 'front_hand', acceptEdits: 'edit_note', plan: 'assignment', auto: 'bolt', bypassPermissions: 'lock_open', ask: 'help' };
 // Resolved on the chat pane via agent-scoped `--mode-*` vars in style.css (Claude Code theme.ts, Codex TUI, Cursor CLI).
 export const permissionModeColor = (mode: string) => `var(--mode-${mode}, var(--muted))`;

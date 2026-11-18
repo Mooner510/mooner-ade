@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type 
 import { api } from './api';
 import { placeAbove } from './Usage';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabels, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
 export type ChatStatusContext = { state: ChatState; share?: string | null };
@@ -25,7 +25,7 @@ export const chatStatusDefs: Record<string, Def> = {
     tip: ({ state }) => `진행 상태\n에이전트가 지금 하는 일입니다. ${state.pending ? `승인을 기다리는 요청이 ${state.pending}개 있습니다.` : '대기 중 · 응답 중 · 승인 대기 중 하나로 표시됩니다.'}` },
   model: { label: '모델', icon: 'smart_toy', format: '{model}', values: ({ state }) => ({ model: displayModel(state.model, state.agent), id: state.model ?? '' }), hint: '{model} 짧은 이름 · {id} 전체 모델 ID', color: ({ state }) => modelAppearance(state.model, state.agent).color,
     tip: ({ state }) => `모델\n이 채팅이 쓰는 모델입니다.${state.model ? `\n${state.model}` : ''}` },
-  mode: { label: '권한 모드', icon: 'shield', format: '{mode}', values: ({ state }) => ({ mode: permissionLabels[state.permissionMode] ?? state.permissionMode, id: state.permissionMode }),
+  mode: { label: '권한 모드', icon: 'shield', format: '{mode}', values: ({ state }) => ({ mode: permissionLabel(state.permissionMode, state.agent), id: state.permissionMode }),
     color: ({ state }) => permissionModeColor(state.permissionMode),
     tip: () => '권한 모드\n도구 실행과 파일 수정을 어디까지 자동으로 허용할지 정합니다.' },
   context: { label: '컨텍스트 사용률', icon: 'data_usage', format: '{percent}% · {used}/{window}',

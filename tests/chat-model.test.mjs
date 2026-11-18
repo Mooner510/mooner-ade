@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents, keepAgents } from '../apps/web/src/chat-model.ts';
-import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions, turnDoneParts, turnTokenRows } from '../apps/web/src/chat-model.ts';
+import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionLabel, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions, turnDoneParts, turnTokenRows } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
 const flow = (...entries) => entries.map(entry => typeof entry === 'string' ? { block: say(entry), sub: false } : entry);
@@ -249,6 +249,14 @@ test('permission mode colors resolve to agent-scoped CSS variables', () => {
   assert.equal(permissionModeColor('default'), 'var(--mode-default, var(--muted))');
   assert.equal(permissionModeColor('acceptEdits'), 'var(--mode-acceptEdits, var(--muted))');
   assert.equal(permissionModeColor('ask'), 'var(--mode-ask, var(--muted))');
+});
+
+test('cursor names its modes 에이전트, 계획, 질문; other agents keep 기본', () => {
+  assert.equal(permissionLabel('default', 'cursor'), '에이전트');
+  assert.equal(permissionLabel('plan', 'cursor'), '계획');
+  assert.equal(permissionLabel('ask', 'cursor'), '질문');
+  assert.equal(permissionLabel('default', 'claude'), '기본');
+  assert.equal(permissionLabel('default'), '기본');
 });
 
 test('every model family has its own color and unknown models have none', () => {

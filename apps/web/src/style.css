@@ -1540,10 +1540,9 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-thinking p { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--border); white-space: pre-wrap; }
 .chat-working { display: flex; align-items: center; gap: 8px; color: var(--muted); transition: color .6s linear; }
 .chat-working small { flex: none; white-space: nowrap; font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
-/* The streamed thought can be one very long line (Cursor sends no line breaks): it takes only the room that is left, so the spinner, label and timer never get squeezed. */
+/* A long label ellipsizes before the spinner or the timer is squeezed. */
 .chat-working .chat-spin { flex: none; }
 .chat-working-label { flex: 0 1 auto; }
-.chat-working em { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 12px; opacity: .75; }
 .chat-working.deep .chat-spin { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 .chat-spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--agent) 30%, transparent); border-top-color: var(--agent); animation: spin .8s linear infinite; }
 /* A tool call is a line of its own, not a box: a coloured icon, the tool's name in bold and a muted monospaced summary set it apart from the
