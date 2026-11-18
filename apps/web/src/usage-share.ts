@@ -6,6 +6,33 @@ export type Reading = { util: number; resetsAt: number | null };
 export type Share = { label: string; est: number | null; observed: number | null; quality: 'none' | 'delta' | 'consistent' | 'clamped' | 'tiny' };
 export type KSums = { usd: number; dUtil: number };
 
+// Codex and Cursor have no session dollar total. This is the meter their plan share is learned in. Keep in step with tokenWeight in chat-stats.js.
+export const tokenWeight = (tokens: { input?: number; output?: number; cacheRead?: number; cacheCreate?: number } | null | undefined) =>
+  (tokens?.input ?? 0) + (tokens?.output ?? 0) * 5 + (tokens?.cacheRead ?? 0) * 0.1 + (tokens?.cacheCreate ?? 0) * 1.25;
+
+// Which Cursor plan bar a model draws from. Auto, Composer and unnamed defaults share the Cursor pool; Grok has its own; other models use the API pool.
+export const cursorUsagePool = (model: string | null | undefined): 'auto' | 'api' | 'grok' => {
+  const id = (model ?? '').trim().toLowerCase();
+  if (id.includes('grok')) return 'grok';
+  if (!id || id === 'auto' || id === 'default' || id.includes('composer') || id.includes('cursor')) return 'auto';
+  return 'api';
+};
+
+type UsageKey = 'session' | 'weekly' | 'auto' | 'api' | 'total' | 'grok';
+// Claude and Codex: the 5-hour and weekly bars. Cursor: the pool this model draws from, plus the plan total when that is a separate bar.
+export function shareWindows(agent: 'claude' | 'codex' | 'cursor', model: string | null | undefined, windows: { key: string }[] | undefined): UsageKey[] {
+  const have = new Set((windows ?? []).map(item => item.key));
+  if (agent === 'cursor') {
+    const pool = cursorUsagePool(model);
+    const primary = have.has(pool) ? pool : have.has('auto') ? 'auto' : have.has('api') ? 'api' : have.has('total') ? 'total' : null;
+    const keys: UsageKey[] = [];
+    if (primary) keys.push(primary);
+    if (have.has('total') && primary !== 'total') keys.push('total');
+    return keys;
+  }
+  return (['session', 'weekly'] as const).filter(key => have.has(key));
+}
+
 const round1 = (value: number) => Math.round(value * 10) / 10;
 // Under 0.1%p three decimals, from 0.1%p one; under 0.001%p nothing is worth showing.
 export const TINY = 0.001;

@@ -5,7 +5,7 @@ import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
 import { QuestionCard, QuestionList, usePlayedEntrance } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
-import { useUsageShare } from './use-usage-share';
+import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
@@ -1093,7 +1093,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => () => { const at = drainAt.current; cancelAnimationFrame(at.frame); if (at.timer) clearTimeout(at.timer); cancelAnimationFrame(follow.current); cancelAnimationFrame(pinFrame.current); }, []);
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
-  const share = useUsageShare({ id, enabled: agent === 'claude' && visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, costUsd: view.state.costUsd });
+  const share = useUsageShare({ id, agent, enabled: visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, model: view.state.model, meter: agent === 'claude' ? view.state.costUsd ?? 0 : tokenWeight(view.state.tokens) });
   const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
@@ -1342,7 +1342,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     void transmit(next.text, next.images).finally(() => setQueueSending(false));
   }, [state.status, queue, view.ready, queueSending]);
   // Interactive UIs in a reply (ade-ui blocks) reach this chat through window events carrying the chat id. `ade.send` goes out like a typed message
-  // (queued as a follow-up while the agent works, so it never steers a running turn); `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
+  // (queued as a follow-up only while this agent is in a turn, so it never steers a running turn; a subagent running on its own does not count).
+  // `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
   const fromUi = useRef<(kind: 'send' | 'prefill', message: string, replace?: boolean) => void>(() => {});
   fromUi.current = (kind, message, replace) => {
     // replace: a form writes the whole next message, so it overwrites the box instead of appending under what was already typed.

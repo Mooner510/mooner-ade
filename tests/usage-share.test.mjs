@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addPair, contribution, learnedK, sameWindow } from '../apps/web/src/usage-share.ts';
+import { addPair, contribution, cursorUsagePool, learnedK, sameWindow, shareWindows, tokenWeight } from '../apps/web/src/usage-share.ts';
 
 const reset = 1_800_000_000_000, r = (util, at = reset) => ({ util, resetsAt: at });
 const cal = { k: 8.88 }; // dollars per 1%p
@@ -36,6 +36,18 @@ test('usage share: k is learned from whole turns and needs 10 points before it i
   const learned = learnedK(sums);
   assert.ok(Math.abs(learned.k - 103 / 11) < 1e-9); assert.ok(learned.relErr < 0.1);
   assert.equal(learnedK(undefined), null);
+});
+test('usage share: Codex uses both windows; Cursor uses the model pool plus the plan total', () => {
+  const claude = [{ key: 'session', label: '5시간', percent: 1, resetsAt: 1 }, { key: 'weekly', label: '주간', percent: 2, resetsAt: 2 }];
+  const cursor = [{ key: 'auto', label: 'Cursor 모델', percent: 3, resetsAt: 3 }, { key: 'api', label: '기타 모델', percent: 4, resetsAt: 4 }, { key: 'total', label: '전체', percent: 5, resetsAt: 5 }];
+  assert.deepEqual(shareWindows('claude', 'opus', claude), ['session', 'weekly']);
+  assert.deepEqual(shareWindows('codex', 'gpt-5', claude), ['session', 'weekly']);
+  assert.deepEqual(shareWindows('cursor', 'claude-sonnet', cursor), ['api', 'total']);
+  assert.deepEqual(shareWindows('cursor', 'composer-2', cursor), ['auto', 'total']);
+  assert.deepEqual(shareWindows('cursor', 'grok-4', [{ key: 'auto', label: '', percent: 1, resetsAt: 1 }, { key: 'total', label: '', percent: 2, resetsAt: 2 }]), ['auto', 'total']);
+  assert.equal(cursorUsagePool(''), 'auto');
+  assert.equal(cursorUsagePool('grok-code'), 'grok');
+  assert.equal(tokenWeight({ input: 10, output: 2, cacheRead: 100, cacheCreate: 4 }), 10 + 10 + 10 + 5);
 });
 test('usage share: reset times jitter under a second but are the same window', () => {
   assert.equal(sameWindow(reset, reset + 700), true);

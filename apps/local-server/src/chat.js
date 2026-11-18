@@ -17,7 +17,7 @@ import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } 
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
 import { readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
 import { readSessionCache } from './claude-cache.js';
-import { chatEventStats } from './chat-stats.js';
+import { chatEventStats, eventWeightSince, subagentExtra, withSubagents } from './chat-stats.js';
 import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
@@ -110,7 +110,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // The API reports a message's real output_tokens only once, at its end (message_delta), so while it streams the shown output is the larger of that report and an
   // estimate: the CLI's thinking estimate plus the streamed text / tool input (`streamBytes`, ~4 bytes a token, so it runs under the real count and never overshoots).
   const btwRuns = new Map(); // /btw questions in flight, by the id the UI gave them (to cancel)
-  let costPerUnit = 0;
+  let costPerUnit = 0, subCostCache = { seq: -1, price: -1, cost: 0 };
+  const subLive = new Map(); // a subagent's usage while its message is still streaming (not stored yet)
+  // Dollars of subagent usage the last total_cost_usd does not cover yet (a background agent that kept running after the result).
+  const uncoveredCost = () => {
+    if (subCostCache.seq !== seq || subCostCache.price !== costPerUnit) subCostCache = { seq, price: costPerUnit, cost: subagentExtra(events, { unitPrice: costPerUnit }).cost };
+    let live = subCostCache.cost;
+    if (costPerUnit > 0) for (const usage of subLive.values()) live += weigh(usage) * costPerUnit;
+    return live;
+  };
   let turnUsage = null, thinkingTokens = 0, streamBytes = 0, outputFinal = false, turnDone = zero(), liveId = null;
   const resetLive = () => { turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; turnDone = zero(); liveId = null; };
   const nextMessage = id => { if (id == null || id !== liveId) { if (turnUsage) turnDone = addTokens(turnDone, turnUsage); turnUsage = null; thinkingTokens = 0; streamBytes = 0; outputFinal = false; liveId = id ?? null; } };
@@ -186,6 +194,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // Claude: the message streaming right now per subagent ('' = main thread). Text deltas name no message; they belong to the latest start of their own stream.
   const streamIds = new Map(), toolInputSize = new Map();
   const taskIds = new Map(), approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images, previews } sent into a running turn, not yet taken in by it
+  const subTools = new Set(); // tool calls a subagent made; their results are not this conversation's turn
   let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0;
   const stopCursorStorePoll = () => { if (cursorStorePoll) { clearInterval(cursorStorePoll); cursorStorePoll = null; } };
   const noteCursorAcpUsage = event => {
@@ -235,11 +244,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const live = outputFinal ? reported : { ...reported, output: Math.max(reported.output, thinkingTokens + (streamBytes >> 2)) };
     return addTokens(addTokens(state.tokens, turnDone), live);
   };
-  // The CLI reports the cost only in a turn's result, so while a turn runs the cost is the committed one plus the in-flight tokens at the last turn's price per unit.
-  // ponytail: no estimate before the first result of this process (no price known yet); a built-in price table would give one.
+  // The CLI reports the session cost in a turn's result (that total includes subagents that finished before it). While a turn runs, add the in-flight main-thread
+  // tokens at the last turn's price, plus subagent usage the total does not cover yet. ponytail: no estimate before the first priced result.
   const shown = () => {
-    const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens);
-    return { ...state, tokens, costUsd: typeof state.costUsd === 'number' && costPerUnit && live > 0 ? state.costUsd + live * costPerUnit : state.costUsd, pending: approvals.size, recoverable: canRetryTurn() };
+    const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens), base = typeof state.costUsd === 'number' ? state.costUsd + uncoveredCost() : state.costUsd;
+    return { ...state, tokens, costUsd: typeof base === 'number' && costPerUnit && live > 0 ? base + live * costPerUnit : base, pending: approvals.size, recoverable: canRetryTurn() };
   };
   const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
@@ -311,9 +320,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
       // total_cost_usd is the session total: the CLI restores it on --resume (its cost-state), so a replaced child continues from the old figure; nothing is added on top.
       if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && event.costUsd > state.costUsd) costPerUnit = (event.costUsd - state.costUsd) / spent; state.costUsd = event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
+      else if (event.turnCostUsd > 0) { const spent = weigh(event.usage ?? zero()); if (spent > 0) costPerUnit = event.turnCostUsd / spent; } // a reopened chat still prices subagent usage that landed after the last result
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
+      subLive.clear();
       state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; resetLive(); state.cache = null; cacheReading = null;
       state.segmentTitles = { custom: '', ai: '', agent: '' }; refreshChatTitle();
       if (!replay) void refreshAutoCompact();
@@ -405,10 +416,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (!protocol) {
           const stream = event.parentToolUseId ?? '';
           if (event.phase === 'start') { if (event.messageId) streamIds.set(stream, event.messageId); if (!stream) { nextMessage(event.messageId); thinkingTokens = 0; } }
+          else if (event.phase === 'tool' && stream && event.id) subTools.add(event.id);
           else if (event.phase === 'thinkingTokens') { thinkingTokens = Number(event.tokens) || 0; publishSoon(); }
           else if (event.phase === 'usage') {
-            // A subagent's usage is not this conversation's context; the status line only follows the main thread. Usage itself is not drawn, so it is not sent.
-            if (event.usage && !stream) { turnUsage = mergeTurnUsage(turnUsage, event.usage); if (event.final) outputFinal = true; publishSoon(); }
+            // A subagent's usage is not this conversation's context. It still counts toward the session cost once a turn has a price.
+            if (event.usage && stream) { const id = event.messageId || streamIds.get(stream) || stream; subLive.set(id, mergeTurnUsage(subLive.get(id), event.usage)); publishSoon(); }
+            else if (event.usage) { turnUsage = mergeTurnUsage(turnUsage, event.usage); if (event.final) outputFinal = true; publishSoon(); }
             return;
           } else if (event.messageId === undefined && streamIds.has(stream)) event = { ...event, messageId: streamIds.get(stream) };
           // Thinking text is not counted: the CLI sends its token estimate instead (a CLI that streamed both would count it twice).
@@ -459,6 +472,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
       if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; publishSoon(); }
+      if (event.kind === 'message' && event.parentToolUseId && event.id) subLive.delete(event.id);
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
         if (agent === 'claude') void refreshAutoCompact(event.model ?? state.model);
@@ -506,11 +520,20 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       else if (inflight && ['message', 'command_output', 'compact', 'approval'].includes(event.kind)) inflight.produced = true;
   }
-  // Background sub-agents keep running after a turn's `result`, and their hand-back starts a new turn on its own (no user line, no steer). Their output is
-  // activity: without this the chat showed "idle" (no stop button, no working indicator) while messages kept arriving. The next `result` closes it again;
-  // if none comes (a silent child) the quiet timer drops back to idle, and any later output reopens it.
+  // A subagent's own steps are not this conversation's turn. The agent the user is talking to stays idle, so a message is sent at once
+  // (not steered, and a form is not held as a follow-up) while that subagent runs. Its tool ids are remembered so a tool result that
+  // omits parent_tool_use_id is still recognized as its own.
+  const fromSubagent = event => Boolean(event.parentToolUseId) || (event.kind === 'tool_result' && subTools.has(event.toolUseId));
+  function noteSubagentTools(event) {
+    if (event.kind !== 'message' || !event.parentToolUseId) return;
+    for (const block of event.blocks ?? []) if (block.type === 'tool_use' && block.id) subTools.add(block.id);
+  }
+  // The hand-back starts a new turn on the main thread (no user line, no parent). That output is the agent the user is talking to:
+  // without this the chat showed "idle" (no stop button) while it kept answering. The next `result` closes it; if none comes, the quiet timer drops back to idle.
   function noteBackgroundActivity(event) {
     if (protocol || closed || !child || !['message', 'tool_result', 'session'].includes(event.kind)) return;
+    noteSubagentTools(event);
+    if (fromSubagent(event)) return;
     if (!turnOpen) { turnOpen = true; reopened = true; setStatus(); }
     if (reopened) { clearTimeout(activityTimer); activityTimer = setTimeout(() => { if (reopened && turnOpen && !approvals.size) { reopened = false; turnOpen = steers.size > 0; setStatus(); } }, quietMs); activityTimer.unref(); }
   }
@@ -533,7 +556,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function restartWhenQuiet() { if (quiet()) restart(); else { restartAfterTurn = true; state.restartPending = true; } }
   // Ends the child on purpose (restart, handoff, close). child is nulled first, so its close handler returns early: the subagents/tasks it took with it are
   // dropped here, or `quiet()` stays false (no idle kill, stale task UI).
-  function dropChild() { const proc = child; child = null; protocol?.dispose(); protocol = null; state.liveTasks = []; taskIds.clear(); proc.kill('SIGTERM'); return proc; }
+  function dropChild() { const proc = child; child = null; protocol?.dispose(); protocol = null; state.liveTasks = []; taskIds.clear(); subTools.clear(); proc.kill('SIGTERM'); return proc; }
   // --effort is a startup flag: a running child is replaced (the next message resumes the session) once it is not mid-turn.
   function restart() {
     restartAfterTurn = false; state.restartPending = false;
@@ -617,7 +640,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     setStatus();
   }
   function attach(proc) {
-    child = proc; state.liveTasks = []; taskIds.clear(); // a replaced child took its subagents with it
+    child = proc; state.liveTasks = []; taskIds.clear(); subTools.clear(); // a replaced child took its subagents with it
     let buffer = '', stderr = '';
     const decoder = new StringDecoder('utf8');
     proc.stdout.on('data', chunk => {
@@ -638,7 +661,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     proc.once('close', (code, signal) => {
       if (child !== proc) return;
       const wasTurn = turnOpen;
-      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear(); state.liveTasks = []; // A turn cut off before its result still spent these tokens.
+      child = null; protocol?.dispose(); protocol = null; turnOpen = false; reopened = false; clearTimeout(activityTimer); clearApprovals(); controls.clear(); dropSteers(); streamIds.clear(); toolInputSize.clear(); state.liveTasks = []; subTools.clear(); // A turn cut off before its result still spent these tokens.
       nextMessage(null); state.tokens = addTokens(state.tokens, turnDone); resetLive();
       const abort = !closed && !agentExitBenign(code, signal);
       const fail = (message, { store = true } = {}) => {
@@ -1110,7 +1133,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.
-    stats() { return { sessionId: state.sessionId ?? '', ...chatEventStats(retainedEvents()) }; },
+    stats() { return { sessionId: state.sessionId ?? '', ...withSubagents(chatEventStats(retainedEvents()), events, costPerUnit) }; },
+    storedEvents() { return events; },
+    tokenPrice() { return costPerUnit; },
+    // Codex and Cursor have no dollar transcript. The plan-share meter is the token weight their usage events accumulated since each window opened.
+    spendSince(since) { return eventWeightSince(logFile, events, since); },
     sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath, costUsd: typeof state.costUsd === 'number' ? state.costUsd : null }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
     async cancelSteer() {
