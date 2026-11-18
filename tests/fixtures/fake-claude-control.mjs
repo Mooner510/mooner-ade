@@ -26,6 +26,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
     return;
   }
+  if (message.type === 'control_response' && message.response?.request_id === 'req-mcp') { // the host's answer to 'askmcp': what it asked the CLI to remember
+    send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `grants=${JSON.stringify(message.response.response?.updatedPermissions ?? [])}` }] } });
+    result();
+    return;
+  }
   if (message.type !== 'user') return;
   if (message.uuid && running) return; // a steering line is held behind the running turn
   if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message });
@@ -43,6 +48,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (text.includes('다시 실행해')) { send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `allow=${JSON.stringify(allow)}` }] } }); result(); return; }
+  if (text === 'askmcp') { // an MCP tool the CLI offers no suggestions for
+    send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__run', input: { command: 'x' }, tool_use_id: 'toolu_mcp' } });
+    return;
+  }
   if (text === 'approve') {
     send({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_1' } });
     setTimeout(() => process.exit(1), 150);

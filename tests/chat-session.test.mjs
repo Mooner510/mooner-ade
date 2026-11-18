@@ -942,3 +942,31 @@ test('Claude: allowing without a retry keeps the refusal open, and a command tha
   assert.equal(events.filter(event => event.kind === 'auto_denied').at(-1).rule, null, 'a compound command has no exact rule');
   await assert.rejects(session.allowBlocked(['toolu_blk'], { retry: false }), /다시 시도"로만/);
 });
+
+test('Claude: "allow this tool always" is a rule for the whole tool that the chat keeps for every later child', async t => {
+  const { session, events } = await controlSession(t), said = () => events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1);
+  await session.send('askmcp'); await until(() => session.state().status === 'attention');
+  const [first] = session.replay().approvals;
+  await session.approve(first.requestId, { allow: true, allowTool: true });
+  await until(() => session.state().status === 'idle');
+  assert.equal(said(), 'grants=[{"type":"addRules","rules":[{"toolName":"mcp__srv__run"}],"behavior":"allow","destination":"session"}]');
+  // The CLI asks again (an `ask` rule in the user's settings beats any allow rule): the chat answers it itself, so no card appears.
+  await session.send('askmcp'); await until(() => said() === 'grants=[]');
+  await until(() => session.state().status === 'idle');
+  assert.equal(session.replay().approvals.length, 0, 'no card for a tool allowed for this chat');
+  assert.equal(events.filter(event => event.kind === 'approval' && event.phase === 'request').length, 1, 'only the first request ever became a card');
+  await session.send('이걸 다시 실행해 줘'); await until(() => session.state().status === 'idle');
+  assert.equal(said(), 'allow=["mcp__srv__run"]', 'the running child got the rule as flag settings too');
+  await session.set({ effort: 'high' }); // a launch flag: the child is replaced and has forgotten its own session rules
+  await session.send('다시 실행해'); await until(() => session.state().status === 'idle');
+  assert.equal(said(), 'allow=["mcp__srv__run"]', 'the new child got the rule again');
+});
+
+test('Claude: denying a request grants nothing, even when the tool button was meant', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('askmcp'); await until(() => session.state().status === 'attention');
+  const [ask] = session.replay().approvals;
+  await session.approve(ask.requestId, { allow: false, allowTool: true });
+  await until(() => session.state().status === 'idle');
+  assert.equal(events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1), 'grants=[]');
+});

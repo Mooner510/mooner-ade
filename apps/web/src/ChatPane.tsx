@@ -768,7 +768,7 @@ function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; ent
 
 // ExitPlanMode: the plan is the thing being decided, so it gets room to read (tall body, larger type) and a full-size dialog
 // that carries the same decision buttons. The footer stays outside the scroll area, so the answer is never scrolled away.
-type PlanAnswer = { mode?: string; message?: string };
+type PlanAnswer = { mode?: string; message?: string; allowTool?: boolean };
 function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: string[]; choices?: boolean; onAnswer(allow: boolean, answer?: PlanAnswer): void; onBack?(): void }) {
   const [revising, setRevising] = useState(false), [note, setNote] = useState(''), feedback = note.trim();
   if (revising) return <footer className="plan-revise">
@@ -879,7 +879,7 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
   if (approval.questions?.length) return <QuestionCard approval={approval} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
   // Claude's ExitPlanMode and Cursor's create_plan ('계획 승인') read the same; only Claude picks the mode it continues in.
   if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} />;
-  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0 || (explain === true && /^mcp__/.test(approval.tool)), summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
+  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
   const written = approval.tool === 'Write' && typeof input.content === 'string' ? input.content : null;
   // The same diff view as the Edit tool card (only what changes, coloured), not the whole old text as removed and the new as added.
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
@@ -905,6 +905,7 @@ function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, o
       {explain && <button type="button" className="secondary approval-explain" onClick={() => explainOpen(true)}>다르게 하기…</button>}
       <button type="button" onClick={() => onAnswer(false, false)}>거부</button>
       {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="이 세션의 유사 요청 허용">항상 허용</button>}
+      {explain && <button type="button" onClick={() => onAnswer(true, false, undefined, { allowTool: true })} title={`이 채팅에서 ${approval.tool}은(는) 입력과 상관없이 묻지 않고 허용합니다`}>이 도구 항상 허용</button>}
       <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
     </footer>}
   </div>;

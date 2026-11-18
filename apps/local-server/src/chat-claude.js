@@ -140,6 +140,19 @@ export const ASK_SKIPPED = "The user chose not to answer these questions. Do not
 export const isMcpTool = (tool) => typeof tool === "string" && /^mcp__[^_].*__.+/.test(tool);
 export const alwaysSuggestions = (tool, suggestions) =>
   suggestions?.length ? suggestions : isMcpTool(tool) ? [{ type: "addRules", rules: [{ toolName: tool }], behavior: "allow", destination: "session" }] : [];
+// "Allow this tool, always": one allow rule for the whole tool whatever its input. Not for the plan and question tools, whose approval is an answer, not a permission.
+export const toolAllowable = (tool) => typeof tool === "string" && tool.length > 0 && tool !== "ExitPlanMode" && tool !== "AskUserQuestion";
+export const toolSuggestions = (tool) =>
+  toolAllowable(tool) ? [{ type: "addRules", rules: [{ toolName: tool }], behavior: "allow", destination: "session" }] : [];
+// The session allow rules among some suggestions, as rule strings ("Bash(ls:*)", "mcp__a__b"). A session rule lives only in the CLI process, which the chat
+// replaces after 10 idle minutes or a setting change, so the chat keeps these and hands them to every new child (like the rules for blocked actions).
+export const sessionRuleStrings = (suggestions) =>
+  (suggestions ?? []).flatMap((item) =>
+    item?.type === "addRules" && item.behavior === "allow" && item.destination === "session"
+      ? (item.rules ?? []).flatMap((rule) =>
+          typeof rule?.toolName === "string" && rule.toolName ? [typeof rule.ruleContent === "string" && rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName] : [])
+      : [],
+  );
 export function approvalLine(
   requestId,
   { allow, input, message, suggestions, mode },

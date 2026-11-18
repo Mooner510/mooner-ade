@@ -9,7 +9,7 @@ import { resolveAgentCommand, spawnAgent } from './agent-spawn.js';
 import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { autoDenialReason, pendingBlocked, retryText, sessionRule } from './auto-denial.js';
-import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
+import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, sessionRuleStrings, toolAllowable, toolSuggestions, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
 import { cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
@@ -229,7 +229,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
   let lastMeta = null;
   const saveMeta = () => {
@@ -407,6 +407,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (agent === 'claude' && event.kind === 'tool_result' && event.isError) noteAutoDenied(event);
       if (event.kind === 'approval') {
+        // A tool the user allowed for this chat is answered here, without a card. The CLI's own allow rule cannot do this alone: an `ask` rule in the user's settings
+        // (or a hook) beats every allow rule, and the CLI then offers no suggestion at all, so the request would come back each time.
+        if (event.phase === 'request' && agent === 'claude' && !protocol && !event.questions && meta.allowTools?.includes(event.tool) && toolAllowable(event.tool)) {
+          void write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
+          return;
+        }
         // A Write request says whether it creates the file or replaces one, so its card can read "새 파일" or "덮어쓰기".
         if (event.phase === 'request' && event.tool === 'Write' && typeof event.input?.file_path === 'string') event.exists = existsSync(path.resolve(cwd, event.input.file_path));
         if (event.phase === 'request') approvals.set(event.requestId, event); else approvals.delete(event.requestId);
@@ -882,12 +888,18 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       const planMode = agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && answer.mode ? answer.mode : undefined;
       if (agent === 'claude' && answer.allow === true) ownMode = planMode ?? (answer.always === true ? uiPermissionMode(alwaysSuggestions(pending.tool, pending.suggestions).find(item => item.type === 'setMode')?.mode) : undefined);
       if (planMode !== undefined && (!PERMISSION_MODES.includes(planMode) || planMode === 'plan' || planMode === 'bypassPermissions')) throw fault('INVALID_INPUT', '계획 승인 후 사용할 수 없는 권한 모드입니다.');
+      if (answer.allowTool === true && (agent !== 'claude' || !toolAllowable(pending.tool))) throw fault('INVALID_INPUT', '이 요청은 도구 전체 허용을 지원하지 않습니다.');
       if (protocol) await protocol.approve(requestId, answer);
       else {
         // A Claude question is answered inside the tool input; skipping it tells the model so, instead of the generic "rejected, STOP" refusal.
         const asking = pending.tool === 'AskUserQuestion' && pending.questions;
+        const grant = answer.allow !== true ? [] : answer.allowTool === true ? toolSuggestions(pending.tool) : answer.always === true ? alwaysSuggestions(pending.tool, pending.suggestions) : [];
         await write(approvalLine(requestId, { allow: answer.allow === true, input: asking && answer.allow ? askUserInput(pending.input, pending.questions, answer.answers) : pending.input,
-          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ? (asking ? answer.message : refusalWith(answer.message)) : asking ? ASK_SKIPPED : undefined, suggestions: answer.always === true ? alwaysSuggestions(pending.tool, pending.suggestions) : [], mode: planMode }));
+          message: pending.tool === 'ExitPlanMode' && answer.message ? planRevision(answer.message) : answer.message ? (asking ? answer.message : refusalWith(answer.message)) : asking ? ASK_SKIPPED : undefined, suggestions: grant, mode: planMode }));
+        // The CLI keeps a session rule only in its own memory; the chat keeps it too, so a child started later (idle kill, setting change) still has it.
+        const rules = agent === 'claude' ? sessionRuleStrings(grant) : [];
+        if (answer.allow === true && answer.allowTool === true) { meta.allowTools = [...new Set([...(meta.allowTools ?? []), pending.tool])].slice(-50); void saveMeta().catch(reportStorage); }
+        if (rules.length) { meta.sessionAllow = [...new Set([...(meta.sessionAllow ?? []), ...rules])].slice(-100); void saveMeta().catch(reportStorage); void applySessionAllow(meta.sessionAllow); }
       }
       // Approving a plan makes the CLI leave plan mode (back to what it was before); it says nothing about it, so the mode chip is moved here.
       if (agent === 'claude' && pending.tool === 'ExitPlanMode' && answer.allow === true && state.permissionMode === 'plan') { meta.permissionMode = state.permissionMode = planMode ?? prePlanMode; void saveMeta().catch(() => {}); publish(); }
@@ -1159,7 +1171,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
-      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.sessionAllow = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
+      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.sessionAllow = undefined; meta.allowTools = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
     async close({ forget = false, archiveAs } = {}) {
