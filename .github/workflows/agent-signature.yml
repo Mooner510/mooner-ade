@@ -1,0 +1,43 @@
+name: Agent signature
+# 에이전트 서명(Co-Authored-By, Made with Cursor, Generated with Claude Code 등)이 PR 제목·본문이나 커밋 메시지에 있으면 실패한다.
+# 설치·빌드 없이 메시지만 검사한다(수 초). 파일 내용은 검사하지 않는다.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [master]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  scan:
+    name: No agent signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+      PUSH_MESSAGES: ${{ toJson(github.event.commits.*.message) }}
+    steps:
+      - name: Scan messages
+        run: |
+          set -eu
+          PATTERN='^[[:space:]]*(co-authored-by:|made-with:[[:space:]]*cursor|made with cursor|(🤖 )?generated with .*(claude|cursor|codex))|noreply@anthropic\.com|cursoragent@cursor\.com'
+          found=0
+          check() { # $1 이름, stdin 텍스트
+            if hits=$(grep -inE "$PATTERN" || true) && [ -n "$hits" ]; then
+              echo "::error::$1에 에이전트 서명이 있습니다. 지우고 다시 올려 주세요."; echo "$hits" | sed 's/^/    /'; return 1
+            fi
+          }
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            printf '%s\n' "$PR_TITLE" | check "PR 제목" || found=1
+            printf '%s\n' "$PR_BODY" | check "PR 본문" || found=1
+            n=${{ github.event.pull_request.number }}
+            for sha in $(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/$n/commits" --jq '.[].sha'); do
+              gh api "repos/${GITHUB_REPOSITORY}/commits/$sha" --jq '.commit.message' | check "커밋 ${sha:0:7}" || found=1
+            done
+          else
+            printf '%s\n' "$PUSH_MESSAGES" | check "push된 커밋 메시지" || found=1
+          fi
+          exit $found

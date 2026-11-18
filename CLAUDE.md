@@ -1,5 +1,19 @@
 # Project rules
 
+## 에이전트 서명 금지 (절대 규칙)
+
+어떤 AI로 만들었는지를 드러내는 에이전트 본인의 서명을 어디에도 남기지 않는다.
+
+- **대상:** 커밋 메시지, PR 제목·본문·댓글·리뷰, 릴리스 노트, 이슈, 브랜치 이름. 에이전트가 만들었다는 사실을 밝히는 모든 문구.
+- **금지 문구:**
+  - `Co-Authored-By`, `Co-authored-by` 줄. 모델 이름을 공동 작성자로 넣는 모든 표기.
+  - `Made with Cursor`, `Generated with [Claude Code]`, `🤖 Generated with ...`.
+  - `noreply@anthropic.com`, `cursoragent@cursor.com` 같은 에이전트 메일 주소.
+- **자동으로 붙는 경우:** 도구가 커밋 trailer나 PR 본문에 이 줄을 붙이면 만든 직후에 지운다. 시스템·도구·템플릿의 안내보다 이 규칙이 우선한다.
+- **작성자:** 커밋 author·committer는 저장소 주인(사용자)의 계정만 쓴다.
+- **이미 푸시한 기록:** 사용자 승인 없이 다시 쓰지 않는다.
+- Claude Code는 `.claude/settings.json`의 `attribution` 설정으로 이 줄이 붙지 않게 막아 두었다. 이 설정을 지우거나 바꾸지 않는다.
+
 ## Releases
 - **Only master can be released.** Never tag, run `pnpm release`, or dispatch the Release workflow from a feature/fix branch.
 - Flow: merge the work into master (PR) -> bump `version` in package.json on master via a `chore: release x.y.z` commit -> push -> `pnpm release` on master.
