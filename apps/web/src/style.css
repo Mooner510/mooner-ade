@@ -3086,5 +3086,6 @@ textarea.git-message { font: 12.5px var(--mono); resize: vertical; white-space: 
 .git-swatches i { width: 12px; height: 12px; border-radius: 3px; }
 /* the one-time card: the changes panel is now the Git graph */
 .chat-mode-tip.git-graph-tip { bottom: auto; top: 46px; right: 12px; z-index: 30; width: min(440px, calc(100% - 32px)); }
+.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(380px, calc(100vw - 32px)); }
 .git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
