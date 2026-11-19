@@ -13,3 +13,7 @@ wakatime.txt
 scripts/verify/bin/claude.exe
 # verify sessions (scripts/verify/session.mjs): tmp/main and tmp/ade-*
 /tmp/
+
+# A dummy verify session on Windows (its HOME is redirected) leaves PowerShell's module cache, Microsoft/Windows/PowerShell/ModuleAnalysisCache, in the working
+# directory of the server (the checkout root) and of its terminals. Only that root-level folder is ignored.
+/Microsoft/
