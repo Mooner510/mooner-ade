@@ -484,14 +484,14 @@ function ThemePicker({ value, onChange }: { value: ThemeId; onChange(id: ThemeId
     buttons[index].focus();
   };
   return <div className="theme-list" role="radiogroup" aria-label="색 테마" onKeyDown={move}>
-    {([['다크', 'dark'], ['라이트', 'light']] as const).map(([label, scheme]) => <div key={scheme}>
+    {([['다크', 'dark'], ['라이트', 'light']] as const).map(([label, scheme]) => <div key={scheme} className="theme-list-group">
       <p className="theme-list-label">{label}</p>
       <div className="theme-list-names">
         {APP_THEMES.filter(theme => theme.scheme === scheme).map(theme => {
           const on = theme.id === value;
           return <button type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} data-theme={theme.id} key={theme.id} className={on ? 'on' : ''}
             onClick={() => onChange(theme.id)} onMouseEnter={() => look.set('theme', theme.id)} onFocus={() => look.set('theme', theme.id)}>
-            <span>{theme.label}</span>{on && <Icon name="check" size={12} />}
+            <span className="theme-list-name"><i style={{ background: theme.vars['--accent'] }} />{theme.label}</span>{on && <Icon name="check" size={12} />}
           </button>;
         })}
       </div>
