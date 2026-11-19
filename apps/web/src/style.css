@@ -1,6 +1,6 @@
 :root {
   --bg: #0c0d0f; --surface: #141518; --raised: #1b1d21; --overlay: #202227; --border: #24262b; --border-strong: #33363d;
-  --fg: #e4e6ea; --muted: #8b9099; --faint: #5c616b; --accent: #5ec8e5; --accent-strong: #2fb3d6; --accent-fg: #06141a; --accent-soft: #5ec8e51f;
+  --fg: #e4e6ea; --muted: #8b9099; --faint: #616670; --accent: #5ec8e5; --accent-strong: #2fb3d6; --accent-fg: #06141a; --accent-soft: #5ec8e51f;
   --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
   --shadow: 0 12px 40px #000a;
   --brand-claude: #d97757; --brand-codex: #b1a7ff; --brand-cursor: #ffffff;
