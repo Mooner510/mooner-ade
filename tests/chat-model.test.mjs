@@ -387,6 +387,14 @@ test('Cursor First Party stays white and has a readable background in the light 
 });
 
 
+test('markdown columns stay at the message width, so a long id or URL breaks inside it instead of being cut at the right edge', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../apps/web/src/style.css', import.meta.url), 'utf8');
+  // A grid's implicit `auto` column grows to its widest unbreakable token; the .md grid and the list grids need a bounded column.
+  const rule = css.match(/^\.md, \.md ul, \.md ol \{[^}]*\}/m);
+  assert.ok(rule && /grid-template-columns: minmax\(0, 1fr\)/.test(rule[0]));
+});
+
 test('Cursor labels preserve model versions and group models by provider inside each party', () => {
   for (const [id, name] of [['claude-sonnet-4', 'Claude Sonnet 4'], ['glm-5p3', 'GLM 5p3'], ['claude-opus-5-5', 'Claude Opus 5.5'], ['muse-spark-1.3', 'Muse Spark 1.3'], ['gpt-5.6-sol[fast=true]', 'GPT 5.6 Sol'], ['GPT-6-Luna', 'GPT 6 Luna']]) assert.equal(modelDisplayName(id), name);
   assert.equal(modelRows([{ id: 'gpt-6-luna', name: 'GPT-6-Luna', family: '', window: 0, main: true }], {})[0].label, 'GPT 6 Luna');
