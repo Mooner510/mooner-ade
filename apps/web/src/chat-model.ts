@@ -54,7 +54,10 @@ export type Item = ItemBase & (
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
+  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+/** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
+export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
 export type ChatView = {
   items: Item[]; results: Record<string, { content: string; isError: boolean }>;
@@ -292,6 +295,30 @@ export function turnTokenRows({ tokens }: TurnDone): TurnTokenRow[] {
     ...(tokens.cacheRead + tokens.cacheCreate > 0 ? [{ icon: 'database' as const, label: '캐시', up: { label: '쓰기', value: compact(tokens.cacheCreate) }, down: { label: '읽기', value: compact(tokens.cacheRead) } }] : [])];
 }
 
+// `!command` runs: `start` opens a card, `output` (live only) grows it, `end` settles it with the whole output the server kept, `sent` marks runs handed to the agent.
+const SHELL_STATUSES = new Set(['done', 'failed', 'stopped', 'timeout', 'limit', 'interrupted', 'error']);
+function reduceShell(view: ChatView, event: any, key: string, fresh: boolean): ChatView {
+  const id = typeof event.id === 'string' ? event.id : '';
+  const patch = (change: (item: Extract<Item, { kind: 'shell' }>) => Partial<Extract<Item, { kind: 'shell' }>>) => ({ ...view, items: view.items.map(item => item.kind === 'shell' && item.id === id ? { ...item, ...change(item), fresh: false } : item) });
+  const known = view.items.some(item => item.kind === 'shell' && item.id === id);
+  switch (event.phase) {
+    case 'start': return known || !id ? view : append(view, { kind: 'shell', key: `shell:${id}`, id, command: String(event.command ?? ''), cwd: String(event.cwd ?? ''), ...(event.shell && { shell: String(event.shell) }), status: 'running', startedAt: Number(event.at) || Date.now(), stdout: '', stderr: '', fresh });
+    case 'output': {
+      if (!known) return view;
+      const text = String(event.text ?? ''), stream = event.stream === 'stderr' ? 'stderr' : 'stdout';
+      return patch(item => ({ [stream]: item[stream] + text, lastOutputAt: Date.now() }));
+    }
+    case 'end': {
+      const status = SHELL_STATUSES.has(event.status) ? event.status as ShellStatus : 'failed';
+      const change = { status, ms: typeof event.ms === 'number' ? event.ms : undefined, exitCode: typeof event.exitCode === 'number' ? event.exitCode : null, signal: typeof event.signal === 'string' ? event.signal : null, stdout: String(event.stdout ?? ''), stderr: String(event.stderr ?? ''), needsTerminal: event.needsTerminal === true, ...(typeof event.error === 'string' && { error: event.error }) };
+      // An end whose start is gone (cut off the stored tail) still shows what it printed.
+      return known ? patch(() => change) : append(view, { kind: 'shell', key: `shell:${id || key}`, id: id || key, command: '', cwd: '', startedAt: Number(event.at) || Date.now(), ...change, fresh });
+    }
+    case 'sent': { const ids = new Set(Array.isArray(event.ids) ? event.ids : []); return ids.size ? { ...view, items: view.items.map(item => item.kind === 'shell' && ids.has(item.id) ? { ...item, sent: true, fresh: false } : item) } : view; }
+    default: return view;
+  }
+}
+
 // Applies one server event. Stored events carry `seq` (a replayed or doubly delivered one is ignored); `delta` events are live-only.
 export function reduce(view: ChatView, event: any): ChatView {
   if (!event || typeof event !== 'object') return view;
@@ -336,6 +363,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       return { ...view, tasks };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
+    case 'shell': return reduceShell(view, event, key, fresh);
     case 'command_output': {
       const text = String(event.text ?? ''), isError = event.isError === true;
       // The CLI confirms a model switch itself; the line ADE writes (with the model's colour) already says so.

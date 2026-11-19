@@ -17,6 +17,8 @@ import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
+import { ShellCard } from './ShellCard';
+import { isShellDraft, parseShellInput } from './chat-shell';
 import { FileIcon } from './FileIcon';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
@@ -364,8 +366,8 @@ type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>;
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
-type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void };
-const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {} });
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; stopShell(runId: string): void };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, stopShell() {} });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -581,7 +583,7 @@ const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type =
 const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  const isLocal = (entry?: Item) => (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw') && entry.local === true;
+  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw') && entry.local === true;
   // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
   // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
   const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
@@ -758,11 +760,16 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
   if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
   if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
+  if (item.kind === 'shell') return <ShellCardRow item={item} enter={enter} />;
   return null;
 });
 function UsageCardRow({ item, enter }: { item: Extract<Item, { kind: 'usage' }>; enter?: true }) {
   const { projectId, colors, showSession } = useContext(LocalCardsContext);
   return <div data-enter={enter}><UsageCard snap={item.snap} projectId={projectId} colors={colors} showSession={showSession} /></div>;
+}
+function ShellCardRow({ item, enter }: { item: Extract<Item, { kind: 'shell' }>; enter?: true }) {
+  const { stopShell } = useContext(LocalCardsContext);
+  return <ShellCard item={item} enter={enter} onStop={stopShell} />;
 }
 function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; enter?: true }) {
   const { closeBtw, retryBtw } = useContext(LocalCardsContext);
@@ -1427,7 +1434,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const retryBtw = (key: string) => { const item = viewRef.current.items.find(entry => entry.key === key); if (item?.kind === 'btw') askBtw(key, item.question); };
   // The cards sit in memoised rows, so they reach these through a ref that always holds this render's functions.
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
-  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key) }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession]);
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession]);
   async function runLocal(name: string, argument: string): Promise<boolean> {
     if (locked && ['model', 'effort', 'permissions'].includes(name)) { note(`지금은 설정을 바꿀 수 없습니다. ${locked}`); return true; }
     switch (name) {
@@ -1525,8 +1532,22 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Enter while Claude or Codex works steers the running turn (sent now, folded into it); Tab is the follow-up (held until the turn ends). `/…` lines never steer.
   // Cursor cannot fold a line into the running turn, so Enter stops that turn and sends the line as the next one. Tab still waits.
   async function submit(mode: 'steer' | 'queue' = 'steer') {
-    const message = text.trim();
-    if ((!message && !images.length) || !view.ready) return;
+    const typed = text.trim();
+    if ((!typed && !images.length) || !view.ready) return;
+    // `!command` runs a shell command (runs beside a working turn too); `!…` sends a message that starts with `!`.
+    const shellInput = parseShellInput(typed);
+    let runCommand = shellInput?.kind === 'run' ? shellInput.command : '';
+    if (shellInput?.kind === 'empty') { note('사용법: !명령 — 이 폴더에서 셸 명령을 직접 실행합니다. 예: !git status (!로 시작하는 메시지는 \\!로 시작해 보내세요)'); setText(''); return; }
+    if (shellInput?.kind === 'ambiguous') {
+      const choice = await ctx.pick(`“${shellInput.command.length > 60 ? `${shellInput.command.slice(0, 60)}…` : shellInput.command}”을(를) 셸 명령으로 실행할까요, 메시지로 보낼까요?`, [{ id: 'run', label: '셸 명령으로 실행' }, { id: 'send', label: '메시지로 보내기' }, { id: 'no', label: '취소' }]);
+      if (choice === 'run') runCommand = shellInput.command; else if (choice !== 'send') return;
+    }
+    if (runCommand) {
+      try { await ctx.call('chat/shell', { id, command: runCommand }); setText(''); setRecall(null); setCompact(true); clearChatDevDraft(ctx.projectId, id); } catch (cause) { note(cause instanceof Error ? cause.message : String(cause)); }
+      return;
+    }
+    const message = shellInput?.kind === 'escaped' ? shellInput.text.trim() : typed;
+    if (!message && !images.length) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
     // Cold (or nearly) prompt cache on a filled, not-cleared context: confirm before the whole context is re-read; cancel keeps the draft.
@@ -1736,13 +1757,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <span className="chat-command-head"><b>{file.replace(/\/$/, '').split('/').pop()}{file.endsWith('/') ? '/' : ''}</b></span>
             <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
           </button></li>)}</ul>}
+        {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 명령 · 입력하고 Enter로 실행합니다 (사용자가 직접 실행하는 것이라 승인 없이 이 폴더에서 돌아갑니다). 로그인처럼 직접 입력이 필요한 명령은 터미널 탭에서 실행하세요. 메시지를 !로 시작하려면 <code>{'\\!'}</code>로 쓰세요.</span></p>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><span className="image-modal-frame"><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></span></Modal>}
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
         {commandHead && <div className="chat-input-mirror" aria-hidden ref={inputMirror}><span className="chat-input-command">{commandHead}</span>{`${text.slice(commandHead.length)} `}</div>}
-        <textarea ref={box} rows={1} value={text} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중 · 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기 · Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+        <textarea ref={box} rows={1} value={text} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중 · 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기 · Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요 · !명령으로 셸 실행'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
