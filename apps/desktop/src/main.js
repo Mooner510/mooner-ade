@@ -12,7 +12,8 @@ import { setupPlugins } from './plugins.js';
 import { localServerEnv } from './server-env.js';
 import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
-import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
+import { QUIT_CANCEL, QUIT_KEEP, quitPrompt } from './update-policy.js';
+import { applyStagedUpdate, checkForUpdate, stagedUpdateVersion, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
 // (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
@@ -443,14 +444,12 @@ if (leavingConsole) {
     if (!live?.terminals && !live?.chats) return true;
     const canKeep = Boolean(ptyHostInfo && report.keepsTerminals), chatsStop = live.chats > 0 && !report.keepsChats;
     const open = [live.terminals && `터미널 ${live.terminals}개`, live.chats && `채팅 ${live.chats}개${live.answering ? `(응답 중 ${live.answering}개)` : ''}`].filter(Boolean).join('와 ');
-    const detail = [`${open}가 열려 있습니다.`,
-      [canKeep && `백그라운드로 남기기: 창을 닫아도 터미널과 채팅은 계속 실행되고, 다음에 앱을 열면 그대로 이어집니다.${ptyHostInfo.features?.includes('linger-forever') ? '' : ' (이번에는 30분 동안만 남습니다.)'}${chatsStop ? ' (이번에는 채팅 응답이 중단됩니다. 앱을 한 번 다시 시작하면 채팅도 남길 수 있습니다.)' : ''}`,
-        '종료: 터미널과 채팅을 모두 끝냅니다. 대화는 저장되어 나중에 다시 열 수 있습니다.'].filter(Boolean).join('\n')].join('\n\n');
-    const buttons = canKeep ? ['백그라운드로 남기기', '종료', '취소'] : ['종료', '취소'];
+    // With an update waiting, quitting installs it and starts the app again (terminals stay), so the question says that instead of "종료".
+    const { detail, buttons } = quitPrompt({ open, canKeep, chatsStop, lingerForever: Boolean(ptyHostInfo?.features?.includes('linger-forever')), stagedVersion: stagedUpdateVersion() });
     const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
     const { response } = await dialog.showMessageBox(...(window ? [window] : []), { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, title: '무너에이드', message: '무너에이드를 종료할까요?', detail });
-    if (buttons[response] === '취소') return false;
-    if (buttons[response] === '백그라운드로 남기기') { keepTerminalsOnQuit = true; leftInBackground = true; }
+    if (buttons[response] === QUIT_CANCEL) return false;
+    if (buttons[response] === QUIT_KEEP) { keepTerminalsOnQuit = true; leftInBackground = true; }
     return true;
   }
   app.on('before-quit', event => {

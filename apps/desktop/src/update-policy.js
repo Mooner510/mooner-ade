@@ -98,6 +98,46 @@ export function describeFailure(error) {
   return text;
 }
 
+// What the quit question says when the window is closed with terminals or chats still running (main.js asks it and acts on the label of the button pressed).
+// With an update downloaded and waiting, the quit installs it and starts the app again, and the terminals are kept through that restart as for any update
+// restart (whenever they can be kept at all): the plain "종료" would promise an end that does not happen, so it is worded as what it does then.
+export const QUIT_KEEP = '백그라운드로 남기기', QUIT_END = '종료', QUIT_UPDATE = '업데이트하고 다시 시작', QUIT_CANCEL = '취소';
+export function quitPrompt({ open, canKeep, chatsStop, lingerForever, stagedVersion = null }) {
+  const keep = `백그라운드로 남기기: 창을 닫아도 터미널과 채팅은 계속 실행되고, 다음에 앱을 열면 그대로 이어집니다.${lingerForever ? '' : ' (이번에는 30분 동안만 남습니다.)'}${chatsStop ? ' (이번에는 채팅 응답이 중단됩니다. 앱을 한 번 다시 시작하면 채팅도 남길 수 있습니다.)' : ''}`;
+  if (!stagedVersion) {
+    return {
+      buttons: canKeep ? [QUIT_KEEP, QUIT_END, QUIT_CANCEL] : [QUIT_END, QUIT_CANCEL],
+      detail: [`${open}가 열려 있습니다.`, [canKeep && keep, '종료: 터미널과 채팅을 모두 끝냅니다. 대화는 저장되어 나중에 다시 열 수 있습니다.'].filter(Boolean).join('\n')].join('\n\n'),
+    };
+  }
+  const update = canKeep
+    ? `${QUIT_UPDATE}: 받아 둔 업데이트(v${stagedVersion})를 설치하고 앱을 다시 실행합니다. 터미널과 채팅은 끝나지 않고 새 창에서 이어집니다.${chatsStop ? ' (이번에는 채팅 응답이 중단됩니다.)' : ''}`
+    : `${QUIT_UPDATE}: 받아 둔 업데이트(v${stagedVersion})를 설치하고 앱을 다시 실행합니다. 이 환경에서는 터미널과 채팅이 이어지지 않고 끝납니다. 대화는 저장되어 나중에 다시 열 수 있습니다.`;
+  return {
+    buttons: canKeep ? [QUIT_KEEP, QUIT_UPDATE, QUIT_CANCEL] : [QUIT_UPDATE, QUIT_CANCEL],
+    detail: [`${open}가 열려 있습니다.`, [canKeep && `${keep} 받아 둔 업데이트(v${stagedVersion})는 설치하지 않고 다음에 종료할 때로 미룹니다.`, update].filter(Boolean).join('\n')].join('\n\n'),
+  };
+}
+
+// Versions whose install failed in this session (a download that broke, a hash that does not match, a folder that cannot be written). A background check
+// does not offer such a version again at once: after the first failure it waits 10 minutes, after the second an hour, and after the third it leaves the
+// version alone until the app restarts, so a release that cannot be installed does not ask and fail every ten minutes. The settings button always tries
+// again, and a newer version is another version.
+export const RETRY_AFTER_FAILURE_MS = [10 * 60 * 1000, 60 * 60 * 1000];
+export function createFailures(now = Date.now) {
+  const seen = new Map();
+  return {
+    record(version) {
+      const count = (seen.get(version)?.count ?? 0) + 1, wait = RETRY_AFTER_FAILURE_MS[count - 1];
+      seen.set(version, { count, until: wait === undefined ? Infinity : now() + wait });
+      return count;
+    },
+    blocked: version => (seen.get(version)?.until ?? 0) > now(),
+    count: version => seen.get(version)?.count ?? 0,
+    clear(version) { seen.delete(version); },
+  };
+}
+
 // Old per-update scratch folders (a download or extraction the app never got to clean up) are removed once they are this old.
 export const STALE_UPDATE_MS = 24 * 60 * 60 * 1000;
 export const staleUpdateDirs = (entries, now, maxAge = STALE_UPDATE_MS) =>

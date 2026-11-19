@@ -234,10 +234,11 @@ async function failsCleanly(t, label, releases, { prepare, expect = /업데이�
 test('a download whose sha256 differs from the release is refused', { skip }, async t => {
   const body = zips.full, bad = Buffer.from(body); bad[bad.length - 1] ^= 0xff;
   const ctx = await failsCleanly(t, 'sha256', [release('v0.6.0', { files: { [ASSET]: { body, serve: bad } } })], { expect: /해시가 릴리스와 다릅니다/ });
-  // The same session recovers once the release is fixed: the lock of "one check at a time" was let go.
+  // The same session recovers once the release is fixed (the lock of "one check at a time" was let go). The timer waits ten minutes after a failure, the settings button does not.
   ctx.github.releases[0].files[ASSET].serve = undefined;
   ctx.electron.onMessage = button(PROMPT_ON_QUIT);
-  assert.equal(await ctx.check(), 'staged');
+  assert.equal(await ctx.check(), 'error', 'the timer is held back for now');
+  assert.equal(await ctx.check({ manual: true }), 'staged');
   ctx.electron.onMessage = button('받지 않기');
   assert.equal(await ctx.check({ manual: true }), 'declined');
 });
@@ -360,4 +361,47 @@ test('an install folder the helper could not write to is reported before anythin
     assert.equal(ctx.electron.quits, 0);
     assert.deepEqual(updateDirs(), []);
   }
+});
+
+// ---- a release that cannot be installed, and the version the quit question names ---------------------------------------------------------------------------
+
+test('an update that keeps failing is asked about less and less, then left alone until the settings button or a newer version', { skip }, async t => {
+  const clock = { now: Date.UTC(2026, 10, 20) }, minutes = count => count * 60_000;
+  t.mock.method(Date, 'now', () => clock.now);
+  const body = zips.full, bad = Buffer.from(body); bad[bad.length - 1] ^= 0xff;
+  const ctx = await setup(t, { current: '0.5.12', releases: [release('v0.6.0', { files: { [ASSET]: { body, serve: bad } } })], answer: button(PROMPT_ON_QUIT), shell: null });
+  const state = () => [prompts(ctx.electron).length, ctx.electron.errors.length, zipRequests(ctx.github).length];
+  const later = async (after, extra) => { clock.now += minutes(after); return ctx.check(extra); };
+
+  assert.equal(await ctx.check(), 'error');
+  assert.deepEqual(state(), [1, 1, 1], 'asked, downloaded, refused');
+  assert.equal(await later(5), 'error');
+  assert.deepEqual(state(), [1, 1, 1], 'the next tick, five minutes on, neither asks nor downloads');
+  assert.equal(await later(6), 'error');
+  assert.deepEqual(state(), [2, 2, 2], 'ten minutes after the failure it asks again, and fails again');
+  assert.equal(await later(30), 'error');
+  assert.equal(await later(29), 'error');
+  assert.deepEqual(state(), [2, 2, 2], 'now an hour is waited');
+  assert.equal(await later(2), 'error');
+  assert.deepEqual(state(), [3, 3, 3], 'an hour after the second failure it asks a last time');
+  assert.equal(await later(60 * 24), 'error');
+  assert.equal(await later(60 * 24 * 7), 'error');
+  assert.deepEqual(state(), [3, 3, 3], 'after the third failure the timer leaves it alone, for days');
+
+  // The settings button always tries again (and a manual attempt that fails counts like any other).
+  assert.equal(await later(1, { manual: true }), 'error');
+  assert.deepEqual(state(), [4, 4, 4]);
+  assert.equal(await later(60), 'error');
+  assert.deepEqual(state(), [4, 4, 4], 'the manual attempt did not bring the timer back');
+
+  // A newer release is another version: asked at once, and this one downloads.
+  ctx.github.releases.unshift(release('v0.6.1'));
+  assert.equal(await later(1), 'staged');
+  assert.match(prompts(ctx.electron).at(-1).message, /0\.6\.1/);
+  assert.deepEqual(state(), [5, 4, 5]);
+  assert.equal(ctx.updater.stagedUpdateVersion(), '0.6.1', 'the quit question is worded after the update that is waiting');
+  ctx.electron.onMessage = button('받지 않기');
+  assert.equal(await ctx.check({ manual: true }), 'declined');
+  assert.equal(ctx.updater.stagedUpdateVersion(), null);
+  assert.deepEqual(updateDirs(), []);
 });
