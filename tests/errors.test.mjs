@@ -53,3 +53,9 @@ test('a raw Node file-system error is shown as a Korean sentence that keeps the 
   assert.equal(errorText(new Error('ENOENT은 파일이 없다는 뜻')), 'ENOENT은 파일이 없다는 뜻');
   assert.equal(errorText(new Error('열지 못했습니다')), '열지 못했습니다');
 });
+
+test('git 사용자 정보가 없을 때의 영어 오류는 설정 방법을 알려 주는 문장이 된다', () => {
+  const text = errorText(new Error('Committer identity unknown *** Please tell me who you are. Run git config --global user.email "you@example.com" fatal: unable to auto-detect email address'));
+  assert.match(text, /^Git 사용자 이름과 이메일이 설정되어 있지 않습니다/);
+  assert.match(text, /git config --global user.name/);
+});

@@ -3212,7 +3212,8 @@ textarea.git-message { font: 12.5px var(--mono); resize: vertical; white-space: 
 .git-conflict-body li.done .icon { color: var(--add); }
 .git-conflict-body li.selected { background: var(--selected); }
 .git-conflict-actions { display: flex; flex-direction: column; gap: 6px; }
-.git-conflict-actions button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px; text-align: left; }
+.git-conflict-actions button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px; text-align: left; border-color: var(--border-strong); background: var(--raised); } /* 테두리가 대화상자 배경에 묻혀 글자처럼 보이던 것을 버튼으로 */
+.git-conflict-actions button:hover:not(:disabled) { background: var(--hover); }
 .git-conflict-actions small { color: var(--muted); font-size: 11px; }
 .git-file-list { margin: 0 0 10px; padding: 6px 8px; list-style: none; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; font: 12px var(--mono); }
 .git-file-list li { padding: 2px 0; overflow-wrap: anywhere; }

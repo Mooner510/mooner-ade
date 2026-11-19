@@ -23,6 +23,8 @@ const FS_REASON: Record<string, string> = {
 export function errorText(cause: unknown) {
   if (cause instanceof TypeError && NETWORK_FAILURE.test(cause.message)) return '서버에 연결할 수 없습니다. 연결이 돌아오면 다시 시도하세요.';
   const message = (cause instanceof Error ? cause.message : String(cause ?? '')).trim();
+  // 커밋·머지에는 git 사용자 정보가 필요하다. 새 PC에서 흔한 오류라 영어 안내 대신 할 일을 적는다.
+  if (/Committer identity unknown|Please tell me who you are|unable to auto-detect email address/i.test(message)) return 'Git 사용자 이름과 이메일이 설정되어 있지 않습니다. 터미널에서 git config --global user.name "이름" 과 git config --global user.email "메일" 을 실행한 뒤 다시 시도하세요.';
   const fsError = FS_ERROR.exec(message);
   if (fsError) return `${fsError[2] ? `${fsError[2]} ` : ''}${FS_REASON[fsError[1]]}`;
   return message || '알 수 없는 오류';
