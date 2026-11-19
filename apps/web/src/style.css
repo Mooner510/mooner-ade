@@ -2453,6 +2453,7 @@ dialog.chat-stats[open] { display: flex; flex-direction: column; }
 dialog.chat-stats > header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 dialog.chat-stats > header h2 { margin: 0; font-size: 15px; }
 dialog.chat-stats > header small { flex: 1; color: var(--faint); font-family: var(--mono); }
+dialog.chat-stats > header .icon-button { margin-left: auto; } /* 기록 파일이 없어 세션 ID 칸(small)이 없을 때도 닫기 버튼이 오른쪽 끝에 */
 .stats-body { display: grid; gap: 18px; padding: 16px; overflow-y: auto; }
 .stats-body section { min-width: 0; }
 .stats-body h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
