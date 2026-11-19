@@ -717,7 +717,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .look-theme-term { margin: 10px 0 0; padding: 8px 10px; border: 1px solid; border-radius: 8px; font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre; }
 @media (max-width: 800px) {
   .settings-content:has(.look-preview) { flex-direction: column; }
-  .look-preview { width: auto; max-height: 220px; border-left: 0; border-top: 1px solid var(--border); }
+  .look-preview { width: auto; max-height: min(220px, 28dvh); border-left: 0; border-top: 1px solid var(--border); } /* 낮은 창(480px)에서는 미리보기가 설정 목록의 절반을 먹지 않게 */
 }
 @media (prefers-reduced-motion: reduce) {
   .settings-modal { transition: none; }
