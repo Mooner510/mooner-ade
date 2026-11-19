@@ -465,17 +465,30 @@ function AgentTracker({ list: all, colors, opened, waiting, onOpen, onHide }: { 
 // One subagent's whole run: its prompt, every step it took (the ordinary cards), and its report. It follows the end while it runs, until you scroll up.
 function AgentDrawer({ agent, closing, list, colors, results, settings, docked, onPick, onStop, onClose }: { agent: SubAgent; closing?: boolean; list: SubAgent[]; colors: Map<string, string>; results: ChatView['results']; settings: Settings; docked: boolean; onPick(id: string): void; onStop(id: string): void; onClose(): void }) {
   const now = useTick(agent.status === 'running'), body = useRef<HTMLDivElement>(null), follow = useRef(true), at = list.findIndex(item => item.id === agent.id);
-  const parts = agent.items.flatMap(item => item.blocks.flatMap((block, index) => shownBlock(block) && !(agent.report && block.type === 'tool_use' && block.name === 'SubagentHandback') ? [{ key: `${item.key}|${block.key ?? index}`, item, block }] : []));
-  // The subagent's last words usually are its report; the "결과" section below already shows them, so the same text is not repeated above it.
-  const lastText = lastIndexWhere(parts, part => part.block.type === 'text');
-  if (agent.report && lastText >= 0 && (parts[lastText].block as { text: string }).text.trim() === agent.report.trim()) parts.splice(lastText, 1);
-  // "Summary" display, as in the thread: a run of 3+ tools in a row is one bundle (its thoughts are plain text here, so they end a run).
-  const runStart = new Map<string, ToolRun>(), inRun = new Set<string>();
-  if (settings.chatToolDisplay === 'summary') for (const run of toolRuns(parts.map(part => ({ block: part.block, sub: part.item.sub })), [{ start: 0, end: parts.length, steps: parts.length, tools: 0, answered: false }], 3, true)) {
-    runStart.set(parts[run.start].key, run); for (let i = run.start; i < run.end; i++) inRun.add(parts[i].key);
-  }
+  // The steps are drawn by the same `Turn` as the thread (process boxes, tool bundles, plain answers); only what the "결과" section or the card already says is dropped.
+  const { items, count } = useMemo(() => {
+    const dropHandback = Boolean(agent.report);
+    const visible = (block: Block) => shownBlock(block) && !(dropHandback && block.type === 'tool_use' && block.name === 'SubagentHandback');
+    const out: Item[] = [];
+    for (const item of agent.items) {
+      if (item.kind !== 'assistant') continue;
+      const blocks = item.blocks.filter(visible);
+      if (blocks.length) out.push(blocks.length === item.blocks.length ? item : { ...item, blocks });
+    }
+    // The subagent's last words usually are its report; the "결과" section below already shows them, so the same text is not repeated above it.
+    const last = out.at(-1);
+    if (agent.report && last?.kind === 'assistant') {
+      const lastBlock = last.blocks.at(-1);
+      if (lastBlock?.type === 'text' && lastBlock.text.trim() === agent.report.trim()) {
+        const blocks = last.blocks.slice(0, -1);
+        if (blocks.length) out[out.length - 1] = { ...last, blocks }; else out.pop();
+      }
+    }
+    return { items: out, count: out.reduce((sum, item) => sum + (item.kind === 'assistant' ? item.blocks.length : 0), 0) };
+  }, [agent.items, agent.report]);
+  const running = agent.status === 'running';
   useEffect(() => { follow.current = true; body.current?.focus({ preventScroll: true }); }, [agent.id]);
-  useLayoutEffect(() => { const el = body.current; if (el && follow.current) el.scrollTop = el.scrollHeight; }, [agent.id, parts.length, agent.status, agent.report]);
+  useLayoutEffect(() => { const el = body.current; if (el && follow.current) el.scrollTop = el.scrollHeight; }, [agent.id, count, agent.status, agent.report]);
   const meta = agentMeta(agent, now);
   return <aside className="chat-agent-drawer" data-docked={docked || undefined} data-closing={closing || undefined} inert={closing || undefined} style={dotStyle(colors.get(agent.id))} aria-label={`서브에이전트 ${agent.description}`} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
     <header>
@@ -489,13 +502,8 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
     </header>
     <div className="chat-agent-drawer-body" ref={body} tabIndex={-1} onScroll={event => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 16; }}>
       {agent.prompt && <details className="chat-agent-prompt" open={agent.job}><summary>{agent.job ? '명령' : '프롬프트'}</summary><div><Markdown text={agent.prompt} /></div></details>}
-      {parts.map(part => {
-        const run = runStart.get(part.key);
-        if (inRun.has(part.key) && !run) return null;
-        if (run) return <div key={`bundle:${part.key}`} className="chat-agent-step"><ToolBundle parts={parts.slice(run.start, run.end)} results={results} settings={settings} running={agent.status === 'running'} plainThinking /></div>;
-        return <div key={part.key} className="chat-agent-step"><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={agent.status === 'running'} plainThinking enter={part.item.fresh} /></div>;
-      })}
-      {!parts.length && !agent.report && <p className="chat-agent-empty">{agent.status === 'running' ? '아직 받은 단계가 없습니다…' : '기록된 단계가 없습니다.'}</p>}
+      {items.length > 0 && <Turn key={agent.id} items={items} agentIds={NO_AGENTS} settled={!running} working={running} results={results} settings={settings} plainThinking bare />}
+      {!count && !agent.report && <p className="chat-agent-empty">{running ? '아직 받은 단계가 없습니다…' : '기록된 단계가 없습니다.'}</p>}
       {agent.status === 'running' && agent.now && <p className="chat-agent-live"><i className="chat-spin" />{agent.now}</p>}
       {agent.report && <section className="chat-agent-report"><h4>결과</h4><Markdown text={agent.report} /></section>}
     </div>
@@ -598,7 +606,9 @@ const turnsOf = (items: Item[], busy: boolean) => {
   return turns;
 };
 
-type TurnProps = { items: Item[]; agentIds: ReadonlySet<string>; settled: boolean; working: boolean; results: ChatView['results']; settings: Settings; plainThinking?: boolean; onBranch?(uuid: string): void; onRewind?(uuid: string): void; onRecover?(): void; recovering?: boolean };
+const NO_AGENTS: ReadonlySet<string> = new Set();
+// bare: a subagent's run inside its drawer: no copy / branch / rewind icons and no artifact links under it.
+type TurnProps = { items: Item[]; agentIds: ReadonlySet<string>; settled: boolean; working: boolean; results: ChatView['results']; settings: Settings; plainThinking?: boolean; bare?: boolean; onBranch?(uuid: string): void; onRewind?(uuid: string): void; onRecover?(): void; recovering?: boolean };
 type Part = { kind: 'block'; key: string; item: AssistantItem; block: Block } | { kind: 'item'; key: string; item: Item };
 const toolIds = (items: Item[]) => items.flatMap(item => item.kind === 'assistant' ? item.blocks.flatMap(block => block.type === 'tool_use' ? [block.id] : []) : []);
 // A turn re-renders only when one of its own items, its own tools' results or its phase changes: a delta in the last turn leaves the others alone.
@@ -641,7 +651,7 @@ function ArtifactCard({ artifact }: { artifact: ReturnType<typeof artifactsOf>[n
   return <a className="chat-artifact" href={artifact.url} rel="noreferrer noopener" onClick={event => { event.preventDefault(); window.dispatchEvent(new CustomEvent('ade:link', { detail: artifact.url })); }}>{body}</a>;
 }
 
-const Turn = memo(function Turn({ items, agentIds, settled, working, results, settings, plainThinking, onBranch, onRewind, onRecover, recovering }: TurnProps) {
+const Turn = memo(function Turn({ items, agentIds, settled, working, results, settings, plainThinking, bare, onBranch, onRewind, onRecover, recovering }: TurnProps) {
   const lead = items[0]?.kind === 'user' || items[0]?.kind === 'divider' ? items[0] : null;
   const body = lead ? items.slice(1) : items;
   const parts: Part[] = [];
@@ -694,8 +704,8 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
       <div><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={working && !settled} plainThinking={plainThinking} enter={part.item.fresh} /></div>
     </div>);
   }
-  const allowActions = finalItem && turnAllowsMessageActions(items);
-  const artifacts = artifactsOf(items.flatMap(item => item.kind === 'assistant' ? item.blocks : []), results);
+  const allowActions = !bare && finalItem && turnAllowsMessageActions(items);
+  const artifacts = bare ? [] : artifactsOf(items.flatMap(item => item.kind === 'assistant' ? item.blocks : []), results);
   return <div className="chat-turn">
     {lead && <Message item={lead} />}
     {rows}
