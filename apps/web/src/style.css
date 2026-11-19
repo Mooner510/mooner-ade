@@ -2660,6 +2660,8 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .feedback-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .feedback-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: feedback-ping 1.8s ease-out infinite; }
 /* 상단 피드백 버튼: 처리 상태가 바뀐 피드백이 있으면(아직 안 열어 봄) 버튼 모서리에 점. 토스트는 1.3초 아이콘뿐이라 놓치기 쉽다. */
+/* 움직임 줄이기를 켠 사람에게는 끝없이 퍼지거나 떠다니는 장식 애니메이션을 멈춘다(점·표시는 그대로). 돌아가는 로딩 표시는 진행 신호라 둔다. */
+@media (prefers-reduced-motion: reduce) { .feedback-dot::after, .feedback-empty-mark, .chat-send.stop:not(:disabled)::before, .mini-main b { animation: none; } }
 .bar-button { position: relative; }
 .bar-button .feedback-dot.bar-news { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; }
 @keyframes feedback-ping { to { scale: 3; opacity: 0; } }
