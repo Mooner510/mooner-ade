@@ -92,6 +92,9 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
+  // Someone who finished a tour before the version number existed counts as having finished version 1. The new tour clears `onboarded` below, and that gets saved: if the app is
+  // closed before the tour ends, the next start must not read `onboarded: false` as a first run (the theme and font screen), so the tour version is the record of "was onboarded once".
+  if (next.onboarded && next.tourVersion < 1) next.tourVersion = 1;
   if (next.tourVersion < TOUR_VERSION) next.onboarded = false;
   // Saved settings from before the Git graph belong to someone who knew the changes panel: they get the card once. New users meet it in the tutorial.
   if (saved.gitTipPending === undefined && Object.keys(saved).length > 0) next.gitTipPending = true;
