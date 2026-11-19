@@ -2156,7 +2156,7 @@ button.chat-chip:hover { background: var(--hover); }
 .chat-foot { gap: 3px; margin-left: -6px; min-height: 32px; }
 .chat-model .dd-label, .chat-model > div .dd-label, .chat-effort .dd-label, .chat-effort > div .dd-label { font-weight: 600; }
 .chat-foot .dropdown summary { border-color: transparent; background: transparent; color: var(--muted); padding: 0 8px; gap: 6px; font-size: 12.5px; border-radius: 10px; align-items: center; }
-.chat-foot .dropdown summary:focus-visible { outline: none; background: var(--hover); color: var(--fg); }
+.chat-foot .dropdown summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; background: var(--hover); color: var(--fg); } /* 배경색만 살짝 달라져서 키보드 포커스를 알아보기 어려웠다 */
 /* menus opened from the chat foot: a padded card with rounded rows, groups split by a hairline */
 .chat-mode > div, .chat-model > div, .chat-effort > div { padding: 6px; gap: 2px; border-radius: 12px; min-width: max(180px, var(--anchor-width, 0px)); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
 .chat-mode > div button, .chat-model > div button, .chat-effort > div button { padding: 7px 10px; border-radius: 8px; font-size: 13px; }
