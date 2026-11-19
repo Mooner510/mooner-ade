@@ -2673,6 +2673,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 /* 움직임 줄이기를 켠 사람에게는 끝없이 퍼지거나 떠다니는 장식 애니메이션을 멈춘다(점·표시는 그대로). 돌아가는 로딩 표시는 진행 신호라 둔다. */
 @media (prefers-reduced-motion: reduce) { .feedback-dot::after, .feedback-empty-mark, .chat-send.stop:not(:disabled)::before, .mini-main b { animation: none; } }
 .bar-button { position: relative; }
+.bar-note { word-break: keep-all; position: fixed; z-index: 40; top: 46px; right: 12px; max-width: min(320px, calc(100vw - 24px)); padding: 7px 10px; font-size: 12px; line-height: 1.45; color: var(--fg); background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); animation: fade-in .15s var(--ease-out); }
 .bar-button .feedback-dot.bar-news { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; }
 @keyframes feedback-ping { to { scale: 3; opacity: 0; } }
 /* Delete: a small round button on the card's top corner, shown on hover or keyboard focus (always on touch screens). */
@@ -3237,3 +3238,5 @@ body.pane-dragging, body.pane-dragging * { cursor: grabbing !important; }
 body.pane-dragging { user-select: none; }
 .git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
+
+.ide-mark { display: inline-grid; place-items: center; flex: none; border-radius: 4px; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
