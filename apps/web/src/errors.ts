@@ -13,9 +13,19 @@ const emit = (scope: string) => listeners.get(scope)?.forEach(fn => fn());
 
 // A fetch that never reached the server (stopped, restarting) throws a bare TypeError: "Failed to fetch" (Chrome), "Load failed" (Safari), "NetworkError…" (Firefox).
 const NETWORK_FAILURE = /^(failed to fetch|load failed|networkerror)/i;
+// A raw Node file-system error ("ENOENT: no such file or directory, realpath 'C:\x'") says nothing about what to do: name the cause in Korean and keep the path.
+const FS_ERROR = /^(ENOENT|ENOTDIR|EACCES|EPERM|ENOSPC|EBUSY): [^']*?(?:'([^']*)')?(?: -> '[^']*')?$/;
+const FS_REASON: Record<string, string> = {
+  ENOENT: '찾을 수 없습니다. 이름이 바뀌었거나 삭제되었는지 확인하세요.', ENOTDIR: '폴더가 아닙니다. 폴더 경로가 맞는지 확인하세요.',
+  EACCES: '접근 권한이 없습니다. 폴더 권한을 확인하세요.', EPERM: '접근이 허용되지 않습니다. 폴더 권한을 확인하세요.',
+  ENOSPC: '디스크 공간이 부족합니다. 공간을 비운 뒤 다시 시도하세요.', EBUSY: '다른 프로그램이 사용 중입니다. 잠시 뒤 다시 시도하세요.'
+};
 export function errorText(cause: unknown) {
   if (cause instanceof TypeError && NETWORK_FAILURE.test(cause.message)) return '서버에 연결할 수 없습니다. 연결이 돌아오면 다시 시도하세요.';
-  return (cause instanceof Error ? cause.message : String(cause ?? '')).trim() || '알 수 없는 오류';
+  const message = (cause instanceof Error ? cause.message : String(cause ?? '')).trim();
+  const fsError = FS_ERROR.exec(message);
+  if (fsError) return `${fsError[2] ? `${fsError[2]} ` : ''}${FS_REASON[fsError[1]]}`;
+  return message || '알 수 없는 오류';
 }
 
 // `git status` (and the log) on a directory that is not a repository. English git, and a Korean locale build.

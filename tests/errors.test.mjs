@@ -44,3 +44,12 @@ test('a non-repository git status is recognized in English and Korean', () => {
   assert.equal(notAGitRepository('fatal: ambiguous argument \'HEAD\''), false);
   assert.equal(notAGitRepository(''), false);
 });
+
+test('a raw Node file-system error is shown as a Korean sentence that keeps the path and says what to check', () => {
+  assert.equal(errorText(new Error("ENOENT: no such file or directory, realpath 'C:\work\gone'")), "C:\work\gone 찾을 수 없습니다. 이름이 바뀌었거나 삭제되었는지 확인하세요.");
+  assert.match(errorText(new Error("EACCES: permission denied, open '/root/x'")), /^\/root\/x 접근 권한이 없습니다/);
+  assert.match(errorText(new Error('ENOSPC: no space left on device, write')), /^디스크 공간이 부족합니다/);
+  // Anything that is not that shape is passed through untouched.
+  assert.equal(errorText(new Error('ENOENT은 파일이 없다는 뜻')), 'ENOENT은 파일이 없다는 뜻');
+  assert.equal(errorText(new Error('열지 못했습니다')), '열지 못했습니다');
+});
