@@ -27,7 +27,9 @@ export async function fakeHub() {
     const status = hub.feedbackStatus, path = req.url.split('?')[0];
     if (req.method === 'POST' && path === '/__test/feedback-status') {
       const chunks = []; for await (const c of req) chunks.push(c);
-      Object.assign(status, JSON.parse(Buffer.concat(chunks).toString() || '{}'));
+      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      // Only the documented fields are taken over: never `asked` (the record of what the app asked) and never a prototype key.
+      for (const name of ['on', 'all', 'items', 'latestStable']) if (Object.hasOwn(body, name)) status[name] = body[name];
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, asked: status.asked.length })); return;
     }
     if (req.method === 'GET' && path === '/v1/feedback/status') {
