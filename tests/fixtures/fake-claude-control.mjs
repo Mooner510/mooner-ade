@@ -4,7 +4,7 @@ import readline from 'node:readline';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const result = (extra = {}) => send({ type: 'result', is_error: false, result: 'ok', session_id: 'control-session', total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, ...extra });
 send({ type: 'system', subtype: 'init', session_id: 'control-session', model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'] });
-let running = false, allow = [], mcpAnswer = 'grants'; // allow: the permissions.allow the host put into the flag settings
+let running = false, askx = 0, allow = [], mcpAnswer = 'grants'; // allow: the permissions.allow the host put into the flag settings
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
   if (message.type === 'control_request' && message.request?.subtype === 'interrupt') {
@@ -24,6 +24,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (message.type === 'control_request' && message.request?.subtype === 'apply_flag_settings') {
     allow = message.request.settings?.permissions?.allow ?? allow;
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
+    return;
+  }
+  if (message.type === 'control_response' && String(message.response?.request_id).startsWith('req-x')) { // the answer to 'askx:': decision and what the host asked the CLI to remember
+    send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `x=${message.response.response?.behavior} grants=${JSON.stringify(message.response.response?.updatedPermissions ?? [])}` }] } });
+    result();
     return;
   }
   if (message.type === 'control_response' && message.response?.request_id === 'req-mcp' && mcpAnswer === 'grants') { // the host's answer to 'askmcp': what it asked the CLI to remember
@@ -54,6 +59,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (text.includes('다시 실행해')) { send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `allow=${JSON.stringify(allow)}` }] } }); result(); return; }
+  if (text.startsWith('askx:')) { // server_exec-like MCP tool whose input differs every time, with the CLI's own session-rule suggestion; the CLI here never honours an allow rule (an `ask` rule in settings beats it)
+    send({ type: 'control_request', request_id: `req-x${++askx}`, request: { subtype: 'can_use_tool', tool_name: 'mcp__mooner_server__server_exec', input: { command: text.slice(5) }, tool_use_id: `toolu_x${askx}`,
+      permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'mcp__mooner_server__server_exec' }], behavior: 'allow', destination: 'session' }] } });
+    return;
+  }
   if (text === 'askmcp') { // an MCP tool the CLI offers no suggestions for
     mcpAnswer = 'grants';
     send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__run', input: { command: 'x' }, tool_use_id: 'toolu_mcp' } });

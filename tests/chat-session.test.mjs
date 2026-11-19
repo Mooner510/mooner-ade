@@ -1082,6 +1082,44 @@ test('Claude: "allow this tool always" is a rule for the whole tool that the cha
   assert.equal(said(), 'allow=["mcp__srv__run"]', 'the new child got the rule again');
 });
 
+const said = events => events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1);
+const cardsOf = events => events.filter(event => event.kind === 'approval' && event.phase === 'request').length;
+
+test('Claude: "allow this tool always" covers an MCP tool whose input differs every time, and survives a server restart', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-allow-')), events = [];
+  const options = { directory, id: 'allowx', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: event => events.push(event) };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await session.send('askx:Read stacks rules'); await until(() => session.state().status === 'attention');
+  await session.approve(session.replay().approvals[0].requestId, { allow: true, allowTool: true }); await until(() => session.state().status === 'idle');
+  await session.send('askx:cli checkout remote'); await until(() => session.state().status === 'idle');
+  assert.equal(said(events), 'x=allow grants=[]', 'a different input of the same tool is answered without a card');
+  assert.equal(cardsOf(events), 1);
+  await session.close(); session = await openChatSession(options); // the server restarted: a new chat object and a new child
+  await session.send('askx:git log'); await until(() => session.state().status === 'idle');
+  assert.equal(said(events), 'x=allow grants=[]', 'the rule is read back from the chat file');
+  assert.equal(cardsOf(events), 1);
+});
+
+test('Claude: "always allow" (the CLI\'s own rule) on an MCP tool is also tool-wide for this chat, even when the CLI keeps asking', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('askx:Read stacks rules'); await until(() => session.state().status === 'attention');
+  await session.approve(session.replay().approvals[0].requestId, { allow: true, always: true }); await until(() => session.state().status === 'idle');
+  assert.match(said(events), /^x=allow grants=\[\{"type":"addRules","rules":\[\{"toolName":"mcp__mooner_server__server_exec"\}\]/);
+  await session.send('askx:cli checkout remote'); await until(() => session.state().status === 'idle');
+  assert.equal(cardsOf(events), 1, 'no second card for the same tool with another input');
+  assert.equal(said(events), 'x=allow grants=[]');
+});
+
+test('Claude: /clear forgets the tools allowed for the chat, so the next request asks again', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('askx:a'); await until(() => session.state().status === 'attention');
+  await session.approve(session.replay().approvals[0].requestId, { allow: true, allowTool: true }); await until(() => session.state().status === 'idle');
+  await session.reset();
+  await session.send('askx:b'); await until(() => session.state().status === 'attention');
+  assert.equal(cardsOf(events), 2);
+});
+
 test('Claude: denying a request grants nothing, even when the tool button was meant', async t => {
   const { session, events } = await controlSession(t);
   await session.send('askmcp'); await until(() => session.state().status === 'attention');
