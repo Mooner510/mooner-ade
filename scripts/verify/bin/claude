@@ -17,7 +17,8 @@ if (!stream) {
   process.stdin.on('end', async () => {
     const mode = ctl().fb ?? 'ok'; log({ kind: 'oneshot', argv, cwd: process.cwd(), env: envLog, stdin: input.slice(0, 4000), mode });
     // /btw (chat-btw.js passes --disable-slash-commands): a short answer with the usage the CLI reports.
-    if (argv.includes('--disable-slash-commands')) { console.log(JSON.stringify({ type: 'result', is_error: false, result: '곁다리 답입니다. 비동기 함수는 Promise를 돌려줍니다.', total_cost_usd: 0.0174, usage: { input_tokens: 812, output_tokens: 96, cache_creation_input_tokens: 0, cache_read_input_tokens: 14200 } })); process.exit(0); }
+    // The feedback AI draft passes the same isolation flags but also --allowedTools Read: only the btw run (no tools at all) gets this answer.
+    if (argv.includes('--disable-slash-commands') && !argv.includes('--allowedTools')) { console.log(JSON.stringify({ type: 'result', is_error: false, result: '곁다리 답입니다. 비동기 함수는 Promise를 돌려줍니다.', total_cost_usd: 0.0174, usage: { input_tokens: 812, output_tokens: 96, cache_creation_input_tokens: 0, cache_read_input_tokens: 14200 } })); process.exit(0); }
     if (mode === 'fail') { console.error('boom'); process.exit(1); }
     if (mode === 'badjson') { console.log('this is not json'); process.exit(0); }
     if (mode === 'empty') { console.log(JSON.stringify({ type: 'result', is_error: false, result: '' })); process.exit(0); }
