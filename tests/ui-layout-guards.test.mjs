@@ -78,3 +78,14 @@ test('상태바 접기·셸 카드 안내·ui 폼 라벨·비 Git 안내·Mermai
   assert.match(mermaid, /onKeyDown=\{keyView\}/);
   assert.match(chat, /이미지를 5MB 아래로 줄이는 중…/);
 });
+
+test('명령 팔레트(QuickInput)는 Modal처럼 누름과 놓음이 모두 상자 바깥일 때만 닫힌다', async () => {
+  const quick = await read('QuickInput.tsx'), hint = await read('Hint.tsx'), css = await read('style.css');
+  assert.match(quick, /pressedOutside\.current = event\.target === event\.currentTarget && outside\(event\)/);
+  assert.match(quick, /onClick=\{event => \{ if \(pressedOutside\.current && outside\(event\)\) finish\(null\)/);
+  assert.doesNotMatch(quick, /onMouseDown=\{event => \{ if \(event\.target === event\.currentTarget\) finish\(null\)/);
+  // 팁 카드는 카드마다 자기 anchor를 쓰고(한곳에 겹쳐 쌓이지 않게), 클릭을 통과시키며 "알겠어요"만 받는다.
+  assert.match(hint, /target\.style\.setProperty\('anchor-name', anchorName\); el\.style\.setProperty\('position-anchor', anchorName\)/);
+  assert.match(css, /\.hint-card \{ pointer-events: none; \}\s*\.hint-card > button \{ pointer-events: auto; \}/);
+  assert.match(css, /\.workbench:has\(> \.right-panel\) > :not\(\.right-panel\) \.hint-card \{ visibility: hidden; \}/);
+});
