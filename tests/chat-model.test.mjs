@@ -446,6 +446,12 @@ test('stored reasoning replaces the streamed reasoning even when its parts are j
   assert.deepEqual(view.items[0].blocks.map(block => block.text), ['Plan\nCheck']);
 });
 
+test('a /compact result without a boundary or output does not claim the command ran', () => {
+  const view = reduce(emptyView(), { seq: 1, kind: 'user', text: '/compact' });
+  const done = reduce(view, { seq: 2, kind: 'result', status: 'success', text: '' });
+  assert.equal(done.items.at(-1).text, '컨텍스트 압축 완료를 확인하지 못했습니다.');
+});
+
 test('a synthetic message the CLI re-sends after /compact (same uuid, new id) is not shown twice', () => {
   const output = { kind: 'message', role: 'assistant', uuid: 'u1', blocks: [{ type: 'text', text: '## Context Usage' }] };
   let view = reduce(emptyView(), { seq: 1, ...output, id: 'first' });

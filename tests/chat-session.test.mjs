@@ -694,7 +694,7 @@ Review PR $ARGUMENTS`);
   assert.equal(review?.hint, '[pr-number]');
 });
 
-test('Claude /compact leaves a compact event and the context gauge drops to the size after compaction', async t => {
+test('Claude /compact ignores a startup result and drops the context gauge when its own turn finishes', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-compact-'));
   const events = [];
   const session = await openChatSession({
@@ -706,11 +706,17 @@ test('Claude /compact leaves a compact event and the context gauge drops to the 
   await until(() => session.state().status === 'idle');
   assert.equal(session.state().contextTokens, 231097);
   await session.send('/compact');
-  await until(() => events.some(event => event.kind === 'result' && event.turns === 0));
-  await until(() => session.state().status === 'idle');
+  await until(() => events.some(event => event.kind === 'compact') && session.state().status === 'idle');
   const compact = events.find(event => event.kind === 'compact');
-  assert.deepEqual([compact.trigger, compact.preTokens, compact.postTokens], ['manual', 231097, 14613]);
+  const results = events.filter(event => event.kind === 'result' && event.turns === 0);
+  assert.equal(results.length, 1, 'the unrelated result must not finish /compact');
+  assert.ok(compact.seq < results[0].seq);
   assert.equal(session.state().contextTokens, 14613);
+  await session.send('follow-up');
+  await until(() => session.state().status === 'idle');
+  assert.ok(results[0].seq < events.find(event => event.kind === 'user' && event.text === 'follow-up').seq);
+  assert.equal(events.filter(event => event.kind === 'compact').length, 1);
+  assert.deepEqual([compact.trigger, compact.preTokens, compact.postTokens], ['manual', 231097, 14613]);
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === true));
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === false));
   assert.ok(!events.some(event => event.kind === 'divider'), 'compacting keeps the history; only /clear starts over');

@@ -1194,12 +1194,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const hint = focused && visible && view.ready ? nextHint(ctx.settings, [...['keymodel', 'keyeffort', 'keymode', 'keystash'].map(name => [name, picked === name] as [string, boolean]), ['tocli', view.state.status === 'idle'], ['stats', answered && agent === 'claude' && view.state.sessionId && view.state.status === 'idle']]) : undefined;
   const pickedBy = (name: string) => (done: unknown) => { if (done !== false) setPicked(name); };
   const hintSeen = (name: string) => { if (!ctx.settings.hintsSeen.includes(name)) ctx.onSettingsChange({ ...ctx.settings, hintsSeen: [...ctx.settings.hintsSeen, name] }); };
-  useEffect(() => { let alive = true;
+  const canLoadModels = agent !== 'codex' || (view.ready && view.state.agent === agent);
+  useEffect(() => {
+    // The Codex catalog response also sets the chat's supported Effort levels on the server.
+    if (!canLoadModels) return;
+    let alive = true;
     // The model list is a file read; the alias answers can take a CLI start. Show the list first so the picker is not stuck on the stand-ins meanwhile.
     if (agent === 'claude') void ctx.call('chat/model-catalog', { agent }).then((result: any) => { if (alive && result?.catalog?.length) setAgentModels(previous => previous.catalog.length ? previous : { ...previous, catalog: result.catalog }); }, () => {});
     void ctx.call('chat/models', { agent, id }).then(result => { if (alive) setAgentModels(result); }, ctx.fail);
     return () => { alive = false; };
-  }, [agent, id, ctx.call]);
+  }, [agent, id, ctx.call, canLoadModels]);
   // Any size change of the thread (new text, a fold, a card opening) or of the viewport (dock growing) re-follows the bottom; nothing else needs to.
   // The bottom row never wraps. When its content would overflow it steps through fit levels (CSS keyed on data-fit): 1 = permission mode, sandbox and Effort lose their labels,
   // 2 = the extra switches move into the settings button, 3 = notes fold away and the model name may shorten, 4 = "+" moves from the left to the right, next to the settings button (permission mode stays on the left). It measures the real overflow, so there is no fixed pixel threshold.

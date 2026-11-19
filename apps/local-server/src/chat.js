@@ -28,6 +28,7 @@ const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
 // Set once any Claude child echoed one of our plain messages back by its uuid (--replay-user-messages): from then on a turn that ended without the echo is known not to have taken the message in.
 let echoesSeen = false;
+const isClaudeCompact = text => /^\/compact(?:\s|$)/.test(text);
 const BACKGROUND_QUIET_MS = 3 * 60_000;
 export const chatFolder = (directory, id) => {
   if (typeof id !== 'string' || !ID.test(id)) throw fault('INVALID_INPUT', '잘못된 채팅 ID입니다.');
@@ -406,6 +407,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // A reply to something we asked (set_model, interrupt, ...).
     if (raw?.type === 'control_response') { controls.get(raw.response?.request_id)?.(raw.response); controls.delete(raw.response?.request_id); }
     if (protocol) { protocol.handle(raw); return; }
+    if (raw?.type === 'result' && !raw.is_error && turnOpen && inflight && isClaudeCompact(inflight.text)) {
+      // On resume, Claude can finish a startup turn while the user's /compact is still queued.
+      const ids = raw.user_message_uuids ?? (raw.user_message_uuid ? [raw.user_message_uuid] : []);
+      if (ids.length ? !ids.includes(inflight.uuid) : raw.local_command !== 'compact' && !inflight.acked && !inflight.compacted) return;
+    }
     for (const event of normalizeClaude(raw, meta.model ?? state.model)) handleEvent(event);
   }
   // The CLI says only in the result text that auto mode refused a call. The refusal is recorded next to the call it was for (its input, the reason and the exact allow rule
@@ -512,9 +518,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         void saveMeta().catch(reportStorage); publish();
       }
       if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings' || event.kind === 'compact') publish();
-      if (event.kind === 'compact' && agent === 'claude') refreshCacheSoon();
+      if (event.kind === 'compact' && agent === 'claude') {
+        if (inflight && event.trigger === 'manual') inflight.compacted = true;
+        refreshCacheSoon();
+      }
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
+        if (agent === 'claude' && inflight && isClaudeCompact(inflight.text)) inflight = null;
         if (agent === 'cursor' && state.sessionId) {
           const sessionId = state.sessionId, last = retainedEvents().findLast(item => item.kind === 'message');
           if (last?.uuid && last.blocks?.some(block => block.type === 'text') && event.status === 'success') {
@@ -665,10 +675,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (!last?.text?.trim()) throw fault('INVALID_INPUT', '다시 시도할 메시지가 없습니다.', 409);
     if (last.images > 0) throw fault('CHAT_UNSUPPORTED', '이미지가 포함된 요청은 자동 복구할 수 없습니다. 같은 내용을 다시 보내세요.', 409);
     state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
+    const compact = agent === 'claude' && isClaudeCompact(last.text) ? { text: last.text, uuid: randomUUID(), acked: false } : null;
+    if (compact) inflight = compact;
     try {
       await start();
       if (protocol) await protocol.send(last.text, []);
-      else await write(userLine(last.text));
+      else await write(userLine(last.text, [], compact?.uuid));
     } catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
     setStatus();
   }

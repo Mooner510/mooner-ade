@@ -251,7 +251,7 @@ function lastSlashName(view: ChatView): string {
   return '';
 }
 
-const ranLine = (name?: string) => name ? `/${name} 명령을 실행했습니다.` : '명령을 실행했습니다.';
+const ranLine = (name?: string) => name === 'compact' ? '컨텍스트 압축 완료를 확인하지 못했습니다.' : name ? `/${name} 명령을 실행했습니다.` : '명령을 실행했습니다.';
 // A finished turn that showed nothing (a slash command answered only in `result`, or not at all) still gets a line under its command.
 function commandFallback(view: ChatView, event: any, key: string): ChatView {
   let user = -1;
