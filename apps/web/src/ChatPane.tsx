@@ -389,7 +389,7 @@ const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(ag
 // ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
 function StopTask({ id }: { id: string }) {
   const { stop } = useContext(AgentsContext);
-  return <span className="stop-task" role="button" tabIndex={-1} title="이 작업 중단" aria-label="이 작업 중단" onClick={event => { event.stopPropagation(); stop(id); }} />;
+  return <span className="stop-task" role="button" tabIndex={0} title="이 작업 중단" aria-label="이 작업 중단" onClick={event => { event.stopPropagation(); stop(id); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); stop(id); } }} />;
 }
 function AgentState({ status, waiting, id }: { status: AgentStatus; waiting?: boolean; id?: string }) {
   const stoppable = useContext(AgentsContext).agents.get(id ?? '')?.background === true;

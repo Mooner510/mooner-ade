@@ -40,7 +40,7 @@ export const ShellCard = memo(function ShellCard({ item, onStop, enter }: { item
       <strong>!</strong><span className="chat-tool-summary" title={item.command}>{item.command.split('\n')[0]}</span>
       <span className={`chat-shell-verdict ${verdict.tone}`}>{verdict.text}{ms != null && ` · ${shellDuration(ms)}`}</span>
       <span className="chat-tool-state" aria-label={verdict.text}>
-        {running ? <><span className="stop-task" role="button" tabIndex={-1} title="이 명령 중단" aria-label="이 명령 중단" onClick={event => { event.stopPropagation(); onStop(item.id); }} /><i className="chat-spin" /></>
+        {running ? <><span className="stop-task" role="button" tabIndex={0} title="이 명령 중단" aria-label="이 명령 중단" onClick={event => { event.stopPropagation(); onStop(item.id); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onStop(item.id); } }} /><i className="chat-spin" /></>
           : state === 'done' ? <Icon name="check" size={13} /> : state === 'error' ? <Icon name="x" size={13} /> : <Icon name="block" size={13} />}
       </span>
       <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
