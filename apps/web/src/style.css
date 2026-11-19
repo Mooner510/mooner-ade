@@ -603,11 +603,10 @@ body.resizing .xterm-host { pointer-events: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; }
 .panel-head > .icon { color: var(--accent); }
 
-/* settings dialog */
-.settings-modal { width: min(820px, 94vw); height: min(620px, 88dvh); transition: width .22s ease, height .22s ease; }
-.settings-modal.bar-live { height: min(620px, calc(100dvh - 52px)); }
+/* One width for every section: the room the appearance preview used to add by growing the dialog. */
+.settings-modal { width: min(1100px, 96vw); height: min(680px, 88dvh); transition: height .22s ease; }
+.settings-modal.bar-live { height: min(680px, calc(100dvh - 52px)); }
 body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); background: var(--raised); box-shadow: inset 0 2px 0 var(--accent); }
-.settings-modal.wide { width: min(1100px, 96vw); }
 .settings-drag { cursor: move; user-select: none; touch-action: none; }
 .settings { display: flex; height: 100%; }
 .settings-nav { width: 180px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: 14px 10px; background: var(--bg); border-right: 1px solid var(--border); }
@@ -679,8 +678,8 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .look-diff > i { grid-column: 1 / -1; display: block; height: 4px; min-width: 12%; margin-top: 8px; border-radius: 99px; background: var(--accent); }
 .look-usage { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
 .look-clock { margin: 0; font-size: 28px; font-variant-numeric: tabular-nums; }
+.look-theme-term { margin: 10px 0 0; padding: 8px 10px; border: 1px solid; border-radius: 8px; font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre; }
 @media (max-width: 800px) {
-  .settings-modal.wide { width: min(820px, 94vw); }
   .settings-content:has(.look-preview) { flex-direction: column; }
   .look-preview { width: auto; max-height: 220px; border-left: 0; border-top: 1px solid var(--border); }
 }
@@ -697,7 +696,6 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .setting-control input[type=range] { width: 160px; padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
 .setting-control input[type=range]:focus-visible { outline: 1px solid var(--focus); outline-offset: 3px; }
 .setting-control .dropdown { width: 180px; }
-.setting-control .dropdown.theme-picker { width: 220px; }
 .setting-control .dropdown summary { align-items: center; min-height: 32px; padding: 6px 10px; border-color: var(--border-strong); border-radius: 7px; transition: border-color .12s, background .12s; }
 .setting-control .dropdown summary:hover { background: var(--raised); }
 .setting-control .dropdown[open] summary { border-color: var(--accent); }
@@ -708,6 +706,16 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .setting-control button:not(.icon-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 12px; white-space: nowrap; border-color: var(--border-strong); border-radius: 7px; transition: border-color .12s, background .12s; }
 .setting-control button:not(.icon-btn):hover:not(:disabled) { background: var(--raised); }
 .setting-control button:not(.icon-btn):focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+.setting-row:has(.theme-list) { flex-direction: column; align-items: stretch; gap: 8px; }
+.setting-row:has(.theme-list) .setting-control { display: block; flex: none; width: 100%; }
+.theme-list { display: flex; flex-direction: column; gap: 10px; }
+.theme-list-label { margin: 0 0 4px; font-size: 11px; font-weight: 600; color: var(--faint); }
+.theme-list-names { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 2px; }
+.setting-control .theme-list button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 0; padding: 6px 8px; font: inherit; text-align: left; color: var(--fg); background: transparent; border: 0; border-radius: 6px; }
+.setting-control .theme-list button:hover:not(:disabled) { background: var(--raised); }
+.setting-control .theme-list button.on { background: var(--selected); font-weight: 600; }
+.setting-control .theme-list button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.setting-control .theme-list button .icon { flex: none; color: var(--accent); }
 .setting-control .range-value { min-width: 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .setting-control input[type=text], .setting-control input[type=password] { width: 220px; }
 .setting-control input[type=checkbox], .plugins input[role=switch] { appearance: none; flex: none; width: 34px; height: 20px; margin: 0; padding: 0; border-radius: 10px; position: relative; cursor: pointer; background: var(--border-strong); border: 0; transition: background .12s; }

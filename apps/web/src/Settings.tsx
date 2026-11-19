@@ -2,7 +2,7 @@ import { appKey, appKeyDefs, appKeyInTerminalByDefault, combosOverlap, showAppKe
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
-import { themeById, themeChoices } from './themes';
+import { APP_THEMES, themeById, type ThemeId } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -265,13 +265,18 @@ function Advanced({ children }: { children: ReactNode }) {
   return <details className="setting-advanced" key={searching ? 'open' : 'shut'} open={searching || undefined}><summary><Icon name="chevronDown" size={14} />고급 옵션</summary>{children}</details>;
 }
 
-// `preview` names the appearance sample. `false` keeps the side column and says there is nothing to show.
-const lookHover = createContext<{ id: string; set(id: string): void }>({ id: '', set() {} });
+// `preview` names the appearance sample. `false` keeps the preview column and says there is nothing to show.
+// A theme card handles its own sample, so the row does not wipe the theme the pointer is already on.
+const lookHover = createContext<{ id: string; set(id: string, theme?: string): void }>({ id: '', set() {} });
 function Row({ title, hint, preview, children }: { title: string; hint?: string; preview?: string | false; children: ReactNode }) {
   const look = useContext(lookHover);
   if (!queryHit(useContext(settingsQuery), `${title} ${hint ?? ''}`)) return null;
-  const show = preview === undefined ? undefined : () => look.set(preview || 'none');
-  return <div className={`setting-row${preview && look.id === preview ? ' hot' : ''}`} onMouseEnter={show} onFocusCapture={show}><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
+  const show = preview === undefined ? undefined : (event: { target: EventTarget }) => {
+    if (preview === 'theme' && (event.target as Element).closest?.('.theme-list button')) return;
+    look.set(preview || 'none');
+  };
+  const hot = Boolean(preview && preview !== 'theme' && look.id === preview);
+  return <div className={`setting-row${hot ? ' hot' : ''}`} onMouseEnter={show} onFocusCapture={show}><div><strong>{title}</strong>{hint && <small>{hint}</small>}</div><div className="setting-control">{children}</div></div>;
 }
 
 function Group({ title, children }: { title?: string; children: ReactNode }) {
@@ -378,7 +383,7 @@ const lookNames: Record<string, string> = {
   usage: '사용량 색', clock12: '12시간제', clockSec: '초 표시'
 };
 const TOOL_PREVIEW = ['Read src/app.ts', 'Grep PORT', 'Edit src/server.ts', 'Bash npm test'];
-function LookPreview({ id, settings }: { id: string; settings: Settings }) {
+function LookPreview({ id, settings, previewTheme = '' }: { id: string; settings: Settings; previewTheme?: string }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     if ((id !== 'clock12' && id !== 'clockSec') || !settings.clockSeconds) return;
@@ -386,13 +391,15 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
     return () => clearInterval(timer);
   }, [id, settings.clockSeconds]);
   if (!id || id === 'none') return <aside className="look-preview" aria-label="설정 미리보기"><p className="look-empty">미리보기가 없습니다</p></aside>;
-  const paint = themeById(settings.theme).vars;
-  const accent = settings.accentColor || paint['--accent'];
+  const sampling = id === 'theme' && previewTheme ? themeById(previewTheme) : themeById(settings.theme);
+  const paint = sampling.vars;
+  const accent = id === 'theme' && previewTheme ? paint['--accent'] : (settings.accentColor || paint['--accent']);
   const mono = terminalFontStack;
   const family = id.startsWith('term') ? 'term' : id.startsWith('chat') ? 'chat' : id.startsWith('diff') ? 'diff' : id;
   const shell = family === 'theme' || family === 'accent' || family === 'dim' || family === 'zoom' || family === 'sidebar' || family === 'sidebarWidth';
+  const themeLabel = id === 'theme' && previewTheme ? sampling.label : '';
   return <aside className="look-preview" aria-label="설정 미리보기">
-    <h4>{lookNames[id] ?? '미리보기'}</h4>
+    <h4>{themeLabel || lookNames[id] || '미리보기'}</h4>
     {shell && <div className="look-zoom">
       <div className="look-app" style={{ '--l-bg': paint['--bg'], '--l-surface': paint['--surface'], '--l-line': paint['--border'], '--l-fg': paint['--fg'], '--l-muted': paint['--muted'], '--l-accent': accent, ...(id === 'zoom' ? { transform: `scale(${settings.uiZoom / 100})`, transformOrigin: 'top left' } : {}) } as CSSProperties}>
         <div className={`look-side${settings.sidebarCompact && id !== 'sidebarWidth' ? ' compact' : ''}`} style={!settings.sidebarCompact || id === 'sidebarWidth' ? { width: 22 + (settings.sidebarWidth - 160) / 8 } : undefined}>
@@ -404,6 +411,12 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
         </div>
       </div>
     </div>}
+    {id === 'theme' && <pre className="look-theme-term" style={{ background: paint['--term-bg'], color: paint['--term-fg'], borderColor: paint['--border'] }}>
+      <span style={{ color: paint['--term-green'] }}>$</span> claude{'\n'}
+      <span style={{ color: paint['--term-blue'] }}>ready</span>
+      <span style={{ color: paint['--faint'] }}> · </span>
+      <span style={{ color: paint['--term-yellow'] }}>waiting</span>
+    </pre>}
     {family === 'term' && <pre className="look-term" style={{ fontFamily: mono(settings.terminalFont), fontSize: settings.terminalFontSize, fontWeight: settings.terminalFontWeight, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing }}>
       <span className="dim">~/my-app $ </span>claude{'\n'}
       <span className={settings.boldBright ? 'bright' : ''} style={{ fontWeight: 700 }}>Claude</span> 포트를 환경 변수로 바꿉니다.{'\n'}
@@ -432,8 +445,37 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
   </aside>;
 }
 
+function ThemePicker({ value, onChange }: { value: ThemeId; onChange(id: ThemeId): void }) {
+  const look = useContext(lookHover);
+  const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role=radio]')];
+    const current = buttons.findIndex(button => button === document.activeElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : current + (event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1);
+    if (index < 0 || index >= buttons.length) return;
+    onChange(buttons[index].dataset.theme as ThemeId);
+    buttons[index].focus();
+  };
+  return <div className="theme-list" role="radiogroup" aria-label="색 테마" onKeyDown={move}>
+    {([['다크', 'dark'], ['라이트', 'light']] as const).map(([label, scheme]) => <div key={scheme}>
+      <p className="theme-list-label">{label}</p>
+      <div className="theme-list-names">
+        {APP_THEMES.filter(theme => theme.scheme === scheme).map(theme => {
+          const on = theme.id === value;
+          return <button type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} data-theme={theme.id} key={theme.id} className={on ? 'on' : ''}
+            onClick={() => onChange(theme.id)} onMouseEnter={() => look.set('theme', theme.id)} onFocus={() => look.set('theme', theme.id)}>
+            <span>{theme.label}</span>{on && <Icon name="check" size={12} />}
+          </button>;
+        })}
+      </div>
+    </div>)}
+  </div>;
+}
+
 export function SettingsModal({ settings, onChange, onClose, initialSection = 'appearance', initialAiTab = 'common' }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; initialSection?: Section; initialAiTab?: AiTab }) {
-  const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>(initialAiTab), [statusTab, setStatusTab] = useState<'bar' | 'chat'>('bar'), [query, setQuery] = useState(''), [look, setLook] = useState('');
+  const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>(initialAiTab), [statusTab, setStatusTab] = useState<'bar' | 'chat'>('bar'), [query, setQuery] = useState(''), [look, setLook] = useState(''), [lookTheme, setLookTheme] = useState('');
   const searching = query.trim() !== '';
   const missing = useMissingAgents();
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
@@ -457,18 +499,18 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     <Row title={title} hint={hint}><Dropdown label={title} value={settings[key]} options={soundIds.map(id => ({ value: id, label: sounds[id].label }))} onChange={value => { set(key, value); playSound(value, settings.soundVolume); }} />
       <IconButton icon="bell" label={`${title} 미리 듣기`} onClick={() => playSound(settings[key], settings.soundVolume)} /></Row>;
   const root = useRef<HTMLDivElement>(null);
-  const wide = !searching && section === 'appearance';
+  const appearance = !searching && section === 'appearance';
   const barLive = !searching && section === 'status' && statusTab === 'bar';
-  const lookApi = useMemo(() => ({ id: look, set: setLook }), [look]);
+  const lookApi = useMemo(() => ({ id: look, set: (id: string, theme = '') => { setLook(id); setLookTheme(theme); } }), [look]);
   useEffect(() => {
-    // Reapply the last spot, and keep it inside the window when the window shrinks or the preview opens.
+    // Reapply the last spot, and keep it inside the window when the window shrinks or the status-bar section changes the height.
     const dialog = root.current!.closest('dialog')!, fit = () => placeSettings(dialog, settingsOffset.x, settingsOffset.y);
     fit();
-    const done = (event: TransitionEvent) => { if (event.target === dialog && (event.propertyName === 'width' || event.propertyName === 'height')) fit(); };
+    const done = (event: TransitionEvent) => { if (event.target === dialog && event.propertyName === 'height') fit(); };
     dialog.addEventListener('transitionend', done);
     addEventListener('resize', fit);
     return () => { dialog.removeEventListener('transitionend', done); removeEventListener('resize', fit); };
-  }, [wide, barLive]);
+  }, [barLive]);
   const agentBody = (tab: 'claude' | 'codex' | 'cursor') => <>
     <h4 className="setting-group">실행</h4>
     <Row title="런처에 표시" hint="새 탭 메뉴, 새 pane, 명령 팔레트에 표시합니다. 끄면 목록에서만 숨깁니다.">{inList('agentsOff', tab, `${agentNames[tab]} 표시`)}</Row>
@@ -505,7 +547,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <Row title="Artifact 항상 켜기" hint="기본은 메시지에 ‘artifact’·‘아티팩트’가 들어갈 때만 그 채팅에서 Artifact 도구를 켭니다. 이 옵션을 켜면 모든 채팅이 처음부터 켜지지만 요청마다 컨텍스트가 약 1.3만 토큰 늘어납니다.">{toggle('artifactAlways')}</Row>
     </>}
   </>;
-  return <Modal className={`settings-modal${wide ? ' wide' : ''}${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" region="설정" onClose={onClose}>
+  return <Modal className={`settings-modal${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" region="설정" onClose={onClose}>
     <settingsQuery.Provider value={query}>
     <lookHover.Provider value={lookApi}>
     <div className={`settings${searching ? ' settings-searching' : ''}`} ref={root}>
@@ -526,7 +568,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {searching && <p className="search-empty">일치하는 설정이 없습니다.</p>}
         {(searching || section === 'appearance') && <SectionFrame label="외관" searching={searching}>
           <Group title="전체">
-            <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다." preview="theme"><Dropdown className="theme-picker" label="색 테마" value={settings.theme} options={themeChoices()} onChange={value => set('theme', value as Settings['theme'])} /></Row>
+            <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다. 이름에 올리면 오른쪽 미리보기가 그 테마로 바뀝니다." preview="theme"><ThemePicker value={settings.theme} onChange={value => set('theme', value)} /></Row>
             <Row title="강조 색" hint="버튼, 선택, 포커스 표시에 쓰는 색입니다. 기본은 테마 색을 씁니다." preview="accent">
               <input type="color" value={settings.accentColor || themeById(settings.theme).vars['--accent']} aria-label="강조 색" onChange={event => set('accentColor', event.target.value)} />
               <button disabled={!settings.accentColor} onClick={() => set('accentColor', '')}>기본</button>
@@ -711,7 +753,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Row title="튜토리얼" hint="처음 실행할 때 보여준 둘러보기를 다시 시작합니다."><button onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}><Icon name="book" />다시 보기</button></Row>
         </SectionFrame>}
       </div>
-      {wide && <LookPreview id={look} settings={settings} />}
+      {appearance && <LookPreview id={look || 'theme'} previewTheme={lookTheme} settings={settings} />}
       </div>
       </div>
     </div>
