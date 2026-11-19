@@ -12,7 +12,7 @@ const edits = [
   ['ArrowUp', cmd, '\x1b[1;5H'], ['ArrowDown', cmd, '\x1b[1;5F'],
   ['ArrowLeft', { ...cmd, ...shift }, '\x1b[1;2H'], ['ArrowRight', { ...cmd, ...shift }, '\x1b[1;2F'],
   ['ArrowUp', { ...cmd, ...shift }, '\x1b[1;6H'], ['ArrowDown', { ...cmd, ...shift }, '\x1b[1;6F'],
-  ['Backspace', cmd, '\x15'], ['Delete', cmd, '\x0b'], ['Delete', alt, '\x1bd'], ['Backspace', ctrl, '\x17']
+  ['Backspace', cmd, '\x15'], ['Delete', cmd, '\x0b'], ['k', cmd, '\x0b'], ['Delete', alt, '\x1bd'], ['Backspace', ctrl, '\x17']
 ];
 
 test('terminal edit translations preserve IME, other platforms and xterm-owned keys', () => {

@@ -10,6 +10,14 @@ test('AI tool settings accept valid values', () => {
   assert.deepEqual(ok(settings), settings);
 });
 
+test('usage display settings accept a provider list and reject unknown meters', () => {
+  const shown = { claude: ['weekly', 'fable', 'credit'], codex: [], cursor: ['total', 'grok'] };
+  assert.deepEqual(ok({ usageStyle: 'text', usageShown: shown }).usageShown, shown);
+  assert.equal(ok({ usageStyle: 'bar' }).usageStyle, 'bar');
+  for (const bad of [{ usageStyle: 'pill' }, { usageShown: [] }, { usageShown: { claude: ['monthly'] } }, { usageShown: { claude: ['weekly', 'weekly'] } }, { usageShown: { other: ['session'] } }])
+    assert.throws(() => ok(bad), /잘못된 앱 상태/, JSON.stringify(bad));
+});
+
 test('AI tool settings reject out-of-range or unsafe values', () => {
   for (const bad of [{ cacheWarn: 4 }, { cacheWarn: 51 }, { cacheWarn: 10.5 }, { cacheSendWarnMinutes: 0 }, { cacheSendWarnMinutes: 61 }, { cacheSendWarnMinutes: 1.5 }, { cacheSendWarnMinutes: '10' }, { cacheSendWarn: 'yes' }, { usageRefresh: 59 }, { usageRefresh: 601 }, { agentsOff: ['shell'] }, { agentsMuted: 'claude' },
     { claudeArgs: '--model opus\nrm -rf ~' }, { codexArgs: 'x'.repeat(513) }, { cursorArgs: 5 }, { cacheTimer: 'yes' }, { followUpQueue: 1 }, { notifyLooking: null }])

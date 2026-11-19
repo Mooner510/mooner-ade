@@ -10,6 +10,16 @@ function validateSettings(settings, invalid) {
   for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'interactiveUi', 'artifactAlways', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'animateInBackground', 'confirmCloseChat', 'confirmCloseProject', 'chatPermissionAutoSet', 'feedbackAgentTool', 'feedbackAiContext']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
   if (settings.feedbackAiModel !== undefined && !['', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'sonnet', 'opus'].includes(settings.feedbackAiModel)) invalid();
   if (settings.feedbackAiEffort !== undefined && !['', 'low', 'medium', 'high'].includes(settings.feedbackAiEffort)) invalid();
+  if (settings.usageStyle !== undefined && !['bar', 'text'].includes(settings.usageStyle)) invalid();
+  if (settings.usageShown !== undefined) {
+    const meters = { claude: ['session', 'weekly', 'fable', 'weekly-opus', 'weekly-sonnet', 'credit'], codex: ['session', 'weekly', 'credit'], cursor: ['auto', 'api', 'total', 'grok', 'on-demand'] };
+    const shown = settings.usageShown;
+    if (!shown || typeof shown !== 'object' || Array.isArray(shown)) invalid();
+    for (const [provider, list] of Object.entries(shown)) {
+      const allowed = meters[provider];
+      if (!allowed || !Array.isArray(list) || list.length > allowed.length || list.some(id => typeof id !== 'string' || !allowed.includes(id) || list.indexOf(id) !== list.lastIndexOf(id))) invalid();
+    }
+  }
   if (settings.defaultMode !== undefined && !['chat', 'cli'].includes(settings.defaultMode)) invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();

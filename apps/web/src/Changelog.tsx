@@ -3,17 +3,15 @@ import { Icon } from './Icon';
 import { Modal } from './views';
 import changelog from './changelog.json';
 import kinds from './changelog-kinds.json';
+import { changelogIsFresh, changelogNewer, changelogSeen, hasUnreadChangelogVersions, markChangelogSeen, readChangelogViewed, syncChangelogVersion, writeChangelogViewed } from './changelog-state';
 
 type Entry = { version: string; date: string; time?: string; items: { kind: string; title: string; text: string; icon?: string; image?: string }[] };
 // Items are listed by kind, in the order of changelog-kinds.json (the release notes use the same order).
 const rank = (kind: string) => kinds.indexOf(kind);
 export const entries = (changelog as Entry[]).map(entry => ({ ...entry, items: [...entry.items].sort((a, b) => rank(a.kind) - rank(b.kind)) }));
-const SEEN = 'ade-changelog-seen';
-const seenVersion = () => { try { return localStorage.getItem(SEEN); } catch { return null; } };
-// Versions whose notes were opened at least once; the red dot marks the rest. Versions up to SEEN (from before this list existed) count as viewed.
-const VIEWED = 'ade-changelog-viewed';
-const readViewed = (): string[] => { try { return JSON.parse(localStorage.getItem(VIEWED) ?? '[]'); } catch { return []; } };
-const writeViewed = (list: string[]) => { try { localStorage.setItem(VIEWED, JSON.stringify(list)); } catch {} };
+const seenVersion = changelogSeen;
+const readViewed = readChangelogViewed;
+const writeViewed = writeChangelogViewed;
 // How long ago a release was, in the words the sidebar shows. `date` and `time` are the KST clock time written in changelog.json.
 const ago = (date: string, time: string, now = Date.now()) => {
   const minutes = (now - Date.parse(`${date}T${time}:00+09:00`)) / 60_000;
@@ -26,24 +24,12 @@ const ago = (date: string, time: string, now = Date.now()) => {
   if (days < 365) return `${Math.max(1, Math.floor(days / 30.4))}달 전`;
   return `${Math.floor(days / 365)}년 전`;
 };
-// Versions are plain x.y.z (beta releases have no entry), so a numeric compare is enough.
-const newer = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }) > 0;
-// Red dots mark only the versions this app picked up in its latest update: after the version it ran before, up to the version it runs now.
-// LAST is the version that ran last time; FROM is the version before the most recent update. A beta counts as just before its release (0.5.9-beta2 -> 0.5.9 is new).
-const LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
-const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
-const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch {} };
-const parse = (version: string) => { const [core, pre] = version.split(/-(.*)/); return { nums: core.split('.').map(part => parseInt(part, 10) || 0), pre: Boolean(pre) }; };
-const compare = (a: string, b: string) => { const x = parse(a), y = parse(b); for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; } return Number(y.pre) - Number(x.pre); };
-// Run once at startup with the real app version (the desktop app's; the bundle's newest entry in a plain browser). Records an update when it is newer than the last run.
-export const syncChangelogVersion = (current: string) => {
-  const last = read(LAST) ?? seenVersion();
-  if (!last) { write(LAST, current); write(FROM, current); return; }
-  if (compare(current, last) > 0) { write(FROM, last); write(LAST, current); } else if (read(LAST) === null) write(LAST, last);
-};
-const isFresh = (version: string) => { const from = read(FROM), last = read(LAST); return Boolean(from) && compare(version, from!) > 0 && (!last || compare(version, last) <= 0); };
+const newer = changelogNewer;
+const isFresh = changelogIsFresh;
+// Run once at startup with the real app version (the desktop app's; the bundle's newest entry in a plain browser). True only when this launch recorded an update.
+export { syncChangelogVersion };
 // Same rule as the red dots in the window: some version of the latest update has never been opened (the sidebar button shows a dot for it).
-export const hasUnreadChangelog = () => { const viewed = readViewed(); return entries.some(item => !viewed.includes(item.version) && isFresh(item.version)); };
+export const hasUnreadChangelog = () => hasUnreadChangelogVersions(entries.map(item => item.version));
 
 // The sidebar lists the versions; one version is shown at a time. A version never opened gets a red dot; opening it clears the dot. Closing the window still marks the latest version as seen for the 새 소식 tag.
 export function Changelog({ onClose }: { onClose(): void }) {
@@ -58,7 +44,7 @@ export function Changelog({ onClose }: { onClose(): void }) {
     setViewed(previous => { if (previous.includes(version)) return previous; const next = [...previous, version]; writeViewed(next); return next; });
   };
   useEffect(() => { if (entry) view(entry.version); }, [entry?.version]);
-  const close = () => { try { if (entries[0]) localStorage.setItem(SEEN, entries[0].version); } catch {} onClose(); };
+  const close = () => { if (entries[0]) markChangelogSeen(entries[0].version); onClose(); };
   return <Modal className="project-modal changelog" labelledBy="changelog-title" onClose={close} region="변경 내역">
     <header className="changelog-head"><h2 id="changelog-title">변경 내역</h2><button className="icon-btn" aria-label="닫기" onClick={close}><Icon name="x" size={16} /></button></header>
     <div className="changelog-main">

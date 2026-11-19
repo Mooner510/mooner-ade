@@ -19,7 +19,7 @@ import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type Work
 import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
 import { byLastUsed, ideIcon, ideList, rememberIde, type IdeList } from './ide-open';
-import { copyText } from './toast';
+import { claimTip, copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -292,10 +292,30 @@ function Shell() {
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
+  const settingsRef = useRef(settings); settingsRef.current = settings;
+  const touringRef = useRef(false);
+  const [changelogPending, setChangelogPending] = useState(false);
+  // The first time the window leaves the foreground, say that animations pause and where to keep them running.
+  useEffect(() => {
+    const onBlur = () => window.setTimeout(() => {
+      if (document.hasFocus() || touringRef.current) return;
+      const current = settingsRef.current;
+      if (!current.tips || !current.onboarded || current.animateInBackground) return;
+      if (!claimTip('bg-anim', { max: 1 })) return;
+      setAnimTip(true);
+    }, 80);
+    addEventListener('blur', onBlur);
+    return () => removeEventListener('blur', onBlur);
+  }, []);
   useEffect(() => {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
-    void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => { syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0'); setChangelogUnread(hasUnreadChangelog()); });
+    void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
+      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0');
+      const unread = hasUnreadChangelog();
+      setChangelogUnread(unread);
+      if (updated && unread) setChangelogPending(true);
+    });
   }, []);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
@@ -479,13 +499,32 @@ function Shell() {
   // Shown on first run (and again on request) as a full-screen practice copy of the app over the real screen, which stays inert until it
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
+  touringRef.current = touring;
+  const animTipCard = animTip && <aside className="chat-mode-tip bg-anim-tip" role="status" aria-label="백그라운드 애니메이션">
+    <div className="chat-mode-tip-body">
+      <strong>다른 화면으로 가면 애니메이션이 멈춥니다</strong>
+      <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
+      <div className="chat-mode-tip-actions">
+        <button type="button" className="primary" onClick={() => { setAnimTip(false); setSettingsOpen('default'); }}>설정 열기</button>
+        <button type="button" onClick={() => setAnimTip(false)}>확인</button>
+      </div>
+    </div>
+  </aside>;
+  const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
+  const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const [skippedTour, setSkippedTour] = useState(false); // a skipped tour counts as done; the book button then gets a one-time pointer
+  // After an update, open the notes once the tour and the launch splash are out of the way. Opening marks that version viewed, so the next launch stays quiet.
+  useEffect(() => {
+    if (!changelogPending || !booted || touring || splash) return;
+    setChangelogPending(false);
+    setChangelogOpen(true);
+  }, [changelogPending, booted, touring, splash]);
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
@@ -660,8 +699,9 @@ function Shell() {
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
-    {settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
-    {changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />}
+    {settingsModal}
+    {animTipCard}
+    {changelogModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</AppKeysContext.Provider>;
 }

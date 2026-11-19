@@ -1172,6 +1172,12 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .statusbar .usage-window { position: relative; display: inline-flex; align-items: baseline; gap: 3px; padding-bottom: 2px; }
 .statusbar .usage-window small { font-size: 10px; opacity: .75; }
 .statusbar .usage-window i { position: absolute; left: 0; bottom: 0; height: 2px; max-width: 100%; border-radius: 1px; background: currentColor; opacity: .55; }
+.usage[data-usage-style="text"] .usage-window,
+.look-usage[data-usage-style="text"] .usage-window { gap: 2px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); }
+.usage[data-usage-style="text"] .usage-window i,
+.look-usage[data-usage-style="text"] .usage-window i { display: none; }
+.usage-meter-picks { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; max-width: 280px; }
+.usage-meter-picks label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .statusbar .usage.warn { color: var(--warn); }
 .statusbar .usage.full { color: var(--del); }
 .usage-window.graded { color: hsl(var(--usage-hue) 72% 58%); }
@@ -3086,5 +3092,6 @@ textarea.git-message { font: 12.5px var(--mono); resize: vertical; white-space: 
 .git-swatches i { width: 12px; height: 12px; border-radius: 3px; }
 /* the one-time card: the changes panel is now the Git graph */
 .chat-mode-tip.git-graph-tip { bottom: auto; top: 46px; right: 12px; z-index: 30; width: min(440px, calc(100% - 32px)); }
+.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(380px, calc(100vw - 32px)); }
 .git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }

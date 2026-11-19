@@ -16,7 +16,7 @@ test('Codex status bar and details show remaining credits, including credit-only
   await build({ stdin: { contents: `
     import { memo, useId } from 'react';
     import { renderToStaticMarkup } from 'react-dom/server';
-    import { accountSources, CodexCreditRow, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort } from './Usage';
+    import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort } from './Usage';
     const Icon = () => null;
     let reading;
     const useUsage = () => ({ usage: reading, loading: false, load: async () => reading });

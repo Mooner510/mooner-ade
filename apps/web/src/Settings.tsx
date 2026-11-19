@@ -17,6 +17,7 @@ import { useFeedback } from './feedback-store';
 import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
 import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 import { graphColor, javaHash } from './git-graph';
+import { usageMeterCatalog } from './usage-meters';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -83,10 +84,19 @@ const statusHints: Record<string, string> = {
 };
 
 // How each item looks in the real status bar, with sample values; shown under the item's name so its meaning is clear at a glance.
+const usageSamples: Record<'claude' | 'codex' | 'cursor', [string, string, number][]> = {
+  claude: [['session', '5h', 23], ['weekly', '주', 41], ['fable', 'Fable', 8], ['weekly-opus', 'Opus', 55], ['weekly-sonnet', 'Sonnet', 30], ['credit', '크레딧', 15]],
+  codex: [['session', '5h', 8], ['weekly', '주', 17], ['credit', '크레딧', 40]],
+  cursor: [['auto', 'Cursor', 20], ['api', '기타', 40], ['total', '전체', 25], ['grok', 'Grok', 12], ['on-demand', '추가', 5]]
+};
 function statusSamples(settings: Settings): Record<string, ReactNode> {
-  const usage = (provider: 'claude' | 'codex' | 'cursor', windows: [string, number][]) => <span className="stat usage"><Icon name={provider} size={13} />
-    {windows.map(([key, percent]) => <span key={key} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>)}
-  </span>;
+  const usage = (provider: 'claude' | 'codex' | 'cursor') => {
+    const on = settings.usageShown[provider];
+    const windows = usageSamples[provider].filter(([id]) => on.includes(id) && !(provider === 'claude' && id === 'session' && !settings.claudeSession));
+    return <span className="stat usage" data-usage-style={settings.usageStyle}><Icon name={provider} size={13} />
+      {windows.length ? windows.map(([id, key, percent]) => <span key={id} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>) : <small>표시 없음</small>}
+    </span>;
+  };
   const time = new Date(2025, 0, 1, 14, 32, 8).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: settings.clockSeconds ? '2-digit' : undefined, hour12: settings.clock12h });
   return {
     connection: <span className="conn"><Icon name="wifi" size={13} />연결 끊김</span>,
@@ -94,9 +104,9 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
     branch: <span className="stat"><Icon name="branch" size={13} />main</span>,
     cpu: <span className="stat">12%</span>,
     memory: <span className="stat">6.4GB</span>,
-    claudeusage: usage('claude', settings.claudeSession ? [['5h', 23], ['주', 41]] : [['주', 41]]),
-    codexusage: usage('codex', [['5h', 8], ['주', 17]]),
-    cursorusage: usage('cursor', [['Cursor', 20], ['기타', 40], ['전체', 25]]),
+    claudeusage: usage('claude'),
+    codexusage: usage('codex'),
+    cursorusage: usage('cursor'),
     wakatime: <span className="stat"><Icon name="clock" size={13} />2시간 14분</span>,
     clock: <span className="stat"><Icon name="clock" size={13} />{time}</span>,
     readiness: <span className="stat"><Icon name="info" size={13} /></span>,
@@ -165,7 +175,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
       <input type="text" maxLength={8} value={settings.chatStatusSeparator} aria-label="항목 구분자" onChange={event => onChange({ ...settings, chatStatusSeparator: event.target.value })} /></Row>}
     <div className="status-layout">{column('left')}{column('right')}</div>
     {chat ? <p className="setting-note">모델은 계열마다, 컨텍스트는 사용률에 따라 색이 달라집니다. 브랜치·사용량·시계는 하단 상태바에서 설정합니다.</p> :
-    <p className="setting-note">사용량 색은 ‘외관’에 있고, 5시간 한도·갱신 주기는 ‘AI 툴’에 있습니다.</p>}
+    <p className="setting-note">사용량 색과 모양은 ‘외관’에 있고, 어떤 한도를 보일지는 ‘AI 툴’에 있습니다.</p>}
   </div>;
 }
 
@@ -281,6 +291,16 @@ function Row({ title, hint, preview, children }: { title: string; hint?: string;
 
 function Group({ title, children }: { title?: string; children: ReactNode }) {
   return <div className="setting-block">{title && <h4 className="setting-group">{title}</h4>}{children}</div>;
+}
+
+function UsageMeters({ provider, settings, onChange }: { provider: 'claude' | 'codex' | 'cursor'; settings: Settings; onChange(settings: Settings): void }) {
+  const catalog = usageMeterCatalog[provider], selected = settings.usageShown[provider];
+  const setMeter = (id: string, on: boolean) => onChange({ ...settings, usageShown: { ...settings.usageShown, [provider]: catalog.map(item => item.id).filter(item => item === id ? on : selected.includes(item)) } });
+  return <Row title="상태바에 표시" hint="고른 항목만 상태바에 나옵니다. 숫자를 누르면 끄지 않은 항목도 상세에서 볼 수 있습니다. Fable은 그 한도가 있는 계정에만 표시됩니다.">
+    <div className="usage-meter-picks" role="group" aria-label="상태바 사용량 항목">
+      {catalog.map(item => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={event => setMeter(item.id, event.target.checked)} />{item.label}</label>)}
+    </div>
+  </Row>;
 }
 
 // The Git tool window: the same switches as its Graph Options / View Options menus and Branches pane gear, plus what has no menu there.
@@ -432,7 +452,7 @@ function LookPreview({ id, settings }: { id: string; settings: Settings }) {
       {settings.diffFoldUnchanged && <div className="fold">⋯ 바뀌지 않은 {settings.diffContextLines}줄 주변만</div>}
       {id === 'diffWidth' && <i style={{ width: `${Math.round((settings.reviewWidth - 320) / 1280 * 100)}%` }} />}
     </div>}
-    {id === 'usage' && <p className="look-usage">{[10, 45, 70, 90].map(value => <span key={value} className={`usage-window${settings.usageColors ? ' graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(value) } as CSSProperties : undefined}>{value}%</span>)}</p>}
+    {id === 'usage' && <p className="look-usage" data-usage-style={settings.usageStyle}>{[10, 45, 70, 90].map(value => <span key={value} className={`usage-window${settings.usageColors ? ' graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(value) } as CSSProperties : undefined}>{value}%</span>)}</p>}
     {id === 'clock12' || id === 'clockSec' ? <p className="look-clock">{now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: settings.clockSeconds ? '2-digit' : undefined, hour12: settings.clock12h })}</p> : null}
   </aside>;
 }
@@ -487,15 +507,17 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <h4 className="setting-group">사용량 (상태바)</h4>
       {tab === 'claude' && <>
         <Row title="사용량 표시" hint="5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.">{statusSwitch('claudeusage', 'Claude Code 사용량 표시')}</Row>
-        <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 주간 한도만 표시합니다.">{toggle('claudeSession')}</Row>
+        <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 아래 항목을 켜 두어도 5시간은 나오지 않습니다.">{toggle('claudeSession')}</Row>
       </>}
       {tab === 'codex' && <Row title="사용량 표시" hint="Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.">{statusSwitch('codexusage', 'Codex 사용량 표시')}</Row>}
-      <p className="setting-note">색은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다.</p>
+      <UsageMeters provider={tab} settings={settings} onChange={onChange} />
+      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다. 계정에 없는 한도는 켜 두어도 빈칸으로 나오지 않습니다.</p>
     </>}
     {tab === 'cursor' && <>
       <h4 className="setting-group">사용량 (상태바)</h4>
       <Row title="사용량 표시" hint="청구 주기·모델 풀·Grok Bot 한도를 표시합니다. 터미널에서 cursor-agent login을 해 두면 조회됩니다.">{statusSwitch('cursorusage', 'Cursor 사용량 표시')}</Row>
-      <p className="setting-note">색은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다.</p>
+      <UsageMeters provider={tab} settings={settings} onChange={onChange} />
+      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다. 계정에 없는 한도는 켜 두어도 빈칸으로 나오지 않습니다.</p>
     </>}
     {tab === 'claude' && <>
       <h4 className="setting-group">프롬프트 캐시·입력</h4>
@@ -594,6 +616,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Group title="상태 표시">
             <Row title="사용량 % 색상" hint="사용률에 따라 초록 → 노랑 → 빨강으로 바꿉니다. 끄면 80% 이상만 경고색입니다." preview="usage">
               {toggle('usageColors')}
+            </Row>
+            <Row title="사용량 모양" hint="상태바의 사용량 숫자 표시입니다. 막대는 숫자 아래 줄을 긋고, 알약은 막대 없이 둥근 칸에 넣습니다." preview="usage">
+              <Dropdown label="사용량 모양" value={settings.usageStyle} options={[{ value: 'bar', label: '막대' }, { value: 'text', label: '알약' }]} onChange={value => set('usageStyle', value as Settings['usageStyle'])} />
             </Row>
             <Row title="12시간제 시계" hint="오전/오후로 표시합니다." preview="clock12">{toggle('clock12h')}</Row>
             <Row title="시계에 초 표시" hint="켜면 1초마다 갱신합니다." preview="clockSec">{toggle('clockSeconds')}</Row>
