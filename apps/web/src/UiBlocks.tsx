@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { FORM_BUTTON, formMessage, niceTicks, type Field, type Spec } from './ui-spec';
+import { formMessage, niceTicks, type Field, type Spec } from './ui-spec';
 import { MAX_SEND } from './ui-frame-protocol';
 import { Tick } from './Icon';
 import { Dropdown } from './views';
@@ -64,20 +64,21 @@ function Control({ f, value, set }: { f: Field; value: string; set: (value: stri
 }
 
 function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form' }> }) {
-  const [values, setValues] = useState(() => Object.fromEntries(spec.fields.map(f => [f.k, f.value]))), [sent, setSent] = useState(false);
-  // Fills the composer (replace, so a second click updates it instead of stacking a copy). The user edits and sends.
-  const submit = () => { window.dispatchEvent(new CustomEvent('ade:ui-prefill', { detail: { chatId, text: formMessage(spec, values).slice(0, MAX_SEND), replace: true } })); setSent(true); };
-  return <form className="ui-card ui-form" onSubmit={event => { event.preventDefault(); submit(); }} onChange={() => setSent(false)}>
+  const [values, setValues] = useState(() => Object.fromEntries(spec.fields.map(f => [f.k, f.value]))), [sent, setSent] = useState<'send' | 'fill' | null>(null);
+  // Every form has two actions: fill the composer (replace, so a second click updates it instead of stacking a copy; the user edits and sends),
+  // or send the answers at once. Enter in a field fills the composer, the safer of the two.
+  const submit = (fill: boolean) => { window.dispatchEvent(new CustomEvent(fill ? 'ade:ui-prefill' : 'ade:ui-send', { detail: { chatId, text: formMessage(spec, values).slice(0, MAX_SEND), ...(fill && { replace: true }) } })); setSent(fill ? 'fill' : 'send'); };
+  return <form className="ui-card ui-form" onSubmit={event => { event.preventDefault(); submit(true); }} onChange={() => setSent(null)}>
     {spec.title && <h4>{spec.title}</h4>}
     {spec.fields.map(f => {
-      const control = <Control f={f} value={values[f.k] ?? ''} set={value => { setSent(false); setValues(current => ({ ...current, [f.k]: value })); }} />;
+      const control = <Control f={f} value={values[f.k] ?? ''} set={value => { setSent(null); setValues(current => ({ ...current, [f.k]: value })); }} />;
       // Radio options carry their own labels, so their field is a group, not a label wrapped around labels (which would also pick the first option on a click of the title).
       return f.type === 'radio' ? <div key={f.k} className="ui-field ui-radio" role="radiogroup" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : f.type === 'check' ? <label key={f.k} className="ui-field ui-check ui-choice">{control}<span>{f.label}</span></label>
         : f.type === 'select' ? <div key={f.k} className="ui-field ui-select" role="group" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : <label key={f.k} className={`ui-field ui-${f.type}`}><span>{f.label}</span>{control}</label>;
     })}
-    <button type="submit" className="primary">{sent ? '✓ ' : ''}{FORM_BUTTON}</button>
+    <div className="ui-form-actions"><button type="button" className="secondary" onClick={() => submit(false)}>{sent === 'send' ? '✓ ' : ''}바로 보내기</button><button type="submit" className="primary">{sent === 'fill' ? '✓ ' : ''}{spec.submit}</button></div>
   </form>;
 }
 

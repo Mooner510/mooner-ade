@@ -2010,7 +2010,7 @@ dialog.mermaid-modal[open] { display: flex; flex-direction: column; }
 .ui-steps [data-state=done] .ui-step-mark { background: color-mix(in srgb, var(--add) 22%, transparent); color: var(--add); }
 .ui-steps li[data-state=active] .ui-step-name { font-weight: 600; } .ui-steps [data-state=active] .ui-step-mark { background: var(--accent); color: var(--accent-fg); }
 .ui-form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-.ui-form > button[type=submit] { align-self: flex-end; } /* the form's confirm button sits at the right, like the chat's other decisions */
+.ui-form-actions { align-self: flex-end; display: flex; gap: 8px; } /* the form's buttons sit at the right, the main one last, like the chat's other decisions */
 .ui-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); width: 100%; }
 /* Checkboxes and radios: the app's own marks (same shapes as the question card), the native input hidden but still focusable. Several checkboxes in a row read as one list. */
 .ui-native { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
