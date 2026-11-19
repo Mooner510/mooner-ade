@@ -295,6 +295,7 @@ function Shell() {
   const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
   const settingsRef = useRef(settings); settingsRef.current = settings;
   const touringRef = useRef(false);
+  const [changelogPending, setChangelogPending] = useState(false);
   // The first time the window leaves the foreground, say that animations pause and where to keep them running.
   useEffect(() => {
     const onBlur = () => window.setTimeout(() => {
@@ -309,7 +310,12 @@ function Shell() {
   }, []);
   useEffect(() => {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
-    void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => { syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0'); setChangelogUnread(hasUnreadChangelog()); });
+    void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
+      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0');
+      const unread = hasUnreadChangelog();
+      setChangelogUnread(unread);
+      if (updated && unread) setChangelogPending(true);
+    });
   }, []);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
@@ -505,13 +511,20 @@ function Shell() {
     </div>
   </aside>;
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
+  const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const [skippedTour, setSkippedTour] = useState(false); // a skipped tour counts as done; the book button then gets a one-time pointer
+  // After an update, open the notes once the tour and the launch splash are out of the way. Opening marks that version viewed, so the next launch stays quiet.
+  useEffect(() => {
+    if (!changelogPending || !booted || touring || splash) return;
+    setChangelogPending(false);
+    setChangelogOpen(true);
+  }, [changelogPending, booted, touring, splash]);
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
@@ -688,7 +701,7 @@ function Shell() {
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {settingsModal}
     {animTipCard}
-    {changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />}
+    {changelogModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</AppKeysContext.Provider>;
 }
