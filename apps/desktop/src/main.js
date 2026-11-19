@@ -359,6 +359,19 @@ function serverBusy() {
     child.send({ type: 'busy?', id }, error => { if (error) finish(error); });
   });
 }
+// The page's origin changes with every launch (the server takes a free port), so its localStorage starts empty each time and cannot remember which
+// version ran last. The changelog keeps its few values here instead; the page reads and writes them synchronously through the preload (changelogStore).
+const changelogFile = path.join(app.getPath('userData'), 'changelog-state.json');
+const CHANGELOG_KEYS = new Set(['ade-changelog-seen', 'ade-changelog-viewed', 'ade-changelog-last', 'ade-changelog-from']);
+const readChangelogState = () => { try { const value = JSON.parse(fs.readFileSync(changelogFile, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } };
+ipcMain.on('ade:changelog-get', (event, key) => { event.returnValue = sameOrigin(event.senderFrame?.url ?? '') && CHANGELOG_KEYS.has(key) ? readChangelogState()[key] ?? null : null; });
+ipcMain.on('ade:changelog-set', (event, key, value) => {
+  if (sameOrigin(event.senderFrame?.url ?? '') && CHANGELOG_KEYS.has(key) && typeof value === 'string' && value.length <= 100_000) {
+    try { fs.writeFileSync(`${changelogFile}.tmp`, JSON.stringify({ ...readChangelogState(), [key]: value })); fs.renameSync(`${changelogFile}.tmp`, changelogFile); }
+    catch (error) { console.warn(`변경 내역 상태를 저장하지 못했습니다: ${error.message}`); }
+  }
+  event.returnValue = null;
+});
 // Just before the update restarts the app: keep the terminals for the new version instead of ending them.
 // Beta updates are the user's choice, kept beside the other app data (not in the server's settings: the updater lives in this process).
 const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
