@@ -1,11 +1,11 @@
-import { Fragment, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { colorize } from './Editor';
 import { FileIcon } from './FileIcon';
 import { fileHref, fileRef, type FileRef } from './file-ref';
 import { Icon } from './Icon';
 import { requestOpen } from './ide-open';
 import { copyText } from './toast';
-import { holdBack, INLINE, parse, stableSplit, type Node } from './markdown-parse';
+import { holdBack, INLINE, parse, stableSplit, tableSpans, type Node } from './markdown-parse';
 import { ChatUiContext, UiFrame } from './UiFrame';
 import { UI_LANG } from './ui-frame-protocol';
 import { NATIVE_LANG, parseUi } from './ui-spec';
@@ -83,6 +83,7 @@ function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [left, setLeft] = useState(false);
   const [right, setRight] = useState(false);
+  const spans = useMemo(() => tableSpans(rows, head.length), [rows, head.length]);
 
   useEffect(() => {
     const scroll = scrollRef.current!;
@@ -104,7 +105,12 @@ function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
   return <div className={`md-table${head.length >= 5 ? ' wide' : ''}`} data-scroll-left={left || undefined} data-scroll-right={right || undefined}>
     <div className="md-table-scroll" ref={scrollRef}>
       <table><thead><tr>{head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
-        <tbody>{rows.map((row, r) => <tr key={r}>{head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table>
+        <tbody>{rows.map((row, r) => <tr key={r}>{head.map((_, c) => {
+          const span = spans[r][c];
+          if (!span) return null;
+          // A merged cell that reaches the last row would draw the table's bottom border inside the frame; `last:` rows drop theirs, so it must too.
+          return <td key={c} rowSpan={span > 1 ? span : undefined} data-merge-end={span > 1 && r + span >= rows.length ? '' : undefined}>{inline(row[c] ?? '')}</td>;
+        })}</tr>)}</tbody></table>
     </div>
   </div>;
 }

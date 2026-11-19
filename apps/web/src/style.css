@@ -1951,6 +1951,9 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md-table th:last-child, .md-table td:last-child { border-right: 0; }
 .md-table th { font-weight: 600; background: color-mix(in srgb, var(--fg) 4%, var(--raised)); border-bottom-color: color-mix(in srgb, var(--fg) 26%, var(--border)); white-space: nowrap; }
 .md-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--fg) 2%, transparent); }
+/* 세로로 합친 셀(첫 열의 빈 칸 또는 ^^): 묶음 이름처럼 보이게 옅은 바탕을 주고, 표 맨 아래까지 닿으면 아래 테두리를 뺀다 */
+.md-table tbody tr td[rowspan] { background: color-mix(in srgb, var(--fg) 3%, transparent); }
+.md-table td[data-merge-end] { border-bottom: 0; }
 .md-code { border: 1px solid var(--border); border-radius: 8px; background: var(--raised); overflow: hidden; }
 .md-code header, .md-mermaid > header { display: flex; align-items: center; justify-content: space-between; padding: 3px 8px 3px 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); }
 .md-code header button { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); padding: 1px 6px; border-radius: 4px; }

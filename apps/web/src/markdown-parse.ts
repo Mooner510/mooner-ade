@@ -16,6 +16,22 @@ function fenced(lines: string[], start: number): [Node, number] {
   return [{ t: 'code', lang, code: code.join('\n'), ...(i >= lines.length && { open: true as const }) }, i];
 }
 
+// Vertical cell merging for a table's body. GFM has no spans, but models write a group's label once and leave the rows below blank (or `^^`, the
+// MultiMarkdown mark), so a blank cell in the FIRST column and a `^^` cell in any column both continue the cell above. Other blank cells stay blank:
+// a column of optional values ("위치") must not swallow the value above it.
+// Returns, per body cell, its rowSpan: 0 = covered by the cell above (not rendered), 1 = plain, n > 1 = the cell that owns n rows.
+export const MERGE_UP = '^^';
+export function tableSpans(rows: string[][], columns: number): number[][] {
+  const spans = rows.map(() => new Array<number>(columns).fill(1)), owner = new Array<number>(columns).fill(-1);
+  rows.forEach((row, r) => {
+    for (let c = 0; c < columns; c++) {
+      const text = row[c] ?? '', continues = owner[c] >= 0 && (text === MERGE_UP || (c === 0 && text === ''));
+      if (continues) { spans[owner[c]][c]++; spans[r][c] = 0; } else owner[c] = r;
+    }
+  });
+  return spans;
+}
+
 export function parse(source: string): Node[] {
   const lines = source.replace(/\r\n?/g, '\n').split('\n'), nodes: Node[] = [];
   let paragraph: string[] = [];
