@@ -149,6 +149,12 @@ function startServer() {
       if (server !== child) return;
       if (message?.type === 'plugin/workspace') plugins?.fromServer(message);
       // Feedback submissions go out through the plugin that declared `feedback` (docs/PLUGINS.md); the answer goes back by id.
+      // Where the feedback sent through the account has got to: the same way round (a plugin that can answer, else "unsupported").
+      else if (message?.type === 'feedback/status-query' && Number.isSafeInteger(message.id) && Array.isArray(message.keys)) {
+        const answer = value => { if (child.connected) child.send({ type: 'feedback/status-result', id: message.id, ...value }); };
+        if (!plugins) answer({ ok: false, error: { code: 'unsupported' } });
+        else plugins.queryFeedbackStatus({ keys: message.keys.filter(key => typeof key === 'string').slice(0, 50) }).then(answer, () => answer({ ok: false, error: { code: 'network_error' } }));
+      }
       else if (message?.type === 'feedback/submit' && Number.isSafeInteger(message.id)) {
         const answer = value => { if (child.connected) child.send({ type: 'feedback/result', id: message.id, ...value }); };
         if (!plugins) answer({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: '플러그인을 쓸 수 없어 피드백을 제출할 수 없습니다.' } });

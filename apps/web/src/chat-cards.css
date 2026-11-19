@@ -92,3 +92,18 @@
 .bc-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--faint); }
 .bc-usage .chat-done-pop { left: auto; right: 0; }
 @media (prefers-reduced-motion: reduce) { .uc-tile.skeleton { animation: none; } .uc-ring .fill, .uc progress::-webkit-progress-value { transition: none; } }
+
+/* ── !command: the user's own shell run, drawn like a tool card ─────────── */
+.chat-shell .stop-task { opacity: 1; }
+.chat-shell-verdict { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.chat-shell-verdict.ok { color: var(--add); }
+.chat-shell-verdict.bad { color: var(--error); }
+.chat-shell-verdict.warn { color: var(--warn); }
+.chat-shell-verdict.run { color: var(--accent); }
+.chat-shell.error .chat-tool-head strong, .chat-shell.running .chat-tool-head strong { color: inherit; }
+.chat-shell-where { margin: 0; font: 11px/1.4 var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-shell-stream.stderr pre { color: var(--error); }
+.chat-shell .chat-tool-note.chat-shell-advice { color: var(--warn); align-items: flex-start; }
+.chat-shell .chat-tool-note.chat-shell-sent { color: var(--faint); font-size: 11.5px; }
+.chat-shell-mode code { color: var(--accent); }
+.chat-command-args.chat-shell-mode span { white-space: normal; overflow: visible; }

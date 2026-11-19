@@ -395,6 +395,16 @@ MoonerADE → 플러그인
 - `clientKey`는 피드백마다 고정입니다. 같은 피드백을 다시 제출하면 같은 `clientKey`가 오므로, 받는 쪽은 이것으로 중복을 막으세요.
 - 플러그인이 멈추거나 종료되면 진행 중인 제출은 실패로 끝나고, 제출할 수 없는 상태가 됩니다.
 
+#### 처리 상태 조회 (선택)
+
+제출한 건이 대기인지, beta·릴리스에 반영됐는지 앱에 보여 주려면 플러그인이 Hub의 `GET /v1/feedback/status`를 계정 토큰으로 대신 호출해 줄 수 있습니다. 계약과 Hub 쪽 규칙은 [FEEDBACK_STATUS.md](FEEDBACK_STATUS.md)에 있습니다.
+
+| 방향 | 메시지 | 뜻 |
+|---|---|---|
+| 플러그인 → MoonerADE | `{type:'feedback', available, ..., statusQuery:true}` | 조회를 할 수 있다는 선언. 없으면 MoonerADE는 묻지 않습니다 |
+| MoonerADE → 플러그인 | `{type:'feedback/status', id, keys}` | 이 `clientKey`들의 처리 상태를 알려 주세요(50개 이하) |
+| 플러그인 → MoonerADE | `{type:'feedback/status-result', id, ok, items?, latestStable?, error?}` | `items`: `{[clientKey]:{state:'pending'|'beta'|'released'|'closed'|'declined', version?}}`. 모양이 다른 항목은 버려지고, 40초 안에 답이 없으면 실패로 칩니다. `error`는 `{code, retryAfter?}` |
+
 ## 터미널과 에이전트
 
 승인되어 실행 중인 플러그인이 `terminal`을 보내면, 그 뒤로 여는 ADE 터미널에:

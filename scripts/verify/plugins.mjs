@@ -93,7 +93,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
   };
   return {
     async route(name, input) { if (closed || !Object.hasOwn(handlers, name)) throw new Error('지원하지 않는 플러그인 검증 작업입니다.'); return handlers[name](input); },
-    fromServer: message => manager.fromServer(message), submitFeedback: input => manager.submitFeedback(input),
+    fromServer: message => manager.fromServer(message), submitFeedback: input => manager.submitFeedback(input), queryFeedbackStatus: input => manager.queryFeedbackStatus(input),
     close() { closed = true; clearTimeout(rescanTimer); watcher.close(); for (const request of [...pending.values()]) request.finish(request.options.cancelId ?? 1); manager.close(); }
   };
 }

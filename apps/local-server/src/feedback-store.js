@@ -240,6 +240,19 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
       return changed(id, await write(next));
     });
   }
+  // How far a submitted item has come (feedback-progress.js). Only added to feedback.json, never read by anything that predates it; the item's own
+  // status and `updatedAt` stay as they were. A deleted item is simply skipped.
+  const setTrack = (id, track) => locked(id, async () => {
+    const item = await read(id).catch(error => { if (error.code === 'NOT_FOUND') return null; throw error; });
+    if (!item || item.status !== 'submitted') return item;
+    return changed(id, await write({ ...item, track }));
+  });
+  // The person looked at the news: what is shown now stops counting as news.
+  const markSeen = id => locked(id, async () => {
+    const item = await read(id);
+    if (!item.track || item.track.seenSig === item.track.sig) return item;
+    return changed(id, await write({ ...item, track: { ...item.track, seenSig: item.track.sig } }));
+  });
   const filePath = (id, name) => {
     const base = String(name);
     if (!IMAGE.test(base) && !IMAGE.test(base.replace('.orig.', '.'))) throw fault('INVALID_INPUT', '잘못된 이미지 이름입니다.');
@@ -286,7 +299,7 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
 
   return {
     root, incomingDir, folder, filePath, list, get: read, create, update, remove, addImage, replaceImage, restoreImage, removeImage, moveImage,
-    setStatus, recover, importIncoming, markdown,
+    setStatus, setTrack, markSeen, recover, importIncoming, markdown,
     imagesOf: item => item.images.map(image => ({ path: path.join(folder(item.id), image.name), mime: EXT_MIME[image.name.split('.').pop()] }))
   };
 }

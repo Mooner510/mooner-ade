@@ -20,8 +20,23 @@ export const bigPng = bytes => Buffer.concat([PNG1.subarray(0, PNG1.length - 12)
 // The Hub as the app sees it: anonymous feedback (`mode`) and, on the same address, the plugin market (hub.plugins, scripts/verify/hub-fake.mjs;
 // a script in another process drives it through /__test/*).
 export async function fakeHub() {
-  const requests = [], hub = { requests, mode: 'ok', retryAfter: undefined, plugins: createHubRoutes() };
+  const requests = [], hub = { requests, mode: 'ok', retryAfter: undefined, plugins: createHubRoutes(), feedbackStatus: { on: false, all: null, items: {}, latestStable: undefined, asked: [] } };
   const server = http.createServer(async (req, res) => {
+    // Feedback progress (docs/FEEDBACK_STATUS.md): off (404, like a Hub without the endpoint) until a script turns it on with POST /__test/feedback-status
+    // { on, all?: {state, version?}, items?: { key: {state, version?} }, latestStable? }; `all` answers every key asked about.
+    const status = hub.feedbackStatus, path = req.url.split('?')[0];
+    if (req.method === 'POST' && path === '/__test/feedback-status') {
+      const chunks = []; for await (const c of req) chunks.push(c);
+      Object.assign(status, JSON.parse(Buffer.concat(chunks).toString() || '{}'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, asked: status.asked.length })); return;
+    }
+    if (req.method === 'GET' && path === '/v1/feedback/status') {
+      const keys = (new URL(req.url, 'http://x').searchParams.get('keys') ?? '').split(',').filter(Boolean);
+      status.asked.push({ keys, device: req.headers['x-ade-device'], at: Date.now() });
+      if (!status.on) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { code: 'not_found' } })); return; }
+      const items = {}; for (const key of keys) { const value = status.items[key] ?? status.all; if (value) items[key] = value; }
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ items, ...(status.latestStable && { latestStable: status.latestStable }) })); return;
+    }
     if (await hub.plugins.handle(req, res)) return;
     const chunks = []; for await (const c of req) chunks.push(c);
     let meta = null, images = 0;

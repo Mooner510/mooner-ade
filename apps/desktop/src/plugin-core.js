@@ -40,6 +40,7 @@ const NOTIFY_PER_MINUTE = 10;
 const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
 // Feedback submission (plugins that declared `feedback`): how long an upload may take before MoonerADE gives up on the answer.
 export const FEEDBACK_TIMEOUT_MS = 120_000;
+export const FEEDBACK_STATUS_TIMEOUT_MS = 40_000;
 const NO_FEEDBACK_PLUGIN = '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.';
 
 const fail = (message, code = 'PLUGIN_INVALID') => Object.assign(new Error(message), { code });
@@ -649,7 +650,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   function feedbackStatus() {
     const declared = [...hosts.values()].filter(host => host.item.manifest.feedback && host.status === 'running');
     const ready = declared.find(host => host.feedback?.available);
-    if (ready) return { ok: true, ...(ready.feedback.account && { account: ready.feedback.account }), plugin: ready.id };
+    if (ready) return { ok: true, ...(ready.feedback.account && { account: ready.feedback.account }), ...(ready.feedback.statusQuery && { statusQuery: true }), plugin: ready.id };
     const reason = declared.find(host => host.feedback?.reason)?.feedback.reason;
     return { ok: false, reason: reason || NO_FEEDBACK_PLUGIN };
   }
@@ -669,6 +670,19 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       timer.unref?.();
       host.feedbackPending.set(id, value => { clearTimeout(timer); resolve(value); });
       host.child.send({ type: 'feedback/submit', id, meta, images });
+    });
+  }
+  // Asks the signed-in plugin how far some feedback has come (`feedback/status` → `feedback/status-result`). Only plugins that said `statusQuery: true` are asked,
+  // and every failure resolves to an answer the caller treats as "not now": it never rejects and never hangs.
+  function queryFeedbackStatus({ keys }) {
+    const status = feedbackStatus(), host = status.ok && status.statusQuery ? hosts.get(status.plugin) : null;
+    if (!host?.child?.connected) return Promise.resolve({ ok: false, error: { code: 'unsupported' } });
+    const id = ++feedbackSequence;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { host.feedbackStatusPending.delete(id); resolve({ ok: false, error: { code: 'network_error', message: '플러그인이 제때 응답하지 않았습니다.' } }); }, FEEDBACK_STATUS_TIMEOUT_MS);
+      timer.unref?.();
+      host.feedbackStatusPending.set(id, value => { clearTimeout(timer); resolve(value); });
+      host.child.send({ type: 'feedback/status', id, keys: keys.slice(0, 50) });
     });
   }
   // What the user turned off stays out: a server turned off is not given at all, single tools are named for the agents to leave out.
@@ -709,7 +723,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (hash !== item.hash) { item.hash = hash; return; }
     const dataDir = path.join(dataRoot, manifest.id);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), feedback: null, feedbackPending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
+    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), feedback: null, feedbackPending: new Map(), feedbackStatusPending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
     hosts.set(manifest.id, host);
     let child;
     try { child = spawnHost({ id: manifest.id, dir: item.dir, main: path.join(item.dir, ...manifest.main.split('/')) }); }
@@ -739,6 +753,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   function endFeedback(host, message) {
     for (const answer of host.feedbackPending.values()) answer({ ok: false, error: { code: 'PLUGIN_STOPPED', message } });
     host.feedbackPending.clear();
+    for (const answer of host.feedbackStatusPending.values()) answer({ ok: false, error: { code: 'network_error', message } });
+    host.feedbackStatusPending.clear();
     host.feedback = null;
   }
   function onHostExit(host, code) {
@@ -819,8 +835,22 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         if (!manifest.feedback) break;
         const account = typeof message.account === 'string' ? plainText(message.account).slice(0, 100) : '';
         const reason = typeof message.reason === 'string' ? plainText(message.reason).slice(0, 200) : '';
-        host.feedback = { available: message.available === true, ...(account && { account }), ...(reason && { reason }) };
+        host.feedback = { available: message.available === true, ...(account && { account }), ...(reason && { reason }), ...(message.statusQuery === true && { statusQuery: true }) };
         emitFeedback();
+        break;
+      }
+      // The answer to `feedback/status`: only well-formed {state, version?} entries are passed on (no text of the feedback is ever in it).
+      case 'feedback/status-result': {
+        const answer = host.feedbackStatusPending.get(message.id);
+        if (!answer) break;
+        host.feedbackStatusPending.delete(message.id);
+        if (message.ok !== true) { answer({ ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'network_error', ...(Number.isInteger(message.error?.retryAfter) && message.error.retryAfter > 0 && { retryAfter: Math.min(message.error.retryAfter, 86_400) }) } }); break; }
+        const items = {};
+        for (const [key, value] of Object.entries(message.items && typeof message.items === 'object' ? message.items : {}).slice(0, 50)) {
+          if (!/^[A-Za-z0-9_-]{8,64}$/.test(key) || !value || !['pending', 'beta', 'released', 'closed', 'declined'].includes(value.state)) continue;
+          items[key] = { state: value.state, ...(typeof value.version === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(value.version) && { version: value.version }) };
+        }
+        answer({ ok: true, items, ...(typeof message.latestStable === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(message.latestStable) && { latestStable: message.latestStable }) });
         break;
       }
       case 'feedback/result': {
@@ -1453,7 +1483,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     for (const host of [...hosts.values()]) stop(host);
   }
 
-  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback,
+  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback, queryFeedbackStatus,
     startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, selectGithubAccount, runUpdateRound: runRound,
     hubCatalog, installFromHub, signInHub, cancelHubSignIn, signOutHub };
 }
