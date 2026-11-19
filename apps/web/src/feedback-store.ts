@@ -57,7 +57,8 @@ export const openFeedback = (id: string) => {
   if (progressNews(state.items.filter(item => item.id === id)).length) void api<Feedback>('feedback/seen', { id }).then(applyItem, () => {});
 };
 // "지금 확인": asks the Hub again now and reloads the list (quietly when there is nothing to ask).
-export const refreshProgress = () => api('feedback/refresh', {}).then(() => refreshFeedback(0), () => {});
+// `skipped`: the server answered within its 20-second gap and did not ask the Hub again (the panel says so instead of staying silent).
+export const refreshProgress = (): Promise<{ skipped: boolean }> => api<{ skipped?: boolean }>('feedback/refresh', {}).then(async result => { await refreshFeedback(0); return { skipped: Boolean(result?.skipped) }; }, () => ({ skipped: false }));
 export const removeLocal = (id: string) => set({ items: state.items.filter(item => item.id !== id), currentId: state.currentId === id ? '' : state.currentId });
 export const createFeedback = async () => { const item = await feedbackCall('feedback/create', {}); set({ currentId: item.id }); return item; };
 // A fresh draft for the write screen; calls while one is being made share it (the panel opens straight into an editor, so nothing may create two).
