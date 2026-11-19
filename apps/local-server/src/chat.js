@@ -10,7 +10,7 @@ import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { autoDenialReason, pendingBlocked, retryText, sessionRule } from './auto-denial.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, sessionRuleStrings, toolAllowable, toolSuggestions, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
-import { cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
+import { cursorAutoCompact, cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
@@ -170,7 +170,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   };
   void refreshAutoCompact();
   // The prompt cache's clock, read from the session's transcript (the same reading the terminal's cache timer uses): `state.cache` = the last main-thread
-  // request, its cache lifetime and the context size it read. Read when a turn ends or the context is compacted, not on a timer: the countdown itself runs in the page.
+  // request, its cache lifetime and the context size it read. Claude resets that clock at the start of every main-thread API call, so a main-thread
+  // response re-reads the transcript (a subagent's usage does not), and so does a turn end or a compact. The countdown itself runs in the page.
   let cacheReading = null, cacheBusy = false, cacheLater = null;
   const refreshCache = async () => {
     if (agent !== 'claude' || closed || !state.sessionId || cacheBusy) return;
@@ -182,7 +183,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (!closed && JSON.stringify(next) !== JSON.stringify(state.cache ?? null)) { state.cache = next; publish(); }
     } catch { /* an unreadable transcript keeps the last reading */ } finally { cacheBusy = false; }
   };
-  // The CLI writes the transcript a moment after it reports the result.
+  // The CLI writes the transcript a moment after it reports the response.
   const refreshCacheSoon = () => { clearTimeout(cacheLater); cacheLater = setTimeout(() => void refreshCache(), 500); cacheLater.unref?.(); };
   // Until the CLI's init event names the real model and mode, show what a plain `claude` would use here (settings.json). Never stored, never passed as a flag.
   if (agent === 'claude') void readClaudeDefaults(configDirOf(), cwd).then(found => {
@@ -206,7 +207,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const streamIds = new Map(), toolInputSize = new Map();
   const taskIds = new Map(), approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images, previews } sent into a running turn, not yet taken in by it
   const subTools = new Set(); // tool calls a subagent made; their results are not this conversation's turn
-  let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0;
+  let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0, cursorSummaryCount = null, cursorManualCompact = false;
   const stopCursorStorePoll = () => { if (cursorStorePoll) { clearInterval(cursorStorePoll); cursorStorePoll = null; } };
   const noteCursorAcpUsage = event => {
     if (agent !== 'cursor' || event.contextSource === 'store') return;
@@ -219,7 +220,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 5_000) return;
     const reading = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
     if (!reading) return;
-    if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
+    // /summarize emits its own divider. While that runs, a store poll must not add a second "자동 압축".
+    const noted = cursorManualCompact ? { count: cursorSummaryCount, event: null } : cursorAutoCompact(cursorSummaryCount, reading, state.contextTokens);
+    if (!cursorManualCompact) cursorSummaryCount = noted.count;
+    if (noted.event) emit(noted.event);
+    if (!noted.event && cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
     if (reading.contextTokens === state.contextTokens && (reading.contextWindow ?? state.contextWindow) === state.contextWindow) return;
     emit({ kind: 'usage', contextTokens: reading.contextTokens, contextWindow: reading.contextWindow ?? state.contextWindow, contextSource: 'store' });
   };
@@ -510,7 +515,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (moved) { emit(moved); publish(); }
       if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
-      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; publishSoon(); }
+      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; refreshCacheSoon(); publishSoon(); }
       if (event.kind === 'message' && event.parentToolUseId && event.id) subLive.delete(event.id);
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
@@ -882,11 +887,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (images.length) throw fault('CHAT_UNSUPPORTED', '컨텍스트 압축 명령에는 이미지를 붙일 수 없습니다.', 409);
           const sessionId = state.sessionId ?? meta.sessionId;
           const preTokens = state.contextTokens, startedAt = Date.now();
+          cursorManualCompact = true;
           emit({ kind: 'delta', phase: 'compacting', active: true });
           restart();
           try {
             const output = await runCursorSummarize({ executable, executableArgs: argsOf(executableArgs, meta.auth), sessionId, cwd, env, spawnProcess });
             const after = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
+            if (Number.isInteger(after?.selfSummaryCount)) cursorSummaryCount = after.selfSummaryCount;
             emit({ kind: 'delta', phase: 'compacting', active: false });
             emit({ kind: 'compact', trigger: 'manual', preTokens: preTokens || null, postTokens: after?.contextTokens ?? null });
             const cleaned = cleanCursorSummarizeOutput(output);
@@ -900,7 +907,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
             try { await start(); } catch { restart(); }
             setStatus();
             throw error;
-          }
+          } finally { cursorManualCompact = false; }
           turnOpen = false;
           setStatus();
           if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);

@@ -16,6 +16,8 @@ if (!stream) {
   let input = ''; process.stdin.on('data', c => input += c);
   process.stdin.on('end', async () => {
     const mode = ctl().fb ?? 'ok'; log({ kind: 'oneshot', argv, cwd: process.cwd(), env: envLog, stdin: input.slice(0, 4000), mode });
+    // /btw (chat-btw.js passes --disable-slash-commands): a short answer with the usage the CLI reports.
+    if (argv.includes('--disable-slash-commands')) { console.log(JSON.stringify({ type: 'result', is_error: false, result: '곁다리 답입니다. 비동기 함수는 Promise를 돌려줍니다.', total_cost_usd: 0.0174, usage: { input_tokens: 812, output_tokens: 96, cache_creation_input_tokens: 0, cache_read_input_tokens: 14200 } })); process.exit(0); }
     if (mode === 'fail') { console.error('boom'); process.exit(1); }
     if (mode === 'badjson') { console.log('this is not json'); process.exit(0); }
     if (mode === 'empty') { console.log(JSON.stringify({ type: 'result', is_error: false, result: '' })); process.exit(0); }
@@ -129,6 +131,14 @@ if (!stream) {
     }
     if (text.includes('uiframeform')) { say('폼입니다.\n\n```ade-ui\n' + '<div class="stack"><div class="card"><span class="label">이름</span><input id="n"><button class="primary" id="b-solo">적용</button></div><div class="row"><button id="b-cancel">취소</button><button class="primary" id="b-main">보내기</button><script>void 0</script></div></div>' + '\n```\n'); result(); return; }
     if (text.includes('adeui')) { say('UI입니다.\n\n```ade-ui\n' + "<div><h3>테스트 UI</h3><button id=\"b-send\" class=\"primary\" onclick=\"ade.send('UI에서 보낸 메시지')\">보내기</button> <button id=\"b-pre\" onclick=\"ade.prefill('UI가 채운 문장')\">입력창에 채우기</button> <button id=\"b-net\" onclick=\"fetch('https://example.com/x').then(()=>r.textContent='NET OK').catch(e=>r.textContent='NET BLOCKED')\">외부 요청</button> <button id=\"b-grow\" onclick=\"more.style.height='200px'\">키우기</button><p id=\"r\">대기</p><div id=\"more\"></div></div>" + '\n```\n'); result(); return; }
+    if (/\bmermaid\b/.test(text)) {
+      say(['배포 흐름', '',
+        '```mermaid', 'flowchart LR', '  subgraph repo [depend-backend 레포]', '    stacks[".github/stacks.yml"]', '    dockerfile["Dockerfile"]', '    ci["CI -> OCI 이미지 + Trivy"]', '  end',
+        '  subgraph gharp [Gharp / CI]', '    promo["verified promotion 저장"]', '  end', '  subgraph host [단일 호스트]', '    deployer["gharp-deployer"]', '    stacks_cfg["/opt/stacks/projects/..."]', '    pg["shared-postgres"]', '    caddy["Caddy shared network"]', '  end',
+        '  stacks --> ci', '  dockerfile --> ci', '  ci --> promo', '  promo --> deployer', '  deployer --> stacks_cfg', '  deployer --> pg', '  deployer --> caddy', '```', '',
+        '요청 처리 순서는 이렇게요.', '', '```mermaid', 'sequenceDiagram', '  participant U as 사용자', '  participant A as ADE', '  participant C as Claude', '  U->>A: 채팅 전송', '  A->>C: stream-json', '  C-->>A: assistant', '  A-->>U: Markdown 렌더', '```'].join('\n'));
+      result('mermaid'); return;
+    }
     if (text.includes('uiblock')) { say('결과입니다.\n\n```ui\n["stats",["가동률","99%","ok","30일"],["지연","24ms"]]\n```\n\n```ui\n["form","계획","보내기",["slider","seats","좌석",2,1],["radio","c","결제","월","년"]]\n```\n\n```ui\n{깨진 json\n```\n'); result(); return; }
     if (text.includes('autoblock')) { // auto mode refuses two calls (a plain command with an exact rule, a compound one without) and says so only in the error result
       const n = Date.now(), why = 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Merge Without Review]. If you have other tasks that do not depend on this action, continue working on those.';

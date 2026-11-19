@@ -1,6 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
 import { Icon, IconButton, type IconName } from './Icon';
-import { copyText } from './toast';
 import type { HubGrants, HubPlugin, HubState, PluginsBridge, PluginsState } from './PluginSettings';
 import './plugin-market.css';
 
@@ -50,29 +49,11 @@ function Entry({ plugin, busy, run, bridge }: { plugin: HubPlugin; busy: string;
 
 export function PluginMarket({ hub, busy, run, bridge, notice }: { hub: HubState; busy: string; run: Run; bridge: PluginsBridge; notice: Notice }) {
   const working = Boolean(busy);
-  // The list is asked for when the market opens (the app keeps an answer from the last minute) and again after signing in.
-  useEffect(() => { if (hub.available && hub.signedIn) void bridge.hubCatalog?.().catch(() => {}); }, [hub.available, hub.signedIn]);
-  if (!hub.available) return <Callout tone="error">이 MoonerADE에서는 MoonerADE Hub를 쓸 수 없습니다. 앱을 업데이트하거나 Hub 주소(ADE_HUB_URL)를 확인하세요.</Callout>;
+  // Shown only while signed in (the sign-in is on the 정보 page). The list is asked for when the market opens and again after signing in.
+  useEffect(() => { void bridge.hubCatalog?.().catch(() => {}); }, [hub.signedIn]);
 
   // The result of the last button, except "sign-in started": the code box says that while it waits, and afterwards it is stale.
   const message = notice && !(notice.step === 'signin' && !notice.error) && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>;
-  if (!hub.signedIn) return <div className="plugin-market">
-    {message}
-    {hub.error && !notice && <Callout tone="error">{hub.error}</Callout>}
-    {hub.device
-      ? <Callout tone="info" action={<Button busy={working} running={busy === 'market:cancel'} onClick={() => run('market:cancel', () => bridge.cancelHubSignIn!())}>취소</Button>}>
-          브라우저에서 MoonerADE Hub에 로그인하고 코드 <b className="mono">{hub.device.userCode}</b>를 승인하세요.
-          <button type="button" className="plugin-link" onClick={() => copyText(hub.device!.userCode)}>코드 복사</button>
-        </Callout>
-      : <div className="plugin-empty plugin-market-signin">
-          <Icon name="plugin" size={24} />
-          <strong>MoonerADE Hub에 로그인하세요</strong>
-          <p>로그인하면 Hub가 제공하는 비공개 플러그인을 목록에서 골라 설치하고, 업데이트도 Hub에서 받을 수 있어요. GitHub 계정은 필요 없습니다.</p>
-          <Button className="primary" busy={working} running={busy === 'market:signin'} icon="person" onClick={() => run('market:signin', () => bridge.signInHub!())}>Hub 로그인</Button>
-          <small>로그인 정보는 이 PC에 암호화해 저장하고 Hub에만 보냅니다.</small>
-        </div>}
-  </div>;
-
   const catalog = hub.catalog, plugins = catalog?.plugins ?? [];
   return <div className="plugin-market">
     {message}

@@ -14,7 +14,7 @@
 
 | 모드 | 기동 | 용도 | 비고 |
 |---|---|---|---|
-| **A 더미** | `session.mjs up` → 공용 `tmp/main` | 화면·상태·렌더링·플러그인·서버 로직 | 가짜 `claude`·가짜 Hub, 비용 없음. 가짜는 Claude뿐이다 |
+| **A 더미** | `session.mjs up` → 공용 `tmp/main` | 화면·상태·렌더링·플러그인·서버 로직 | 가짜 `claude`·가짜 Hub와 Claude Code·Codex·Cursor 예시 사용량, 비용 없음 |
 | **B API 키** | `session.mjs new <목적> --real --reason "…"` → `tmp/ade-*` | 실제 CLI 프로토콜·출력·권한 흐름, `$` 비용 확인 | 세션 HOME이라 설정 › AI 툴에 저장한 API 키로만 로그인 |
 | **C′ 격리 CLI + 구독** | `session.mjs new <목적> --agent-dirs --reason "…"` (`--fresh-agents`는 매번 새 로그인) | 실제 AI 검증의 기본값, 구독 사용량 | HOME은 실제, CLI 설정 폴더만 `~/.ade-test/agents/{claude,codex,cursor}`로 격리 |
 

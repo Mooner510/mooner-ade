@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { ApiError, basename } from './api';
+import { GIT_STATUS_RETRY_MS, notAGitRepository } from './errors';
 import { DiffView, type Settings } from './Editor';
 import { FileIcon } from './FileIcon';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -38,6 +39,8 @@ export function GitLog(props: GitLogProps) {
   const { call, settings, setSettings, visible, ask, fail, demo } = props;
   const [data, setData] = useState<LogData | null>(demo?.data ?? null), [state, setState] = useState<RepoState>(demo?.data.state ?? { op: null, conflicts: [] });
   const [loadError, setLoadError] = useState(''), [busy, setBusy] = useState(''), [limit, setLimit] = useState(settings.gitLogLimit);
+  // A non-repo keeps answering the same way. Skip the timer until the retry delay, another repo, or the drawer opens again.
+  const quietUntil = useRef(0);
   const [filters, setFilters] = useState<Filters>(noFilters), [pathHashes, setPathHashes] = useState<Set<string> | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string[]>([]), anchor = useRef(''), [lead, setLead] = useState('');
@@ -57,19 +60,24 @@ export function GitLog(props: GitLogProps) {
 
   // ---- loading ----
   const load = useCallback(async (force = false) => {
-    if (demo) return;
+    if (demo || (!force && Date.now() < quietUntil.current)) return;
     try {
       const next = await call<LogData & { unchanged?: boolean }>('git/log', { limit, ...(force ? {} : { signature: signature.current }) });
       setState(previous => JSON.stringify(previous) === JSON.stringify(next.state) ? previous : next.state);
+      quietUntil.current = 0;
       if (next.unchanged) return;
       signature.current = next.signature; setData(next); setLoadError('');
-    } catch (cause) { setLoadError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setLoadError(message);
+      if (notAGitRepository(message)) quietUntil.current = Date.now() + GIT_STATUS_RETRY_MS;
+    }
   }, [call, limit, demo]);
-  useEffect(() => { signature.current = ''; if (!demo) setData(null); setSelected([]); setCollapsed(new Set()); setCompare(null); setFilters(noFilters); }, [props.repoKey]);
+  useEffect(() => { signature.current = ''; quietUntil.current = 0; if (!demo) setData(null); setSelected([]); setCollapsed(new Set()); setCompare(null); setFilters(noFilters); }, [props.repoKey]);
   useEffect(() => {
     if (!visible || props.unavailable || demo) return;
     void load(true);
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, Math.max(2, settings.diffRefresh) * 1000);
+    const timer = setInterval(() => { if (!document.hidden && Date.now() >= quietUntil.current) void load(); }, Math.max(2, settings.diffRefresh) * 1000);
     return () => clearInterval(timer);
   }, [visible, load, settings.diffRefresh, props.unavailable, demo]);
   useEffect(() => {
@@ -665,7 +673,7 @@ export function GitLog(props: GitLogProps) {
             <ChangedFiles files={files} byDir={settings.gitFilesByDir} selected={fileSel} loading={loadingFiles && !files.length} empty={!selection.length && !compare ? '커밋을 선택하세요.' : '변경된 파일이 없습니다.'}
               onSelect={setFileSel} onOpen={spec => demo ? demo.note('실제 앱에서는 편집기 영역의 diff 탭으로 열립니다.') : props.openDiff(spec)} />
           </div>
-          {previewSpec && <DiffPreview key={previewSpec} spec={previewSpec} call={call} settings={settings} demo={Boolean(demo)} />}
+          {previewSpec && <DiffPreview key={previewSpec} spec={previewSpec} call={call} settings={settings} setSettings={setSettings} demo={Boolean(demo)} />}
           {settings.gitDetails && !compare && selection.length > 0 && <div className="git-details">
             {one ? <CommitDetails commit={one} details={oneDetails} refs={refsOf(one.h)} containing={containing} all={allBranches} onAll={() => setAllBranches(value => !value)} onJump={jump} known={hash => Boolean(graph?.index.has(hash) || data.commits.some(commit => commit.h.startsWith(hash)))} resolve={hash => data.commits.find(commit => commit.h.startsWith(hash))?.h ?? hash} />
               : <div className="git-multi">{selection.length > 50 && <p className="hint">(선택한 커밋 {selection.length}개 중 50개 표시)</p>}{selection.slice(0, 50).map(commit => <div key={commit.h} className="git-multi-row" onClick={() => jump(commit.h)}><code>{short(commit.h)}</code><span>{commit.s}</span><small>{commit.an}</small></div>)}</div>}
@@ -745,7 +753,14 @@ function RefLabels({ refs, detached, compact, tagNames }: { refs: Ref[]; detache
     {groups.map(group => {
       const [main] = group, colorOf = (ref: Ref) => ref.kind === 'local' && ref.current ? REF_COLORS.head : REF_COLORS[ref.kind];
       const shown = compact ? [main] : group;
-      const tooltip = group.map(ref => `${ref.name}${ref.kind === 'local' && ref.current ? ' (HEAD)' : ''}`).join('\n') + (compact && group.length > 1 ? `\n… 외 ${group.length - 1}개 (세부 정보 패널)` : '');
+      // A name drawn in full stays out of the tooltip; the tooltip keeps only what the chip does not show: hidden names, clipped names, the HEAD marker and the overflow count.
+      const iconOnly = main.kind === 'tag' && !tagNames;
+      const lines = group.flatMap((ref, at) => {
+        const current = ref.kind === 'local' && ref.current;
+        if (!iconOnly && !(compact && at > 0) && clip(ref.name) === ref.name) return current ? ['현재 브랜치 (HEAD)'] : [];
+        return [`${ref.name}${current ? ' (HEAD)' : ''}`];
+      });
+      const tooltip = (lines.join('\n') + (compact && group.length > 1 ? `\n… 외 ${group.length - 1}개 (세부 정보 패널)` : '')) || undefined;
       if (main.kind === 'tag' && !tagNames) return <span key={main.ref} className="git-ref icon-only" title={tooltip}><TagGlyph color={REF_COLORS.tag} /></span>;
       return <span key={main.ref} className={`git-ref ${main.kind} ${main.kind === 'local' && main.current ? 'current' : ''}`} title={tooltip}>
         <span className="git-ref-icons">{group.map(ref => <TagGlyph key={ref.ref} color={colorOf(ref)} />)}</span>
@@ -761,7 +776,7 @@ function ChangedFiles({ files, byDir, selected, loading, empty, onSelect, onOpen
   if (loading) return <p className="hint git-files-empty">불러오는 중…</p>;
   if (!files.length) return <p className="hint git-files-empty">{empty}</p>;
   const item = (file: FileChange & { spec: string }, depth: number, label: string) => <div key={file.spec} role="treeitem" tabIndex={-1} aria-selected={selected === file.spec} className={`git-file ${selected === file.spec ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 14 }}
-    title={`${STATUS[file.status] ?? file.status}: ${file.original ? `${file.original} → ` : ''}${file.path}\n더블클릭: diff 열기`} onClick={() => onSelect(file.spec)} onDoubleClick={() => onOpen(file.spec)}>
+    title={`${STATUS[file.status] ?? file.status}${file.original ? `\n원래 경로: ${file.original}` : ''}\n더블클릭: diff 열기`} onClick={() => onSelect(file.spec)} onDoubleClick={() => onOpen(file.spec)}>
     <FileIcon name={basename(file.path)} size={14} /><span className={`git-file-name s-${file.status}`}>{label}</span>{!byDir && file.path.includes('/') && <small>{file.path.slice(0, file.path.lastIndexOf('/'))}</small>}{file.original && <small>← {basename(file.original)}</small>}
   </div>;
   const onKey = (event: React.KeyboardEvent) => {
@@ -781,12 +796,12 @@ function ChangedFiles({ files, byDir, selected, loading, empty, onSelect, onOpen
 }
 
 // The diff of one changed file, beside the list ("Show Diff Preview").
-function DiffPreview({ spec, call, settings, demo }: { spec: string; call: Call; settings: Settings; demo: boolean }) {
+function DiffPreview({ spec, call, settings, setSettings, demo }: { spec: string; call: Call; settings: Settings; setSettings: GitLogProps['setSettings']; demo: boolean }) {
   const [value, setValue] = useState<{ original: string; modified: string; note: string } | null>(null), [error, setError] = useState('');
   useEffect(() => { if (demo) { setValue({ original: 'const port = 3000;\n', modified: 'const port = Number(process.env.PORT ?? 3000);\n', note: '' }); return; } let live = true; loadSpec(call, spec).then(next => { if (live) setValue(next); }, cause => { if (live) setError(String(cause?.message ?? cause)); }); return () => { live = false; }; }, [spec]);
   const path = spec.replace(/^diff:[^:]*:/, '').split('\t')[0];
   return <div className="git-preview">{error ? <p className="git-error">{error}</p> : !value ? <p className="hint">불러오는 중…</p> : value.note && value.original === value.modified ? <p className="hint">{value.note}</p>
-    : <DiffView original={value.original} modified={value.modified} path={path} settings={settings} />}</div>;
+    : <DiffView original={value.original} modified={value.modified} path={path} settings={settings} onLayoutChange={diffLayout => setSettings(previous => ({ ...previous, diffLayout }))} />}</div>;
 }
 
 // ---- details ----

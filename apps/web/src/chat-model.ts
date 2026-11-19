@@ -52,7 +52,7 @@ export type Item = ItemBase & (
   | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
-  | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
+  | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
@@ -64,7 +64,7 @@ export type ChatView = {
   tasks: Record<string, TaskInfo>; // what the CLI reported about each subagent, by its Agent call's tool_use id
   blocked?: Record<string, BlockedAction>; // auto mode's refusals since the user's last message that they have not retried yet
   denied?: Record<string, true>; // tool calls the user refused at their approval card (their error result is a refusal, not a failure)
-  thinkingTokens: number; compacting: boolean; steers: { uuid: string; text: string; images: number; previews?: string[] }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
+  thinkingTokens: number; compacting: boolean; reconnecting: boolean; steers: { uuid: string; text: string; images: number; previews?: string[] }[]; approvals: Approval[]; seq: number; state: ChatState; ready: boolean;
 };
 export const emptyState = (): ChatState => ({ status: 'idle', model: null, effort: null, worktree: false, addDirs: [], permissionMode: 'default', sessionId: null, costUsd: 0, turns: 0, durationMs: 0, contextTokens: 0, contextWindow: null, autoCompact: null,
   tokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, slashCommands: [], tools: [], pending: 0, error: null, startedAt: Date.now(), segmentTitles: {}, chatTitle: '' });
@@ -87,7 +87,7 @@ export const resolveChatTitle = (titles: ChatSegmentTitles = {}, users: { kind: 
   return first ? first.slice(0, 80) : '';
 };
 const refreshViewTitle = (view: ChatView, segmentTitles: ChatSegmentTitles) => ({ ...view, state: { ...view.state, segmentTitles, chatTitle: resolveChatTitle(segmentTitles, titleUsersFromItems(view.items)) } });
-export const emptyView = (): ChatView => ({ items: [], results: {}, live: {}, liveId: null, tasks: {}, thinkingTokens: 0, compacting: false, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
+export const emptyView = (): ChatView => ({ items: [], results: {}, live: {}, liveId: null, tasks: {}, thinkingTokens: 0, compacting: false, reconnecting: false, steers: [], approvals: [], seq: 0, state: emptyState(), ready: false });
 
 const MAX_ITEMS = 2000, MAX_TOOL_JSON = 8192;
 // Array#findLastIndex without the ES2023 lib.
@@ -351,6 +351,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       }
       if (event.phase === 'thinkingTokens') return { ...view, thinkingTokens: Number(event.tokens) || 0 };
       if (event.phase === 'compacting') return { ...view, compacting: event.active === true };
+      if (event.phase === 'reconnecting') return { ...view, reconnecting: event.active === true };
       if (!['text', 'thinking', 'tool', 'toolInput'].includes(event.phase)) return view;
       const messageId = String(event.messageId ?? view.liveId ?? 'live-0'), at = findAssistant(view.items, messageId);
       const base: AssistantItem = at >= 0 ? view.items[at] as AssistantItem
@@ -381,7 +382,7 @@ export function reduce(view: ChatView, event: any): ChatView {
         const text = event.status === 'interrupted' ? '응답을 중단했습니다.' : '응답에 실패했습니다.';
         for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results) results = { ...results }; results[block.id] = { content: text, isError: true }; }
       }
-      view = { ...view, items: settleItems(view.items), results, compacting: false, live: {}, liveId: null, thinkingTokens: 0 };
+      view = { ...view, items: settleItems(view.items), results, compacting: false, reconnecting: false, live: {}, liveId: null, thinkingTokens: 0 };
       view = stampDone(view, event);
       if (event.status === 'interrupted') return { ...append(view, { kind: 'note', key, text: '응답을 중단했습니다.', fresh }), approvals: [] };
       if (event.status === 'failed') {
@@ -803,18 +804,188 @@ export function mcpSummary(input: any): string {
 }
 
 // A document / page the agent published on claude.ai (the Artifact tool, or the Claude Docs connector): the link comes back in the tool's result.
-export type ArtifactRef = { url: string; title: string; toolUseId: string };
-const ARTIFACT_URL = /https:\/\/claude\.ai\/artifact\/[A-Za-z0-9_-]+/;
+// Only `https://claude.ai/artifact/<id>` is a page worth opening. A preview host, localhost, `claude.ai/code`, a bare `/artifact` path,
+// or an id that is itself a segment name (`preview`, `artifact`, …) is a temporary address: the card explains it instead of navigating.
+export type ArtifactRef = { url: string; title: string; toolUseId: string; problem?: 'temporary' | 'invalid' | 'expired'; preview?: string };
+export type ArtifactUrlKind = 'durable' | 'temporary' | 'invalid';
+const RESERVED_ARTIFACT_ID = /^(?:preview|temp|temporary|code|artifact|draft|new)$/i;
+const ARTIFACT_PATH = /^\/artifact\/([A-Za-z0-9_-]+)\/?$/;
+const FAILURE_KEYS = ['error', 'status', 'reason', 'detail'];
+const FAILURE_WRAP = new Set(['frame', 'result', 'data', 'artifact', 'error']);
+
+function artifactUrlOf(raw: string): URL | null {
+  try { return new URL(raw.trim()); } catch { return null; }
+}
+function artifactPath(url: URL): string {
+  return url.pathname.replace(/\/{2,}/g, '/');
+}
+// `https://claude.ai/artifact/` joined with `artifact/<id>` (a doubled segment). The real page is the id after the extra segment.
+function repairDoubledArtifactUrl(raw: string): string | null {
+  const url = artifactUrlOf(raw);
+  if (!url || url.protocol !== 'https:' || url.hostname !== 'claude.ai' || url.search || url.hash) return null;
+  const id = /^\/artifact\/artifact\/([A-Za-z0-9_-]+)\/?$/.exec(artifactPath(url))?.[1] ?? '';
+  if (!id || RESERVED_ARTIFACT_ID.test(id)) return null;
+  return `https://claude.ai/artifact/${id}`;
+}
+export function classifyArtifactUrl(raw: string): ArtifactUrlKind {
+  const text = raw.trim();
+  if (!text) return 'invalid';
+  const url = artifactUrlOf(text);
+  if (!url) return /^\/artifact(?:\/|$)/i.test(text) || /localhost|127\.0\.0\.1|claude\.ai\/code|preview/i.test(text) ? 'temporary' : 'invalid';
+  const host = url.hostname.toLowerCase(), path = artifactPath(url), id = ARTIFACT_PATH.exec(path)?.[1] ?? '';
+  const local = host === 'localhost' || host === '127.0.0.1';
+  const onClaude = host === 'claude.ai' || host.endsWith('.claude.ai');
+  const preview = host.startsWith('preview.') || url.searchParams.has('preview') || /\/preview(?:\/|$)/i.test(path);
+  const code = host === 'claude.ai' && /^\/code(?:\/|$)/.test(path);
+  if (url.protocol === 'https:' && host === 'claude.ai' && id && !RESERVED_ARTIFACT_ID.test(id) && !url.search && !url.hash && !code) return 'durable';
+  if (local || preview || code || /\/artifact(?:\/|$)/i.test(path) || onClaude) return 'temporary';
+  return 'invalid';
+}
+function canonicalArtifactUrl(raw: string): string {
+  const id = ARTIFACT_PATH.exec(artifactPath(artifactUrlOf(raw)!))![1];
+  return `https://claude.ai/artifact/${id}`;
+}
+function stripHtml(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:39|x27);|&apos;/gi, "'");
+}
+function plainPiece(raw: string, cap: number): string {
+  const text = stripHtml(raw).replace(/\s+/g, ' ').trim().replace(/[<>]/g, '');
+  if (!text || /^https?:\/\//i.test(text) || /^\/artifact(?:\/|$)/i.test(text) || /javascript:/i.test(text)) return '';
+  return text.length > cap ? `${text.slice(0, cap - 1).trimEnd()}…` : text;
+}
+// An error line, not a document that happens to mention a date. `expired` alone, or next to link/artifact/url.
+function failureText(value: string): 'expired' | 'invalid' | null {
+  const text = value.trim();
+  if (!text || text.length > 240) return null;
+  if (/^(?:expired|gone|link_expired|not found)$/i.test(text)) return 'expired';
+  if (/^(?:invalid|invalid_url|bad_url)$/i.test(text)) return 'invalid';
+  if (/(?:artifact|link|url|주소|링크).{0,40}(?:expir|만료|invalid|잘못)|(?:expir|만료|invalid|잘못).{0,40}(?:artifact|link|url|주소|링크)/i.test(text) || /no longer available/i.test(text))
+    return /invalid|잘못/.test(text) && !/expir|만료/.test(text) ? 'invalid' : 'expired';
+  return null;
+}
+function structuredFailure(value: unknown, depth = 0): 'expired' | 'invalid' | null {
+  if (!value || typeof value !== 'object' || depth > 2) return null;
+  const bag = value as Record<string, unknown>;
+  if (bag.expired === true || bag.isExpired === true) return 'expired';
+  for (const key of FAILURE_KEYS) {
+    if (typeof bag[key] !== 'string') continue;
+    const hit = failureText(bag[key] as string);
+    if (hit) return hit;
+  }
+  if (depth >= 2) return null;
+  for (const [key, child] of Object.entries(bag)) {
+    if (!FAILURE_WRAP.has(key)) continue;
+    const hit = structuredFailure(child, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+function parsedResult(content: string): unknown {
+  const text = content.trim();
+  if (!text.startsWith('{') && !text.startsWith('[')) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+function collectUrls(value: unknown, out: string[], depth = 0): void {
+  if (depth > 6 || value == null) return;
+  if (typeof value === 'string') {
+    for (const match of value.matchAll(/https?:\/\/[^\s"'<>]+/g)) {
+      const url = match[0].replace(/[),.;]+$/, '');
+      if (url) out.push(url);
+    }
+    const trimmed = value.trim();
+    if (/^\/artifact(?:\/|$)/i.test(trimmed)) out.push(trimmed);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) collectUrls(child, out, depth + 1);
+}
+const PREVIEW_KEYS = ['body', 'html', 'snippet', 'markdown', 'description', 'text', 'preview', 'content'];
+function nestedPreview(value: unknown, depth: number): string {
+  if (!value || typeof value !== 'object' || depth > 6) return '';
+  const bag = value as Record<string, unknown>;
+  for (const key of PREVIEW_KEYS) {
+    if (typeof bag[key] !== 'string') continue;
+    const text = plainPiece(bag[key] as string, 200);
+    if (text) return text;
+  }
+  for (const child of Array.isArray(value) ? value : Object.values(bag)) {
+    const hit = nestedPreview(child, depth + 1);
+    if (hit) return hit;
+  }
+  return '';
+}
+function resultTitle(value: unknown, depth = 0): string {
+  if (!value || typeof value !== 'object' || depth > 5) return '';
+  const bag = value as Record<string, unknown>;
+  for (const key of ['title', 'name']) {
+    if (typeof bag[key] !== 'string') continue;
+    const text = plainPiece(bag[key] as string, 140);
+    if (text) return text;
+  }
+  for (const child of Object.values(bag)) {
+    const hit = resultTitle(child, depth + 1);
+    if (hit) return hit;
+  }
+  return '';
+}
+function previewOf(data: unknown, content: string, title: string): string {
+  const fromTree = data ? nestedPreview(data, 0) : '';
+  let text = fromTree;
+  if (!text && !data) {
+    const prose = plainPiece(content.replace(/https?:\/\/\S+/g, ' '), 200);
+    text = !prose || /^(?:preview|url|link|artifact|see|created)$/i.test(prose) || failureText(prose) ? '' : prose;
+  }
+  return text && text !== title ? text : '';
+}
+function durableIn(content: string): boolean {
+  const urls: string[] = [];
+  collectUrls(content, urls);
+  return urls.some(url => classifyArtifactUrl(url) === 'durable' || repairDoubledArtifactUrl(url) !== null);
+}
 export function artifactsOf(blocks: Block[], results: Record<string, { content: string; isError: boolean }>): ArtifactRef[] {
   const found = new Map<string, ArtifactRef>();
   for (const block of blocks) {
     if (block.type !== 'tool_use' || !(block.name === 'Artifact' || /^mcp__.+__(batch|create|update|publish)$/.test(block.name))) continue; // read / guide results may quote other links
-    const result = results[block.id], url = !result || result.isError ? undefined : ARTIFACT_URL.exec(result.content)?.[0];
-    if (!url) continue;
-    const input = block.input ?? {}, title = String(input.title ?? input.name ?? input.container?.create?.name ?? input.container?.create?.title ?? '').trim();
-    const prev = found.get(url);
-    if (!prev) found.set(url, { url, title, toolUseId: block.id });
-    else if (!prev.title && title) prev.title = title;
+    const result = results[block.id];
+    if (!result) continue;
+    const data = parsedResult(result.content);
+    const input = block.input ?? {}, title = String(input.title ?? input.name ?? input.container?.create?.name ?? input.container?.create?.title ?? '').trim() || resultTitle(data);
+    const preview = previewOf(data, result.content, title);
+    const plain = data ? null : failureText(result.content);
+    const marked = structuredFailure(data) || (plain && !durableIn(result.content) ? plain : null);
+    const put = (ref: ArtifactRef, key: string) => {
+      if (preview) ref.preview = preview;
+      const prev = found.get(key);
+      if (!prev) found.set(key, ref);
+      else {
+        if (!prev.title && ref.title) prev.title = ref.title;
+        if (!prev.preview && ref.preview) prev.preview = ref.preview;
+      }
+    };
+    // A failed call with no expired/invalid marker stays hidden (a quoted url in an error is not a page). A marker becomes a card the UI can explain.
+    if (marked) { put({ url: '', title, toolUseId: block.id, problem: marked }, `problem:${block.id}`); continue; }
+    if (result.isError) continue;
+    const urls: string[] = [];
+    collectUrls(data ?? result.content, urls);
+    let durable = '', bad = '';
+    for (const candidate of urls) {
+      const repaired = repairDoubledArtifactUrl(candidate);
+      if (repaired) { durable = repaired; break; }
+      const kind = classifyArtifactUrl(candidate);
+      if (kind === 'durable') { durable = canonicalArtifactUrl(candidate); break; }
+      if (!bad && kind === 'temporary') bad = candidate;
+    }
+    if (durable) put({ url: durable, title, toolUseId: block.id }, durable);
+    else if (bad) put({ url: bad, title, toolUseId: block.id, problem: 'temporary' }, `bad:${block.id}`);
   }
   return [...found.values()];
 }
@@ -1037,6 +1208,13 @@ export function turnAllowsMessageActions(turn: Item[]): boolean {
   const assistants = turn.filter((item): item is Extract<Item, { kind: 'assistant' }> => item.kind === 'assistant' && !item.sub);
   if (!assistants.length) return true;
   return assistants.some(item => item.blocks.some(inferenceBlock));
+}
+
+// Cursor cannot fold a line into the running turn. Enter queues it ahead of Follow-ups already waiting, and behind any earlier "send now" lines.
+export function enqueueSendNow<T extends { now?: boolean }>(items: T[], item: T): T[] {
+  const at = items.findIndex(entry => !entry.now);
+  const index = at < 0 ? items.length : at;
+  return [...items.slice(0, index), item, ...items.slice(index)];
 }
 
 /** 시간대별 문구와 공통 문구를 섞어 무작위로 하나 고른다. */

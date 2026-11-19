@@ -26,7 +26,7 @@ export async function withAgentRpc({ agent, cwd, env = {}, executable = agent ==
   try {
     await protocol.request('initialize', agent === 'codex'
       ? { clientInfo: { name: 'mooner_ade', version: '0.5.10' }, capabilities: { experimentalApi: true } }
-      : { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.10' } });
+      : { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true, subagents: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.10' } });
     if (agent === 'codex') child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
     else await protocol.request('authenticate', { methodId: 'cursor_login' });
     return await read(protocol.request, notifications);

@@ -6,7 +6,7 @@ import { APP_THEMES, themeById, type ThemeId } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
-import { PluginSettings } from './PluginSettings';
+import { HubSignIn, PluginSettings, pluginsBridge, usePluginsState } from './PluginSettings';
 import { useShells } from './shells';
 import { useMissingAgents } from './installed-agents';
 import { Dropdown, Modal } from './views';
@@ -17,7 +17,8 @@ import { useFeedback } from './feedback-store';
 import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
 import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 import { graphColor, javaHash } from './git-graph';
-import { usageMeterCatalog } from './usage-meters';
+import { usageMeterCatalog, type UsageProvider } from './usage-meters';
+import { accentChoices } from './Setup';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -36,6 +37,7 @@ function FeedbackAvailabilityRow() {
 
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null), [systemCa, setSystemCa] = useState<boolean | null>(null);
+  const hubState = usePluginsState();
   useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.dev ? `${info.version} (dev)` : info.version), () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); void desktop()?.getSystemCa?.().then(setSystemCa, () => {}); }, []);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
@@ -43,12 +45,13 @@ function AboutSettings() {
     {beta !== null && <Row title="베타 업데이트 받기" hint="정식 버전이 아닌 개발 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다.">
       <input type="checkbox" role="switch" aria-label="베타 업데이트 받기" checked={beta} onChange={event => { const next = event.target.checked; setBeta(next); void desktop()!.setBetaUpdates!(next).then(setBeta, () => setBeta(!next)); }} />
     </Row>}
-    {systemCa !== null && <Row title="시스템 인증서 신뢰 (플러그인)" hint="회사 등 HTTPS를 검사하는 네트워크에서 플러그인이 ‘fetch failed’로 연결하지 못할 때 켭니다. 운영체제가 신뢰하는 인증서를 플러그인도 신뢰하며, 바꾸면 앱을 다시 시작해야 적용됩니다.">
+    {systemCa !== null && <Row title="시스템 인증서 신뢰" hint="회사 등 HTTPS를 검사하는 네트워크에서 Hub에 연결하지 못할 때(‘fetch failed’) 켭니다. Hub로 가는 모든 연결(로그인, 마켓, 플러그인, 피드백)이 운영체제가 신뢰하는 인증서를 함께 신뢰하며, 바꾸면 앱을 다시 시작해야 적용됩니다.">
       <input type="checkbox" role="switch" aria-label="시스템 인증서 신뢰" checked={systemCa} onChange={event => { const next = event.target.checked; setSystemCa(next); void desktop()!.setSystemCa!(next).then(setSystemCa, () => setSystemCa(!next)); }} />
     </Row>}
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교하고, 새 버전이 있으면 설치 여부를 묻습니다.">
       <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
+    <HubSignIn hub={hubState?.hub} bridge={pluginsBridge()} />
   </>;
 }
 
@@ -75,7 +78,7 @@ const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
 ];
 export const statusLabels: Record<string, string> = {
   connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', cpu: 'CPU 사용률', memory: '메모리 사용량',
-  claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태', openproject: '프로젝트 열기 버튼'
+  claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태'
 };
 const statusHints: Record<string, string> = {
   claudeusage: '5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.',
@@ -85,7 +88,7 @@ const statusHints: Record<string, string> = {
 
 // How each item looks in the real status bar, with sample values; shown under the item's name so its meaning is clear at a glance.
 const usageSamples: Record<'claude' | 'codex' | 'cursor', [string, string, number][]> = {
-  claude: [['session', '5h', 23], ['weekly', '주', 41], ['fable', 'Fable', 8], ['weekly-opus', 'Opus', 55], ['weekly-sonnet', 'Sonnet', 30], ['credit', '크레딧', 15]],
+  claude: [['session', '5h', 23], ['weekly', '주', 41], ['fable', 'FB', 8], ['credit', '크레딧', 15]],
   codex: [['session', '5h', 8], ['weekly', '주', 17], ['credit', '크레딧', 40]],
   cursor: [['auto', 'Cursor', 20], ['api', '기타', 40], ['total', '전체', 25], ['grok', 'Grok', 12], ['on-demand', '추가', 5]]
 };
@@ -94,7 +97,7 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
     const on = settings.usageShown[provider];
     const windows = usageSamples[provider].filter(([id]) => on.includes(id) && !(provider === 'claude' && id === 'session' && !settings.claudeSession));
     return <span className="stat usage" data-usage-style={settings.usageStyle}><Icon name={provider} size={13} />
-      {windows.length ? windows.map(([id, key, percent]) => <span key={id} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>) : <small>표시 없음</small>}
+      {windows.length ? windows.map(([id, key, percent]) => <span key={id} className={`usage-window ${settings.usageColors ? 'graded' : ''}`} style={settings.usageColors ? { '--usage-hue': usageHue(percent) } as CSSProperties : undefined}><small className={id === 'fable' ? 'fable' : undefined}>{key}</small>{percent}%<i style={{ width: `${percent}%` }} /></span>) : <small>표시 없음</small>}
     </span>;
   };
   const time = new Date(2025, 0, 1, 14, 32, 8).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: settings.clockSeconds ? '2-digit' : undefined, hour12: settings.clock12h });
@@ -109,8 +112,7 @@ function statusSamples(settings: Settings): Record<string, ReactNode> {
     cursorusage: usage('cursor'),
     wakatime: <span className="stat"><Icon name="clock" size={13} />2시간 14분</span>,
     clock: <span className="stat"><Icon name="clock" size={13} />{time}</span>,
-    readiness: <span className="stat"><Icon name="info" size={13} /></span>,
-    openproject: <span className="stat"><Icon name="folderPlus" size={14} /></span>
+    readiness: <span className="stat"><Icon name="info" size={13} /></span>
   };
 }
 
@@ -154,7 +156,6 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
       const hint = id === 'wakatime' && !settings.wakatime ? 'WakaTime 작업 시간 기록을 켜야 표시됩니다.' : chat ? chatStatusDefs[id]?.hint ?? statusHints[id] : statusHints[id];
       if (!queryHit(query, `${labels[id] ?? id} ${hint ?? ''}`)) return null;
       return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} draggable className={`setting-hit ${shown.has(id) || (chat && id === 'share') ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${marker}`}
-        title="순서 · 위치 변경 (Alt+화살표)"
         onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', id); setDragging(id); }}
         onDragOver={event => { const box = event.currentTarget.getBoundingClientRect(); over(event, side, event.clientY < box.top + box.height / 2 ? index : index + 1); }}
         onDrop={finish} onDragEnd={() => { setDragging(''); setDrop(null); }} onKeyDown={event => keys(event, id, side, index)}>
@@ -298,12 +299,15 @@ function Group({ title, children }: { title?: string; children: ReactNode }) {
   return <div className="setting-block">{title && <h4 className="setting-group">{title}</h4>}{children}</div>;
 }
 
-function UsageMeters({ provider, settings, onChange }: { provider: 'claude' | 'codex' | 'cursor'; settings: Settings; onChange(settings: Settings): void }) {
+function UsageMeters({ provider, settings, onChange }: { provider: UsageProvider; settings: Settings; onChange(settings: Settings): void }) {
   const catalog = usageMeterCatalog[provider], selected = settings.usageShown[provider];
   const setMeter = (id: string, on: boolean) => onChange({ ...settings, usageShown: { ...settings.usageShown, [provider]: catalog.map(item => item.id).filter(item => item === id ? on : selected.includes(item)) } });
-  return <Row title="상태바에 표시" hint="고른 항목만 상태바에 나옵니다. 숫자를 누르면 끄지 않은 항목도 상세에서 볼 수 있습니다. Fable은 그 한도가 있는 계정에만 표시됩니다.">
-    <div className="usage-meter-picks" role="group" aria-label="상태바 사용량 항목">
-      {catalog.map(item => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={event => setMeter(item.id, event.target.checked)} />{item.label}</label>)}
+  return <Row title="상태바에 표시" hint="선택한 항목 중 계정에 제공되는 사용량을 표시합니다. 사용량 상세는 이 선택의 영향을 받지 않습니다.">
+    <div className="usage-meter-grid" role="group" aria-label="상태바 사용량 항목">
+      {catalog.map(({ id, label }) => <label key={id}>
+        <input type="checkbox" checked={selected.includes(id)} onChange={event => setMeter(id, event.target.checked)} />
+        <span>{label}</span>
+      </label>)}
     </div>
   </Row>;
 }
@@ -549,17 +553,17 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       <h4 className="setting-group">사용량 (상태바)</h4>
       {tab === 'claude' && <>
         <Row title="사용량 표시" hint="5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.">{statusSwitch('claudeusage', 'Claude Code 사용량 표시')}</Row>
-        <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 끄면 아래 항목을 켜 두어도 5시간은 나오지 않습니다.">{toggle('claudeSession')}</Row>
+        <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 이 설정을 끄면 사용량 상세에서도 5시간 한도가 숨겨집니다.">{toggle('claudeSession')}</Row>
       </>}
       {tab === 'codex' && <Row title="사용량 표시" hint="Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.">{statusSwitch('codexusage', 'Codex 사용량 표시')}</Row>}
       <UsageMeters provider={tab} settings={settings} onChange={onChange} />
-      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다. 계정에 없는 한도는 켜 두어도 빈칸으로 나오지 않습니다.</p>
+      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다.</p>
     </>}
     {tab === 'cursor' && <>
       <h4 className="setting-group">사용량 (상태바)</h4>
       <Row title="사용량 표시" hint="청구 주기·모델 풀·Grok Bot 한도를 표시합니다. 터미널에서 cursor-agent login을 해 두면 조회됩니다.">{statusSwitch('cursorusage', 'Cursor 사용량 표시')}</Row>
       <UsageMeters provider={tab} settings={settings} onChange={onChange} />
-      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다. 계정에 없는 한도는 켜 두어도 빈칸으로 나오지 않습니다.</p>
+      <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다.</p>
     </>}
     {tab === 'claude' && <>
       <h4 className="setting-group">프롬프트 캐시·입력</h4>
@@ -597,8 +601,11 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Group title="전체">
             <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다. 이름에 올리면 오른쪽 미리보기가 그 테마로 바뀝니다." preview="theme"><ThemePicker value={settings.theme} onChange={value => set('theme', value)} /></Row>
             <Row title="강조 색" hint="버튼, 선택, 포커스 표시에 쓰는 색입니다. 기본은 테마 색을 씁니다." preview="accent">
-              <input type="color" value={settings.accentColor || themeById(settings.theme).vars['--accent']} aria-label="강조 색" onChange={event => set('accentColor', event.target.value)} />
-              <button disabled={!settings.accentColor} onClick={() => set('accentColor', '')}>기본</button>
+              <span className="accent-choices" role="radiogroup" aria-label="강조 색">
+                <button type="button" role="radio" aria-checked={settings.accentColor === ''} aria-label="기본" title="기본" style={{ '--swatch': themeById(settings.theme).vars['--accent'] } as CSSProperties} onClick={() => set('accentColor', '')} />
+                {accentChoices.map(([color, label]) => <button type="button" role="radio" key={color} aria-checked={settings.accentColor.toLowerCase() === color} aria-label={label} title={label} style={{ '--swatch': color } as CSSProperties} onClick={() => set('accentColor', color)} />)}
+              </span>
+              <input type="color" value={settings.accentColor || themeById(settings.theme).vars['--accent']} aria-label="강조 색 직접 고르기" onChange={event => set('accentColor', event.target.value)} />
             </Row>
             <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
             {typeof desktop()?.setZoom === 'function' && <Row title="화면 배율" hint="앱 전체 크기를 바꿉니다. (80–150%) 터미널 글꼴 크기는 아래 터미널에서 정합니다." preview="zoom">{number('uiZoom', 80, 150, 5)}</Row>}
@@ -646,7 +653,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="diff 글꼴" hint="이 컴퓨터에 설치된 글꼴만 목록에 나옵니다. 비우면 터미널 글꼴을 따릅니다." preview="diffFont">
               <Dropdown label="diff 글꼴" value={settings.diffFont} options={diffFontOptions} onChange={value => set('diffFont', value)} /></Row>
             <Row title="자동 줄바꿈" preview="diffWrap"><input type="checkbox" role="switch" checked={settings.wordWrap} onChange={event => set('wordWrap', event.target.checked)} /></Row>
-            <Row title="diff 표시 방식" hint="자동은 패널이 넓을 때만 좌우로 나눠 보여줍니다." preview="diffLayout"><Dropdown label="diff 표시 방식" value={settings.diffLayout} options={[{ value: 'auto', label: '자동' }, { value: 'inline', label: '한 줄로 (통합)' }, { value: 'split', label: '좌우 비교' }]} onChange={value => set('diffLayout', value as Settings['diffLayout'])} /></Row>
+            <Row title="diff 표시 방식" hint="좁은 패널은 항상 통합 보기로 표시됩니다." preview="diffLayout"><Dropdown label="diff 표시 방식" value={settings.diffLayout} options={[{ value: 'auto', label: '자동' }, { value: 'inline', label: '한 줄로 (통합)' }, { value: 'split', label: '좌우 비교' }]} onChange={value => set('diffLayout', value as Settings['diffLayout'])} /></Row>
             <Advanced>
               <Row title="diff 글꼴 이름 직접 입력" hint="목록에 없는 글꼴 이름을 입력할 때 씁니다." preview="diffName">
                 <input type="text" value={settings.diffFont} maxLength={200} placeholder={settings.terminalFont || 'JetBrains Mono'} aria-label="diff 글꼴 직접 입력" onChange={event => set('diffFont', event.target.value)} /></Row>

@@ -1,6 +1,8 @@
 import { showAppKey } from './shortcuts';
 import { terminalEditKey } from './terminal-keys';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { usePaneDrag } from './pane-drag';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -9,7 +11,9 @@ import '@xterm/xterm/css/xterm.css';
 import { basename, findLeaf, isLeaf, leafList, type Leaf, type Pane } from './api';
 import { useHiddenAgents } from './installed-agents';
 import { pickGreeting } from './chat-model';
-import { DiffView, terminalFontStack, type Settings } from './Editor';
+import { DiffView, FileEditor, terminalFontStack, type DiffLayoutChoice, type Settings } from './Editor';
+import { FileIcon } from './FileIcon';
+import type { FileBuffer } from './file-buffer';
 import { Icon, IconButton, SplitButton, type IconName } from './Icon';
 import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
@@ -81,6 +85,9 @@ export type TerminalSize = { cols: number; rows: number };
 export type TerminalBus = { buffers: Map<string, TerminalFeed>; listeners: Map<string, (feed: TerminalFeed) => void>; sizes: Map<string, TerminalSize>; sizeListeners: Map<string, (size: TerminalSize) => void> };
 export type EditorCtx = {
   settings: Settings; gitVersion: number;
+  fileBuffer(path: string): FileBuffer;
+  watchFiles(listener: (paths: string[]) => void): () => void;
+  onDiffLayoutChange(layout: DiffLayoutChoice): void;
   onSelectTab(group: string, path: string): void; onCloseTab(group: string, path: string): void; onCloseGroup(group: string): void;
   loadDiff(kind: string, path: string): Promise<{ original: string; modified: string }>;
 };
@@ -660,21 +667,25 @@ function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
   const [value, setValue] = useState<{ original: string; modified: string } | null>(null), [error, setError] = useState('');
   useEffect(() => { ctx.loadDiff(kind, full).then(setValue, cause => setError(String(cause.message || cause))); }, [kind, full, ctx.gitVersion]);
   if (error) return <div className="empty">{error}</div>;
-  return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} /> : <div className="empty">불러오는 중…</div>;
+  return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} onLayoutChange={ctx.onDiffLayoutChange} /> : <div className="empty">불러오는 중…</div>;
 }
 
-// An editor pane holds diff tabs opened from the Git tool window's changed files.
-function EditorGroup({ leaf, focused, zoomed, ctx, onFocus, onZoom }: { leaf: Leaf; focused: boolean; zoomed: boolean; ctx: EditorCtx; onFocus(id: string): void; onZoom(id: string): void }) {
+function EditorGroup({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom }: { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: EditorCtx; onFocus(id: string): void; onZoom(id: string): void }) {
   const tabs = leaf.tabs || [], active = leaf.active && tabs.includes(leaf.active) ? leaf.active : tabs[0] || '';
   const label = (spec: string) => { const { kind, path } = diffParts(spec); return `${basename(path)} (${revisionLabel(kind)})`; };
-  return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="diff 편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)}>
-    <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(path =>
-      <div key={path} role="tab" aria-selected={path === active} className={`tab ${path === active ? 'active' : ''}`}
-        onClick={() => ctx.onSelectTab(leaf.id, path)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, path); }}>
-        <Icon name="diff" size={13} /><span title={path}>{label(path)}</span><button aria-label={`${path} 닫기`} onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, path); }}><Icon name="x" size={13} /></button></div>)}</div>
-      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="Diff 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
-    {active ? <DiffTab key={active} spec={active} ctx={ctx} />
-      : <div className="empty"><h2>열린 diff가 없습니다</h2><p>Git 패널에서 커밋의 파일을 더블클릭하세요.</p></div>}
+  const path = active.startsWith('file:') ? active.slice(5) : '';
+  return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)}>
+    <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(spec => {
+      const file = spec.startsWith('file:') ? spec.slice(5) : '';
+      const name = file ? basename(file) : label(spec);
+      return <div key={spec} role="tab" aria-selected={spec === active} className={`tab ${spec === active ? 'active' : ''}`}
+        onClick={() => ctx.onSelectTab(leaf.id, spec)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, spec); }}>
+        {file ? <FileIcon name={name} size={14} /> : <Icon name="diff" size={13} />}<span title={file || spec}>{name}</span><button aria-label={`${file || spec} 닫기`} onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, spec); }}><Icon name="x" size={13} /></button></div>;
+    })}</div>
+      <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="편집기 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
+    {path ? <FileEditor key={path} buffer={ctx.fileBuffer(path)} settings={ctx.settings} visible={visible} watch={ctx.watchFiles} />
+      : active ? <DiffTab key={active} spec={active} ctx={ctx} />
+        : <div className="empty"><h2>열린 파일이 없습니다</h2></div>}
   </section>;
 }
 
@@ -735,7 +746,7 @@ function useCloseGhost(pane: Pane, visible: boolean, zoom: string) {
   const capture = () => {
     const now = new Map<string, Ghost>();
     for (const leaf of leafList(pane)) {
-      const slot = document.querySelector<HTMLElement>(`[data-leaf="${CSS.escape(leaf.id)}"]`), el = slot?.firstElementChild, rect = slot?.getBoundingClientRect(), host = slot?.parentElement;
+      const slot = document.querySelector<HTMLElement>(`[data-leaf="${CSS.escape(leaf.id)}"]`), el = slot?.querySelector('.pane-content')?.firstElementChild, rect = slot?.getBoundingClientRect(), host = slot?.parentElement;
       if (slot && el && host && rect?.width && rect.height) now.set(leaf.id, { el, slot: rect, row: slot.dataset.dir === 'row', last: !!slot.dataset.last, host, hostParent: host.parentElement, index: [...host.children].indexOf(slot) });
     }
     return now;
@@ -751,21 +762,71 @@ function useCloseGhost(pane: Pane, visible: boolean, zoom: string) {
   useEffect(() => { const refresh = () => { last.current = capture(); }, timer = setTimeout(refresh, 700); window.addEventListener('resize', refresh); return () => { clearTimeout(timer); window.removeEventListener('resize', refresh); }; });
 }
 
+// The layout tree owns sizes and dividers. Portals keep each pane mounted when its split parent changes.
+function PaneAnchor({ host }: { host: HTMLDivElement }) {
+  return <div className="pane-anchor" ref={node => {
+    if (node && host.parentNode !== node) node.append(host);
+  }} />;
+}
+
+// Measure destination slots without moving the live panes between split parents until drop.
+function PreviewSlots({ pane }: { pane: Pane }) {
+  if (isLeaf(pane)) return <div className="pane-anchor" data-preview-leaf={pane.id} />;
+  return <div className={`split ${pane.direction}`}>{pane.children.map((child, index) =>
+    <div className="split-slot" key={isLeaf(child) ? child.id : index} style={{ flex: pane.sizes[index] || 1 }}>
+      <PreviewSlots pane={child} />
+    </div>
+  )}</div>;
+}
+
 export function Panes(props: Props) {
   const { pane, zoom } = props;
-  useCloseGhost(pane, props.visible, zoom || '');
-  const zoomed = zoom ? findLeaf(pane, zoom) : undefined;
-  if (zoomed) return <Tree {...props} pane={zoomed} zoom={zoom} />;
-  return <Tree {...props} />;
+  const hosts = useRef(new Map<string, HTMLDivElement>()).current;
+  const { preview, pageRef } = usePaneDrag(pane, props.onLayout, props.visible, zoom, hosts);
+  useLayoutEffect(() => {
+    if (preview && hosts.has(freshLeaf)) freshLeaf = '';
+  }, [preview, hosts]);
+  useCloseGhost(pane, props.visible, zoom);
+  const displayed = (zoom && findLeaf(pane, zoom)) || pane;
+  const leaves = leafList(displayed);
+  const ids = new Set(leaves.map(leaf => leaf.id));
+  for (const leaf of leaves) {
+    if (hosts.has(leaf.id)) continue;
+    const host = document.createElement('div');
+    host.className = 'pane-content';
+    hosts.set(leaf.id, host);
+  }
+  useLayoutEffect(() => {
+    for (const id of hosts.keys()) if (!ids.has(id)) hosts.delete(id);
+  });
+  return <>
+    <div className="pane-layout" ref={pageRef}>
+      {preview && <div className="pane-preview" aria-hidden="true"><PreviewSlots pane={preview} /></div>}
+      <Tree pane={displayed} onLayout={props.onLayout} hosts={hosts} previewing={!!preview} />
+    </div>
+    {leaves.map(leaf => createPortal(
+      <PaneContent {...props} leaf={leaf} />, hosts.get(leaf.id)!, leaf.id
+    ))}
+  </>;
 }
-function Tree(props: Props) {
-  const { pane } = props;
-  if (isLeaf(pane)) return pane.kind === 'editor'
-    ? <EditorGroup leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} ctx={props.editor} onFocus={props.onFocus} onZoom={props.onZoom} />
-    : pane.kind === 'chat' ? <ChatPane leaf={pane} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} visible={props.visible} ctx={props.chat} onFocus={props.onFocus} onZoom={props.onZoom} onSplit={props.onSplit} />
-    : pane.kind === 'launcher' ? <LauncherPane onModeChange={props.onModeChange} shell={props.editor.settings.terminalShell} mode={props.editor.settings.defaultMode} hidden={props.editor.settings.agentsOff} nudge={props.editor.settings.chatTipPending} id={pane.id} focused={props.focus === pane.id} onFocus={props.onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />
-    : <TerminalPane {...props} id={pane.id} focused={props.focus === pane.id} zoomed={props.zoom === pane.id} settings={props.editor.settings} />;
-  return <Splitter equalOnClick ids={pane.children.map(child => isLeaf(child) ? child.id : '')} fresh={pane.children.map(child => isLeaf(child) && child.id === freshLeaf)} direction={pane.direction} sizes={pane.sizes} onSizes={sizes => props.onLayout({ ...pane, sizes })}>
-    {pane.children.map((child, index) => <Tree key={isLeaf(child) ? child.id : index} {...props} pane={child} onLayout={next => props.onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}
+
+function Tree({ pane, onLayout, hosts, previewing }: { pane: Pane; onLayout(next: Pane): void; hosts: Map<string, HTMLDivElement>; previewing: boolean }) {
+  if (isLeaf(pane)) return <PaneAnchor host={hosts.get(pane.id)!} />;
+  return <Splitter equalOnClick ids={pane.children.map(child => isLeaf(child) ? child.id : '')}
+    keys={pane.children.map((child, index) => isLeaf(child) ? child.id : String(index))}
+    fresh={pane.children.map(child => !previewing && isLeaf(child) && child.id === freshLeaf)}
+    direction={pane.direction} sizes={pane.sizes} onSizes={sizes => { if (!previewing) onLayout({ ...pane, sizes }); }}>
+    {pane.children.map((child, index) => <Tree pane={child} hosts={hosts} previewing={previewing}
+      onLayout={next => onLayout({ ...pane, children: pane.children.map((old, i) => i === index ? next : old) })} />)}
   </Splitter>;
 }
+
+const PaneContent = memo(function PaneContent(props: Props & { leaf: Leaf }) {
+  const { leaf, focus, zoom, visible, editor, chat, onFocus, onZoom } = props;
+  const focused = focus === leaf.id, zoomed = zoom === leaf.id;
+  if (leaf.kind === 'editor') return <EditorGroup leaf={leaf} focused={focused} zoomed={zoomed} visible={visible && (!zoom || zoomed)} ctx={editor} onFocus={onFocus} onZoom={onZoom} />;
+  if (leaf.kind === 'chat') return <ChatPane leaf={leaf} focused={focused} zoomed={zoomed} visible={visible} ctx={chat} onFocus={onFocus} onZoom={onZoom} onSplit={props.onSplit} />;
+  if (leaf.kind === 'launcher') return <LauncherPane onModeChange={props.onModeChange} shell={editor.settings.terminalShell} mode={editor.settings.defaultMode}
+    hidden={editor.settings.agentsOff} nudge={editor.settings.chatTipPending} id={leaf.id} focused={focused} onFocus={onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />;
+  return <TerminalPane {...props} id={leaf.id} focused={focused} zoomed={zoomed} settings={editor.settings} />;
+});

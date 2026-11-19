@@ -437,7 +437,6 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         <div className="status-right">
           {usage('claude', 23, 41)}{usage('codex', 8, 17)}
           <span className="stat"><Icon name="clock" size={13} />{new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: settings.clock12h })}</span>
-          <button title={`프로젝트 열기 (${showKeys('mod+alt+o')})`} aria-label="프로젝트 열기" onClick={() => note('둘러보기를 마치면 내 프로젝트를 열 수 있어요.')}><Icon name="folderPlus" size={14} /></button>
         </div>
       </footer>
       {on && tour.palette && <QuickInput key={paletteKey} request={request} onClose={() => dispatch({ type: 'palette', open: false })} />}
@@ -462,7 +461,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       </nav>
       <div className="ws-stack">{tour.projects.map(workspace)}</div>
     </div>
-    {phase === 'setup' && !leaving && <><div className="tour-dim" /><Setup settings={settings} onSettings={onSettings} onNext={() => setPhase('tour')} /></>}
+    {phase === 'setup' && !leaving && <><div className="tour-dim" /><Setup settings={settings} onSettings={onSettings} onNext={() => setPhase('tour')} onSkip={skip} /></>}
     {phase === 'tour' && hero && !leaving && <div className="tour-dim" />}
     {phase === 'tour' && rect && !leaving && <div className="tour-ring" style={{ left: rect.x - 4, top: rect.y - 4, width: rect.w + 8, height: rect.h + 8 }} />}
     {phase === 'tour' && rect && !leaving && !done && !hero && <div key={target} ref={pointer} className="tour-pointer" aria-hidden="true"><span className="trail far">{cursor}</span><span className="trail">{cursor}</span>{cursor}<i /></div>}

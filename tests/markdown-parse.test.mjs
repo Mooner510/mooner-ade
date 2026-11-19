@@ -81,6 +81,10 @@ test('a markdown link to a path counts as a file, a link to an address does not'
   assert.deepEqual(fileHref('C:/p/a.ts'), { path: 'C:/p/a.ts', folder: false });
 });
 
+test('a mermaid fence is parsed as a code block with lang mermaid', () => {
+  assert.deepEqual(parse('```mermaid\nflowchart LR\n  A --> B\n```'), [{ t: 'code', lang: 'mermaid', code: 'flowchart LR\n  A --> B' }]);
+});
+
 test('a file chip still being typed is held back until its brackets close', () => {
   for (const [text, shown] of [['a [[fi', 'a '], ['a [[file:src/a', 'a '], ['a [[file:x]', 'a '], ['a [[file:x]]', 'a [[file:x]]'], ['a [[', 'a '], ['a [[1,2', 'a [[1,2']]) assert.equal(holdBack(text), shown, text);
 });

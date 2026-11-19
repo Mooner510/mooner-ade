@@ -1,5 +1,7 @@
 export class ApiError extends Error {
-  constructor(public code: string, message: string, public files?: string[]) { super(message); }
+  code: string;
+  files?: string[];
+  constructor(code: string, message: string, files?: string[]) { super(message); this.code = code; this.files = files; }
 }
 export async function api<T = any>(action: string, input: object = {}): Promise<T> {
   const response = await fetch(`/api/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
@@ -36,6 +38,108 @@ export function remove(pane: Pane, id: string): Pane | null {
   if (isLeaf(pane)) return pane.id === id ? null : pane;
   const children = pane.children.map(child => remove(child, id)).filter((child): child is Pane => child !== null);
   return children.length === 0 ? null : children.length === 1 ? children[0] : { ...pane, children, sizes: children.map(() => 1) };
+}
+// Where a dragged pane would land inside a slot. x/y are fractions of the slot (0–1).
+// The outer 22% is an edge: left/right insert along a row, top/bottom along a column; a corner uses the nearer edge.
+// The center splits the target. The nearer axis (larger offset from the middle) picks row or column.
+const DROP_EDGE = 0.22;
+export function paneDrop(x: number, y: number): { how: 'before' | 'after' | 'row' | 'column'; axis: 'row' | 'column' } {
+  const left = x < DROP_EDGE, right = x > 1 - DROP_EDGE, top = y < DROP_EDGE, bottom = y > 1 - DROP_EDGE;
+  if (left || right || top || bottom) {
+    const dx = Math.min(x, 1 - x), dy = Math.min(y, 1 - y);
+    if ((left || right) && (!(top || bottom) || dx <= dy)) return { how: x < 0.5 ? 'before' : 'after', axis: 'row' };
+    return { how: y < 0.5 ? 'before' : 'after', axis: 'column' };
+  }
+  const axis = Math.abs(x - 0.5) >= Math.abs(y - 0.5) ? 'row' : 'column';
+  return { how: axis, axis };
+}
+type DragSide = { how: 'before' | 'after'; axis: 'row' | 'column' };
+function dragEdges(x: number, y: number, header: number) {
+  const row: DragSide = { how: x <= .5 ? 'before' : 'after', axis: 'row' };
+  const column: DragSide = { how: y <= .5 ? 'before' : 'after', axis: 'column' };
+  return { row, column, dx: Math.min(x, 1 - x), dy: y <= header ? Infinity : Math.min(y, 1 - y) };
+}
+// Header travel reorders side by side. Below the header, even the center resolves to a side.
+export function dragPlace(x: number, y: number, parent: 'row' | 'column', header = 0): DragSide {
+  const { row, column, dx, dy } = dragEdges(x, y, header);
+  return dx < dy || (dx === dy && parent === 'row') ? row : column;
+}
+export function dragHolds(place: DragSide, x: number, y: number, header = 0) {
+  const { dx, dy } = dragEdges(x, y, header);
+  const distance = place.axis === 'row'
+    ? (place.how === 'before' ? x : 1 - x)
+    : (y <= header ? Infinity : place.how === 'before' ? y : 1 - y);
+  return distance <= Math.min(dx, dy) + .06;
+}
+// Moves `id` next to `targetId`, or splits that leaf. `before`/`after` insert along `axis` (default row);
+// a parent whose direction differs wraps the target the way `split` wraps a leaf. `row`/`column` split the
+// target and the moved leaf is the second child, same as `split`. A split left with one child collapses, same as `remove`.
+export function placeLeaf(pane: Pane, id: string, targetId: string, how: 'before' | 'after' | 'row' | 'column', axis?: 'row' | 'column'): Pane {
+  if (id === targetId) return pane;
+  const leaf = findLeaf(pane, id);
+  if (!leaf || !findLeaf(pane, targetId)) return pane;
+  if (how === 'row' || how === 'column') {
+    const rest = remove(pane, id);
+    return rest ? split(rest, targetId, leaf, how) : pane;
+  }
+  const direction = axis ?? 'row';
+  const reordered = reorderSiblings(pane, id, targetId, how, direction);
+  if (reordered) return reordered;
+  const rest = removeForMove(pane, id);
+  return rest ? insertLeaf(rest, targetId, leaf, how, direction) : pane;
+}
+function reorderSiblings(pane: Pane, id: string, targetId: string, how: 'before' | 'after', direction: 'row' | 'column'): Pane | undefined {
+  if (isLeaf(pane)) return;
+  const from = pane.children.findIndex(child => isLeaf(child) && child.id === id);
+  const to = pane.children.findIndex(child => isLeaf(child) && child.id === targetId);
+  if (from >= 0 && to >= 0) {
+    if (pane.direction !== direction) return;
+    const at = to - Number(from < to) + Number(how === 'after');
+    if (from === at) return pane;
+    const children = [...pane.children], sizes = [...pane.sizes];
+    children.splice(at, 0, children.splice(from, 1)[0]);
+    sizes.splice(at, 0, sizes.splice(from, 1)[0]);
+    return { ...pane, children, sizes };
+  }
+  for (const [index, child] of pane.children.entries()) {
+    const next = reorderSiblings(child, id, targetId, how, direction);
+    if (!next) continue;
+    if (next === child) return pane;
+    const children = [...pane.children]; children[index] = next;
+    return { ...pane, children };
+  }
+}
+function removeForMove(pane: Pane, id: string): Pane | null {
+  if (isLeaf(pane)) return pane.id === id ? null : pane;
+  const children: Pane[] = [], sizes: number[] = [];
+  for (const [index, child] of pane.children.entries()) {
+    const next = removeForMove(child, id);
+    if (next) { children.push(next); sizes.push(pane.sizes[index]); }
+  }
+  if (children.length <= 1) return children[0] ?? null;
+  return children.every((child, index) => child === pane.children[index]) && children.length === pane.children.length
+    ? pane : { ...pane, children, sizes };
+}
+function insertLeaf(pane: Pane, targetId: string, leaf: Leaf, how: 'before' | 'after', direction: 'row' | 'column'): Pane {
+  if (isLeaf(pane)) return pane.id === targetId ? { direction, children: how === 'before' ? [leaf, pane] : [pane, leaf], sizes: [1, 1] } : pane;
+  const index = pane.children.findIndex(child => isLeaf(child) && child.id === targetId);
+  if (index >= 0 && pane.direction === direction) {
+    const children = [...pane.children];
+    children.splice(how === 'before' ? index : index + 1, 0, leaf);
+    const sizes = [...pane.sizes];
+    // A pane joining an even split gets the same share as its siblings.
+    const targetSize = sizes[index];
+    const share = sizes.every(size => size === targetSize) ? targetSize : targetSize / 2;
+    sizes.splice(index, 1, share, share);
+    return { ...pane, children, sizes };
+  }
+  if (index >= 0) {
+    const target = pane.children[index];
+    const wrapped: Pane = { direction, children: how === 'before' ? [leaf, target] : [target, leaf], sizes: [1, 1] };
+    return { ...pane, children: pane.children.map((child, i) => i === index ? wrapped : child) };
+  }
+  const children = pane.children.map(child => insertLeaf(child, targetId, leaf, how, direction));
+  return children.every((child, i) => child === pane.children[i]) ? pane : { ...pane, children };
 }
 export function equalize(pane: Pane): Pane {
   return isLeaf(pane) ? pane : { ...pane, children: pane.children.map(equalize), sizes: pane.children.map(() => 1) };

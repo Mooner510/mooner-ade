@@ -104,6 +104,7 @@ ONLY=F4 node scripts/verify/t-feedback.mjs                            # id가 F4
 | `ask`(단어 단위) | AskUserQuestion 카드 |
 | `plan` | ExitPlanMode(목차 3개 섹션) |
 | `tasks` | 서브에이전트 2개(일반·백그라운드), task_started/progress/notification |
+| `mermaid`(단어 단위) | ` ```mermaid ` 흐름도·시퀀스 2개(미리보기와 확대 대화상자 확인용) |
 | `uiblock` | ` ```ui ` 블록 3개(통계, 폼, 깨진 JSON) |
 | `tools` | MCP 도구(Claude Docs update + Artifact URL), 자동 모드 차단 Bash, Read |
 

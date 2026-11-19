@@ -119,7 +119,7 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
     </div>
 
     <section><h3>토큰 구성</h3>{stats.tokensAvailable === false ? <p className="stats-empty">이 에이전트는 입출력 토큰을 제공하지 않았습니다.</p> : <>
-      <div className="stats-stack" role="img" aria-label="토큰 구성">{kinds.map(([key, name]) => <i key={key} className={`k-${key}`} style={{ flexBasis: `${(split[key] / total) * 100}%` }} title={`${name} ${split[key].toLocaleString('ko-KR')}`} />)}</div>
+      <div className="stats-stack" role="img" aria-label="토큰 구성">{kinds.map(([key]) => <i key={key} className={`k-${key}`} style={{ flexBasis: `${(split[key] / total) * 100}%` }} title={split[key].toLocaleString('ko-KR')} />)}</div>
       <ul className="stats-legend">{kinds.map(([key, name]) => <li key={key}><i className={`k-${key}`} />{name}<b>{compact(split[key])}</b><small>{((split[key] / total) * 100).toFixed(1)}%</small></li>)}</ul>
       {tokens.thinking > 0 && <p className="stats-note">출력 중 생각 토큰 {compact(tokens.thinking)}</p>}
       </>}

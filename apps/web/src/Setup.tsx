@@ -7,9 +7,9 @@ import { APP_THEMES, themeById, type AppTheme, type ThemeScheme } from './themes
 import { Dropdown } from './views';
 
 // First-run setup, before the tour: theme, accent and terminal font, each applied at once to the practice app behind it.
-const accentChoices = [['#7c9cff', '블루'], ['#a78bfa', '바이올렛'], ['#f472b6', '핑크'], ['#fb8b5b', '오렌지'], ['#f5c04a', '옐로'], ['#4ade80', '그린']] as const;
+export const accentChoices = [['#7c9cff', '블루'], ['#a78bfa', '바이올렛'], ['#f472b6', '핑크'], ['#fb8b5b', '오렌지'], ['#f5c04a', '옐로'], ['#4ade80', '그린']] as const;
 
-export function Setup({ settings, onSettings, onNext }: { settings: Settings; onSettings(next: Settings): void; onNext(): void }) {
+export function Setup({ settings, onSettings, onNext, onSkip }: { settings: Settings; onSettings(next: Settings): void; onNext(): void; onSkip(): void }) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onSettings({ ...settings, [key]: value });
   const fontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedTerminalFonts(), '시스템 기본'), [settings.terminalFont]);
   const current = themeById(settings.theme);
@@ -59,6 +59,7 @@ export function Setup({ settings, onSettings, onNext }: { settings: Settings; on
     </div>
 
     <footer>
+      <button type="button" className="tour-skip" onClick={onSkip}>건너뛰기</button>
       <span className="spacer" />
       <button type="button" className="primary" autoFocus onClick={onNext}>다음: 기능 둘러보기<Icon name="arrowRight" size={16} /></button>
     </footer>

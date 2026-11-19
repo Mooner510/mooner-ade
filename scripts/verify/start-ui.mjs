@@ -109,7 +109,7 @@ const restartServer = what => run(what, async () => { const wasDown = !s || Bool
 let watchers = [], timer, changed = new Set();
 function watchSource() {
   for (const w of watchers) w.close(); watchers = [];
-  for (const rel of ['apps/local-server/src', 'apps/desktop/src', 'scripts/verify/plugins.mjs', 'scripts/verify/session-dirs.mjs']) {
+  for (const rel of ['apps/local-server/src', 'apps/desktop/src', 'scripts/verify/plugins.mjs', 'scripts/verify/session-dirs.mjs', 'scripts/verify/usage.mjs']) {
     const p = join(source, rel); if (!existsSync(p)) continue;
     const dir = statSync(p).isDirectory();
     try {

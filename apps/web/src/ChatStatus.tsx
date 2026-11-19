@@ -90,6 +90,14 @@ export const cacheTtlOptions: { value: CacheTtl; label: string; hint: string }[]
 ];
 export type CacheTtl = 'auto' | '5m' | '1h';
 
+// The usage text fades in when what it names changes while it is shown (Plan Usage → a measured share, Plan ↔ API). A fresh mount does not fade:
+// moving the item to the other side of the line (a layout change) mounts it again, and the keyframes run on every insertion.
+function SwapText({ name, children }: { name: string; children: ReactNode }) {
+  const [shown, setShown] = useState({ name, turn: 0 });
+  if (shown.name !== name) setShown({ name, turn: shown.turn + 1 });
+  return <span key={shown.turn} className={shown.turn ? 'chat-stat-swap' : undefined}>{children}</span>;
+}
+
 function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth(auth: 'login' | 'key'): void }) {
   const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null), [ttl, setTtl] = useState<CacheTtl>('auto');
   const key = state.apiKey === true, locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
@@ -101,7 +109,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
   return <>
     <button type="button" className={`stat chat-stat chat-stat-share usage-basis ${key ? 'api' : 'plan'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={popId} popoverTarget={popId}>
       <span className="icon material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden="true">{key ? 'key' : 'speed'}</span>
-      {key ? <span className="chat-stat-swap">API Usage <b className="usage-money">${dollars(spent)}</b></span> : <span key={share ?? ''} className="chat-stat-swap">{share || 'Plan Usage'}</span>}
+      <SwapText name={key ? 'API Usage' : share || 'Plan Usage'}>{key ? <>API Usage <b className="usage-money">${dollars(spent)}</b></> : share || 'Plan Usage'}</SwapText>
       <span className="icon material-symbols-outlined usage-caret" style={{ fontSize: 14 }} aria-hidden="true">expand_less</span>
     </button>
     <span ref={pop} id={popId} popover="auto" role="dialog" aria-label="채팅 사용 방식" className="chat-stat-tip usage-panel" onToggle={event => { const toggle = event as unknown as { newState: string; currentTarget: HTMLElement }; setOpen(toggle.newState === 'open'); placeAbove(toggle, align, 8); }}>
@@ -124,7 +132,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
       </span>
       <strong className="usage-head">캐시 유지 시간</strong>
       <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
-        {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} title={option.hint} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
+        {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} title={ttl === option.value ? undefined : option.hint} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
       </span>
       <span className="usage-note">{cacheTtlOptions.find(option => option.value === ttl)?.hint}. 다음 응답부터 적용됩니다.</span>
       {locked && <span className="usage-note">로그인 방식은 응답이 끝난 뒤 바꿀 수 있습니다.</span>}

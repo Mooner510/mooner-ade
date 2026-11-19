@@ -1,6 +1,6 @@
 import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { basename, type Leaf } from './api';
-import { DiffView, usageHue, type Settings } from './Editor';
+import { DiffView, usageHue, type DiffLayoutChoice, type Settings } from './Editor';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
 import { QuestionCard, QuestionList, usePlayedEntrance } from './QuestionCard';
@@ -18,9 +18,11 @@ import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { Collapse, useHeightMorph } from './Collapse';
 import { FileIcon } from './FileIcon';
-import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
+import { prepareChatImage } from './image-fit';
+import { UserMessageBubble } from './user-message-bubble';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
@@ -46,7 +48,7 @@ export type ChatCtx = {
   onSettingsChange(settings: Settings): void;
 };
 type Props = { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: ChatCtx; onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void };
-type Attachment = { mime: string; data: string; url: string };
+type Attachment = { mime: string; data: string; url: string; reduced?: boolean };
 type CommandInfo = { name: string; description: string; hint?: string };
 
 const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' } as const;
@@ -206,26 +208,13 @@ const chatWidths = { narrow: '680px', default: '780px', wide: '1000px', full: '1
 const prettyResult = (value: string) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : value; } catch { return value; } };
 const clip = (value: string, max = 6000) => value.length > max ? `${value.slice(0, max)}\n… (${value.length - max}자 생략)` : value;
 
-// Edit diffs in the chat, unified (one column, as GitHub shows it by default) or split (old | new). The choice is the "diff 표시" setting,
-// so it is shared by every diff in the app and kept; ChatPane provides it.
-const DiffLayoutContext = createContext<{ split: boolean; set(split: boolean): void }>({ split: false, set() {} });
-// The bar over a diff: the file (named=true: where nothing above names it already, e.g. an approval card) and "+N −M" on the left, the
-// view toggle on the right. The diff itself is as tall as its lines (no 60px floor), so a one-line edit leaves no empty band.
+const SetDiffLayoutContext = createContext<(layout: DiffLayoutChoice) => void>(() => {});
 function ChatDiff({ from, to, path, settings, named = false }: { from: string; to: string; path: string; settings: Settings; named?: boolean }) {
-  const { split, set } = useContext(DiffLayoutContext), cwd = useContext(CwdContext);
-  const shown = useMemo(() => ({ ...settings, diffLayout: split ? 'split' : 'inline' }) as Settings, [settings, split]);
+  const setLayout = useContext(SetDiffLayoutContext), cwd = useContext(CwdContext);
   const { added, removed } = useMemo(() => lineChanges(from, to), [from, to]);
-  return <div className="chat-diff-wrap">
-    <div className="chat-diff-bar">
-      <span className="chat-diff-title">{named && <span className="chat-diff-path" title={path}>{relativePath(path, cwd)}</span>}
-        <span className="chat-diff-count"><span className="add">+{added}</span><span className="del">−{removed}</span></span></span>
-      <span className="chat-diff-views" role="group" aria-label="diff 보기 방식">
-        <button type="button" aria-pressed={!split} onClick={() => set(false)}>합쳐 보기</button>
-        <button type="button" aria-pressed={split} onClick={() => set(true)}>나눠 보기</button>
-      </span>
-    </div>
-    <div className="chat-diff"><DiffView original={from} modified={to} path={path} settings={shown} compact minHeight={0} /></div>
-  </div>;
+  return <DiffView original={from} modified={to} path={path} settings={settings} onLayoutChange={setLayout} compact minHeight={0}
+    header={<span className="chat-diff-title">{named && <span className="chat-diff-path" title={path}>{relativePath(path, cwd)}</span>}
+      <span className="chat-diff-count"><span className="add">+{added}</span><span className="del">−{removed}</span></span></span>} />;
 }
 // A tool's input as labelled fields (relative paths, readable values); the raw JSON is folded under them for copying or checking.
 function ToolInput({ input, cwd }: { input: Record<string, unknown>; cwd: string }) {
@@ -630,6 +619,24 @@ function TurnTokens({ done }: { done: TurnDone }) {
   </span>;
 }
 
+// A published artifact in the thread. A durable claude.ai page still offers 열기, through the app's external-link dialog.
+// A temporary, invalid, or expired address is only a note: nothing navigates.
+function ArtifactCard({ artifact }: { artifact: ReturnType<typeof artifactsOf>[number] }) {
+  const broken = artifact.problem != null;
+  const body = <>
+    <span className="icon material-symbols-outlined" aria-hidden="true">article</span>
+    <span className="chat-artifact-text">
+      <small>Artifact 생성됨</small>
+      <strong>{artifact.title || (broken ? '아티팩트' : artifact.url)}</strong>
+      {artifact.preview ? <em>{artifact.preview}</em> : !broken && <em>{artifact.url.replace('https://', '')}</em>}
+      {broken && <p className="usage-note">이 아티팩트 링크는 만료되었거나 잘못된 주소입니다.</p>}
+    </span>
+    {!broken && <span className="chat-artifact-open">열기<Icon name="externalLink" size={13} /></span>}
+  </>;
+  if (broken) return <div className="chat-artifact">{body}</div>;
+  return <a className="chat-artifact" href={artifact.url} rel="noreferrer noopener" onClick={event => { event.preventDefault(); window.dispatchEvent(new CustomEvent('ade:link', { detail: artifact.url })); }}>{body}</a>;
+}
+
 const Turn = memo(function Turn({ items, agentIds, settled, working, results, settings, plainThinking, onBranch, onRewind, onRecover, recovering }: TurnProps) {
   const lead = items[0]?.kind === 'user' || items[0]?.kind === 'divider' ? items[0] : null;
   const body = lead ? items.slice(1) : items;
@@ -688,11 +695,7 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
   return <div className="chat-turn">
     {lead && <Message item={lead} />}
     {rows}
-    {artifacts.map(artifact => <a key={artifact.url} className="chat-artifact" href={artifact.url} target="_blank" rel="noopener noreferrer">
-      <span className="icon material-symbols-outlined" aria-hidden="true">article</span>
-      <span className="chat-artifact-text"><small>Artifact 생성됨</small><strong>{artifact.title || artifact.url}</strong><em>{artifact.url.replace('https://', '')}</em></span>
-      <span className="chat-artifact-open">열기<Icon name="externalLink" size={13} /></span>
-    </a>)}
+    {artifacts.map(artifact => <ArtifactCard key={`${artifact.toolUseId}:${artifact.problem ?? artifact.url}`} artifact={artifact} />)}
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
       {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
@@ -738,13 +741,13 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'user') {
     const preview = item.text.replace(/\s+/g, ' ').trim() || (item.images > 0 ? `이미지 ${item.images}장` : '');
     const slash = parseChatSlashCommand(item.text);
-    if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble command"><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</div></div>;
+    if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="command" markdown={false}><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</UserMessageBubble></div>;
     const bus = parseBusMessages(item.text);
-    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><div className="chat-bubble bus">{bus.map((message, index) => <div className="chat-bus" key={index}>
+    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus">{bus.map((message, index) => <div className="chat-bus" key={index}>
       <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지 · {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span>{message.hop > 0 && <small>답장 {message.hop}/{message.maxHops}</small>}</div>
       <Markdown text={message.text} />
-    </div>)}</div></div>;
-    return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <div className="chat-bubble"><Markdown text={item.text} /></div>}</div>;
+    </div>)}</UserMessageBubble></div>;
+    return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
   if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{item.trigger === 'auto' ? '자동 압축' : '컨텍스트 압축'}{item.preTokens != null && item.postTokens != null ? ` · ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
@@ -936,7 +939,7 @@ function UserImages({ previews, count }: { previews?: string[]; count: number })
   if (!previews?.length) return count > 0 ? <small className="chat-images"><Icon name="copy" size={11} />이미지 {count}장</small> : null;
   return <>
     <div className="chat-user-images">{previews.map((url, index) => <button type="button" key={index} title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBig(url)}><img src={url} alt={`첨부 이미지 ${index + 1}`} /></button>)}</div>
-    {big && <Modal className="image-modal" labelledBy={`image-modal-${modalId}`} region="이미지 크게 보기" onClose={() => setBig(null)}><img id={`image-modal-${modalId}`} src={big} alt="첨부 이미지 크게 보기" onClick={() => setBig(null)} /><IconButton icon="x" label="닫기" onClick={() => setBig(null)} /></Modal>}
+    {big && <Modal className="image-modal" labelledBy={`image-modal-${modalId}`} region="이미지 크게 보기" onClose={() => setBig(null)}><span className="image-modal-frame"><img id={`image-modal-${modalId}`} src={big} alt="첨부 이미지 크게 보기" onClick={() => setBig(null)} /><IconButton icon="x" label="닫기" onClick={() => setBig(null)} /></span></Modal>}
   </>;
 }
 
@@ -970,6 +973,13 @@ function playFlip(root: HTMLElement, from: FlipSnapshot): Promise<unknown> {
   return Promise.allSettled(running.map(animation => animation.finished));
 }
 
+function sendQueueLabel(queue: { now?: boolean }[]) {
+  const now = queue.reduce((count, item) => count + (item.now ? 1 : 0), 0), later = queue.length - now;
+  if (now && later) return `응답을 끊고 보낼 메시지 ${now}개 · 그 뒤 Follow-up ${later}개`;
+  if (now) return now > 1 ? `응답을 끊고 보낼 메시지 ${now}개` : '응답을 끊고 바로 보냅니다';
+  return `Follow-up ${later}개 · 현재 응답이 끝나면 순서대로 전송`;
+}
+
 export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom, onSplit }: Props) {
   const id = leaf.id, cwd = leaf.cwd || ctx.root, agent = leaf.agent ?? 'claude', agentLabel = agent === 'claude' ? 'Claude Code' : agent === 'codex' ? 'Codex' : 'Cursor Agent';
   const [agentModels, setAgentModels] = useState<{ models: Record<string, string>; catalog: CatalogModel[] }>({ models: {}, catalog: [] });
@@ -989,7 +999,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
   const imageInput = useRef<HTMLInputElement>(null), fileInput = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[] }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -1060,7 +1070,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const apply = (next: (view: ChatView) => ChatView) => { drain(); const value = next(viewRef.current); viewRef.current = value; setView(value); };
   const [optimistic, setOptimistic] = useState<Optimistic>({}), latest = useRef<Record<string, number>>({}), seq = useRef(0);
   const share = useUsageShare({ id, agent, enabled: visible && !view.state.apiKey, ready: view.ready, call: ctx.call, projectId: ctx.projectId, refresh: ctx.settings.usageRefresh, status: view.state.status, model: view.state.model, meter: agent === 'claude' ? view.state.costUsd ?? 0 : tokenWeight(view.state.tokens) });
-  const diffSplit = ctx.settings.diffLayout === 'split', diffLayout = useMemo(() => ({ split: diffSplit, set: (split: boolean) => { if (split !== diffSplit) ctxRef.current.onSettingsChange({ ...ctxRef.current.settings, diffLayout: split ? 'split' : 'inline' }); } }), [diffSplit]);
+  const setDiffLayout = useCallback((diffLayout: DiffLayoutChoice) => {
+    const { settings, onSettingsChange } = ctxRef.current;
+    if (settings.diffLayout !== diffLayout) onSettingsChange({ ...settings, diffLayout });
+  }, []);
   const state = agent === 'cursor' ? withOptimistic(view.state, optimistic) : view.state, caps = state.capabilities, modes = caps?.permissionModes ?? (agent === 'cursor' ? ['default', 'plan', 'ask'] : MODES), effortOptions = caps?.efforts?.length ? caps.efforts : agent === 'claude' ? efforts : caps?.efforts ?? [],
     cursorOptions = agent === 'cursor' ? (caps?.configOptions ?? []).filter(option => option.id !== 'model' && option.id !== 'mode' && option.category !== 'model' && option.category !== 'mode') : [],
     maxOption = cursorOptions.find(option => isCursorMax(option) && option.options.length >= 2), contextOption = cursorOptions.find(option => option.id === 'context'), maxContext = !maxOption && contextOption ? contextEnds(contextOption) : null,
@@ -1071,7 +1084,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     optionsForModel = (model: string | null) => modelOptions(model, catalog, aliases, agent, modelPins), modelChoices = optionsForModel(selectedModel),
     resolvedModelValue = (() => { const pick = (model: string | null) => { const value = modelValue(model, aliases); return value && modelChoices.some(option => option.value === value) ? value : ''; };
       return pick(selectedModel) || pick(aliases[''] ?? null) || modelChoices.find(option => option.value !== MORE_MODELS)?.value || ''; })(),
-    busy = state.status === 'working' || state.status === 'attention';
+    busy = state.status === 'working' || state.status === 'attention',
+    // Cursor ACP has no in-turn steer: a second session/prompt cancels the running turn. Enter does that and sends at once; Tab still waits.
+    foldIn = caps?.steer !== false && agent !== 'cursor' && !(agent === 'codex' && view.compacting);
 
   // Set while a provider switch is under way (close, re-render, the new agent's open); the buttons stay locked so quick clicks cannot interleave sessions.
   const [providerSwap, setProviderSwap] = useState(false);
@@ -1342,6 +1357,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     }
     return [...names.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [commands, state.slashCommands, state.commandInfo, effortOptions, modes]);
+  // A complete command name at the start of the composer (`/btw …`, only a name this chat knows) is drawn in the provider's colour, by a mirror behind the textarea.
+  const commandHead = (() => { const head = /^\/[\w:-]+(?=\s|$)/.exec(text)?.[0] ?? ''; return head && available.some(item => item.name === head.slice(1)) ? head : ''; })(), inputMirror = useRef<HTMLDivElement>(null);
   const slashQuery = /^\/([^\s/]*)$/.exec(text), [slashOff, setSlashOff] = useState(false);
   // Escape dismisses the slash menu without deleting the draft; typing away from `/…` opens it again.
   useEffect(() => { if (!slashQuery) setSlashOff(false); }, [slashQuery === null]);
@@ -1398,8 +1415,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const closedBtw = useRef(new Set<string>());
   function askBtw(key: string, question: string) {
     closedBtw.current.delete(key); patchLocal(key, { status: 'pending', error: undefined });
-    void ctx.call<{ answer: string; costUsd: number | null }>('chat/btw', { id, question, btwId: key }).then(
-      result => { if (!closedBtw.current.has(key)) patchLocal(key, { status: 'done', answer: result.answer, costUsd: result.costUsd }); },
+    void ctx.call<{ answer: string; costUsd: number | null; tokens?: Tokens }>('chat/btw', { id, question, btwId: key }).then(
+      result => { if (!closedBtw.current.has(key)) patchLocal(key, { status: 'done', answer: result.answer, costUsd: result.costUsd, tokens: result.tokens }); },
       cause => { if (!closedBtw.current.has(key)) patchLocal(key, { status: 'error', error: cause instanceof Error ? cause.message : String(cause) }); });
   }
   const closeBtw = (key: string) => {
@@ -1505,7 +1522,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       default: return false;
     }
   }
-  // Enter while Claude works steers the running turn (sent now, folded into it); Tab is the follow-up (held until the turn ends). `/…` lines never steer.
+  // Enter while Claude or Codex works steers the running turn (sent now, folded into it); Tab is the follow-up (held until the turn ends). `/…` lines never steer.
+  // Cursor cannot fold a line into the running turn, so Enter stops that turn and sends the line as the next one. Tab still waits.
   async function submit(mode: 'steer' | 'queue' = 'steer') {
     const message = text.trim();
     if ((!message && !images.length) || !view.ready) return;
@@ -1522,7 +1540,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     }
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
     const body = message || '(이미지)';
-    if (busy && mode === 'steer' && caps?.steer !== false && agent !== 'cursor' && !(agent === 'codex' && view.compacting) && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
+    if (busy && mode === 'steer' && foldIn && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
+    else if (busy && mode === 'steer' && agent === 'cursor' && !message.startsWith('/')) { setQueue(items => enqueueSendNow(items, { text: body, images: attachments, now: true })); interrupt(false); }
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
     else await transmit(body, attachments);
   }
@@ -1546,9 +1565,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const accepted = files.filter(isImage);
     if (!accepted.length) return;
     try {
-      const next = [...images, ...(await Promise.all(accepted.map(fileData)))].slice(0, 4);
-      if (next.reduce((sum, item) => sum + item.data.length, 0) > 2_500_000) return ctx.fail(new Error('이미지가 너무 큽니다 (합계 약 1.8MB 이하).'));
-      setImages(next); toastAttached(accepted.length);
+      const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, 4);
+      setImages(next); toastAttached(next.length - images.length || accepted.length);
     } catch (cause) { ctx.fail(cause); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
@@ -1578,7 +1596,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
   // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
   const agentsSeen = useRef<SubAgent[]>([]);
-  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
+  // Subagents: Claude's Agent calls, and Cursor's Task calls (only drawn once the protocol reports them).
+  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' || agent === 'cursor' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
   const agentKey = agentList.map(item => item.id).join(' ');
   const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
   const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
@@ -1651,7 +1670,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {((maxOption && maxSelected(maxOption)) || (!maxOption && maxContext && contextOption?.currentValue === maxContext.on)) && <span className="tune-ico" style={{ color: '#f2566e' }}><SettingGlyph icon="local_fire_department" size={15} /></span>}</button>
     <div id={tunePanel} popover="auto" className="chat-tune-panel" role="dialog" aria-label="채팅 옵션" onToggle={event => placeAbove(event, 'right')}>{panelItems}</div>
   </span>;
-  return <ChatUiContext.Provider value={uiBlocks}><DiffLayoutContext.Provider value={diffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><LocalCardsContext.Provider value={localCards}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
+  return <ChatUiContext.Provider value={uiBlocks}><SetDiffLayoutContext.Provider value={setDiffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><LocalCardsContext.Provider value={localCards}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px` } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onDragEnter={event => { if (isFileDrag(event)) { event.preventDefault(); dragDepth.current++; setDropping(true); } }}
     onDragOver={event => { if (isFileDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); } }}
     onDragLeave={event => { if (isFileDrag(event) && --dragDepth.current <= 0) { dragDepth.current = 0; setDropping(false); } }}
@@ -1674,12 +1693,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
       onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
-      {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" title="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
+      {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
-        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label || (state.configuring ? '설정을 적용하는 중' : '')} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><div className="chat-bubble steer"><small className="chat-steer">스티어링 · ↑ 수정 · Esc 바로 보내기</small>{item.text}</div></div>)}
+        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label || (state.configuring ? '설정을 적용하는 중' : '')} thought={activity.thought} />}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">스티어링 · ↑ 수정 · Esc 바로 보내기</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1700,8 +1719,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
-      {queue.length > 0 && <div className="chat-queue"><div role="status">Follow-up {queue.length}개 · 현재 응답이 끝나면 순서대로 전송</div>
-        {agent === 'cursor' && busy && <button type="button" onClick={() => interrupt(false)}>현재 응답을 중단하고 대기 메시지 보내기</button>}
+      {queue.length > 0 && <div className="chat-queue"><div role="status">{sendQueueLabel(queue)}</div>
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
       <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
@@ -1719,10 +1737,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
           </button></li>)}</ul>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
-        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
-        {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></Modal>}
+        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
+        {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><span className="image-modal-frame"><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></span></Modal>}
         <div className="chat-input-row">
-        <textarea ref={box} rows={1} value={text} placeholder={oneLine && busy && !stash ? (caps?.steer === false || agent === 'cursor' || (agent === 'codex' && view.compacting) ? '응답이 끝나면 순서대로 보냅니다' : '응답 중 · 입력해 끼워 넣기') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? caps?.steer === false || agent === 'cursor' || (agent === 'codex' && view.compacting) ? '응답이 끝난 뒤 순서대로 전송합니다' : `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+        <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
+        {commandHead && <div className="chat-input-mirror" aria-hidden ref={inputMirror}><span className="chat-input-command">{commandHead}</span>{`${text.slice(commandHead.length)} `}</div>}
+        <textarea ref={box} rows={1} value={text} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중 · 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기 · Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(event.target.value); setCaret(event.target.selectionStart); }} onSelect={event => setCaret(event.currentTarget.selectionStart)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
@@ -1775,8 +1795,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             }
           }} />
         </div>
+        </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
-        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', detail: 'PNG·JPEG·GIF·WebP를 그림으로 보냅니다' }, { id: 'file', label: '파일', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
+        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', detail: 'PNG·JPEG·GIF·WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
@@ -1796,7 +1817,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
     {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onStop={stopTask} onClose={() => setAgentOpen(null)} />}
-  </section></LocalCardsContext.Provider></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></DiffLayoutContext.Provider></ChatUiContext.Provider>;
+  </section></LocalCardsContext.Provider></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></SetDiffLayoutContext.Provider></ChatUiContext.Provider>;
 }
 
 // Rising particles for the two highest Effort levels, kept inside the dropdown and under its label text. xhigh: a few small, faint, slow sparks, no glow or background. max: more, brighter and faster, with a few glowing flares. Every spark gets its own position, size, speed, drift and phase (rolled once per level), so nothing repeats in step.

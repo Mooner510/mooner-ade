@@ -13,6 +13,7 @@ import { listIdes, openPath, outsideTarget } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
+import { projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
@@ -37,6 +38,7 @@ import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
+import { MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
 import { signatureGuard } from './agent-signature.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
@@ -57,6 +59,7 @@ const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
 const devWeb = process.env.ADE_DEV === '1', devTokenEnv = process.env.ADE_DEV_TOKEN ?? ''; // read here: both are removed from the environment below
 const verifyPluginsEnabled = devWeb && process.env.ADE_VERIFY_PLUGINS === '1' && !process.connected;
 let verifyPlugins = null;
+let verifyUsage = null;
 let vite = null;
 // HMR rides on the HTTP server so a leftover dev server from a crashed app cannot block the next run on a fixed port.
 async function startVite(httpServer) {
@@ -810,7 +813,7 @@ async function route(action, input, project) {
     for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
     return status;
   }
-  if (action === 'usage/status') return usage.status(input.provider, { force: input.force === true, project });
+  if (action === 'usage/status') return verifyUsage?.(input.provider) ?? usage.status(input.provider, { force: input.force === true, project });
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
   if (action === 'ide/list') return listIdes({ force: input.force === true });
@@ -1060,9 +1063,9 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const images = Array.isArray(input.images) ? input.images : [];
       const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-      if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > 2_500_000 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
+      if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > MAX_IMAGE_BASE64 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
       // Small JPEG thumbnails the chat shows in the thread (the full images only go to the agent). Anything malformed is just dropped.
-      const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= 150_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
+      const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= MAX_PREVIEW_CHARS && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
       chat.setInteractiveUi(input.interactiveUi);
       await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true, artifact: input.artifact === true, previews });
       return {};
@@ -1237,6 +1240,9 @@ async function route(action, input, project) {
       const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
       return openPath({ ide: text(input.ide, '편집기', 100), root: base.root, target, line: whole(input.line), column: whole(input.column) });
     }
+    case 'files/directory': return { entries: await projectDirectory(workspace, input.path) };
+    case 'files/read': return { file: await readProjectFile(workspace, input.path) };
+    case 'files/write': return writeProjectFile(workspace, input);
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;
@@ -1284,7 +1290,7 @@ function authenticated(request) {
   const match = /(?:^|;\s*)ade_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.cookie || '');
   return match && sessions.has(match[1]);
 }
-// Feedback images (8 MB, base64) are the only requests allowed past 3 MB.
+// Images and escaped editor text can exceed the standard 3 MiB JSON body limit.
 async function body(request, limit = 3 * 1024 * 1024) {
   if (request.headers['content-type'] !== 'application/json') throw fault('INVALID_CONTENT_TYPE', 'JSON 요청만 허용됩니다.', 415);
   const chunks = []; let size = 0;
@@ -1305,7 +1311,9 @@ const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, origin);
     if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
-      const input = await body(request, url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' || (verifyPlugins && url.pathname === '/api/verify/plugins/uploadZip') ? 12 * 1024 * 1024 : undefined);
+      const wideBody = url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' || (verifyPlugins && url.pathname === '/api/verify/plugins/uploadZip');
+      const input = await body(request, url.pathname === '/api/chat/send' ? MAX_CHAT_SEND_BODY :
+        url.pathname === '/api/files/write' ? 13 * 1024 * 1024 : wideBody ? 12 * 1024 * 1024 : undefined);
       let value;
       if (url.pathname === '/api/auth') {
         if (!authenticated(request)) {
@@ -1699,6 +1707,9 @@ if (verifyPluginsEnabled) {
     onTerminal: configurePlugins, onFeedback: status => fromApp({ type: 'feedback/status', status }),
     toServer: message => { fromApp(message); return true; }
   });
+  if (!process.env.REAL_AGENTS && !process.env.AGENT_DIRS) {
+    ({ verifyUsage } = await import('../../../scripts/verify/usage.mjs'));
+  }
 }
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });

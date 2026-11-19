@@ -261,7 +261,25 @@ test('project/create makes an empty folder, optionally a git repository, and ope
 
 test('endpoints of removed features stay gone', async t => {
   const { call } = await boot(t);
-  for (const action of ['files/read', 'files/save', 'files/search', 'git/discard', 'git/stage', 'git/commit', 'run/start', 'conversation/create', 'approval', 'agents/catalog']) await call(action, {}, 404);
+  for (const action of ['files/save', 'files/search', 'git/discard', 'git/stage', 'git/commit', 'run/start', 'conversation/create', 'approval', 'agents/catalog']) await call(action, {}, 404);
+});
+
+test('project file editor endpoints compare the revision before writing', async t => {
+  const { call, repo } = await boot(t);
+  const path = 'src/b.ts';
+  assert.deepEqual(await call('files/directory', { path: 'src' }), { entries: [{ name: 'b.ts', folder: false }] });
+  const { file } = await call('files/read', { path });
+  assert.equal(file.content, 'export const x = 1;\n');
+  await writeFile(join(repo, path), 'external\n');
+  const result = await call('files/write', { path, revision: file.revision, content: 'ADE\n' });
+  assert.equal(result.conflict, true);
+  assert.equal(result.file.content, 'external\n');
+  assert.equal(await readFile(join(repo, path), 'utf8'), 'external\n');
+  assert.equal((await call('files/write', { path, revision: result.file.revision, content: 'ADE\n' })).conflict, false);
+  assert.equal(await readFile(join(repo, path), 'utf8'), 'ADE\n');
+  const projectTreeExpanded = ['.', 'src'];
+  await call('ui', { ui: { gitRepositoryId: '', activeTab: '', focus: '', rightVisible: false, paneTabs: [], projectTreeExpanded } });
+  assert.deepEqual((await call('snapshot')).ui.projectTreeExpanded, projectTreeExpanded);
 });
 
 test('git: a repository-configured core.fsmonitor command never runs during status', async t => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { api } from './api';
-import { compact, dollars, type Item, type UsageSnap } from './chat-model';
-import { Icon } from './Icon';
+import { compact, dollars, turnTokenRows, type Item, type Tokens, type UsageSnap } from './chat-model';
+import { Icon, IconButton } from './Icon';
 import { Markdown } from './Markdown';
 import { untilReset, usageHueStyle, type Usage, type UsageWindow } from './Usage';
 import './chat-cards.css';
@@ -97,19 +97,33 @@ export function UsageCard({ snap, projectId, colors, showSession }: { snap: Usag
   </div>;
 }
 
+// The model's tokens and cost for one answer: an info icon at the card's foot, the figures on hover or focus (the same as the turn-end icon in the thread).
+function BtwUsage({ tokens, costUsd }: { tokens?: Tokens; costUsd?: number | null }) {
+  const rows = turnTokenRows({ at: 0, ms: null, tokens });
+  if (!rows.length && costUsd == null) return null;
+  const glyph = (name: string, size: number) => <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{name}</span>;
+  return <span className="chat-done-tip bc-usage">
+    <IconButton icon="info" tip="none" label="토큰과 비용" size={13} />
+    <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
+      {glyph(row.icon, 14)}<b>{row.label}</b>
+      <span>{glyph('arrow_upward', 12)}{row.up.value}</span><span>{glyph('arrow_downward', 12)}{row.down.value}</span>
+    </span>)}{costUsd != null && <span className="chat-done-row">{glyph('payments', 14)}<b>비용</b><span>${dollars(costUsd)}</span></span>}</span>
+  </span>;
+}
+
 /** /btw: the question, then the answer (or the wait / the failure). Not part of the conversation: the agent never sees it. */
 export function BtwCard({ item, onClose, onRetry }: { item: BtwItem; onClose(): void; onRetry(): void }) {
   return <div className={`chat-row btw-card ${item.status}`} role="region" aria-label="곁다리 질문">
     <div className="bc">
       <header className="bc-head">
-        <span className="bc-tag"><Icon name="sparkles" size={13} />BTW</span>
+        <span className="bc-tag">BTW</span>
         <span className="bc-question">{item.question}</span>
         <button type="button" className="icon-btn" aria-label={item.status === 'pending' ? '질문 취소' : '닫기'} onClick={onClose}><Icon name="x" size={13} /></button>
       </header>
       {item.status === 'pending' && <div className="bc-wait" role="status"><i className="chat-spin" /><span>대화를 훑어보고 답하는 중…</span></div>}
       {item.status === 'done' && <div className="bc-answer"><Markdown text={item.answer ?? ''} /></div>}
       {item.status === 'error' && <div className="bc-error" role="alert"><Icon name="alert" size={14} /><span>{item.error}</span><button type="button" className="bc-retry" onClick={onRetry}>다시 시도</button></div>}
-      <footer className="bc-foot">대화 기록에 남지 않고 에이전트의 작업에도 영향을 주지 않습니다{item.status === 'done' && item.costUsd != null && ` · $${dollars(item.costUsd)}`}</footer>
+      <footer className="bc-foot"><span>대화 기록에 남지 않고 에이전트의 작업에도 영향을 주지 않습니다</span>{item.status === 'done' && <BtwUsage tokens={item.tokens} costUsd={item.costUsd} />}</footer>
     </div>
   </div>;
 }

@@ -41,6 +41,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (process.env.HISTORY_ONLY === '1' && !['initialize', 'initialized', 'thread/read', 'thread/turns/list'].includes(raw.method)) throw new Error('history must not start or resume a writer');
   if (!raw.method) { if (raw.id === requestId) { if (process.env.EXPECT_REJECT === '1' && raw.result?.decision !== 'decline' && raw.result?.outcome?.optionId !== 'deny') throw new Error('approval was not rejected'); finish(); } return; }
   if (cursor && raw.method === 'initialize' && p.clientCapabilities?._meta?.parameterizedModelPicker !== true) throw new Error('parameterized model picker must be advertised');
+  if (cursor && raw.method === 'initialize' && p.clientCapabilities?._meta?.subagents !== true) throw new Error('subagents must be advertised');
   if (raw.method === 'initialize') reply(raw.id, cursor ? { agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } } : {});
   else if (raw.method === 'initialized') {}
   else if (raw.method === 'thread/read') reply(raw.id, { thread: { id: p.threadId, cwd: process.cwd(), createdAt: 1, updatedAt: 2, turns: [] } });

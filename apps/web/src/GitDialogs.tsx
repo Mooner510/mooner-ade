@@ -86,7 +86,7 @@ export function RebaseDialog({ commits, onto, onSubmit, onClose }: { commits: Re
         }}>
         {rows.map((item, index) => <div key={item.sha} role="option" aria-selected={index === selected} className={`git-rebase-row ${index === selected ? 'selected' : ''} ${item.action}`} onClick={() => setSelected(index)}>
           <select value={item.action} aria-label={`${item.subject} 동작`} onChange={event => { const action = event.target.value as RebaseAction; setRows(list => list.map((other, at) => at === index ? { ...other, action } : other)); setSelected(index); }}>
-            {ACTIONS.map(action => <option key={action.id} value={action.id} title={action.hint}>{action.label}</option>)}</select>
+            {ACTIONS.map(action => <option key={action.id} value={action.id}>{action.label}</option>)}</select>
           <code>{item.sha.slice(0, 8)}</code><span>{item.action === 'reword' ? item.edited.split('\n')[0] : item.subject}</span>
         </div>)}
       </div>

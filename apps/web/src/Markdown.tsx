@@ -1,4 +1,4 @@
-import { Fragment, memo, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, memo, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { colorize } from './Editor';
 import { FileIcon } from './FileIcon';
 import { fileHref, fileRef, type FileRef } from './file-ref';
@@ -10,6 +10,7 @@ import { ChatUiContext, UiFrame } from './UiFrame';
 import { UI_LANG } from './ui-frame-protocol';
 import { NATIVE_LANG, parseUi } from './ui-spec';
 import { UiSpecView } from './UiBlocks';
+import { MermaidBlock } from './mermaid-block';
 
 // A small Markdown renderer for chat replies. It builds React elements (no HTML strings except Monaco's escaped syntax colouring), so model output cannot inject markup,
 // and links go through the app's own "open external link?" dialog (ade:link).
@@ -78,10 +79,43 @@ function UiBlock({ code, lang, open, live }: { code: string; lang: string; open?
 // Text with its line breaks: each line through `inline`, joined by <br>.
 const lines = (text: string) => text.split('\n').flatMap((line, index) => index ? [<br key={`br${index}`} />, <Fragment key={`l${index}`}>{inline(line)}</Fragment>] : [<Fragment key="l0">{inline(line)}</Fragment>]);
 
+function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [left, setLeft] = useState(false);
+  const [right, setRight] = useState(false);
+
+  useEffect(() => {
+    const scroll = scrollRef.current!;
+    const sync = () => {
+      setLeft(scroll.scrollLeft > 0);
+      setRight(Math.ceil(scroll.scrollLeft) < scroll.scrollWidth - scroll.clientWidth);
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(scroll);
+    observer.observe(scroll.firstElementChild!);
+    scroll.addEventListener('scroll', sync, { passive: true });
+    sync();
+    return () => {
+      observer.disconnect();
+      scroll.removeEventListener('scroll', sync);
+    };
+  }, []);
+
+  return <div className={`md-table${head.length >= 5 ? ' wide' : ''}`} data-scroll-left={left || undefined} data-scroll-right={right || undefined}>
+    <div className="md-table-scroll" ref={scrollRef}>
+      <table><thead><tr>{head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
+        <tbody>{rows.map((row, r) => <tr key={r}>{head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table>
+    </div>
+  </div>;
+}
+
 function renderNode(node: Node, key: string, live: boolean) {
   switch (node.t) {
     case 'h': { const Tag = `h${Math.min(6, node.level + 2)}` as 'h3'; return <Tag key={key}>{inline(node.text)}</Tag>; }
-    case 'code': return node.lang === UI_LANG || node.lang === NATIVE_LANG ? <UiBlock key={key} code={node.code} lang={node.lang} open={node.open} live={live} /> : <CodeBlock key={key} code={node.code} lang={node.lang} />;
+    case 'code':
+      if (node.lang === UI_LANG || node.lang === NATIVE_LANG) return <UiBlock key={key} code={node.code} lang={node.lang} open={node.open} live={live} />;
+      if (node.lang.toLowerCase() === 'mermaid') return node.open ? <CodeBlock key={key} code={node.code} lang="mermaid" /> : <MermaidBlock key={key} code={node.code} />;
+      return <CodeBlock key={key} code={node.code} lang={node.lang} />;
     case 'quote': return <blockquote key={key}>{lines(node.text)}</blockquote>;
     case 'hr': return <hr key={key} />;
     case 'list': {
@@ -89,8 +123,7 @@ function renderNode(node: Node, key: string, live: boolean) {
       return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={item.num} style={{ listStyleType: item.num === undefined ? 'disc' : 'decimal' }} className={item.depth ? 'nested' : ''}>
         {inline(item.text)}{item.blocks?.map((block, b) => renderNode(block, `${key}-${i}-${b}`, live))}</li>)}</Tag>;
     }
-    case 'table': return <div className={`md-table${node.head.length >= 5 ? ' wide' : ''}`} key={key}><table><thead><tr>{node.head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
-      <tbody>{node.rows.map((row, r) => <tr key={r}>{node.head.map((_, c) => <td key={c}>{inline(row[c] ?? '')}</td>)}</tr>)}</tbody></table></div>;
+    case 'table': return <MarkdownTable key={key} {...node} />;
     default: return <p key={key}>{lines(node.text)}</p>;
   }
 }

@@ -36,6 +36,15 @@ function fill(box: HTMLElement, text: string) {
 }
 
 const clipsText = (element: Element) => element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight;
+// A text field's visible text is its value, not text nodes. It counts as clipped only when the value is wider than the box, so a field that shows its whole value gets no tooltip.
+const TEXT_FIELDS = new Set(['text', 'search', 'url', 'tel', 'email']);
+const fieldOf = (element: Element) => element instanceof HTMLInputElement && TEXT_FIELDS.has(element.type) ? element : null;
+const fieldClips = (field: HTMLInputElement) => {
+  const style = getComputedStyle(field), context = document.createElement('canvas').getContext('2d');
+  if (!context) return false;
+  context.font = style.font;
+  return context.measureText(field.value).width > field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+};
 
 function renderedText(element: Element, includeOverflow = false) {
   // Text ranges exclude labels hidden by responsive styles without reading decorative icon glyphs as labels.
@@ -94,13 +103,16 @@ export function installTooltips() {
     const overflow = element.hasAttribute('data-tip-overflow');
     const text = overflow ? renderedText(element, true).join(' ') : (element as HTMLElement).dataset?.tip ?? taken ?? takenNode?.textContent;
     if (!text) { hide(); return; }
-    const copy = tooltipCopy(text, overflow || clipsText(element) ? '' : renderedText(element).join('\n'));
+    const field = fieldOf(element), clipped = overflow || (field ? fieldClips(field) : clipsText(element));
+    const copy = tooltipCopy(text, clipped ? '' : field ? field.value : renderedText(element).join('\n'));
     if (!copy) {
       // Keep the native title suspended on this anchor until the pointer or focus leaves it.
       if (tip.matches(':popover-open')) tip.hidePopover();
       return;
     }
     fill(tip, copy);
+    // data-tip-nowrap: a single line (a path), kept inside the window by the CSS for .nowrap.
+    tip.classList.toggle('nowrap', element.hasAttribute('data-tip-nowrap'));
     if (!tip.matches(':popover-open')) tip.showPopover();
     place(element);
     // An element that is re-rendered away while its tooltip is showing never fires a leave event.

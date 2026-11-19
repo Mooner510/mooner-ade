@@ -9,6 +9,7 @@ import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
 import { NO_ATTACH_CONSOLE, shouldLeaveConsole, startOffConsole } from './console-detach.js';
 import { watchRtxHdr } from './nvidia-rtx-hdr.js';
 import { setupPlugins } from './plugins.js';
+import { localServerEnv } from './server-env.js';
 import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
@@ -31,6 +32,8 @@ if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
 let server = null, origin = '', quitting = false, restarting = false, mainWindow = null, plugins = null;
+// Settings > 정보. Read again on each spawn (a dev reload included); the running server keeps the env it started with.
+let systemCaEnabled = () => false;
 // `app.isPackaged` is false whenever the executable is named electron/Electron, which is what the macOS bundle's is, so it cannot tell
 // an installed app from a dev one. The runtime/ folder (resources/runtime, beside resources/app) exists only in packaged builds; a dev
 // launcher has none and uses the system Node. A GUI launch (Finder, Dock) has no node on PATH, so never rely on the fallback there.
@@ -131,7 +134,8 @@ async function releasePtyHost() {
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    const child = server = spawn(nodeBinary, [serverEntry], { env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+    // Anonymous feedback to the Hub leaves from here, so this child gets the OS-certificate switch. Plugin children and this process do too.
+    const child = server = spawn(nodeBinary, [serverEntry], { env: localServerEnv(process.env, systemCaEnabled()), stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     let output = '';
     child.stdout.on('data', chunk => {
       process.stdout.write(chunk);
@@ -384,6 +388,7 @@ if (leavingConsole) {
       await ensurePtyHost().catch(error => console.warn(`pty-host 없이 시작합니다: ${error.message}`));
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
       const systemCa = setupSystemCa({ userData: app.getPath('userData'), nodeBinary, getWindow: () => mainWindow });
+      systemCaEnabled = systemCa.enabled;
       try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       createWindow(await startServer());
