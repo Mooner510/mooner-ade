@@ -89,3 +89,9 @@ test('명령 팔레트(QuickInput)는 Modal처럼 누름과 놓음이 모두 상
   assert.match(css, /\.hint-card \{ pointer-events: none; \}\s*\.hint-card > button \{ pointer-events: auto; \}/);
   assert.match(css, /\.workbench:has\(> \.right-panel\) > :not\(\.right-panel\) \.hint-card \{ visibility: hidden; \}/);
 });
+
+test('밝은 테마의 서브에이전트 이름표는 파스텔 글자색에 본문색을 섞어 연한 바탕에서도 읽힌다', async () => {
+  const css = await read('style.css');
+  // 한 가지 밝은 색(hsl 62%)을 어두운 바탕 기준으로 정해 두었기 때문에, 밝은 테마에서는 대비가 1.4:1까지 떨어졌다(최종 e2e에서 발견).
+  assert.match(css, /:root\[data-scheme=light\] \.chat-agent-type, :root\[data-scheme=light\] \.chat-approval header \.chat-approval-agent \.chat-agent-type \{ color: color-mix\(in srgb, var\(--agent-color, var\(--agent\)\) \d+%, var\(--fg\)\); \}/);
+});
