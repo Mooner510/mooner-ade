@@ -5,7 +5,7 @@ export type UsageStyle = 'bar' | 'text';
 export const usageMeterCatalog: Record<UsageProvider, { id: string; label: string }[]> = {
   claude: [
     { id: 'session', label: '5시간' }, { id: 'weekly', label: '주간' }, { id: 'fable', label: 'Fable' },
-    { id: 'weekly-opus', label: '주간 Opus' }, { id: 'weekly-sonnet', label: '주간 Sonnet' }, { id: 'credit', label: '크레딧' }
+    { id: 'credit', label: '크레딧' }
   ],
   codex: [{ id: 'session', label: '5시간' }, { id: 'weekly', label: '주간' }, { id: 'credit', label: '크레딧' }],
   cursor: [

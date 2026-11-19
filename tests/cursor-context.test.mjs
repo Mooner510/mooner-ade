@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { cursorStorePath, decodeConversationTokenDetails, readCursorStoreUsage } from '../apps/local-server/src/cursor-context.js';
+import { cursorAutoCompact, cursorStorePath, decodeConversationTokenDetails, readCursorStoreUsage } from '../apps/local-server/src/cursor-context.js';
 
 const varint = value => {
   const out = [];
@@ -21,6 +21,26 @@ test('decodeConversationTokenDetails reads field 5 used/max tokens', () => {
   const details = fieldBytes(5, Buffer.concat([fieldVarint(1, 12_345), fieldVarint(2, 200_000)]));
   const parsed = decodeConversationTokenDetails(details);
   assert.deepEqual(parsed, { usedTokens: 12_345, maxTokens: 200_000 });
+});
+
+test('decodeConversationTokenDetails keeps the summary count that follows the token meter', () => {
+  const root = Buffer.concat([
+    fieldBytes(5, Buffer.concat([fieldVarint(1, 180_000), fieldVarint(2, 200_000)])),
+    fieldVarint(17, 2),
+  ]);
+  assert.deepEqual(decodeConversationTokenDetails(root), { usedTokens: 180_000, maxTokens: 200_000, selfSummaryCount: 2 });
+});
+
+test('cursorAutoCompact emits when the summary count rises, and baselines the first count unless the meter just fell', () => {
+  assert.deepEqual(cursorAutoCompact(null, { selfSummaryCount: 1, contextTokens: 20_000 }, 0), { count: 1, event: null });
+  const first = cursorAutoCompact(null, { selfSummaryCount: 1, contextTokens: 20_000 }, 180_000);
+  assert.equal(first.event.trigger, 'auto');
+  assert.equal(first.event.preTokens, 180_000);
+  assert.equal(first.event.postTokens, 20_000);
+  const again = cursorAutoCompact(1, { selfSummaryCount: 2, contextTokens: 30_000 }, 20_000);
+  assert.equal(again.event.postTokens, 30_000);
+  assert.equal(cursorAutoCompact(2, { selfSummaryCount: 2, contextTokens: 30_000 }, 30_000).event, null);
+  assert.equal(cursorAutoCompact(2, { contextTokens: 30_000 }, 30_000).count, 2);
 });
 
 test('cursorStorePath prefers acp-sessions then scans chats', async () => {

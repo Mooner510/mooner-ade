@@ -9,6 +9,7 @@ import path from 'node:path';
 import { createPluginManager, createPluginStore, probeMcpTools } from './plugin-core.js';
 import { createHubClient } from './hub-client.js';
 import { createGithub, githubClientId, machineAccounts, machineToken } from './plugin-updates.js';
+import { localServerEnv } from './server-env.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
@@ -56,8 +57,8 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   }
   // The plugin gets the user's environment, minus what only the app's own processes should see.
   const hostEnv = () => {
-    // Settings > 정보 (see system-ca.js): Node then also trusts the OS certificate store, which a TLS-inspecting network needs. An own NODE_USE_SYSTEM_CA wins.
-    const env = { ...(systemCa() && { NODE_USE_SYSTEM_CA: '1' }), ...process.env, ADE_PLUGIN: '1' };
+    // Settings > 정보 (see system-ca.js): the same switch the app process and the local server use for Hub. It wins over a value inherited from the shell.
+    const env = { ...localServerEnv(process.env, systemCa()), ADE_PLUGIN: '1' };
     for (const name of Object.keys(env)) if (/^(ADE_PTY_|ADE_DEV$|ELECTRON_)/.test(name)) delete env[name];
     return env;
   };

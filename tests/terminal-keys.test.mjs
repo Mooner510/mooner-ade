@@ -42,21 +42,37 @@ test('native terminal and composer keys preserve editing, completion and applica
     window.chatCalls = [];
     const noop = () => {}, bus = { buffers: new Map(), listeners: new Map(), sizes: new Map(), sizeListeners: new Map() };
     window.feed = data => bus.listeners.get('test')({data, sequence: 1});
+    let codexState;
+    const chatListeners = new Map();
+    const codexModel = { id:'gpt-6.2-sol', name:'GPT 6.2 Sol', family:'', window:0, main:true, efforts:['medium','high'] };
+    window.codexModelsRequested = 0;
     const call = async (action, input) => {
+      if (action === 'chat/open' && input.agent === 'codex') return new Promise(resolve => {
+        window.finishCodexOpen = () => {
+          codexState = {...demoChatState(), agent:'codex', model:null};
+          resolve({state:codexState, events:[], seq:0, approvals:[]});
+        };
+      });
       if (action === 'chat/open') return {state: {...demoChatState(), effort:'medium'}, events:[], seq:0, approvals:[]};
+      if (action === 'chat/models' && input.agent === 'codex') {
+        window.codexModelsRequested++;
+        if (codexState) chatListeners.get(input.id)?.({type:'chat/state', state:{...codexState, capabilities:{catalog:[codexModel], efforts:codexModel.efforts}}});
+        return {models:{'':codexModel.id}, catalog:[codexModel]};
+      }
       if (action === 'chat/models') return demoModels;
       if (action === 'chat/commands') return [{name:'help', description:'Help'}, {name:'clear', description:'Clear'}];
       if (action === 'files/list') return {files:['a.ts', 'b.ts', 'src/']};
       if (action === 'chat/set' || action === 'chat/send') chatCalls.push({action, input});
       return {};
     };
-    const subscribe = () => noop;
+    const subscribe = (id, listener) => { chatListeners.set(id, listener); return () => chatListeners.delete(id); };
     function App() {
       const [settings, setSettings] = useState({...defaultSettings, terminalGpu: false, tips: false});
       const [kind, setKind] = useState('terminal');
       window.renderChat = () => setKind('chat');
+      window.renderCodex = () => setKind('codex');
       window.optionMeta = value => setSettings(old => ({...old, optionAsMeta: value}));
-      return <Panes pane={{id:'test',kind}} visible focus="test" zoom="" bus={bus} live={new Set(['test'])} cwds={{test:'/tmp'}} titles={{}}
+      return <Panes key={kind} pane={kind === 'codex' ? {id:'test',kind:'chat',agent:'codex'} : {id:'test',kind}} visible focus="test" zoom="" bus={bus} live={new Set(['test'])} cwds={{test:'/tmp'}} titles={{}}
         editor={{settings}} chat={{settings, onSettingsChange:setSettings, root:'/tmp', projectId:'fixture', call, subscribe, onTitle:noop, onState:noop, fail:console.error}} send={m => {if(m.type === 'terminal/input') inputs.push(m.data); return true;}}
         agentOf={noop} ssh={new Set()} working={new Set()} attention={{}} caches={{}}
         onAgent={noop} onAgentEvent={noop} onAgentResolved={noop} onAgentWorking={noop} onFocus={noop} onTitle={noop}
@@ -159,5 +175,11 @@ test('native terminal and composer keys preserve editing, completion and applica
   }
   await clear(); await type('draft'); await dispatch('Enter', alt, ['insertNewline']);
   state = await composer(); assert.ok(state.text.includes('\n')); assert.deepEqual(state.calls, []);
+  await evaluate('renderCodex()'); await settle();
+  assert.equal(await evaluate('codexModelsRequested'), 0, 'the model probe waits for the new Codex chat to open');
+  await evaluate('finishCodexOpen()');
+  for (let i = 0; i < 100 && !await evaluate('!!document.querySelector(".chat-effort")'); i++) await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(await evaluate('codexModelsRequested'), 1);
+  assert.ok(await evaluate('!!document.querySelector(".chat-effort")'), 'Effort is available before sending the first message');
   assert.deepEqual(errors, []);
 });

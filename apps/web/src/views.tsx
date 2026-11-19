@@ -33,7 +33,16 @@ export function Modal({ children, onClose, className = '', labelledBy, region = 
       element.close();
     };
   }, []);
-  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} data-feedback-region={region} onCancel={event => { event.preventDefault(); onClose(); }}>{children}</dialog>;
+  // A click on the ::backdrop is targeted at the <dialog> itself. Padding counts as inside, so compare against the box, and require the press to start outside too (a text drag that ends on the backdrop must not close).
+  const pressedOutside = useRef(false);
+  const outside = (event: { target: EventTarget; currentTarget: HTMLDialogElement; clientX: number; clientY: number }) => {
+    if (event.target !== event.currentTarget) return false;
+    const box = event.currentTarget.getBoundingClientRect();
+    return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  };
+  return <dialog ref={dialog} className={className} aria-labelledby={labelledBy} data-feedback-region={region} onCancel={event => { event.preventDefault(); onClose(); }}
+    onMouseDown={event => { pressedOutside.current = outside(event); }}
+    onClick={event => { if (pressedOutside.current && outside(event)) onClose(); pressedOutside.current = false; }}>{children}</dialog>;
 }
 // A model name whose "(1M)" tail (a 1M-token window) is shown small and gray, next to the name in the model colour.
 export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };

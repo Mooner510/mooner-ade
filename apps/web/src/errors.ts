@@ -18,6 +18,19 @@ export function errorText(cause: unknown) {
   return (cause instanceof Error ? cause.message : String(cause ?? '')).trim() || '알 수 없는 오류';
 }
 
+// `git status` (and the log) on a directory that is not a repository. English git, and a Korean locale build.
+export function notAGitRepository(message: string) {
+  return /not a git repository/i.test(message) || /git 저장소가 아닙니다/i.test(message);
+}
+
+// A "not a repository" answer pauses polling. Another repository count, another selected repo (`key`), or this delay starts it again.
+export const GIT_STATUS_RETRY_MS = 30_000;
+export function gitStatusPause(quietUntil: number, quietKey: string, now: number, count: number, key: string) {
+  if (count <= 0) return { poll: false, quietUntil: 0, quietKey: '' };
+  if (quietUntil > now && quietKey === key) return { poll: false, quietUntil, quietKey };
+  return { poll: true, quietUntil: 0, quietKey: key };
+}
+
 export function errorLog(scope: string): ErrorLog {
   return logs.get(scope) ?? empty;
 }

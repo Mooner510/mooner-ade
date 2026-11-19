@@ -47,14 +47,12 @@ export async function readCodexLogin({ env = process.env, home = os.homedir(), r
 const percent = value => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 const windowKey = seconds => seconds <= 6 * 3600 ? 'session' : seconds >= 6 * 86400 ? 'weekly' : 'other';
 
-// { five_hour: { utilization, resets_at }, seven_day: …, seven_day_opus: … } from api.anthropic.com/api/oauth/usage.
+// { five_hour: { utilization, resets_at }, seven_day: … } from api.anthropic.com/api/oauth/usage.
 export function parseClaudeUsage(body) {
   const windows = [];
   const add = (key, label, value) => { if (value && value.utilization !== null && value.utilization !== undefined) windows.push({ key, label, percent: percent(value.utilization), resetsAt: Date.parse(value.resets_at) || null }); };
   add('session', '5시간', body?.five_hour);
   add('weekly', '주간', body?.seven_day);
-  add('weekly-opus', '주간 Opus', body?.seven_day_opus);
-  add('weekly-sonnet', '주간 Sonnet', body?.seven_day_sonnet);
   // Present only on accounts that have a Fable window. A bare `fable` object uses the same shape; a string (a model name) is ignored.
   add('fable', 'Fable', body?.seven_day_fable ?? (body?.fable && typeof body.fable === 'object' ? body.fable : null));
   return windows;

@@ -26,7 +26,15 @@ export const CURSOR_SANDBOXES = ['enabled', 'disabled'];
 const modeOf = mode => mode === 'default' ? 'agent' : mode;
 // cursor-agent appends this and ends the turn (stopReason end_turn) when the backend drops the stream.
 // `[unavailable] HTTP 503` is the server form; `Stream ended without turnEnded — connection likely dropped mid-stream` is the client form when the stream closes before turnEnded. The useful answer is whatever came before it.
-const CURSOR_TRANSPORT_DROP = /(?:^|\n{1,2})Error: RetriableError: ([^\n]*)\s*$/;
+export const CURSOR_TRANSPORT_DROP = /(?:^|\n{1,2})Error: RetriableError: ([^\n]*)\s*$/;
+export const CURSOR_TRANSPORT_RESUME = '연결이 잠깐 끊겼습니다. 끊긴 지점부터 이어서 진행하고, 이미 끝낸 작업은 반복하지 마세요.';
+const CURSOR_TRANSPORT_HINT = /(?:\[unavailable\]|HTTP\s*503|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|turnEnded|connection likely dropped)/i;
+const MAX_CURSOR_TRANSPORT_RESUMES = 48;
+const defaultTransportResumeDelay = n => Math.min(30_000, 500 * 2 ** Math.min(Math.max(0, n - 1), 6));
+export function isCursorTransportMessage(message) {
+  const text = String(message ?? '');
+  return /RetriableError:/.test(text) && (CURSOR_TRANSPORT_HINT.test(text) || CURSOR_TRANSPORT_DROP.test(text));
+}
 // Cursor sends boolean parameters and select groups. Thinking shares the thought_level category with Effort, so Effort is identified by id.
 export function normalizeCursorOptions(options = []) {
   return options.flatMap(option => {
@@ -53,12 +61,12 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
 };
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
-export function createChatProtocol(agent, { write, emit, fail }) {
+export function createChatProtocol(agent, { write, emit, fail, transportResumeDelay = defaultTransportResumeDelay } = {}) {
   let cursorTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
-  // cursor-agent prints `Error: RetriableError: ...` and ends the turn when the backend drops the stream (HTTP 503, or the stream closing before turnEnded). It does not retry (enableAgentRetries stays off). One resume of the same turn covers that drop.
-  let transportResumes = 0, transportDropped = false, dropDetail = '';
+  // cursor-agent prints `Error: RetriableError: ...` and ends the turn when the backend drops the stream (HTTP 503, DNS blips, or the stream closing before turnEnded). It does not retry (enableAgentRetries stays off). ADE keeps the same user turn open and re-prompts until the link is back.
+  let transportResumes = 0, transportDropped = false, dropDetail = '', transportResumeTimer = null;
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
@@ -123,15 +131,34 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     }
   }
   // Cursor streams a turn's text as one run per stretch between tools: `<turn>-text-<n>` (and `-thinking-<n>`).
-  const cursorTextId = phase => `${turnId}-${phase}-${textSerial}`;
-  function cursorFlush() {
+  // A subagent's text uses its own serial so it is not glued onto the parent turn.
+  const cursorChildren = new Map(); // subagent session id -> { toolUseId, serial }
+  const cursorTextId = (phase, child) => child ? `${child.toolUseId}-${phase}-${child.serial}` : `${turnId}-${phase}-${textSerial}`;
+  function cursorFlush(child) {
     let stored = false;
     for (const phase of ['thinking', 'text']) {
-      const id = cursorTextId(phase), content = chunks.get(id);
-      if (typeof content === 'string' && content.trim()) { message(id, [{ type: phase, text: content }], phase === 'text' ? { uuid: id } : {}); stored = true; if (phase === 'text') said = true; }
+      const id = cursorTextId(phase, child), content = chunks.get(id);
+      if (typeof content === 'string' && content.trim()) { message(id, [{ type: phase, text: content }], { ...(phase === 'text' && { uuid: id }), ...(child && { parentToolUseId: child.toolUseId }) }); stored = true; if (phase === 'text' && !child) said = true; }
       chunks.delete(id);
     }
     return stored;
+  }
+  // Parent text and every subagent's buffered text. A turn can end while a child still holds a chunk.
+  function flushCursorOutput() {
+    let stored = cursorFlush();
+    if (stored) textSerial += 1;
+    for (const child of cursorChildren.values()) if (cursorFlush(child)) { child.serial += 1; stored = true; }
+    return stored;
+  }
+  const cursorTaskStatus = state => state === 'completed' ? 'completed' : state === 'failed' ? 'failed' : 'stopped';
+  const cursorSubagentDone = state => /^(completed|failed|cancelled|canceled|stopped|error)$/i.test(String(state ?? ''));
+  function cursorToolShape(item) {
+    const raw = item.rawInput && typeof item.rawInput === 'object' ? item.rawInput : {};
+    const task = raw._toolName === 'task' || /^Task:/.test(item.title ?? '');
+    const name = item.kind === 'execute' ? 'Bash' : item.kind === 'edit' ? 'Patch' : task ? 'Task' : item.title ?? item.kind ?? 'Tool';
+    if (name !== 'Task') return { name, input: { ...raw, description: item.title, content: item.content, locations: item.locations } };
+    const description = typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim() : String(item.title ?? '').replace(/^Task:\s*/, '').trim() || '서브에이전트';
+    return { name, input: { description, prompt: typeof raw.prompt === 'string' ? raw.prompt : '', subagent_type: typeof raw.subagentType === 'string' && raw.subagentType ? raw.subagentType : 'subagent', ...(typeof raw.model === 'string' && raw.model && { model: raw.model }) } };
   }
   function notification(method, params) {
     if (agent === 'codex') {
@@ -154,35 +181,64 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       else if (method === 'serverRequest/resolved') { const id = String(params.requestId); approvals.delete(id); emit({ kind: 'approval', phase: 'cancel', requestId: id }); }
       return;
     }
-    if (method !== 'session/update' || params.sessionId !== sessionId) return;
+    if (method !== 'session/update') return;
     const update = params.update ?? {}, type = update.sessionUpdate;
+    if (type === 'user_message_chunk' && (!params.sessionId || params.sessionId === sessionId)) {
+      if ((update.content?.text ?? '').trim() === CURSOR_TRANSPORT_RESUME) return;
+    }
+    // Subagent steps arrive on their own session id. Anything else for a session we do not know is not this chat.
+    const child = params.sessionId && params.sessionId !== sessionId ? cursorChildren.get(params.sessionId) : null;
+    // Spawn and the terminal state name the child session themselves, so they are accepted before that session is known.
+    const subagentNotice = type === 'subagent_spawned' || type === 'subagent_state_update';
+    if (params.sessionId && sessionId && params.sessionId !== sessionId && !child && !subagentNotice) return;
+    const parent = child ? { parentToolUseId: child.toolUseId } : {};
+    if (type === 'subagent_spawned') {
+      const toolUseId = update._meta?.cursor?.toolCallId || update.subagentSessionId;
+      if (update.subagentSessionId && toolUseId) cursorChildren.set(update.subagentSessionId, { toolUseId, serial: 0 });
+      if (!toolUseId) return;
+      const description = typeof update.task === 'string' && update.task.trim() ? update.task.trim() : (typeof update.name === 'string' && update.name.trim() ? update.name.trim() : '서브에이전트');
+      const agentType = typeof update.name === 'string' && update.name.trim() ? update.name.trim() : 'subagent';
+      emit({ kind: 'task', phase: 'start', toolUseId, description, agentType, background: false });
+      if (!chunks.has(toolUseId)) message(toolUseId, [{ type: 'tool_use', id: toolUseId, name: 'Task', input: { description, prompt: typeof update.task === 'string' ? update.task : '', subagent_type: agentType } }]);
+      chunks.set(toolUseId, { ...(chunks.get(toolUseId) ?? {}), spawned: true });
+      return;
+    }
+    if (type === 'subagent_state_update') {
+      if (!cursorSubagentDone(update.state)) return;
+      const known = cursorChildren.get(update.subagentSessionId);
+      if (known) cursorFlush(known);
+      const toolUseId = known?.toolUseId || update._meta?.cursor?.toolCallId || update.subagentSessionId;
+      if (toolUseId) emit({ kind: 'task', phase: 'end', toolUseId, status: cursorTaskStatus(update.state), report: '' });
+      return;
+    }
     if (type === 'agent_message_chunk' || type === 'agent_thought_chunk') {
-      const phase = type === 'agent_thought_chunk' ? 'thinking' : 'text', messageId = cursorTextId(phase);
+      const phase = type === 'agent_thought_chunk' ? 'thinking' : 'text', messageId = cursorTextId(phase, child);
       const text = update.content?.text ?? '';
       const old = chunks.get(messageId) ?? '';
       const combined = old + text;
-      const drop = phase === 'text' ? combined.match(CURSOR_TRANSPORT_DROP) : null;
+      const drop = !child && phase === 'text' ? combined.match(CURSOR_TRANSPORT_DROP) : null;
       if (drop) {
         transportDropped = true; dropDetail = (drop[1] ?? '').trim();
         const cleaned = combined.replace(CURSOR_TRANSPORT_DROP, '');
         if (cleaned) chunks.set(messageId, cleaned); else chunks.delete(messageId);
         const keep = text.slice(0, Math.max(0, cleaned.length - old.length));
-        if (keep) emit({ kind: 'delta', phase, index: 0, messageId, text: keep });
+        if (keep) emit({ kind: 'delta', phase, index: 0, messageId, text: keep, ...parent });
       } else {
         chunks.set(messageId, combined);
-        emit({ kind: 'delta', phase, index: 0, messageId, text });
+        emit({ kind: 'delta', phase, index: 0, messageId, text, ...parent });
       }
     } else if (type === 'tool_call' || type === 'tool_call_update') {
       // Text and thoughts said before this tool are stored under the id they streamed with (so the screen keeps the same item) and later text starts a new one.
-      if (cursorFlush()) textSerial += 1;
+      if (child) { if (cursorFlush(child)) child.serial += 1; }
+      else if (cursorFlush()) textSerial += 1;
       const old = chunks.get(update.toolCallId) ?? {}, item = { ...old, ...update };
-      const name = item.kind === 'execute' ? 'Bash' : item.kind === 'edit' ? 'Patch' : item.title ?? item.kind ?? 'Tool';
-      const block = { type: 'tool_use', id: update.toolCallId, name, input: { ...(item.rawInput ?? {}), description: item.title, content: item.content, locations: item.locations } };
+      const shape = cursorToolShape(item);
+      const block = { type: 'tool_use', id: update.toolCallId, name: shape.name, input: shape.input };
       // Updates repeat the call many times over; only a change is stored (status-only updates change nothing that is drawn).
       const shown = JSON.stringify(block);
-      if (shown !== old.shown) message(update.toolCallId, [block]);
+      if (shown !== old.shown) message(update.toolCallId, [block], parent);
       const finished = item.status === 'completed' || item.status === 'failed';
-      if (finished && !old.finished) emit({ kind: 'tool_result', toolUseId: update.toolCallId, isError: item.status === 'failed',
+      if (finished && !old.finished) emit({ kind: 'tool_result', toolUseId: update.toolCallId, isError: item.status === 'failed', ...parent,
         content: (item.content ?? []).map(part => part.type === 'content' ? part.content?.text ?? `[${part.content?.type}]` : part.type === 'diff' ? `${part.path}\n${part.newText}` : JSON.stringify(part)).join('\n') });
       chunks.set(update.toolCallId, { ...item, shown, finished: finished || old.finished });
     } else if (type === 'available_commands_update') {
@@ -225,9 +281,27 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     const option = raw.params?.options?.find(o => o.kind === 'allow_once'); if (!option) return false;
     void send({ id: raw.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } }); return true;
   }
+  function clearTransportResumeTimer() {
+    if (transportResumeTimer) { clearTimeout(transportResumeTimer); transportResumeTimer = null; }
+  }
   function resumeCursorTurn() {
+    emit({ kind: 'delta', phase: 'reconnecting', active: false });
     promptId = nextId + 1;
-    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: '연결이 잠깐 끊겼습니다. 끊긴 지점부터 이어서 진행하고, 이미 끝낸 작업은 반복하지 마세요.' }] }, 0).then(promptDone, promptFailed);
+    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: CURSOR_TRANSPORT_RESUME }] }, 0).then(promptDone, promptFailed);
+  }
+  function scheduleTransportResume(detail) {
+    clearTransportResumeTimer();
+    if (detail) dropDetail = detail;
+    if (transportResumes >= MAX_CURSOR_TRANSPORT_RESUMES) {
+      emit({ kind: 'delta', phase: 'reconnecting', active: false });
+      result('failed', `Cursor 연결이 잠깐 끊겼습니다 (${dropDetail || 'unavailable'}). 잠시 뒤 같은 내용을 다시 보내면 이어서 진행됩니다.`);
+      return;
+    }
+    transportResumes += 1;
+    emit({ kind: 'delta', phase: 'reconnecting', active: true, detail: dropDetail || detail || 'unavailable' });
+    const delay = transportResumeDelay(transportResumes);
+    if (delay <= 0) resumeCursorTurn();
+    else { transportResumeTimer = setTimeout(() => { transportResumeTimer = null; resumeCursorTurn(); }, delay); transportResumeTimer.unref?.(); }
   }
   function promptDone(response) {
     if (disposed) return;
@@ -242,13 +316,11 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     }
     transportDropped = false; dropDetail = '';
     promptId = null;
-    if (cursorFlush()) textSerial += 1;
-    if (dropped) {
-      if (transportResumes >= 1) { result('failed', `Cursor 연결이 잠깐 끊겼습니다 (${detail || 'unavailable'}). 같은 내용을 다시 보내면 이어서 진행됩니다.`); return; }
-      transportResumes += 1; resumeCursorTurn(); return;
-    }
+    const flushed = flushCursorOutput();
+    if (dropped) { scheduleTransportResume(detail); return; }
+    emit({ kind: 'delta', phase: 'reconnecting', active: false });
     transportResumes = 0;
-    const hasOutput = said || [...chunks.values()].some(value => typeof value === 'object');
+    const hasOutput = said || flushed || [...chunks.values()].some(value => typeof value === 'object');
     const status = response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'end_turn' && hasOutput ? 'success' : 'failed';
     const u = response.usage;
     if (u && ['inputTokens', 'outputTokens'].every(key => Number.isSafeInteger(u[key]) && u[key] >= 0)
@@ -264,7 +336,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     promptId = null;
     const message = error?.message ?? '';
     const drop = agent === 'cursor' ? message.match(/RetriableError: ([^\n]*)/) : null;
-    if (drop && transportResumes < 1) { transportResumes += 1; dropDetail = ''; cursorFlush(); resumeCursorTurn(); return; }
+    if (drop && isCursorTransportMessage(message)) { dropDetail = ''; flushCursorOutput(); scheduleTransportResume((drop[1] ?? '').trim()); return; }
     result('failed', message); fail?.(error);
   }
   function serverRequest(raw) {
@@ -279,12 +351,13 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       } else if (raw.method === 'item/tool/requestUserInput') approval(raw, '질문', {}, { questions: p.questions.map(q => ({ id: q.id, prompt: q.question, ...(q.header && { header: q.header }), allowOther: q.isOther === true, secret: q.isSecret, options: (q.options ?? []).map(o => ({ id: o.label, label: o.label, description: o.description })) })) });
       else if (raw.method === 'item/permissions/requestApproval') approval(raw, '추가 권한', p.permissions, { suggestions: ['session'] });
       else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
-    } else if (p.sessionId && p.sessionId !== sessionId) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
+    } else if (p.sessionId && p.sessionId !== sessionId && !cursorChildren.has(p.sessionId)) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
     else if (raw.method === 'session/request_permission' && runEverything && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission' && autoApprovedTool(p.toolCall) && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission') approval(raw, p.toolCall?.title ?? '도구 실행', p.toolCall?.rawInput ?? {}, { suggestions: p.options?.some(o => o.kind === 'allow_always') ? ['session'] : [] });
     else if (raw.method === 'cursor/ask_question') approval(raw, p.title ?? '질문', {}, { questions: p.questions });
     else if (raw.method === 'cursor/create_plan') approval(raw, '계획 승인', { description: p.overview, plan: p.plan });
+    else if (raw.method === 'cursor/task' || raw.method === 'cursor/update_todos' || raw.method === 'cursor/generate_image') void send({ id: raw.id, result: {} });
     else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
   }
   return {
@@ -302,13 +375,16 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     replayCursor(id, updates) {
       sessionId = id; turnId = `history-${id}`; textSerial = 0;
       for (const params of updates) {
-        if (params.sessionId !== id) continue;
-        if (params.update?.sessionUpdate === 'user_message_chunk') {
-          if (cursorFlush()) textSerial++;
-          emit({ kind: 'user', text: params.update.content?.text ?? '', images: params.update.content?.type === 'image' ? 1 : 0 });
+        const own = !params.sessionId || params.sessionId === id;
+        if (own && params.update?.sessionUpdate === 'user_message_chunk') {
+          const text = params.update.content?.text ?? '';
+          if (text.trim() !== CURSOR_TRANSPORT_RESUME) {
+            flushCursorOutput();
+            emit({ kind: 'user', text, images: params.update.content?.type === 'image' ? 1 : 0 });
+          }
         } else notification('session/update', params);
       }
-      cursorFlush();
+      flushCursorOutput();
     },
     handle(raw) {
       if (raw.method) { if (raw.id !== undefined) serverRequest(raw); else notification(raw.method, raw.params ?? {}); }
@@ -321,15 +397,16 @@ export function createChatProtocol(agent, { write, emit, fail }) {
     // What a server that stops hands to the next one, which goes on with the same running agent (chat.js `detach`). Answers to our own
     // requests other than the running Cursor prompt are dropped: the next server never waits for them.
     snapshot: () => ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers,
-      approvals: [...approvals], chunks: [...chunks], skills: [...skills], cursorTokens, promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
+      transportResumes, transportDropped, dropDetail,
+      approvals: [...approvals], chunks: [...chunks], skills: [...skills], cursorChildren: [...cursorChildren], cursorTokens, promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
     restore(saved) {
-      ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers } = saved);
+      ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers, transportResumes = 0, transportDropped = false, dropDetail = '' } = saved);
       cursorTokens = saved.cursorTokens ?? cursorTokens;
-      for (const [map, entries] of [[approvals, saved.approvals], [chunks, saved.chunks], [skills, saved.skills]]) { map.clear(); for (const [key, value] of entries ?? []) map.set(key, value); }
+      for (const [map, entries] of [[approvals, saved.approvals], [chunks, saved.chunks], [skills, saved.skills], [cursorChildren, saved.cursorChildren]]) { map.clear(); for (const [key, value] of entries ?? []) map.set(key, value); }
       promptId = saved.promptId ?? null;
       if (promptId !== null) pending.set(promptId, { resolve: promptDone, reject: promptFailed, timer: null });
     },
-    dispose() { disposed = true; for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
+    dispose() { disposed = true; clearTransportResumeTimer(); for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
     async initialize(meta, cwd, servers = [], instructions) {
       config = { ...meta, cwd };
       if (agent === 'cursor' && meta.tokens) cursorTokens = { ...cursorTokens, ...meta.tokens };
@@ -364,7 +441,8 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         if (named) emit(named);
         emit({ kind: 'session', sessionId, model: response.model ?? meta.model, slashCommands: commands.map(item => item.name), commands });
       } else {
-        const init = await request('initialize', { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.1' } });
+        // `_meta.subagents` is what cursor-agent reads to publish subagent_spawned / subagent_state_update. Without it the task still runs, but ADE never hears about it.
+        const init = await request('initialize', { protocolVersion: 1, clientCapabilities: { _meta: { parameterizedModelPicker: true, subagents: true } }, clientInfo: { name: 'mooner_ade', version: '0.5.1' } });
         capabilities.images = init.agentCapabilities?.promptCapabilities?.image === true;
         capabilities.resume = init.agentCapabilities?.loadSession === true;
         if (meta.sessionId && !capabilities.resume) throw fault('CHAT_UNSUPPORTED', '이 Cursor 버전은 세션 복원을 지원하지 않습니다.', 409);
@@ -429,7 +507,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
         else { startedAt = Date.now(); const response = await request('turn/start', { threadId: sessionId, input, ...codexPermissions(config.permissionMode, config.cwd, config.addDirs, config.sandbox, config.network), ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }) }); turnId = response.turn.id; }
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
-        transportResumes = 0; transportDropped = false; dropDetail = '';
+        clearTransportResumeTimer(); transportResumes = 0; transportDropped = false; dropDetail = '';
         startedAt = Date.now(); turnId = `cursor-${randomUUID()}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
         promptId = nextId + 1; // the id request() is about to use
         void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(promptDone, promptFailed);
@@ -454,6 +532,7 @@ export function createChatProtocol(agent, { write, emit, fail }) {
       await send({ id: raw.id, result: response }); approvals.delete(id);
     },
     async interrupt() {
+      clearTransportResumeTimer(); emit({ kind: 'delta', phase: 'reconnecting', active: false });
       if (agent === 'codex') { if (turnId) await request('turn/interrupt', { threadId: sessionId, turnId }); }
       else await send({ method: 'session/cancel', params: { sessionId } });
     }

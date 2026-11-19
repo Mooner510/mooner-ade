@@ -65,7 +65,9 @@ export function parseBtwOutput(agent, stdout) {
   if (agent === 'claude') {
     let value = null;
     try { value = JSON.parse(stdout); } catch { return null; }
-    return { ok: !value.is_error && typeof value.result === 'string', text: String(value.result ?? ''), costUsd: Number.isFinite(value.total_cost_usd) ? value.total_cost_usd : null };
+    const usage = value.usage;
+    return { ok: !value.is_error && typeof value.result === 'string', text: String(value.result ?? ''), costUsd: Number.isFinite(value.total_cost_usd) ? value.total_cost_usd : null,
+      ...(usage && { tokens: { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0, cacheRead: usage.cache_read_input_tokens ?? 0, cacheCreate: usage.cache_creation_input_tokens ?? 0 } }) };
   }
   return { ok: true, text: stdout.replace(ANSI, '').replace(/^[^\n]*cursor-retrieval:.*\n?/m, '').trim(), costUsd: null };
 }
@@ -100,7 +102,7 @@ export function runBtw({ agent = 'claude', executable = agent === 'cursor' ? 'cu
           : (detail || (code === 0 ? 'AI가 빈 답을 보냈습니다.' : `답을 받지 못했습니다 (${code}).`)).slice(0, 500);
         return finish(reject, fault(login ? 'AGENT_LOGIN' : 'AGENT_PROTOCOL', message, login ? 401 : 502));
       }
-      finish(resolve, { answer: parsed.text.trim(), costUsd: parsed.costUsd });
+      finish(resolve, { answer: parsed.text.trim(), costUsd: parsed.costUsd, ...(parsed.tokens && { tokens: parsed.tokens }) });
     };
     // Claude's JSON is taken as soon as it parses (the CLI lingers ~2s after printing it); the others print plain text and are read to the end.
     proc.stdout?.on('data', chunk => {

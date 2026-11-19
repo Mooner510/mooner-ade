@@ -17,9 +17,11 @@ import { launchersFor, type AgentMode } from './launchers';
 import { chatModeTipDue } from './tips';
 import { detectAgent, resolveAgent } from './terminal-agent';
 import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
-import { errorText, pushError } from './errors';
+import { GIT_STATUS_RETRY_MS, errorText, gitStatusPause, notAGitRepository, pushError } from './errors';
 import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { GitLog } from './GitLog';
+import { ProjectTree } from './ProjectTree';
+import { FileBuffer } from './file-buffer';
 import { loadSpec } from './git-graph';
 import { Dropdown, type Ask, type GitState } from './views';
 import { copyText } from './toast';
@@ -42,7 +44,7 @@ export type Command = { id: string; label: string; keys?: string; hidden?: boole
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
   root: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
-  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onAddProject(): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
+  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
@@ -75,9 +77,9 @@ const SystemStat = memo(function SystemStat({ kind }: { kind: 'cpu' | 'memory' }
   const system = useSyncExternalStore(subscribeSystem, () => systemInfo);
   if (!system) return null;
   return kind === 'cpu' ? <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>
-    : <span className="stat" title={`메모리 ${formatBytes(system.memory.used)} / ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>;
+    : <span className="stat" title={`메모리 전체 ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>;
 });
-// "1 hr 29 mins" → "1h 29m"; the full text stays in the tooltip.
+// "1 hr 29 mins" → "1h 29m".
 const compactDuration = (text: string) => text.replace(/\s*hrs?\b/g, 'h').replace(/\s*mins?\b/g, 'm').replace(/\s*secs?\b/g, 's');
 const WakaTimeStat = memo(function WakaTimeStat() {
   const [status, setStatus] = useState<{ today: string; lastSent: number; lastError: string | null } | null>(null);
@@ -90,7 +92,7 @@ const WakaTimeStat = memo(function WakaTimeStat() {
   }, []);
   if (!status) return null;
   const sent = status.lastSent ? `마지막 전송 ${new Date(status.lastSent).toLocaleTimeString()}` : '아직 전송 전';
-  return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록: ${status.today || '알 수 없음'}\n${sent}${status.lastError ? '\n전송 오류' : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
+  return <span className={`stat ${status.lastError ? 'warn' : ''}`} title={`WakaTime 오늘 기록\n${sent}${status.lastError ? '\n전송 오류' : ''}`}><Icon name="clock" size={13} />{status.today ? compactDuration(status.today) : '—'}</span>;
 });
 const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
@@ -116,7 +118,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   return <>
     <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} data-usage-style={style} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
-      {compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>)}
+      {compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small className={item.key === 'fable' ? 'fable' : undefined}>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>)}
       {codexCredits && <span className={`usage-window ${colors && codexCredits.limit ? 'graded' : ''}`} style={colors && codexCredits.limit ? hue(codexCredits.limit.percent) : undefined}><small>크레딧</small>{codexCreditsLabel(codexCredits)}{codexCredits.limit && <i style={{ width: `${codexCredits.limit.percent}%` }} />}</span>}
       {credit && <span className={`usage-window ${colors && credit.percent !== null ? 'graded' : ''}`} style={colors && credit.percent !== null ? hue(credit.percent) : undefined}><small>크레딧</small>{credit.percent !== null ? `${credit.percent}%` : money(credit.used, credit.currency)}{credit.percent !== null && <i style={{ width: `${credit.percent}%` }} />}</span>}
     </button>
@@ -134,11 +136,29 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
 });
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onAddProject, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
   const [gitOpen, setGitOpen] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [pluginOpen, setPluginOpen] = useState(''), [reviewWide, setReviewWide] = useState(false);
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [treeExpanded, setTreeExpanded] = useState(() => new Set(['.']));
+  const fileBuffers = useRef(new Map<string, FileBuffer>());
+  const fileListeners = useRef(new Set<(paths: string[]) => void>());
+  const watchFiles = useCallback((listener: (paths: string[]) => void) => {
+    fileListeners.current.add(listener);
+    return () => { fileListeners.current.delete(listener); };
+  }, []);
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if ([...fileBuffers.current.values()].some(buffer => buffer.dirty)) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, []);
   const feedback = useFeedback();
   // Plugins that declare `header` add one button to the top bar; it opens the plugin's panel in the right-panel slot.
   const headerPlugins = (usePluginsState()?.plugins ?? []).filter(plugin => plugin.header && plugin.state === 'running');
@@ -179,7 +199,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     repository: useRef(''), paneTabs: useRef(paneTabs), activeTab: useRef(activeTab), focus: useRef(focus),
     project: useRef(project), lastEditor: useRef(''), commands: useRef<Command[]>([]), quickKey: useRef(0), quickRequest: useRef<QuickRequest | null>(null),
     tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {}),
-    gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0)
+    gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0),
+    // A "not a repository" answer pauses polling for this repo list and selection. A different selection, a count change, or the retry delay starts it again.
+    gitQuietUntil: useRef(0), gitQuietKey: useRef('')
   };
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
@@ -269,10 +291,11 @@ ${where}`, [
     for (const leaf of leafList(tree)) if (leaf.kind === 'editor' && !(leaf.tabs || []).length) next = next && remove(next, leaf.id);
     return next;
   }
-  // A diff opens in the focused (or first) diff pane, or in a new one beside the focused terminal.
-  function openDiff(path: string) {
+  // Files and diffs share the editor group and can sit beside a terminal or chat.
+  function openEditorTab(path: string) {
     const tree = activePane();
-    const current = focusedLeaf(), target = (current && findLeaf(tree, current.id)) || leafList(tree).find(leaf => leaf.kind === 'editor');
+    const hasRoom = (leaf?: Leaf) => leaf?.kind === 'editor' && ((leaf.tabs?.length ?? 0) < 30 || leaf.tabs?.includes(path));
+    const current = focusedLeaf(), target = hasRoom(current) ? current : leafList(tree).find(hasRoom);
     let id: string;
     if (target) { id = target.id; commitPane(mapLeaf(tree!, id, leaf => ({ ...leaf, tabs: (leaf.tabs || []).includes(path) ? leaf.tabs : [...(leaf.tabs || []), path], active: path }))); }
     else {
@@ -282,17 +305,58 @@ ${where}`, [
     }
     setFocusLeaf(id);
   }
-  function closeTab(groupId: string, path: string) {
+  function openProjectFile(path: string) {
+    const spec = `file:${path}`;
+    setZoom('');
+    for (const tab of refs.paneTabs.current) {
+      const group = leafList(tab.pane).find(leaf => leaf.kind === 'editor' && leaf.tabs?.includes(spec));
+      if (!group) continue;
+      if (tab.id !== refs.activeTab.current) selectTab(tab.id);
+      commitFor(group.id, mapLeaf(tab.pane!, group.id, leaf => ({ ...leaf, active: spec })));
+      setFocusLeaf(group.id);
+      return;
+    }
+    openEditorTab(spec);
+  }
+  function fileBuffer(path: string) {
+    let buffer = fileBuffers.current.get(path);
+    if (!buffer) { buffer = new FileBuffer(path, call); fileBuffers.current.set(path, buffer); }
+    return buffer;
+  }
+  async function saveBeforeClose(paths: string[]) {
+    const buffers = paths.filter(path => path.startsWith('file:')).map(path => fileBuffers.current.get(path.slice(5))).filter(buffer => buffer?.dirty);
+    await Promise.all(buffers.map(buffer => buffer!.save()));
+    const pending = buffers.find(buffer => buffer?.dirty);
+    if (pending) { openProjectFile(pending.path); return false; }
+    return true;
+  }
+  async function closeTab(groupId: string, path: string) {
+    if (!(await saveBeforeClose([path]))) return;
     const leaf = findLeaf(treeOf(groupId), groupId); if (!leaf) return;
     const list = leaf.tabs || [], index = list.indexOf(path), rest = list.filter(item => item !== path);
     commitFor(groupId, compact(mapLeaf(treeOf(groupId)!, groupId, item => ({ ...item, tabs: rest, active: item.active === path ? rest[index] ?? rest[index - 1] ?? '' : item.active }))));
   }
-  function closeGroup(groupId: string) {
+  async function closeGroup(groupId: string) {
+    if (!(await saveBeforeClose(findLeaf(treeOf(groupId), groupId)?.tabs ?? []))) return;
     if (findLeaf(treeOf(groupId), groupId)) commitFor(groupId, remove(treeOf(groupId)!, groupId));
   }
   // One git/status at a time: each costs several git processes, and file events arrive every 150 ms while an agent writes.
   // Requests made during a run share a single follow-up run, which still sees every change made before it started.
+  // A non-repo answers `git status` with a fatal line. Remember it and do not toast. Polling pauses for this selection, then tries again.
+  const gitKey = () => `${refs.project.current?.repositories.length ?? 0}:${refs.repository.current}`;
+  function silenceNotGit(cause: unknown) {
+    if (!notAGitRepository(errorText(cause))) return false;
+    refs.gitQuietUntil.current = Date.now() + GIT_STATUS_RETRY_MS;
+    refs.gitQuietKey.current = gitKey();
+    setGit(emptyGit);
+    return true;
+  }
   function refreshGit(): Promise<void> {
+    const count = refs.project.current?.repositories.length ?? 0;
+    const decision = gitStatusPause(refs.gitQuietUntil.current, refs.gitQuietKey.current, Date.now(), count, gitKey());
+    refs.gitQuietUntil.current = decision.quietUntil;
+    refs.gitQuietKey.current = decision.quietKey;
+    if (!decision.poll) { if (count === 0) setGit(emptyGit); return Promise.resolve(); }
     const slot = refs.gitRefresh.current;
     if (!slot.running) {
       slot.running = loadGit().finally(() => { slot.running = null; });
@@ -304,8 +368,14 @@ ${where}`, [
   async function loadGit() {
     const state = refs.project.current;
     if (!state || !state.repositories.length || (state.multiRepo && !state.repositories.some(repo => repo.id === refs.repository.current))) { setGit(emptyGit); return; }
-    const next = await call<GitState>('git/status');
-    setGit(previous => { if (JSON.stringify(previous) === JSON.stringify(next)) return previous; setGitVersion(value => value + 1); return next; });
+    try {
+      const next = await call<GitState>('git/status');
+      refs.gitQuietUntil.current = 0;
+      setGit(previous => { if (JSON.stringify(previous) === JSON.stringify(next)) return previous; setGitVersion(value => value + 1); return next; });
+    } catch (cause) {
+      if (silenceNotGit(cause)) return;
+      throw cause;
+    }
   }
 
   // ---- project lifecycle ----
@@ -371,6 +441,7 @@ ${where}`, [
     selectPane: (tabId, paneId) => { selectTab(tabId); setFocusLeaf(paneId); }, closeTab: id => run(() => closePaneTab(id)), newTab: () => run(() => newTab()), renameTab: id => run(() => renamePaneTab(id)), launcher: () => run(() => pickLauncher('tab')),
     async requestClose() {
       const projectId = refs.project.current?.id; if (!projectId) return true;
+      if (!(await saveBeforeClose([...fileBuffers.current.keys()].map(path => `file:${path}`)))) return false;
       // Background subagents are asked about whatever the setting says; the terminals' own question below still follows the setting.
       const background = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id)).length;
       if (background && !(await ask.confirm(`백그라운드 작업이 있는 채팅 ${background}개가 있습니다. 프로젝트를 닫으면 작업이 종료됩니다. 닫을까요?`))) return false;
@@ -388,7 +459,7 @@ ${where}`, [
     }
   }));
   const leafLabel = (leaf: Leaf, fallbackTitle?: string) => {
-    if (leaf.kind === 'editor') return leaf.active ? basename(leaf.active.split(':').pop() || leaf.active) : '편집기';
+    if (leaf.kind === 'editor') return leaf.active ? basename(leaf.active.startsWith('file:') ? leaf.active.slice(5) : leaf.active.split(':').pop() || leaf.active) : '편집기';
     if (leaf.kind === 'launcher') return '새 창';
     if (leaf.kind === 'chat') return titles[leaf.id] || `${leaf.agent === 'codex' ? 'Codex' : leaf.agent === 'cursor' ? 'Cursor' : 'Claude'} 채팅`;
     const title = titles[leaf.id] || fallbackTitle, cwd = project?.terminals.find(terminal => terminal.id === leaf.id)?.cwd;
@@ -433,9 +504,10 @@ ${where}`, [
     if (ui.settings) onLegacySettings(ui.settings);
     // `rightVisible` is the saved name of "the Git drawer is open" (it used to be the changes panel on the right).
     setGitOpen(ui.rightVisible ?? false);
-    // Older versions could also open plain files and working-tree diffs (the removed changes panel) in editor panes; only commit diff tabs are kept.
+    setTreeExpanded(new Set(Array.isArray(ui.projectTreeExpanded) ? ui.projectTreeExpanded.filter((path: unknown) => typeof path === 'string') : ['.']));
+    // Restore project files and commit diffs. Older working-tree diff tabs reference a retired view.
     const clean = (tree: Pane | null): Pane | null => {
-      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(tab => isDiffTab(tab) && !/^diff:(all|staged|unstaged):/.test(tab)); return { id: item.id, kind: 'editor', tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
+      let next = tree; for (const leaf of leafList(tree)) if (leaf.kind === 'editor') next = next && mapLeaf(next, leaf.id, item => { const list = (item.tabs || []).filter(tab => tab.startsWith('file:') || (isDiffTab(tab) && !/^diff:(all|staged|unstaged):/.test(tab))); return { id: item.id, kind: 'editor', tabs: list, active: list.includes(item.active || '') ? item.active : list[0] || '' }; });
       return next;
     };
     const live = new Set(state.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
@@ -480,13 +552,14 @@ ${where}`, [
 
   refs.onMessage.current = message => {
     try {
-          if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); }
+          if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); for (const listener of fileListeners.current) listener([]); }
           else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
           // A plugin started a chat in this project (a header plugin's work): it shows up as a tab.
           else if (message.type === 'plugin/chat') { if (!tabOf(message.id)) void takeOver(undefined, { ...chatLeaf(message.cwd, message.agent), id: message.id }); }
           // A stream of file events (an agent at work) refreshes Git at most twice a second; a hidden window catches up when it shows (visibilitychange).
           else if (message.type === 'fs') {
-            if (refs.active.current && !document.hidden && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(report); }, 500);
+            for (const listener of fileListeners.current) listener(message.paths || []);
+            if (refs.active.current && !document.hidden && !refs.fsRefresh.current) refs.fsRefresh.current = window.setTimeout(() => { refs.fsRefresh.current = 0; void refreshGit().catch(cause => { if (!silenceNotGit(cause)) report(cause); }); }, 500);
           }
           else if (message.type === 'terminal' || message.type === 'terminal/replay') {
             const previous = bus.current.buffers.get(message.id);
@@ -551,17 +624,23 @@ ${where}`, [
   }, tree);
   const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' || leaf.kind === 'chat' ? '' : savedAgent(leaf.id) ?? '').join(',');
   useEffect(() => {
+    const opened = new Set(paneTabs.flatMap(tab => leafList(tab.pane)).flatMap(leaf => leaf.tabs ?? []));
+    for (const [path, buffer] of fileBuffers.current) {
+      if (!buffer.dirty && !opened.has(`file:${path}`)) fileBuffers.current.delete(path);
+    }
+  }, [paneTabs]);
+  useEffect(() => {
     if (!project?.id || restoring) return;
     const timer = setTimeout(() => {
       const savedTabs = paneTabs.map(tab => ({ id: tab.id, pane: remember(tab.pane), ...(tab.title ? { title: tab.title } : {}), ...(refs.tabFocus.current[tab.id] ? { focus: refs.tabFocus.current[tab.id] } : {}) }));
-      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen } }).catch(report);
+      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen, projectTreeExpanded: [...treeExpanded] } }).catch(report);
     }, 400);
     return () => clearTimeout(timer);
-  }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, gitOpen, agentKey, call, report]);
+  }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, gitOpen, treeExpanded, agentKey, call, report]);
   // Polling only runs for the project being shown and while the window is visible; coming back refreshes immediately.
   useEffect(() => {
     if (!project?.id || !active) return;
-    const tick = () => { if (!document.hidden) void refreshGit().catch(report); };
+    const tick = () => { if (!document.hidden) void refreshGit().catch(cause => { if (!silenceNotGit(cause)) report(cause); }); };
     tick(); const timer = setInterval(tick, settings.diffRefresh * 1000);
     document.addEventListener('visibilitychange', tick);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
@@ -761,6 +840,7 @@ ${where}`, [
   }
   async function closeTerminal(id: string) {
     if (findLeaf(treeOf(id), id)?.kind === 'chat') return closeChat(id);
+    if (findLeaf(treeOf(id), id)?.kind === 'editor') return closeGroup(id);
     const info = refs.project.current?.terminals.find(terminal => terminal.id === id);
     if (info && !info.exited && settingsRef.current.confirmClose && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
     if (info) await call('terminal/close', { id });
@@ -769,6 +849,7 @@ ${where}`, [
   }
   async function closePaneTab(tabId: string) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
+    if (!(await saveBeforeClose(leafList(tab.pane).flatMap(leaf => leaf.tabs ?? [])))) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     const chats = leafList(tab.pane).filter(leaf => leaf.kind === 'chat');
     // Busy: answering, waiting for an approval, or running a background subagent. Background work is asked about whatever the setting says.
@@ -824,7 +905,7 @@ ${where}`, [
   // ---- workspace / git ----
   const selectGitRepository = (id: string) => {
     refs.repository.current = id; setGitRepositoryId(id);
-    if (refs.project.current?.multiRepo && id) void call('git/status', { repositoryId: id }).then(setGit).catch(report); else setGit(emptyGit);
+    if (refs.project.current?.multiRepo && id) void call('git/status', { repositoryId: id }).then(next => { refs.gitQuietUntil.current = 0; setGit(next); }).catch(cause => { if (!silenceNotGit(cause)) report(cause); }); else { refs.gitQuietUntil.current = 0; setGit(emptyGit); }
   };
   // A diff tab is `diff:<revision>:<path>[\t<old path>]`: one commit against its parent, `a..b` between two commits, `a..` against the working tree.
   async function loadDiff(kind: string, path: string) {
@@ -845,7 +926,11 @@ ${where}`, [
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
   // The Git drawer rises from the bottom and lives beside the right panel (errors, feedback, plugins), so both can be open.
-  const toggleGit = () => { preloadMonaco(); setGitOpen(value => !value); if (settingsRef.current.gitTipPending) setSettings(previous => ({ ...previous, gitTipPending: false })); };
+  const toggleGit = () => {
+    // No repository: never open the drawer. A drawer restored from the layout can still be closed.
+    if ((refs.project.current?.repositories.length ?? 0) === 0) { setGitOpen(false); return; }
+    preloadMonaco(); setGitOpen(value => !value); if (settingsRef.current.gitTipPending) setSettings(previous => ({ ...previous, gitTipPending: false }));
+  };
   const toggleErrors = () => { setFeedbackOpen(false); setPluginOpen(''); setErrorsOpen(value => !value); };
   // The feedback inbox shares the right panel slot: opening it closes the error list and covers the diff, like the error list does.
   const showFeedback = () => { setErrorsOpen(false); setPluginOpen(''); setFeedbackOpen(true); };
@@ -932,12 +1017,14 @@ ${where}`, [
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
+  const noGit = project.repositories.length === 0;
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
   const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
   const editorCtx: EditorCtx = {
-    settings, gitVersion, loadDiff,
+    settings, gitVersion, loadDiff, fileBuffer, watchFiles,
+    onDiffLayoutChange: diffLayout => setSettings(previous => ({ ...previous, diffLayout })),
     onSelectTab: (group, path) => { commitFor(group, mapLeaf(treeOf(group)!, group, leaf => ({ ...leaf, active: path }))); setFocusLeaf(group); },
-    onCloseTab: closeTab, onCloseGroup: closeGroup
+    onCloseTab: (group, path) => run(() => closeTab(group, path)), onCloseGroup: group => run(() => closeGroup(group))
   };
   const live = new Set(project.terminals.filter(terminal => !terminal.exited).map(terminal => terminal.id));
   const cwds = Object.fromEntries(project.terminals.filter(terminal => terminal.cwd).map(terminal => [terminal.id, terminal.cwd!]));
@@ -994,7 +1081,7 @@ ${where}`, [
       onDoubleClick={() => setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 }))}
       onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); } }} />
     <GitLog call={call} settings={settings} setSettings={setSettings} visible={active && gitOpen} ask={ask} fail={report} onClose={() => setGitOpen(false)} onChanged={() => run(refreshGit)}
-      openDiff={spec => openDiff(spec)} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
+      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);
@@ -1003,7 +1090,7 @@ ${where}`, [
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
     connection: connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>,
-    path: <span className="stat" title={project.root}><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
+    path: <span className="stat" title={project.root} data-tip-nowrap><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
@@ -1014,8 +1101,7 @@ ${where}`, [
     // Only the project on screen: every open project keeps its status bar mounted (hidden), and each would otherwise poll and tick.
     wakatime: settings.wakatime && active && <WakaTimeStat />,
     clock: active && <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
-    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>,
-    openproject: <button title={`프로젝트 열기 (${showAppKey(settings.appKeys, 'addProject')})`} aria-label="프로젝트 열기" onClick={onAddProject}><Icon name="folderPlus" size={14} /></button>
+    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>
   };
   const chatCtx: ChatCtx = {
     call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
@@ -1033,11 +1119,14 @@ ${where}`, [
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
           <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
+      <button type="button" className="icon-btn bar-icon" data-tip="프로젝트 파일 트리" aria-label="프로젝트 파일 트리" aria-pressed={treeOpen} onClick={() => setTreeOpen(value => !value)}>
+        <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19V6a1 1 0 0 1 1-1h4l3 3m0 3V4h5l3 3v4m-5-3h2M3 19l3-8h15l-3 8Z" /></svg>
+      </button>
       <span className="drag-space" />
       <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
-      <button className={`bar-button ${gitOpen ? 'on' : ''}`} data-tip={`Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})${git.additions || git.deletions ? `\n커밋하지 않은 변경: +${git.additions} −${git.deletions}` : ''}`} aria-label="Git 커밋 그래프" aria-pressed={gitOpen} onPointerEnter={preloadMonaco} onFocus={preloadMonaco} onClick={toggleGit}>
+      <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (!noGit) toggleGit(); }}>
         <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
@@ -1046,13 +1135,15 @@ ${where}`, [
       </div>
     </header>
     <ErrorToast scope={root} active={active} />
-    {/* The right panel floats over the terminals instead of taking a column, so opening it never shrinks them. The Git drawer floats over
-        their bottom too, unless it is docked (then the terminals give it the room, like IntelliJ's docked tool window). */}
-    <div className="workbench">{center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}</div>
+    <div className="workbench">
+      <ProjectTree key={project.root} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
+        onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} />
+      {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
+    </div>
     {settings.gitLogDock && gitDrawer}
     <footer className="statusbar" data-feedback-region="상태바">
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title={`검토할 피드백 초안 ${reviewCount}개 · 피드백 요청 열기`} aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
     {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="Chat 모드 안내">

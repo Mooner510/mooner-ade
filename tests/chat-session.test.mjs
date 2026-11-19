@@ -694,7 +694,7 @@ Review PR $ARGUMENTS`);
   assert.equal(review?.hint, '[pr-number]');
 });
 
-test('Claude /compact leaves a compact event and the context gauge drops to the size after compaction', async t => {
+test('Claude /compact ignores a startup result and drops the context gauge when its own turn finishes', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-compact-'));
   const events = [];
   const session = await openChatSession({
@@ -706,11 +706,17 @@ test('Claude /compact leaves a compact event and the context gauge drops to the 
   await until(() => session.state().status === 'idle');
   assert.equal(session.state().contextTokens, 231097);
   await session.send('/compact');
-  await until(() => events.some(event => event.kind === 'result' && event.turns === 0));
-  await until(() => session.state().status === 'idle');
+  await until(() => events.some(event => event.kind === 'compact') && session.state().status === 'idle');
   const compact = events.find(event => event.kind === 'compact');
-  assert.deepEqual([compact.trigger, compact.preTokens, compact.postTokens], ['manual', 231097, 14613]);
+  const results = events.filter(event => event.kind === 'result' && event.turns === 0);
+  assert.equal(results.length, 1, 'the unrelated result must not finish /compact');
+  assert.ok(compact.seq < results[0].seq);
   assert.equal(session.state().contextTokens, 14613);
+  await session.send('follow-up');
+  await until(() => session.state().status === 'idle');
+  assert.ok(results[0].seq < events.find(event => event.kind === 'user' && event.text === 'follow-up').seq);
+  assert.equal(events.filter(event => event.kind === 'compact').length, 1);
+  assert.deepEqual([compact.trigger, compact.preTokens, compact.postTokens], ['manual', 231097, 14613]);
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === true));
   assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'compacting' && event.active === false));
   assert.ok(!events.some(event => event.kind === 'divider'), 'compacting keeps the history; only /clear starts over');
@@ -783,14 +789,61 @@ test('Cursor: text before a tool keeps the id it streamed with, later text gets 
   assert.equal(events.filter(event => event.kind === 'tool_result').length, 1);
 });
 
+test('Cursor: a Task call and its subagent session become one agent with its own steps', () => {
+  const events = [], protocol = createChatProtocol('cursor', { write: async () => {}, emit: event => events.push(event) });
+  protocol.replayCursor('parent', []);
+  const update = (sessionId, value) => protocol.handle({ jsonrpc: '2.0', method: 'session/update', params: { ...(sessionId ? { sessionId } : {}), update: value } });
+  update(null, { sessionUpdate: 'tool_call', toolCallId: 'task-1', kind: 'other', title: 'Task: 파일 찾기', status: 'in_progress', rawInput: { _toolName: 'task', description: '파일 찾기', prompt: 'src를 봐', subagentType: 'explore' } });
+  update(null, { sessionUpdate: 'subagent_spawned', subagentSessionId: 'sub-1', name: 'explore', task: 'src를 봐', _meta: { cursor: { toolCallId: 'task-1' } } });
+  update('sub-1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '찾는 중' } });
+  update('sub-1', { sessionUpdate: 'tool_call', toolCallId: 'grep-1', kind: 'search', title: 'grep src', status: 'completed', rawInput: { pattern: 'src' } });
+  update(null, { sessionUpdate: 'subagent_state_update', subagentSessionId: 'sub-1', state: 'completed', _meta: { cursor: { toolCallId: 'task-1' } } });
+  const task = events.find(event => event.kind === 'message' && event.blocks?.[0]?.name === 'Task');
+  assert.equal(task.blocks[0].input.description, '파일 찾기');
+  assert.equal(task.blocks[0].input.subagent_type, 'explore');
+  assert.equal(task.blocks[0].input.prompt, 'src를 봐');
+  assert.ok(events.some(event => event.kind === 'task' && event.phase === 'start' && event.toolUseId === 'task-1' && event.agentType === 'explore'));
+  assert.ok(events.some(event => event.kind === 'delta' && event.parentToolUseId === 'task-1' && event.text === '찾는 중'));
+  const step = events.find(event => event.kind === 'message' && event.id === 'grep-1');
+  assert.equal(step.parentToolUseId, 'task-1');
+  assert.equal(step.blocks[0].name, 'grep src');
+  assert.ok(events.some(event => event.kind === 'task' && event.phase === 'end' && event.toolUseId === 'task-1' && event.status === 'completed'));
+  update('other-session', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '무시' } });
+  assert.ok(!events.some(event => event.text === '무시'));
+});
 
-for (const [label, dropped, detail] of [
-  ['unavailable', '\n\nError: RetriableError: [unavailable] HTTP 503', /HTTP 503/],
-  ['stream closed before turnEnded', '\n\nError: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream', /turnEnded/],
+test('Cursor: subagent history, a running state, a child permission, and a restarted session stay on that agent', () => {
+  const lines = [], events = [];
+  const protocol = createChatProtocol('cursor', { write: async line => { lines.push(JSON.parse(line)); }, emit: event => events.push(event) });
+  protocol.replayCursor('parent', [
+    { sessionId: 'sub-1', update: { sessionUpdate: 'subagent_spawned', subagentSessionId: 'sub-1', name: 'explore', task: '찾기', _meta: { cursor: { toolCallId: 'task-1' } } } },
+    { sessionId: 'sub-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '기록' } } },
+    { sessionId: 'sub-1', update: { sessionUpdate: 'subagent_state_update', subagentSessionId: 'sub-1', state: 'running', _meta: { cursor: { toolCallId: 'task-1' } } } },
+  ]);
+  assert.ok(events.some(event => event.kind === 'task' && event.phase === 'start' && event.toolUseId === 'task-1'));
+  assert.ok(events.some(event => event.kind === 'delta' && event.text === '기록' && event.parentToolUseId === 'task-1'));
+  assert.equal(events.filter(event => event.kind === 'task' && event.phase === 'end').length, 0);
+  assert.ok(events.some(event => event.kind === 'message' && event.parentToolUseId === 'task-1' && event.blocks?.[0]?.text === '기록'));
+  protocol.handle({ jsonrpc: '2.0', id: 7, method: 'session/request_permission', params: { sessionId: 'sub-1', toolCall: { title: 'Bash', rawInput: { command: 'ls' } }, options: [{ kind: 'allow_once', optionId: 'once' }] } });
+  assert.ok(events.some(event => event.kind === 'approval' && event.phase === 'request' && event.requestId === '7'));
+  protocol.handle({ jsonrpc: '2.0', id: 8, method: 'session/request_permission', params: { sessionId: 'other', toolCall: { title: 'Bash' }, options: [] } });
+  assert.equal(lines.at(-1).error.code, -32602);
+  const later = [];
+  const next = createChatProtocol('cursor', { write: async () => {}, emit: event => later.push(event) });
+  next.restore(protocol.snapshot());
+  next.handle({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sub-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '이어짐' } } } });
+  assert.ok(later.some(event => event.text === '이어짐' && event.parentToolUseId === 'task-1'));
+});
+
+
+for (const [label, dropped] of [
+  ['unavailable', '\n\nError: RetriableError: [unavailable] HTTP 503'],
+  ['stream closed before turnEnded', '\n\nError: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream'],
+  ['dns', '\n\nError: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh'],
 ]) {
-  test(`Cursor continues the same turn once when the agent ends it with a retriable backend drop (${label})`, async () => {
+  test(`Cursor keeps the same turn open across repeated retriable backend drops (${label})`, async () => {
     const lines = [], events = [];
-    const protocol = createChatProtocol('cursor', { write: line => { lines.push(line); return Promise.resolve(); }, emit: event => events.push(event) });
+    const protocol = createChatProtocol('cursor', { write: line => { lines.push(line); return Promise.resolve(); }, emit: event => events.push(event), transportResumeDelay: () => 0 });
     const update = text => protocol.handle({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
     const finish = async () => { protocol.handle({ jsonrpc: '2.0', id: JSON.parse(lines.at(-1)).id, result: { stopReason: 'end_turn' } }); await new Promise(resolve => setImmediate(resolve)); };
     await protocol.send('hello', []);
@@ -798,10 +851,11 @@ for (const [label, dropped, detail] of [
     update(dropped);
     await finish();
     const prompts = lines.filter(line => line.includes('session/prompt'));
-    assert.equal(prompts.length, 2, 'the dropped turn is resumed once');
+    assert.equal(prompts.length, 2, 'the dropped turn is resumed');
     assert.equal(events.filter(event => event.kind === 'result').length, 0, 'the turn stays open across the resume');
     assert.ok(!events.some(event => JSON.stringify(event).includes('RetriableError')), 'the raw error is not stored');
     assert.ok(events.some(event => event.kind === 'message' && event.blocks?.[0]?.text === '작업 중'));
+    assert.ok(events.some(event => event.kind === 'delta' && event.phase === 'reconnecting' && event.active === true));
     update('이어서 끝');
     await finish();
     assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'success');
@@ -810,9 +864,11 @@ for (const [label, dropped, detail] of [
     await finish();
     update(dropped);
     await finish();
-    const failed = events.filter(event => event.kind === 'result').at(-1);
-    assert.equal(failed.status, 'failed');
-    assert.match(failed.text, detail);
+    assert.equal(events.filter(event => event.kind === 'result').length, 1, 'repeated drops still keep the turn open');
+    assert.ok(lines.filter(line => line.includes('session/prompt')).length >= 4);
+    update('끝');
+    await finish();
+    assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'success');
   });
 }
 

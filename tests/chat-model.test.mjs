@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, awaitingTools, approvalAgents, keepAgents } from '../apps/web/src/chat-model.ts';
+import { agentsOf, planSections, autoDenial, emptyPick, isResultText, pickOption, pickOther, processGroups, toolRuns, questionAnswers, questionsAnswered, toolSummary, toolLabel, artifactsOf, classifyArtifactUrl, awaitingTools, approvalAgents, keepAgents, enqueueSendNow } from '../apps/web/src/chat-model.ts';
 import { contextEnds, contextGauge, contextPercent, contextReported, cursorSettingName, effortLabel, effortLevel, emptyView, fillFormat, fromReplay, cursorModelGroups, isChatSlashCommand, isCursorEffort, isCursorSwitch, modelDisplayName, modelAppearance, modelProvider, modelColor, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, parseContextSetting, partialToolInput, permissionLabel, permissionModeColor, reduce, ro, settingsLine, shortModel, withSettingChange, turnAllowsMessageActions, turnDoneParts, turnTokenRows } from '../apps/web/src/chat-model.ts';
 
 const tool = id => ({ type: 'tool_use', id, name: 'Bash', input: {} }), say = text => ({ type: 'text', text });
@@ -425,6 +425,16 @@ test('Cursor effort, fast and max context stay distinct settings', () => {
   assert.equal(cursorSettingName({ id: 'context', name: 'Context' }), '컨텍스트');
 });
 
+test('reconnecting shows while Cursor transport resumes and clears on result', () => {
+  let view = reduce(emptyView(), { kind: 'user', text: 'hello' });
+  view = reduce(view, { kind: 'delta', phase: 'reconnecting', active: true });
+  assert.equal(view.reconnecting, true);
+  view = reduce(view, { kind: 'delta', phase: 'reconnecting', active: false });
+  assert.equal(view.reconnecting, false);
+  view = reduce(reduce(view, { kind: 'delta', phase: 'reconnecting', active: true }), { kind: 'result', status: 'success' });
+  assert.equal(view.reconnecting, false);
+});
+
 test("compacting shows while the CLI compacts and leaves a marker that keeps the history", () => {
   let view = reduce(emptyView(), { kind: "user", text: "/compact" });
   view = reduce(view, { kind: "delta", phase: "compacting", active: true });
@@ -444,6 +454,12 @@ test('stored reasoning replaces the streamed reasoning even when its parts are j
   view = reduce(view, { kind: 'delta', phase: 'thinking', messageId: 'r', index: 0, text: '\n\nCheck' });
   view = reduce(view, { seq: 1, kind: 'message', id: 'r', blocks: [{ type: 'thinking', text: 'Plan\nCheck' }] });
   assert.deepEqual(view.items[0].blocks.map(block => block.text), ['Plan\nCheck']);
+});
+
+test('a /compact result without a boundary or output does not claim the command ran', () => {
+  const view = reduce(emptyView(), { seq: 1, kind: 'user', text: '/compact' });
+  const done = reduce(view, { seq: 2, kind: 'result', status: 'success', text: '' });
+  assert.equal(done.items.at(-1).text, '컨텍스트 압축 완료를 확인하지 못했습니다.');
 });
 
 test('a synthetic message the CLI re-sends after /compact (same uuid, new id) is not shown twice', () => {
@@ -630,6 +646,51 @@ test('artifacts: a created doc is found by the claude.ai link in its result', ()
   assert.deepEqual(artifactsOf(blocks, { b: { content: url, isError: true } }), []);
 });
 
+test('artifacts: a temporary or wrong url is not a durable link, and an expired result can be explained', () => {
+  const real = 'https://claude.ai/artifact/1wrqK8ndBdUqv356KQ2syF';
+  const doubled = 'https://claude.ai/artifact/artifact/1wrqK8ndBdUqv356KQ2syF';
+  const localhost = 'http://localhost:3000/artifact/1wrqK8ndBdUqv356KQ2syF';
+  const code = 'https://claude.ai/code/artifact/1wrqK8ndBdUqv356KQ2syF';
+  assert.equal(classifyArtifactUrl(real), 'durable');
+  assert.equal(classifyArtifactUrl('https://claude.ai/artifact//1wrqK8ndBdUqv356KQ2syF'), 'durable');
+  assert.equal(classifyArtifactUrl(localhost), 'temporary');
+  assert.equal(classifyArtifactUrl(code), 'temporary');
+  assert.equal(classifyArtifactUrl('https://preview.claude.ai/artifact/1wrqK8ndBdUqv356KQ2syF'), 'temporary');
+  assert.equal(classifyArtifactUrl('/artifact/1wrqK8ndBdUqv356KQ2syF'), 'temporary');
+  assert.equal(classifyArtifactUrl('https://claude.ai/artifact/preview'), 'temporary');
+  assert.equal(classifyArtifactUrl('https://claude.ai/artifact/artifact'), 'temporary');
+  assert.equal(classifyArtifactUrl(doubled), 'temporary', 'a doubled segment is not itself a durable link');
+  assert.equal(classifyArtifactUrl('https://claude.ai/1wrqK8ndBdUqv356KQ2syF'), 'temporary', 'a dropped /artifact segment is not durable');
+  const call = (id, name, input) => ({ type: 'tool_use', id, name, input });
+  const html = '<p>본문 <script>alert(1)</script><b>안녕</b></p>';
+  const temp = artifactsOf([call('a', 'Artifact', { title: '초안' })], { a: { content: JSON.stringify({ url: localhost, title: '결과 제목', html }), isError: false } });
+  assert.deepEqual(temp, [{ url: localhost, title: '초안', toolUseId: 'a', problem: 'temporary', preview: '본문 안녕' }]);
+  assert.doesNotMatch(temp[0].preview, /[<>]|alert/);
+  const coded = artifactsOf([call('c', 'Artifact', {})], { c: { content: code, isError: false } });
+  assert.equal(coded[0].problem, 'temporary');
+  assert.equal(classifyArtifactUrl(coded[0].url), 'temporary');
+  const fixed = artifactsOf([call('d', 'Artifact', { title: '문서' })], { d: { content: doubled, isError: false } });
+  assert.deepEqual(fixed, [{ url: real, title: '문서', toolUseId: 'd' }], 'the extra artifact segment is dropped and the real id is kept');
+  const slashes = artifactsOf([call('s', 'Artifact', {})], { s: { content: 'https://claude.ai/artifact//1wrqK8ndBdUqv356KQ2syF', isError: false } });
+  assert.equal(slashes[0].url, real);
+  assert.equal(slashes[0].problem, undefined);
+  const mixed = artifactsOf([call('m', 'Artifact', { title: '문서' })], { m: { content: `preview http://127.0.0.1:9/artifact/nope\n${real}`, isError: false } });
+  assert.deepEqual(mixed, [{ url: real, title: '문서', toolUseId: 'm' }]);
+  const shown = artifactsOf([call('p', 'Artifact', {})], { p: { content: JSON.stringify({ url: real, title: '결과 제목', body: '짧은 본문' }), isError: false } });
+  assert.deepEqual(shown, [{ url: real, title: '결과 제목', toolUseId: 'p', preview: '짧은 본문' }]);
+  const long = artifactsOf([call('l', 'mcp__x__publish', { title: '긴 글' })], { l: { content: JSON.stringify({ url: real, html: `<div>${'가'.repeat(500)}</div>` }), isError: false } });
+  assert.ok(long[0].preview.length <= 200);
+  assert.equal(long[0].preview.endsWith('…'), true);
+  assert.doesNotMatch(long[0].preview, /[<>]/);
+  const expired = artifactsOf([call('e', 'Artifact', { title: '지난 문서' })], { e: { content: 'This artifact link has expired', isError: true } });
+  assert.deepEqual(expired, [{ url: '', title: '지난 문서', toolUseId: 'e', problem: 'expired' }]);
+  const invalid = artifactsOf([call('i', 'mcp__x__publish', {})], { i: { content: JSON.stringify({ error: 'invalid url', html: '<b>남은 본문</b>' }), isError: false } });
+  assert.deepEqual(invalid, [{ url: '', title: '', toolUseId: 'i', problem: 'invalid', preview: '남은 본문' }]);
+  const dead = artifactsOf([call('x', 'Artifact', { title: '문서' })], { x: { content: JSON.stringify({ url: real, error: 'expired' }), isError: false } });
+  assert.equal(dead[0].problem, 'expired');
+  assert.equal(dead[0].url, '');
+});
+
 test('repeating /autocompact or /rename edits the line above instead of adding another', () => {
   let items = [];
   const go = change => { items = withSettingChange(items, change, `k${items.length}`); return items.filter(item => item.kind === 'note').map(item => item.text); };
@@ -738,6 +799,13 @@ test('the thread says when the agent moved into or out of a worktree, a plan lim
   assert.equal(reduce(reduce(emptyView(), limit), limit).items.length, 1, 'the same warning is said once');
   assert.match(line({ kind: 'settings', model: 'claude-sonnet-5-5', by: 'agent' }).text, /모델로 자동 전환되었습니다\.$/);
   assert.match(line({ kind: 'settings', model: 'gpt-5.5', by: 'agent', reason: 'highRiskCyberActivity' }).text, /보안 정책$/);
+});
+
+test('Cursor send-now waits behind earlier send-now lines and ahead of follow-ups', () => {
+  const queued = enqueueSendNow([{ text: '나중', now: false }, { text: '더 나중' }], { text: '지금', now: true });
+  assert.deepEqual(queued.map(item => item.text), ['지금', '나중', '더 나중']);
+  const again = enqueueSendNow(queued, { text: '바로', now: true });
+  assert.deepEqual(again.map(item => item.text), ['지금', '바로', '나중', '더 나중']);
 });
 
 test('blocked actions: shown from the server record, kept when only allowed, dropped when retried or once the user speaks', () => {

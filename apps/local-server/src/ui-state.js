@@ -12,6 +12,7 @@ function validateSettings(settings, invalid) {
   if (settings.feedbackAiEffort !== undefined && !['', 'low', 'medium', 'high'].includes(settings.feedbackAiEffort)) invalid();
   if (settings.usageStyle !== undefined && !['bar', 'text'].includes(settings.usageStyle)) invalid();
   if (settings.usageShown !== undefined) {
+    // Older clients can still submit saved Opus and Sonnet meter IDs.
     const meters = { claude: ['session', 'weekly', 'fable', 'weekly-opus', 'weekly-sonnet', 'credit'], codex: ['session', 'weekly', 'credit'], cursor: ['auto', 'api', 'total', 'grok', 'on-demand'] };
     const shown = settings.usageShown;
     if (!shown || typeof shown !== 'object' || Array.isArray(shown)) invalid();
@@ -106,7 +107,7 @@ export function validateUi(ui) {
       if (value.cwd !== undefined && (typeof value.cwd !== 'string' || value.cwd.length > 8192)) invalid();
       if (value.agent !== undefined && !['claude', 'codex', 'cursor'].includes(value.agent)) invalid();
       if (value.kind === 'editor') {
-        if (!Array.isArray(value.tabs) || value.tabs.length > 30 || value.tabs.some(tab => typeof tab !== 'string' || !tab.startsWith('diff:') || tab.length > 8192)) invalid();
+        if (!Array.isArray(value.tabs) || value.tabs.length > 30 || value.tabs.some(tab => typeof tab !== 'string' || !/^(diff:|file:.+)/s.test(tab) || tab.length > 8192)) invalid();
         if (value.active !== undefined && (typeof value.active !== 'string' || value.active.length > 8192)) invalid();
       }
     } else {
@@ -126,8 +127,11 @@ export function validateUi(ui) {
   }
   if (typeof ui.activeTab !== 'string' || ui.activeTab.length > 128) invalid();
   if (typeof ui.rightVisible !== 'boolean') invalid();
+  const expanded = ui.projectTreeExpanded;
+  if (expanded !== undefined && (!Array.isArray(expanded) || expanded.some(path => typeof path !== 'string' || !path || path.length > 8192 || path.includes('\0')))) invalid();
   return {
     gitRepositoryId: ui.gitRepositoryId, focus: ui.focus, activeTab: ui.activeTab, rightVisible: ui.rightVisible,
+    ...(expanded !== undefined && { projectTreeExpanded: [...new Set(expanded)] }),
     paneTabs: ui.paneTabs.map(({ id, title, focus, pane }) => ({ id, ...(title !== undefined && { title }), ...(focus !== undefined && { focus }), pane }))
   };
 }

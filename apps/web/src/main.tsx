@@ -695,7 +695,7 @@ function Shell() {
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
-        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onAddProject={onAddProject} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}

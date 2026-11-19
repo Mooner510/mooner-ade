@@ -17,7 +17,7 @@ export function CliUpdateNotice({ agent }: { agent: CliAgent }) {
     <button type="button" onClick={() => void update()}>다시 시도</button><button type="button" onClick={dismiss}>닫기</button></div>;
   if (!status?.outdated || !status.latest || snoozed()) return null;
   return <div className="chat-update" role="status"><Icon name="download" size={13} />
-    <span className="chat-update-text"><span className="chat-update-title">{name} 업데이트 가능</span><span className="chat-update-cur">다음 대화부터 적용됩니다</span></span>
+    <span className="chat-update-text"><span className="chat-update-title">{name} 업데이트 가능 (v{status.latest})</span><span className="chat-update-cur">다음 대화부터 적용됩니다</span></span>
     <button type="button" className="primary" onClick={() => void update()}>업데이트</button>
     <button type="button" onClick={() => snooze()}>나중에</button></div>;
 }

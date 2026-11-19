@@ -89,7 +89,7 @@ export type PluginsBridge = {
   hubCatalog?(options?: { force?: boolean }): Promise<PluginsState>; hubInstall?(id: string): Promise<PluginsState>;
 };
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
-const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
+export const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // The plugin state for components outside the settings page (status bar, notification clicks).
@@ -383,12 +383,11 @@ export function PluginSettings({ query = '' }: { query?: string }) {
 
   const builtins = shown.filter(plugin => plugin.builtin), installed = shown.filter(plugin => !plugin.builtin);
   // The market tab is there when this app knows MoonerADE Hub; an update waiting in it is flagged like one needing attention.
-  const hub = bridge.hubCatalog && state.hub ? state.hub : null, marketUpdates = hub?.catalog?.plugins.filter(plugin => plugin.updateAvailable).length ?? 0;
+  const hub = bridge.hubCatalog && state.hub?.available && state.hub.signedIn ? state.hub : null, marketUpdates = hub?.catalog?.plugins.filter(plugin => plugin.updateAvailable).length ?? 0;
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
 
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
-    {window.adeVerifyPlugins && <p className="setting-note">브라우저 테스트 세션 · 키는 임시 폴더에 테스트 키와 함께 암호화 저장됩니다. OS Keychain 보호는 적용되지 않습니다.</p>}
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
     {!filtering && state.error && !global?.error && <Callout tone="error">{state.error}</Callout>}
     {!filtering && global && <Callout tone={global.error ? 'error' : 'ok'}>{global.text}</Callout>}
@@ -415,10 +414,9 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     {hub && !filtering && shownTab === 'market' && <PluginMarket hub={hub} busy={busy} run={run} bridge={bridge} notice={noticeFor('market')} />}
 
     {(filtering ? builtins.length > 0 : shownTab === 'builtin') && <>
-      {filtering
-        ? <div className="plugin-list-head"><h4 className="setting-group">내장 플러그인</h4></div>
-        : <p className="setting-note plugin-tab-note">MoonerADE에 포함된 플러그인입니다. 승인 없이 실행되고, 각자 켜고 끌 수 있습니다.</p>}
+      {filtering && <div className="plugin-list-head"><h4 className="setting-group">내장 플러그인</h4></div>}
       {list(builtins)}
+      {!filtering && <p className="setting-note plugin-tab-note">MoonerADE에 포함된 플러그인입니다. 승인 없이 실행되고, 각자 켜고 끌 수 있습니다.</p>}
     </>}
 
     {(filtering || shownTab === 'installed') && <>
@@ -712,6 +710,8 @@ const MODES: { mode: UpdateMode; label: string; hint: string }[] = [
 // Where updates come from, how they are taken, and the newest version found.
 function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginInfo; update: PluginUpdate; busy: string; run: Run; bridge: PluginsBridge }) {
   const id = plugin.id!, key = (step: string) => `${plugin.folder}:${step}`;
+  // A Hub plugin's updates are not shown until signing in to the Hub (정보 page).
+  if (update.status === 'needs-login') return null;
   if (!update.source || !bridge.checkUpdates) return <Section title="업데이트">
     <p className="plugin-muted">이 플러그인은 업데이트 출처(GitHub 저장소 또는 MoonerADE Hub)를 알려 주지 않습니다. 새 버전의 zip을 설치하면 업데이트됩니다.</p>
   </Section>;
@@ -720,7 +720,7 @@ function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginIn
   const tone: Tone = status === 'available' ? 'info' : status === 'error' ? 'error' : status === 'latest' ? 'ok' : 'info';
   const text = status === 'checking' ? '새 버전을 확인하는 중…' : status === 'downloading' ? `v${update.latest}을(를) 받는 중…` : status === 'installing' ? `v${update.latest}을(를) 설치하는 중…`
     : status === 'available' ? `새 버전 v${update.latest}이(가) 있습니다` : status === 'latest' ? `최신 버전입니다 (v${update.current})` : status === 'error' ? update.error ?? '확인하지 못했습니다.'
-    : status === 'needs-login' ? 'MoonerADE Hub에 로그인해야 새 버전을 확인할 수 있어요' : '아직 확인하지 않았습니다.';
+    : '아직 확인하지 않았습니다.';
   return <Section title="업데이트" hint={fromHub ? <>출처 <b>MoonerADE Hub</b></> : <>출처 <button type="button" className="plugin-link plugin-source" onClick={() => run(key('source'), () => bridge.openSource!(id))}><Icon name="externalLink" size={12} />github.com/{update.source.github}</button> 릴리스</>}>
     <div className="plugin-update" data-tone={tone}>
       <div className="plugin-update-status">
@@ -731,9 +731,7 @@ function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginIn
         </div>
         <div className="plugin-update-actions">
           {status === 'available' && <BusyButton className="primary" busy={working} running={busy === key('install')} icon="download" onClick={() => run(key('install'), () => bridge.installUpdate!(id))}>설치</BusyButton>}
-          {status === 'needs-login' && bridge.signInHub
-            ? <BusyButton className="primary" busy={working} running={busy === key('hub-signin')} icon="person" onClick={() => run(key('hub-signin'), () => bridge.signInHub!())}>Hub 로그인</BusyButton>
-            : <BusyButton busy={working || spinning || status === 'needs-login'} running={busy === key('check')} icon="refresh" onClick={() => run(key('check'), () => bridge.checkUpdates!(id))}>지금 확인</BusyButton>}
+          <BusyButton busy={working || spinning} running={busy === key('check')} icon="refresh" onClick={() => run(key('check'), () => bridge.checkUpdates!(id))}>지금 확인</BusyButton>
         </div>
       </div>
       {(update.review?.length ?? 0) > 0 && <Callout tone="warn">이 업데이트는 전에 없던 것을 요청해 자동으로 설치하지 않았습니다. 확인하고 설치하세요.
@@ -747,6 +745,24 @@ function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginIn
       </div>
     </div>
   </Section>;
+}
+
+// MoonerADE Hub sign-in, on the 정보 page. The plugin market (플러그인 › 마켓) appears only after signing in here.
+export function HubSignIn({ hub, bridge }: { hub: HubState | null | undefined; bridge: PluginsBridge | undefined }) {
+  const [busy, setBusy] = useState(''), [error, setError] = useState<string | null>(null);
+  if (!bridge?.signInHub || !bridge.signOutHub || !bridge.cancelHubSignIn || !hub?.available) return null;
+  const run = (key: string, step: () => Promise<PluginsState>) => { setBusy(key); setError(null); void step().then(undefined, (failed: Error) => setError(errorText(failed))).finally(() => setBusy('')); };
+  return <>
+    <Row title="Hub 계정 로그인" hint={hub.signedIn ? `${hub.account ?? '계정'}으로 로그인되어 있습니다. 플러그인 › 마켓에서 Hub의 플러그인을 설치합니다.` : 'MoonerADE의 추가 기능을 이용하기 위해서는 로그인이 필요합니다. 계정 생성은 개발자에게 별도 문의가 필요합니다.'}>
+      {hub.signedIn
+        ? <BusyButton busy={Boolean(busy)} running={busy === 'hub:signout'} onClick={() => run('hub:signout', () => bridge.signOutHub!())}>로그아웃</BusyButton>
+        : hub.device
+          ? <BusyButton busy={Boolean(busy)} running={busy === 'hub:cancel'} onClick={() => run('hub:cancel', () => bridge.cancelHubSignIn!())}>취소</BusyButton>
+          : <BusyButton className="primary" busy={Boolean(busy)} running={busy === 'hub:signin'} icon="person" onClick={() => run('hub:signin', () => bridge.signInHub!())}>Hub 로그인</BusyButton>}
+    </Row>
+    {!hub.signedIn && hub.device && <Callout tone="info">브라우저에서 MoonerADE Hub에 로그인하고 코드 <b className="mono">{hub.device.userCode}</b>를 승인하세요. <button type="button" className="plugin-link" onClick={() => copyText(hub.device!.userCode)}>코드 복사</button></Callout>}
+    {(error || hub.error) && <Callout tone="error">{error ?? hub.error}</Callout>}
+  </>;
 }
 
 // The GitHub account for plugins from private repositories: connected in MoonerADE, or this PC's gh / git login.
@@ -856,7 +872,7 @@ function McpTools({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
         {tool.destructive && <span className="plugin-tag" data-tone="warn">변경 작업</span>}
       </div>
       {tool.description && <ToolDescription text={tool.description} />}
-      {tool.params.length > 0 && <p className="plugin-tool-params">인자 {tool.params.map(param => <code key={param.name} title={param.required ? '필수' : '선택'}>{param.name}{param.required ? '' : '?'}</code>)}</p>}
+      {tool.params.length > 0 && <p className="plugin-tool-params">인자 {tool.params.map(param => <code key={param.name} title={param.required ? '필수' : undefined}>{param.name}{param.required ? '' : '?'}</code>)}</p>}
     </div>
     <input type="checkbox" role="switch" aria-label={`${tool.name} 도구 사용`} checked={tool.enabled} disabled={working || !serverOn}
       onChange={event => set({ tool: tool.name, enabled: event.target.checked }, `tool-${tool.name}`)} />

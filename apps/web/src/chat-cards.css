@@ -80,14 +80,15 @@
 .bc { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 9px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
 .btw-card.error .bc { border-color: color-mix(in srgb, var(--error) 50%, var(--border)); background: color-mix(in srgb, var(--error) 5%, var(--surface)); }
 .bc-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.bc-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; letter-spacing: .05em; color: var(--accent-fg); background: var(--accent); }
-.bc-question { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; font-size: 13px; }
-.bc-wait { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
-.bc-answer { font-size: 13.5px; line-height: 1.6; }
+.bc-tag { flex: none; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .06em; line-height: 16px; color: var(--muted); }
+.bc-question { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; font-size: 12.5px; }
+.bc-wait { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.bc-answer { font-size: 13px; line-height: 1.6; }
 .bc-answer > :first-child { margin-top: 0; }
 .bc-answer > :last-child { margin-bottom: 0; }
-.bc-error { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--error); }
+.bc-error { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--error); }
 .bc-error span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .bc-retry { flex: none; padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: 6px; font-size: 12px; color: var(--fg); }
-.bc-foot { font-size: 11px; color: var(--faint); }
+.bc-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--faint); }
+.bc-usage .chat-done-pop { left: auto; right: 0; }
 @media (prefers-reduced-motion: reduce) { .uc-tile.skeleton { animation: none; } .uc-ring .fill, .uc progress::-webkit-progress-value { transition: none; } }

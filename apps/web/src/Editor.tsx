@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { AgentMode } from './launchers';
 import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
-import { defaultUsageMeters, type UsageStyle } from './usage-meters';
+import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-meters';
+import type { FileBuffer } from './file-buffer';
 
 export type Settings = {
   theme: ThemeId; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
@@ -57,10 +58,10 @@ export type Settings = {
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
 // statusItems is the shown set; statusLeft/statusRight hold every item's side and order, shown or not, so hiding one keeps its place.
-const defaultLeft = ['connection', 'path', 'branch'], defaultRight = ['cpu', 'memory', 'claudeusage', 'codexusage', 'cursorusage', 'wakatime', 'clock', 'readiness', 'openproject'];
+const defaultLeft = ['connection', 'path', 'branch'], defaultRight = ['cpu', 'memory', 'claudeusage', 'codexusage', 'cursorusage', 'wakatime', 'clock', 'readiness'];
 export const statusItemIds = [...defaultLeft, ...defaultRight];
 // Items that were fixed or did not exist before the layout could be edited; saved settings from then get them shown.
-const addedWithLayout = ['connection', 'readiness', 'openproject', 'claudeusage', 'codexusage', 'cursorusage'];
+const addedWithLayout = ['connection', 'readiness', 'claudeusage', 'codexusage', 'cursorusage'];
 export function statusLayout(settings: Pick<Settings, 'statusLeft' | 'statusRight'>) {
   const known = new Set(statusItemIds), seen = new Set<string>();
   const keep = (list: string[] = []) => list.filter(id => known.has(id) && !seen.has(id) && seen.add(id));
@@ -110,7 +111,7 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   }
   if (next.usageStyle !== 'bar' && next.usageStyle !== 'text') next.usageStyle = 'bar';
   next.usageShown = {
-    claude: Array.isArray(saved.usageShown?.claude) ? saved.usageShown.claude : [...defaultUsageMeters.claude],
+    claude: usageMetersOf('claude', Array.isArray(saved.usageShown?.claude) ? saved.usageShown : undefined),
     codex: Array.isArray(saved.usageShown?.codex) ? saved.usageShown.codex : [...defaultUsageMeters.codex],
     cursor: Array.isArray(saved.usageShown?.cursor) ? saved.usageShown.cursor : [...defaultUsageMeters.cursor]
   };
@@ -196,11 +197,101 @@ export async function colorize(code: string, hint: string): Promise<string | nul
   monaco.editor.setTheme(themeName(themeById(document.documentElement.dataset.theme).id));
   return monaco.editor.colorize(code, id, { tabSize: 2 });
 }
-export function DiffView({ original, modified, path, settings, compact = false, minHeight = 60, onHeight }: { original: string; modified: string; path: string; settings: Settings; compact?: boolean; minHeight?: number; onHeight?(height: number): void }) {
+export type DiffLayoutChoice = Exclude<Settings['diffLayout'], 'auto'>;
+
+export function FileEditor({ buffer, settings, visible, watch }: {
+  buffer: FileBuffer; settings: Settings; visible: boolean;
+  watch(listener: (paths: string[]) => void): () => void;
+}) {
+  const state = useSyncExternalStore(buffer.subscribe, buffer.get);
   const host = useRef<HTMLDivElement>(null);
+  const live = useRef<{ monaco: typeof Monaco; editor: Monaco.editor.IStandaloneCodeEditor } | null>(null);
+  const latest = useRef({ state, settings, visible });
+  const updating = useRef(false);
+  latest.current = { state, settings, visible };
+  const loaded = state.draft !== undefined;
+  const readOnly = Boolean(state.conflict || state.busy);
+  useEffect(() => {
+    if (!visible) return;
+    const refresh = () => { if (!document.hidden) void buffer.refresh(); };
+    const unsubscribe = watch(paths => {
+      if (!paths.length || paths.some(path => path === buffer.path || buffer.path.startsWith(`${path}/`))) void buffer.refresh();
+    });
+    void buffer.refresh();
+    const timer = setInterval(refresh, 1000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { unsubscribe(); clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [visible, buffer, watch]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    let disposed = false, cleanup = () => {};
+    void loadMonaco().then(monaco => {
+      if (disposed || !host.current) return;
+      const now = latest.current;
+      const model = monaco.editor.createModel(now.state.draft ?? '', languageOf(monaco, buffer.path) ?? 'plaintext');
+      monaco.editor.setTheme(themeName(now.settings.theme));
+      const editor = monaco.editor.create(host.current, {
+        model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
+        fontSize: now.settings.fontSize, wordWrap: now.settings.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now.settings),
+        readOnly: Boolean(now.state.conflict || now.state.busy), ariaLabel: buffer.path
+      });
+      live.current = { monaco, editor };
+      const change = model.onDidChangeContent(() => { if (!updating.current) buffer.edit(model.getValue(undefined, true)); });
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { void buffer.save(); });
+      if (now.visible && !now.state.conflict && document.activeElement?.closest('.project-tree')) editor.focus();
+      cleanup = () => { live.current = null; change.dispose(); editor.dispose(); model.dispose(); };
+    });
+    return () => { disposed = true; cleanup(); };
+  }, [buffer, loaded]);
+
+  useEffect(() => {
+    const editor = live.current?.editor, model = editor?.getModel();
+    if (!model || state.draft === undefined || model.getValue(undefined, true) === state.draft) return;
+    const position = editor?.getPosition();
+    updating.current = true;
+    try { model.setValue(state.draft); if (position) editor?.setPosition(position); }
+    finally { updating.current = false; }
+  }, [state.draft]);
+  useEffect(() => {
+    if (!live.current) return;
+    const { monaco, editor } = live.current;
+    monaco.editor.setTheme(themeName(settings.theme));
+    editor.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(settings), readOnly });
+  }, [settings.theme, settings.fontSize, settings.wordWrap, settings.diffFont, settings.terminalFont, readOnly]);
+
+  const conflict = state.conflict;
+  return <>
+    {conflict && <div className="file-conflict">
+      <span role="alert">{conflict.file ? '외부에서 파일이 변경되었습니다.' : '외부에서 파일이 삭제되었습니다.'} ADE의 편집 내용은 아직 저장되지 않았습니다.</span>
+      <button disabled={state.busy} onClick={buffer.reload}>다시 불러오기</button>
+      <button disabled={state.busy} onClick={() => void buffer.save(true)}>덮어쓰기</button>
+    </div>}
+    {state.error && <div className="file-conflict" role="alert">
+      <span>{state.error}</span>
+      {!conflict && <button onClick={() => void (buffer.dirty ? buffer.save() : buffer.refresh())}>다시 시도</button>}
+    </div>}
+    {loaded ? <div className="editor" ref={host} /> : !state.error && <div className="empty">{state.file === null ? '파일이 삭제되었습니다.' : '불러오는 중…'}</div>}
+  </>;
+}
+
+export function DiffView({ original, modified, path, settings, onLayoutChange, header, compact = false, minHeight = 60, onHeight }: {
+  original: string; modified: string; path: string; settings: Settings; onLayoutChange(layout: DiffLayoutChoice): void;
+  header?: ReactNode; compact?: boolean; minHeight?: number; onHeight?(height: number): void;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(true);
+  const sideBySide = !narrow && (settings.diffLayout === 'split' || (settings.diffLayout === 'auto' && !compact));
   const live = useRef<{ monaco: typeof Monaco; diff: Monaco.editor.IStandaloneDiffEditor; a: Monaco.editor.ITextModel; b: Monaco.editor.ITextModel } | null>(null);
-  const latest = useRef({ original, modified, settings, onHeight }); latest.current = { original, modified, settings, onHeight };
-  const sideBySide = (value: Settings) => value.diffLayout === 'split' ? true : value.diffLayout !== 'inline';
+  const latest = useRef({ original, modified, settings, sideBySide, onHeight }); latest.current = { original, modified, settings, sideBySide, onHeight };
+  useEffect(() => {
+    const box = host.current!;
+    const measure = () => setNarrow(box.clientWidth <= 760);
+    const observer = new ResizeObserver(measure);
+    measure();
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     let disposed = false, cleanup = () => {};
     void loadMonaco().then(monaco => {
@@ -208,7 +299,7 @@ export function DiffView({ original, modified, path, settings, compact = false, 
       const now = latest.current.settings;
       monaco.editor.setTheme(themeName(now.theme));
       const diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: sideBySide(now), useInlineViewWhenSpaceIsLimited: now.diffLayout === 'auto', renderSideBySideInlineBreakpoint: 760,
+        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false,
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
@@ -235,7 +326,7 @@ export function DiffView({ original, modified, path, settings, compact = false, 
       cleanup = () => { live.current = null; box.removeEventListener('pointerdown', onDown, true); box.removeEventListener('pointerup', onUp, true); sized?.dispose(); diff.dispose(); a.dispose(); b.dispose(); };
     });
     return () => { disposed = true; cleanup(); };
-  }, [path, compact, settings.diffFoldUnchanged, settings.diffContextLines]);
+  }, [path, compact, minHeight, settings.diffFoldUnchanged, settings.diffContextLines]);
   useEffect(() => {
     const editor = live.current; if (!editor) return;
     if (editor.a.getValue() !== original) editor.a.setValue(original);
@@ -244,7 +335,16 @@ export function DiffView({ original, modified, path, settings, compact = false, 
   useEffect(() => {
     const editor = live.current; if (!editor) return;
     editor.monaco.editor.setTheme(themeName(settings.theme));
-    editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide(settings), useInlineViewWhenSpaceIsLimited: settings.diffLayout === 'auto', ignoreTrimWhitespace: settings.diffIgnoreWhitespace, maxComputationTime: settings.diffComputeMs, fontFamily: diffFontFamily(settings) });
-  }, [settings.theme, settings.fontSize, settings.wordWrap, settings.diffLayout, settings.diffIgnoreWhitespace, settings.diffComputeMs, settings.diffFont, settings.terminalFont]);
-  return <div className={compact ? 'editor compact-diff' : 'editor'} ref={host} />;
+    editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide, ignoreTrimWhitespace: settings.diffIgnoreWhitespace, maxComputationTime: settings.diffComputeMs, fontFamily: diffFontFamily(settings) });
+  }, [settings.theme, settings.fontSize, settings.wordWrap, sideBySide, settings.diffIgnoreWhitespace, settings.diffComputeMs, settings.diffFont, settings.terminalFont]);
+  return <div className={compact ? 'chat-diff-wrap' : 'diff-view'}>
+    <div className="diff-view-bar">
+      {header}
+      <span className="diff-view-choices" role="group" aria-label="diff 보기 방식">
+        <button type="button" aria-pressed={!sideBySide} onClick={() => onLayoutChange('inline')}>합쳐 보기</button>
+        <button type="button" aria-pressed={sideBySide} disabled={narrow} title={narrow ? '패널이 넓을 때 나눠 볼 수 있습니다.' : undefined} onClick={() => onLayoutChange('split')}>나눠 보기</button>
+      </span>
+    </div>
+    {compact ? <div className="chat-diff"><div className="editor compact-diff" ref={host} /></div> : <div className="editor" ref={host} />}
+  </div>;
 }

@@ -23,7 +23,7 @@ const readVarint = (data, index) => {
 export function decodeConversationTokenDetails(checkpoint) {
   if (!checkpoint?.length) return null;
   const data = Buffer.isBuffer(checkpoint) ? checkpoint : Buffer.from(checkpoint);
-  let index = 0;
+  let index = 0, tokens = null, selfSummaryCount = null;
   while (index < data.length) {
     const keyRead = readVarint(data, index);
     if (!keyRead) return null;
@@ -34,7 +34,10 @@ export function decodeConversationTokenDetails(checkpoint) {
     if (wire === 0) {
       const valueRead = readVarint(data, index);
       if (!valueRead) return null;
-      index = valueRead[1];
+      const [value, after] = valueRead;
+      index = after;
+      // ConversationStateStructure field 17 is how many times this conversation has summarized itself.
+      if (field === 17) selfSummaryCount = value;
     } else if (wire === 2) {
       const lenRead = readVarint(data, index);
       if (!lenRead) return null;
@@ -43,15 +46,28 @@ export function decodeConversationTokenDetails(checkpoint) {
       if (index + length > data.length) return null;
       const chunk = data.subarray(index, index + length);
       index += length;
-      if (field === 5 || field === 4) {
-        const details = tokenField(chunk);
-        if (details) return details;
-      }
+      if ((field === 5 || field === 4) && !tokens) tokens = tokenField(chunk);
     } else if (wire === 1) index += 8;
     else if (wire === 5) index += 4;
     else return null; // groups, packed quirks: stop instead of guessing
   }
-  return null;
+  if (!tokens) return null;
+  return selfSummaryCount == null ? tokens : { ...tokens, selfSummaryCount };
+}
+
+// A rise in the store's summary count is Cursor auto-compacting. The first count we see is only a baseline,
+// unless this session already had a context meter and that meter just fell (the count field was absent until the summary).
+export function cursorAutoCompact(previousCount, reading, preTokens) {
+  const count = reading?.selfSummaryCount;
+  if (!Number.isInteger(count)) return { count: previousCount ?? null, event: null };
+  const event = (post = reading.contextTokens) => ({ kind: 'compact', trigger: 'auto', preTokens: preTokens > 0 ? preTokens : null, postTokens: Number.isFinite(post) ? post : null });
+  if (previousCount == null) {
+    const dropped = preTokens > 0 && reading.contextTokens > 0 && reading.contextTokens < preTokens * 0.8;
+    if (count > 0 && dropped) return { count, event: event() };
+    return { count, event: null };
+  }
+  if (count <= previousCount) return { count, event: null };
+  return { count, event: event() };
 }
 
 function tokenField(chunk) {
@@ -116,5 +132,5 @@ export async function readCursorStoreUsage(sessionId, { query = run, storePath =
   if (!blobHex || !/^[0-9a-f]+$/i.test(blobHex)) return null;
   const details = decodeConversationTokenDetails(Buffer.from(blobHex, 'hex'));
   if (!details) return null;
-  return { contextTokens: details.usedTokens, contextWindow: details.maxTokens, source: 'store', at: Date.now() };
+  return { contextTokens: details.usedTokens, contextWindow: details.maxTokens, source: 'store', at: Date.now(), ...(Number.isInteger(details.selfSummaryCount) && { selfSummaryCount: details.selfSummaryCount }) };
 }

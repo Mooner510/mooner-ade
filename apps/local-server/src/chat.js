@@ -10,7 +10,7 @@ import { conversationDigest, runBtw } from './chat-btw.js';
 import { CODEX_KEY_ENV } from './agent-keys.js';
 import { autoDenialReason, pendingBlocked, retryText, sessionRule } from './auto-denial.js';
 import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, sessionRuleStrings, toolAllowable, toolSuggestions, ASK_SKIPPED, askUserInput, approvalLine, buildClaudeArgs, cliPermissionMode, controlLine, EFFORTS, normalizeClaude, isPickedModel, PERMISSION_MODES, worktreeMove, planRevision, refusalWith, transcriptEvents, uiPermissionMode, userLine, validMessageUuid, wantsArtifact } from './chat-claude.js';
-import { cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
+import { cursorAutoCompact, cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
@@ -28,6 +28,7 @@ const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
 // Set once any Claude child echoed one of our plain messages back by its uuid (--replay-user-messages): from then on a turn that ended without the echo is known not to have taken the message in.
 let echoesSeen = false;
+const isClaudeCompact = text => /^\/compact(?:\s|$)/.test(text);
 const BACKGROUND_QUIET_MS = 3 * 60_000;
 export const chatFolder = (directory, id) => {
   if (typeof id !== 'string' || !ID.test(id)) throw fault('INVALID_INPUT', '잘못된 채팅 ID입니다.');
@@ -169,7 +170,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   };
   void refreshAutoCompact();
   // The prompt cache's clock, read from the session's transcript (the same reading the terminal's cache timer uses): `state.cache` = the last main-thread
-  // request, its cache lifetime and the context size it read. Read when a turn ends or the context is compacted, not on a timer: the countdown itself runs in the page.
+  // request, its cache lifetime and the context size it read. Claude resets that clock at the start of every main-thread API call, so a main-thread
+  // response re-reads the transcript (a subagent's usage does not), and so does a turn end or a compact. The countdown itself runs in the page.
   let cacheReading = null, cacheBusy = false, cacheLater = null;
   const refreshCache = async () => {
     if (agent !== 'claude' || closed || !state.sessionId || cacheBusy) return;
@@ -181,7 +183,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (!closed && JSON.stringify(next) !== JSON.stringify(state.cache ?? null)) { state.cache = next; publish(); }
     } catch { /* an unreadable transcript keeps the last reading */ } finally { cacheBusy = false; }
   };
-  // The CLI writes the transcript a moment after it reports the result.
+  // The CLI writes the transcript a moment after it reports the response.
   const refreshCacheSoon = () => { clearTimeout(cacheLater); cacheLater = setTimeout(() => void refreshCache(), 500); cacheLater.unref?.(); };
   // Until the CLI's init event names the real model and mode, show what a plain `claude` would use here (settings.json). Never stored, never passed as a flag.
   if (agent === 'claude') void readClaudeDefaults(configDirOf(), cwd).then(found => {
@@ -205,7 +207,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const streamIds = new Map(), toolInputSize = new Map();
   const taskIds = new Map(), approvals = new Map(), controls = new Map(), steers = new Map(); // steers: uuid -> { text, images, previews } sent into a running turn, not yet taken in by it
   const subTools = new Set(); // tool calls a subagent made; their results are not this conversation's turn
-  let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0;
+  let cursorAcpUsageAt = 0, cursorStorePoll = null, cursorStoreUntil = 0, cursorSummaryCount = null, cursorManualCompact = false;
   const stopCursorStorePoll = () => { if (cursorStorePoll) { clearInterval(cursorStorePoll); cursorStorePoll = null; } };
   const noteCursorAcpUsage = event => {
     if (agent !== 'cursor' || event.contextSource === 'store') return;
@@ -218,7 +220,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 5_000) return;
     const reading = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
     if (!reading) return;
-    if (cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
+    // /summarize emits its own divider. While that runs, a store poll must not add a second "자동 압축".
+    const noted = cursorManualCompact ? { count: cursorSummaryCount, event: null } : cursorAutoCompact(cursorSummaryCount, reading, state.contextTokens);
+    if (!cursorManualCompact) cursorSummaryCount = noted.count;
+    if (noted.event) emit(noted.event);
+    if (!noted.event && cursorAcpUsageAt && Date.now() - cursorAcpUsageAt < 60_000 && state.contextTokens > 0 && reading.contextTokens <= state.contextTokens) return;
     if (reading.contextTokens === state.contextTokens && (reading.contextWindow ?? state.contextWindow) === state.contextWindow) return;
     emit({ kind: 'usage', contextTokens: reading.contextTokens, contextWindow: reading.contextWindow ?? state.contextWindow, contextSource: 'store' });
   };
@@ -406,6 +412,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // A reply to something we asked (set_model, interrupt, ...).
     if (raw?.type === 'control_response') { controls.get(raw.response?.request_id)?.(raw.response); controls.delete(raw.response?.request_id); }
     if (protocol) { protocol.handle(raw); return; }
+    if (raw?.type === 'result' && !raw.is_error && turnOpen && inflight && isClaudeCompact(inflight.text)) {
+      // On resume, Claude can finish a startup turn while the user's /compact is still queued.
+      const ids = raw.user_message_uuids ?? (raw.user_message_uuid ? [raw.user_message_uuid] : []);
+      if (ids.length ? !ids.includes(inflight.uuid) : raw.local_command !== 'compact' && !inflight.acked && !inflight.compacted) return;
+    }
     for (const event of normalizeClaude(raw, meta.model ?? state.model)) handleEvent(event);
   }
   // The CLI says only in the result text that auto mode refused a call. The refusal is recorded next to the call it was for (its input, the reason and the exact allow rule
@@ -504,7 +515,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (moved) { emit(moved); publish(); }
       if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
-      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; publishSoon(); }
+      if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; refreshCacheSoon(); publishSoon(); }
       if (event.kind === 'message' && event.parentToolUseId && event.id) subLive.delete(event.id);
       if (event.kind === 'session') {
         meta.sessionId = state.sessionId ?? undefined; meta.resumeAt = undefined; meta.fork = false;
@@ -512,9 +523,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         void saveMeta().catch(reportStorage); publish();
       }
       if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings' || event.kind === 'compact') publish();
-      if (event.kind === 'compact' && agent === 'claude') refreshCacheSoon();
+      if (event.kind === 'compact' && agent === 'claude') {
+        if (inflight && event.trigger === 'manual') inflight.compacted = true;
+        refreshCacheSoon();
+      }
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
+        if (agent === 'claude' && inflight && isClaudeCompact(inflight.text)) inflight = null;
         if (agent === 'cursor' && state.sessionId) {
           const sessionId = state.sessionId, last = retainedEvents().findLast(item => item.kind === 'message');
           if (last?.uuid && last.blocks?.some(block => block.type === 'text') && event.status === 'success') {
@@ -665,10 +680,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (!last?.text?.trim()) throw fault('INVALID_INPUT', '다시 시도할 메시지가 없습니다.', 409);
     if (last.images > 0) throw fault('CHAT_UNSUPPORTED', '이미지가 포함된 요청은 자동 복구할 수 없습니다. 같은 내용을 다시 보내세요.', 409);
     state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
+    const compact = agent === 'claude' && isClaudeCompact(last.text) ? { text: last.text, uuid: randomUUID(), acked: false } : null;
+    if (compact) inflight = compact;
     try {
       await start();
       if (protocol) await protocol.send(last.text, []);
-      else await write(userLine(last.text));
+      else await write(userLine(last.text, [], compact?.uuid));
     } catch (error) { turnOpen = false; if (protocol) restart(); setStatus(); throw error; }
     setStatus();
   }
@@ -870,11 +887,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (images.length) throw fault('CHAT_UNSUPPORTED', '컨텍스트 압축 명령에는 이미지를 붙일 수 없습니다.', 409);
           const sessionId = state.sessionId ?? meta.sessionId;
           const preTokens = state.contextTokens, startedAt = Date.now();
+          cursorManualCompact = true;
           emit({ kind: 'delta', phase: 'compacting', active: true });
           restart();
           try {
             const output = await runCursorSummarize({ executable, executableArgs: argsOf(executableArgs, meta.auth), sessionId, cwd, env, spawnProcess });
             const after = await readCursorStoreUsage(sessionId, { storePath: id => cursorStorePath(id, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } }) }).catch(() => null);
+            if (Number.isInteger(after?.selfSummaryCount)) cursorSummaryCount = after.selfSummaryCount;
             emit({ kind: 'delta', phase: 'compacting', active: false });
             emit({ kind: 'compact', trigger: 'manual', preTokens: preTokens || null, postTokens: after?.contextTokens ?? null });
             const cleaned = cleanCursorSummarizeOutput(output);
@@ -888,7 +907,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
             try { await start(); } catch { restart(); }
             setStatus();
             throw error;
-          }
+          } finally { cursorManualCompact = false; }
           turnOpen = false;
           setStatus();
           if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);

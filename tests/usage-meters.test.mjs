@@ -9,5 +9,6 @@ test('status-bar meters keep only the windows the user left on', () => {
   assert.deepEqual(barWindows(windows, defaultUsageMeters.claude, true).map(item => item.key), ['session', 'weekly', 'fable']);
   assert.deepEqual(barWindows(windows, defaultUsageMeters.claude, false).map(item => item.key), ['weekly', 'fable']);
   assert.deepEqual(usageMetersOf('cursor', { cursor: ['total', 'nope', 'grok'] }), ['total', 'grok']);
+  assert.deepEqual(usageMetersOf('claude', { claude: ['weekly', 'weekly-opus', 'weekly-sonnet', 'fable'] }), ['weekly', 'fable']);
   assert.deepEqual(barWindows(windows, [], true), []);
 });

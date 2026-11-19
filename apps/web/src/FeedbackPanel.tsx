@@ -203,7 +203,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
                 {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
                 {item.types.map(typeId => <span key={typeId} className="feedback-tag">{typeTag(typeId)}</span>)}
                 {item.source !== 'human' && <span className="feedback-source"><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
-                {item.images.length > 0 && <span className="feedback-count" title={`이미지 ${item.images.length}장`}><Icon name="image" size={12} />{item.images.length}</span>}
+                {item.images.length > 0 && <span className="feedback-count"><Icon name="image" size={12} />{item.images.length}</span>}
                 <time dateTime={new Date(item.updatedAt).toISOString()} title={new Date(item.updatedAt).toLocaleString('ko-KR')}>{ago(item.updatedAt, stamp)}</time>
               </small>
             </span>
@@ -345,7 +345,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
       <section className={`feedback-card${drafting ? ' drafting' : ''}`} data-feedback-region="피드백 작성 카드">
         <div className="feedback-title-row">
           <input className="feedback-title" aria-label="피드백 제목 (선택)" placeholder="제목 (선택)" maxLength={MAX_TITLE} value={title} readOnly={!editable || drafting} onChange={event => edit({ title: event.target.value })} />
-          {editable && types.length > 0 && /\[[^\]]*\]/.test(title) && <span className="feedback-title-warn" title="선택한 유형과 제목의 [ ] 중복"><Icon name="alert" size={12} />[ ] 중복 주의</span>}
+          {editable && types.length > 0 && /\[[^\]]*\]/.test(title) && <span className="feedback-title-warn" title="선택한 유형과 제목이 겹칩니다"><Icon name="alert" size={12} />[ ] 중복 주의</span>}
         </div>
         {tab === 'edit' && editable
           ? <textarea className="feedback-body" aria-label="피드백 내용 (마크다운)" autoFocus={!body} placeholder={drafting ? 'AI가 다듬는 중…' : '내용'} value={body} readOnly={drafting} onChange={event => edit({ body: event.target.value })}

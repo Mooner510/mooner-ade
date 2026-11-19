@@ -27,7 +27,11 @@ test('Codex logins need ChatGPT tokens, not an API key', async () => {
 });
 
 test('usage bodies become 5-hour and weekly windows', () => {
-  assert.deepEqual(parseClaudeUsage({ five_hour: { utilization: 23.4, resets_at: '2026-10-23T10:00:00Z' }, seven_day: { utilization: 41, resets_at: null }, seven_day_opus: null }), [
+  assert.deepEqual(parseClaudeUsage({
+    five_hour: { utilization: 23.4, resets_at: '2026-10-23T10:00:00Z' },
+    seven_day: { utilization: 41, resets_at: null },
+    seven_day_opus: { utilization: 50 }, seven_day_sonnet: { utilization: 60 }
+  }), [
     { key: 'session', label: '5시간', percent: 23, resetsAt: Date.parse('2026-10-23T10:00:00Z') },
     { key: 'weekly', label: '주간', percent: 41, resetsAt: null }
   ]);
