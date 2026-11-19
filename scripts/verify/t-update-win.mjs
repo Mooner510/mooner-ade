@@ -152,7 +152,7 @@ if (!existsSync(watch.ready)) throw new Error('콘솔 창 감시가 시작되지
 const started = Date.now();
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ADE_|ELECTRON_)/.test(name)));
 // ELECTRON_NO_ATTACH_CONSOLE: this first start stands in for a launch from Explorer or a shortcut, which has no console to join.
-const child = spawn(exeOf(installed), drive ? [`--remote-debugging-port=${cdpPort}`] : [], { env: { ...env, ...isolated, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: onQuit ? '종료할 때 업데이트|확인' : '지금 업데이트|중단하고 업데이트|확인', ELECTRON_NO_ATTACH_CONSOLE: '1' }, stdio: 'ignore', detached: true, windowsHide: true });
+const child = spawn(exeOf(installed), drive ? [`--remote-debugging-port=${cdpPort}`] : [], { env: { ...env, ...isolated, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: onQuit ? '종료할 때 업데이트|확인' : '지금 업데이트|중단하고 업데이트|확인', ELECTRON_NO_ATTACH_CONSOLE: '1' }, stdio: 'ignore', detached: true, windowsHide: true, cwd: dirs.home }); // cwd: whatever the app and its children write relative to it (a PowerShell module cache) lands in the temp folder, not in the checkout
 child.unref();
 let exit = null;
 let exitAt = 0;
