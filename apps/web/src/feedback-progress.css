@@ -1,0 +1,15 @@
+/* How far a submitted feedback has come (대기 → beta 반영 → 릴리스 반영), from the Hub. */
+.feedback-status.status-submitted.progress-wait { --tone: var(--warn); }
+.feedback-status.status-submitted.progress-beta { --tone: var(--info); }
+.feedback-status.status-submitted.progress-done { --tone: var(--add); }
+.feedback-status.status-submitted.progress-muted { --tone: var(--muted); }
+.feedback-inapp { flex: none; font-size: 11px; color: var(--add); white-space: nowrap; }
+.feedback-progress-word { font-weight: 650; }
+.feedback-progress-word.progress-wait { color: var(--warn); }
+.feedback-progress-word.progress-beta { color: var(--info); }
+.feedback-progress-word.progress-done { color: var(--add); }
+.feedback-progress-word.progress-muted { color: var(--muted); }
+.feedback-inapp-note { flex-basis: 100%; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.feedback-progress-line { display: flex; align-items: center; gap: 8px; margin: 2px 12px 6px; font-size: 11.5px; color: var(--faint); }
+.feedback-progress-line button { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; color: var(--muted); border: 1px solid var(--border); background: none; font-size: 11px; }
+.feedback-progress-line button:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }

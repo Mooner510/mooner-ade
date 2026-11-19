@@ -6,8 +6,9 @@ import { toast } from './toast';
 import { Dropdown, type Ask } from './views';
 import { effortLabel, effortStyle, modelColor, showCombo } from './chat-model';
 import { AnnotateImage } from './AnnotateImage';
-import { ago, base64Bytes, canSubmit, displayTitle, feedbackGroup, feedbackTypes, groupLabels, toggleType, typeTag, feedbackEffort, feedbackModelId, isEditable, isEmptyDraft, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackGroup, type FeedbackQueue, type FeedbackSource } from './feedback-model';
-import { canCapture, ensureDraft, feedbackCall, openFeedback, removeLocal, requestCapture, startDraft, useFeedback, useQueueClock, type CaptureMode } from './feedback-store';
+import { ago, base64Bytes, canSubmit, displayTitle, feedbackGroup, feedbackTypes, groupLabels, toggleType, typeTag, feedbackEffort, feedbackModelId, isEditable, isEmptyDraft, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, progressBadge, progressInApp, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackGroup, type FeedbackProgressInfo, type FeedbackQueue, type FeedbackSource } from './feedback-model';
+import './feedback-progress.css';
+import { canCapture, ensureDraft, feedbackCall, openFeedback, refreshProgress, removeLocal, requestCapture, startDraft, useFeedback, useQueueClock, type CaptureMode } from './feedback-store';
 
 export const feedbackFileUrl = (item: Pick<Feedback, 'id' | 'updatedAt'>, name: string) => `/feedback-file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}?v=${item.updatedAt}`;
 const sourceIcons: Record<FeedbackSource, IconName> = { human: 'person', ai: 'sparkles', agent: 'bot' };
@@ -167,7 +168,17 @@ const QueueChip = ({ queue }: { queue: FeedbackQueue }) => queue.size > 0 ? <spa
 const groups: FeedbackGroup[] = ['todo', 'sending', 'done'];
 
 // 내역: what was written or sent so far. A row opens in the same editor as everything else (no second screen to go back from).
+// "Where did my feedback get to?": when the Hub was last asked, and a button to ask now. Nothing is shown when no item is waiting on an answer or this Hub cannot say.
+function ProgressLine({ items, info, now }: { items: Feedback[]; info: FeedbackProgressInfo; now: number }) {
+  const [busy, setBusy] = useState(false), waiting = items.some(item => item.status === 'submitted' && item.progress?.state !== 'released' && item.progress?.state !== 'declined');
+  if (!waiting || info.off || info.unsupported) return null;
+  return <p className="feedback-progress-line" role="status">
+    <span>{info.checkedAt ? `처리 상태 확인 · ${ago(info.checkedAt, now)}` : '처리 상태를 아직 확인하지 못했어요'}</span>
+    <button type="button" disabled={busy} onClick={() => { setBusy(true); void refreshProgress().finally(() => setBusy(false)); }}><Icon name="refresh" size={12} />{busy ? '확인 중…' : '지금 확인'}</button>
+  </p>;
+}
 function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite }: PanelProps & { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; now: number; loaded: boolean; onWrite(): void }) {
+  const { progress: progressInfo } = useFeedback();
   const [filter, setFilter] = useState<'all' | FeedbackGroup>('all');
   const remove = (item: Feedback) => void (async () => {
     if (!(await ask.confirm('이 피드백을 삭제할까요? 이미지와 본문이 모두 지워집니다.'))) return;
@@ -184,6 +195,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
       <button type="button" className="chat-chip" aria-pressed={active === 'all'} onClick={() => setFilter('all')}>전체<b>{items.length}</b></button>
       {groups.filter(group => counts[group]).map(group => <button key={group} type="button" className={`chat-chip group-${group}`} aria-pressed={active === group} onClick={() => setFilter(group)}>{groupLabels[group]}<b>{counts[group]}</b></button>)}
     </div>}
+    <ProgressLine items={items} info={progressInfo} now={stamp} />
     <div className="review-list feedback-list">
       {loaded && !items.length && <div className="feedback-empty">
         <span className="feedback-empty-mark"><Icon name="feedback" size={26} /></span>
@@ -199,7 +211,10 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
             <span className="feedback-row-main">
               <strong className={title ? '' : 'untitled'}>{title || '(내용 없음)'}</strong>
               <small>
-                <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>
+                {item.status === 'submitted' && progressBadge(item.progress)
+                  ? <span className={`feedback-status status-submitted progress-${progressBadge(item.progress)!.tone}`} title={`제출됨 · 처리 상태는 Hub가 알려 준 값입니다${item.progress?.checkedAt ? ` (${ago(item.progress.checkedAt, stamp)} 확인)` : ''}`}>{progressBadge(item.progress)!.text}</span>
+                  : <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>}
+                {item.status === 'submitted' && item.progress?.state === 'beta' && item.progress.inApp === true && <span className="feedback-inapp">이 버전에 포함</span>}
                 {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
                 {item.types.map(typeId => <span key={typeId} className="feedback-tag">{typeTag(typeId)}</span>)}
                 {item.source !== 'human' && <span className="feedback-source"><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
@@ -208,6 +223,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
               </small>
             </span>
             {unseen && <i className="feedback-dot" aria-label="아직 검토하지 않음" />}
+            {!unseen && item.progress?.news && item.status === 'submitted' && <i className="feedback-dot" aria-label="처리 상태가 바뀜" title="처리 상태가 바뀌었어요" />}
             <Icon name="chevronRight" size={16} />
           </button>
           {item.status !== 'submitting' && <IconButton icon="trash" tip="none" className="feedback-row-delete" label="이 피드백 삭제" size={14} disabled={item.status === 'drafting'} onClick={() => remove(item)} />}
@@ -336,7 +352,8 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
         {item.status === 'queued' && item.error && <small className="feedback-last-error">마지막 시도: {item.error}</small>}
       </div>}
       {item.status === 'submitted' && <div className="feedback-note ok">
-        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? ` · 이슈 #${item.issueNumber}` : ''}</span>
+        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? ` · 이슈 #${item.issueNumber}` : ''}{progressBadge(item.progress) && <> · <b className={`feedback-progress-word progress-${progressBadge(item.progress)!.tone}`}>{progressBadge(item.progress)!.text}</b></>}</span>
+        {progressInApp(item.progress) && <small className="feedback-inapp-note">{progressInApp(item.progress)}</small>}
         {item.issueUrl && <button type="button" onClick={() => window.open(item.issueUrl, '_blank', 'noopener')}><Icon name="externalLink" size={13} />이슈 열기</button>}
       </div>}
       {item.status === 'failed' && item.error && <p className="feedback-note warn" role="alert"><Icon name="alert" size={14} />{item.error}</p>}
