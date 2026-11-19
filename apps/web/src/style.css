@@ -1424,7 +1424,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .setup-head h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
 .setup-head p { margin: 0; color: var(--muted); line-height: 1.55; }
 .setup h2 { margin: 10px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.setup-themes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-height: 292px; overflow: auto; padding: 2px; scrollbar-gutter: stable; }
+.setup-themes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 168px; max-height: 292px; overflow: auto; padding: 2px; scrollbar-gutter: stable; }
 .setup-theme-group { grid-column: 1 / -1; margin: 2px 2px 0; font-size: 11px; font-weight: 600; color: var(--faint); }
 .setup-theme-group:not(:first-child) { margin-top: 8px; }
 .setup-theme { display: grid; gap: 6px; min-width: 0; padding: 6px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--raised); text-align: left; transition: border-color .2s, box-shadow .2s; }
@@ -1455,7 +1455,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .setup-size output { width: 36px; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }
 .setup-preview { margin: 0; padding: 12px 14px; min-height: 116px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); line-height: 1.5; white-space: pre; overflow: hidden; }
 .setup-preview .p { color: #4fb6d6; } .setup-preview .g { color: var(--add); } .setup-preview .r { color: var(--del, #f27474); } .setup-preview .o { color: #d97757; } .setup-preview .d { color: var(--faint); }
-.setup footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+/* 창이 낮아 대화상자가 스크롤될 때도 "다음"·"건너뛰기"가 항상 보이게 아래에 붙인다(padding 24px을 되돌려 가장자리까지). */
+.setup footer { display: flex; align-items: center; gap: 8px; margin: 0 -24px -24px; padding: 10px 24px 24px; position: sticky; bottom: -24px; background: var(--overlay); }
 .setup footer small { color: var(--faint); }
 .setup footer .primary { padding: 6px 14px; font-size: 13px; }
 
