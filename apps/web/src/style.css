@@ -2658,6 +2658,9 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .feedback-eta { color: var(--warn); }
 .feedback-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .feedback-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: feedback-ping 1.8s ease-out infinite; }
+/* 상단 피드백 버튼: 처리 상태가 바뀐 피드백이 있으면(아직 안 열어 봄) 버튼 모서리에 점. 토스트는 1.3초 아이콘뿐이라 놓치기 쉽다. */
+.bar-button { position: relative; }
+.bar-button .feedback-dot.bar-news { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; }
 @keyframes feedback-ping { to { scale: 3; opacity: 0; } }
 /* Delete: a small round button on the card's top corner, shown on hover or keyboard focus (always on touch screens). */
 .feedback-row-wrap > .feedback-row-delete { position: absolute; top: -7px; right: 10px; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--overlay); color: var(--muted); opacity: 0; scale: .7; transition: opacity .15s, scale .18s var(--ease-out), color .15s, background .15s; }
