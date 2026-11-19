@@ -266,7 +266,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     const side = y(Math.max(rect.y, H - h - 48));
     // A pane header button: the bottom-right corner, clear of the pane's content (a chat's centred composer, a terminal's output).
     // A whole pane (the Chat showcase): over the sidebar at the left, next to the conversation rather than on it.
-    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, y(rect.y + 40)]
+    // A terminal fills from the top, so its card sits low (a question and its choices stay readable); a chat keeps the card high.
+    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, target?.includes('.terminal-pane') ? y(H - h - 48) : y(rect.y + 40)]
       : rect.x + rect.w + m + w <= W - m ? [rect.x + rect.w + m, side] : rect.x - m - w >= m ? [rect.x - m - w, side]
       : rect.y + rect.h + m + h <= H - m ? [x(rect.x), rect.y + rect.h + m] : rect.y - m - h >= m ? [x(rect.x), rect.y - m - h] : corner;
     card.style.left = `${spot[0]}px`; card.style.top = `${spot[1]}px`;
