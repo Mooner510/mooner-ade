@@ -433,6 +433,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // bypassPermissions never asks: every tool request is allowed on the spot. Only a question to the user (AskUserQuestion) or a plan to approve
   // (ExitPlanMode) still reaches the user, since an answer is the point there. Codex does the same inside its protocol (chat-rpc.js).
   const bypassAllows = event => agent === 'claude' && state.permissionMode === 'bypassPermissions' && event.phase === 'request' && !event.questions && event.tool !== 'AskUserQuestion' && event.tool !== 'ExitPlanMode';
+  // "Always allow" on a tool whose suggestion is one rule for the whole tool (an MCP tool) is the same grant as the "this tool" button: either way the chat answers it.
+  const toolAllowedForChat = tool => toolAllowable(tool) && (meta.allowTools?.includes(tool) || meta.sessionAllow?.includes(tool));
   const bypassAllow = event => write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
   // Requests that were already waiting when the chat switched into bypass.
   function bypassPending() {
@@ -447,7 +449,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'approval') {
         // A tool the user allowed for this chat is answered here, without a card. The CLI's own allow rule cannot do this alone: an `ask` rule in the user's settings
         // (or a hook) beats every allow rule, and the CLI then offers no suggestion at all, so the request would come back each time.
-        if (event.phase === 'request' && agent === 'claude' && !protocol && !event.questions && meta.allowTools?.includes(event.tool) && toolAllowable(event.tool)) {
+        if (event.phase === 'request' && agent === 'claude' && !protocol && !event.questions && toolAllowedForChat(event.tool)) {
           void write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
           return;
         }
@@ -485,7 +487,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       let moved;
       if (agent === 'claude') {
         if (event.kind === 'session') lastMainModel = undefined;
-        if (event.kind === 'limit') { const sig = `${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`; if (sig === lastLimit) return; lastLimit = sig; }
+        if (event.kind === 'limit') { const sig = `${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}:${event.utilization === null ? '' : Math.round(event.utilization * 100)}`; if (sig === lastLimit) return; lastLimit = sig; }
         if (event.kind === 'message') {
           for (const block of event.blocks ?? []) if (block.type === 'tool_use' && (block.name === 'EnterWorktree' || block.name === 'ExitWorktree')) worktreeCalls.set(block.id, block);
           // A reply from another model than the one before (and than the one picked): the CLI switched on its own (plan mode, a limit). Said before that reply.

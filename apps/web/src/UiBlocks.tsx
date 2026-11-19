@@ -1,6 +1,7 @@
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { formMessage, niceTicks, type Field, type Spec } from './ui-spec';
 import { MAX_SEND } from './ui-frame-protocol';
+import { subscribeUiSent, uiSendActive, uiSendOf } from './ui-sent';
 import { Tick } from './Icon';
 import { Dropdown } from './views';
 
@@ -63,11 +64,22 @@ function Control({ f, value, set }: { f: Field; value: string; set: (value: stri
   }
 }
 
+const SEND_LABEL = { pending: '대기열에서 기다리는 중…', working: '처리 중…', done: '✓ 처리 완료' } as const;
+
 function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form' }> }) {
-  const [values, setValues] = useState(() => Object.fromEntries(spec.fields.map(f => [f.k, f.value]))), [sent, setSent] = useState<'send' | 'fill' | null>(null);
+  const [values, setValues] = useState(() => Object.fromEntries(spec.fields.map(f => [f.k, f.value]))), [sent, setSent] = useState<'fill' | null>(null);
+  // What became of the last "바로 보내기" of this form lives outside the component (it survives a remount), so one choice is not sent twice: while the answer is queued or the
+  // turn runs the button is a status, and once done it stays so until the answers change. The user interrupting the turn frees it (ui-sent.ts).
+  const formId = JSON.stringify(spec), message = formMessage(spec, values).slice(0, MAX_SEND);
+  const send = useSyncExternalStore(subscribeUiSent, () => uiSendOf(chatId, formId));
+  const sendLocked = uiSendActive(send) || (send?.stage === 'done' && send.text === message);
   // Every form has two actions: fill the composer (replace, so a second click updates it instead of stacking a copy; the user edits and sends),
   // or send the answers at once. Enter in a field fills the composer, the safer of the two.
-  const submit = (fill: boolean) => { window.dispatchEvent(new CustomEvent(fill ? 'ade:ui-prefill' : 'ade:ui-send', { detail: { chatId, text: formMessage(spec, values).slice(0, MAX_SEND), ...(fill && { replace: true }) } })); setSent(fill ? 'fill' : 'send'); };
+  const submit = (fill: boolean) => {
+    if (!fill && sendLocked) return;
+    window.dispatchEvent(new CustomEvent(fill ? 'ade:ui-prefill' : 'ade:ui-send', { detail: { chatId, text: message, form: formId, ...(fill && { replace: true }) } }));
+    if (fill) setSent('fill');
+  };
   return <form className="ui-card ui-form" onSubmit={event => { event.preventDefault(); submit(true); }} onChange={() => setSent(null)}>
     {spec.title && <h4>{spec.title}</h4>}
     {spec.fields.map(f => {
@@ -78,7 +90,7 @@ function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form
         : f.type === 'select' ? <div key={f.k} className="ui-field ui-select" role="group" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : <label key={f.k} className={`ui-field ui-${f.type}`}><span>{f.label}</span>{control}</label>;
     })}
-    <div className="ui-form-actions"><button type="button" className="secondary" onClick={() => submit(false)}>{sent === 'send' ? '✓ ' : ''}바로 보내기</button><button type="submit" className="primary">{sent === 'fill' ? '✓ ' : ''}{spec.submit}</button></div>
+    <div className="ui-form-actions"><button type="button" className="secondary" disabled={sendLocked} aria-live="polite" data-send={send && sendLocked ? send.stage : undefined} onClick={() => submit(false)}>{send && sendLocked ? SEND_LABEL[send.stage] : '바로 보내기'}</button><button type="submit" className="primary">{sent === 'fill' ? '✓ ' : ''}{spec.submit}</button></div>
   </form>;
 }
 

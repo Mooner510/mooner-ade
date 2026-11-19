@@ -1920,6 +1920,8 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-stat-tip span { display: block; }
 
 /* markdown */
+/* A grid's implicit column is `auto`, whose minimum is the widest unbreakable token inside (a long id, URL or path): the column then outgrew the message and the lines were cut at its edge instead of breaking. minmax(0, 1fr) keeps it at the message width, where overflow-wrap breaks the token. */
+.md, .md ul, .md ol { grid-template-columns: minmax(0, 1fr); }
 .md { display: grid; gap: 8px; min-width: 0; }
 .md > * { margin: 0; }
 .md :is(h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; }

@@ -387,6 +387,14 @@ test('Cursor First Party stays white and has a readable background in the light 
 });
 
 
+test('markdown columns stay at the message width, so a long id or URL breaks inside it instead of being cut at the right edge', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../apps/web/src/style.css', import.meta.url), 'utf8');
+  // A grid's implicit `auto` column grows to its widest unbreakable token; the .md grid and the list grids need a bounded column.
+  const rule = css.match(/^\.md, \.md ul, \.md ol \{[^}]*\}/m);
+  assert.ok(rule && /grid-template-columns: minmax\(0, 1fr\)/.test(rule[0]));
+});
+
 test('Cursor labels preserve model versions and group models by provider inside each party', () => {
   for (const [id, name] of [['claude-sonnet-4', 'Claude Sonnet 4'], ['glm-5p3', 'GLM 5p3'], ['claude-opus-5-5', 'Claude Opus 5.5'], ['muse-spark-1.3', 'Muse Spark 1.3'], ['gpt-5.6-sol[fast=true]', 'GPT 5.6 Sol'], ['GPT-6-Luna', 'GPT 6 Luna']]) assert.equal(modelDisplayName(id), name);
   assert.equal(modelRows([{ id: 'gpt-6-luna', name: 'GPT-6-Luna', family: '', window: 0, main: true }], {})[0].label, 'GPT 6 Luna');
@@ -799,6 +807,27 @@ test('the thread says when the agent moved into or out of a worktree, a plan lim
   assert.equal(reduce(reduce(emptyView(), limit), limit).items.length, 1, 'the same warning is said once');
   assert.match(line({ kind: 'settings', model: 'claude-sonnet-5-5', by: 'agent' }).text, /모델로 자동 전환되었습니다\.$/);
   assert.match(line({ kind: 'settings', model: 'gpt-5.5', by: 'agent', reason: 'highRiskCyberActivity' }).text, /보안 정책$/);
+});
+
+test('a plan-limit line follows the CLI\'s latest reading instead of freezing on the first one, and never passes a warning line off as the usage', () => {
+  const warn = (extra = {}) => ({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1794808800, ...extra });
+  let view = reduce(emptyView(), { ...warn({ utilization: 0.91 }), seq: 1, at: Date.now() });
+  assert.match(view.items[0].text, /^5시간 한도의 91%를 사용했습니다 · .*기준 · .*에 초기화$/);
+  const key = view.items[0].key;
+  view = reduce(view, { kind: 'user', text: '계속', seq: 2 });
+  view = reduce(view, { ...warn({ utilization: 0.96 }), seq: 3, at: Date.now() });
+  assert.equal(view.items.length, 2, 'the same window keeps one line');
+  assert.match(view.items[0].text, /^5시간 한도의 96%를 사용했습니다/);
+  assert.equal(view.items[0].key, key, 'the line keeps its place and key');
+  const same = reduce(view, { ...warn({ utilization: 0.96 }), seq: 4, at: Date.now() });
+  assert.equal(same.items, view.items, 'an identical reading changes nothing');
+  assert.equal(reduce(view, { ...warn({ utilization: 0.97, threshold: 0.9, resetsAt: 1794812400 }), seq: 5 }).items.length, 3, 'the next window is a new line');
+  assert.equal(reduce(view, { kind: 'limit', status: 'rejected', limit: 'five_hour', resetsAt: 1794808800, seq: 5 }).items.length, 3, 'reaching the limit is its own line');
+  // Without a reading, the warning line is only a lower bound.
+  assert.match(reduce(emptyView(), warn()).items[0].text, /^5시간 한도의 90% 이상 사용했습니다 · /);
+  assert.match(reduce(emptyView(), warn({ threshold: null })).items[0].text, /^5시간 한도의 대부분을 사용했습니다 · /);
+  assert.match(reduce(emptyView(), warn({ limit: 'seven_day_overage_included', utilization: 0.5 })).items[0].text, /^주간 한도의 50%를/);
+  assert.match(reduce(emptyView(), warn({ limit: 'unheard_of', utilization: 0.5 })).items[0].text, /^사용 한도의 50%를/);
 });
 
 test('Cursor send-now waits behind earlier send-now lines and ahead of follow-ups', () => {
