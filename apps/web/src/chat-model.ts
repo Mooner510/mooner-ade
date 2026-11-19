@@ -352,9 +352,12 @@ export function reduce(view: ChatView, event: any): ChatView {
       const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
       const tasks = { ...view.tasks, [id]: next };
       // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
-      const isJob = view.items.some(item => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      const owner = view.items.find((item): item is AssistantItem => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      const isJob = Boolean(owner);
+      // A job a subagent started is that subagent's to hear about (its end answers the subagent, not the main thread), so only a main-thread job gets the rule.
+      const mainJob = Boolean(owner) && !owner!.sub;
       // A shell/Monitor that ends by itself makes the CLI start a turn on its own: a rule says why that reply appears (one the user stopped stays quiet).
-      if (phase === 'end' && isJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
+      if (phase === 'end' && mainJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
         const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
         const message = `${next.description || '백그라운드 작업'} ${status}`;
         return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });

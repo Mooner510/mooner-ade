@@ -610,6 +610,16 @@ test('a background job that ends by itself leaves one 알림 rule, since the CLI
   assert.deepEqual(view.items.find(item => item.kind === 'note').tones, [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: 'Watch hub 끝남', color: 'var(--fg)' }]);
 });
 
+test('a background job a subagent started leaves no 알림 rule in the main thread, and it is still not a subagent marker', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'scan' } }] });
+  view = reduce(view, { seq: 2, kind: 'message', id: 'sm', parentToolUseId: 'ag', blocks: [{ type: 'tool_use', id: 'sh', name: 'Bash', input: { command: 'pnpm install', run_in_background: true } }] });
+  view = reduce(view, { seq: 3, kind: 'task', phase: 'start', toolUseId: 'sh', description: 'Run pnpm install', background: true, at: 1000 });
+  view = reduce(view, { seq: 4, kind: 'task', phase: 'end', toolUseId: 'sh', status: 'completed', at: 2000 });
+  assert.equal(view.items.filter(item => item.kind === 'note').length, 0);
+  assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 0);
+  assert.equal(view.tasks.sh.status, 'completed', 'its state is still tracked');
+});
+
 test('agent list and pending maps keep their identity while nothing about them changed (pane contexts read by every tool card)', () => {
   let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'a', name: 'Agent', input: { description: 'scan' } }] });
   const first = agentsOf(view.items, view.results, view.tasks, true);
