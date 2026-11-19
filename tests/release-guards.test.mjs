@@ -8,8 +8,9 @@ import path from 'node:path';
 // scripts/release.mjs run for real, but in a throw-away repository whose "origin" is a bare repository next to it: the guards that keep a release on
 // master (CLAUDE.md "Releases") and the changelog entry a stable release needs must keep holding. Nothing here touches this repository or GitHub.
 const root = path.resolve(import.meta.dirname, '..');
-const noConfig = path.join(os.tmpdir(), 'ade-release-guards-gitconfig');
+const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-release-guards-config-')), noConfig = path.join(configDir, 'gitconfig');
 fs.writeFileSync(noConfig, '');
+test.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
 const env = { ...process.env, GIT_CONFIG_GLOBAL: noConfig, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_TERMINAL_PROMPT: '0' };
 const run = (cwd, file, args) => spawnSync(file, args, { cwd, env, encoding: 'utf8' });
 const git = (cwd, ...args) => { const result = run(cwd, 'git', args); assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`); return result.stdout.trim(); };
