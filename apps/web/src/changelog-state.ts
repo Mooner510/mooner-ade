@@ -20,8 +20,11 @@ const parse = (version: string) => { const [core, pre] = version.split(/-(.*)/);
 const compare = (a: string, b: string) => { const x = parse(a), y = parse(b); for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; } return Number(y.pre) - Number(x.pre); };
 
 // Records an update when `current` is newer than the last run. True only for that update, not the first launch.
-export const syncChangelogVersion = (current: string, store = browserStore()) => {
+// `before`: for someone who already used the app (saved settings) but has no record here (the version they ran never wrote one, and they never opened the
+// changelog window): that person is updating from `before` (the version below the newest note), not starting for the first time.
+export const syncChangelogVersion = (current: string, store = browserStore(), before?: string) => {
   const last = store.getItem(LAST) ?? store.getItem(SEEN);
+  if (!last && before !== undefined && compare(current, before) > 0) { store.setItem(FROM, before); store.setItem(LAST, current); return true; }
   if (!last) { store.setItem(LAST, current); store.setItem(FROM, current); return false; }
   if (compare(current, last) > 0) { store.setItem(FROM, last); store.setItem(LAST, current); return true; }
   if (store.getItem(LAST) === null) store.setItem(LAST, last);

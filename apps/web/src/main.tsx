@@ -308,10 +308,12 @@ function Shell() {
     addEventListener('blur', onBlur);
     return () => removeEventListener('blur', onBlur);
   }, []);
-  useEffect(() => {
+  // Run once at boot, when it is known whether settings were saved: someone who used the app before but left no record here (never opened the changelog)
+  // is updating, so the notes open for them too instead of being recorded as a first launch.
+  const checkChangelog = useCallback((existingUser: boolean) => {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
-      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0');
+      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0', undefined, existingUser ? changelogEntries[1]?.version ?? '0.0.0' : undefined);
       const unread = hasUnreadChangelog();
       setChangelogUnread(unread);
       if (updated && unread) setChangelogPending(true);
@@ -368,8 +370,9 @@ function Shell() {
       setSplash(Boolean(loaded?.onboarded));
       const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
+      checkChangelog(Boolean(saved.settings));
     }).catch(cause => setBootError(errorText(cause)));
-  }, []);
+  }, [checkChangelog]);
   useEffect(() => {
     const theme = themeById(settings.theme), root = document.documentElement;
     root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme;
