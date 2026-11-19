@@ -805,7 +805,10 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-tabs small { font-size: 11px; font-weight: 500; color: var(--faint); }
 .plugin-tab-alert { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 .plugin-tabbar .plugin-toolbar { padding-bottom: 4px; }
-.plugin-tab-note { margin: 12px 0 4px; }
+/* The built-in tab's note stays at the bottom of the settings screen: below a short list it sinks to the bottom, over a long one it sticks there while scrolling. -22px cancels .settings-body padding. */
+.settings-body:has(> .plugins .plugin-tab-note) { display: flex; flex-direction: column; }
+.settings-body:has(> .plugins .plugin-tab-note) > .plugins { flex: 1; display: flex; flex-direction: column; }
+.plugin-tab-note { position: sticky; bottom: -22px; z-index: 1; margin: auto 0 -22px; padding: 12px 0 14px 10px; border-left: 0; border-top: 1px solid var(--border); background: var(--overlay); }
 .plugins > .plugin-list-head:first-child, .plugins > .plugin-callout + .plugin-list-head { margin-top: 0; }
 .plugin-list-head + .setting-row { padding-top: 0; border-bottom: 0; }
 .plugin-list-head .setting-group { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
@@ -1178,12 +1181,29 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .status-column.drop-target { border-color: var(--accent); }
 .status-column h4 { margin: 2px 4px 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .status-column ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.status-column li { position: relative; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: grab; background: var(--bg); }
-.status-column li:hover { background: var(--raised); }
+.status-column li { position: relative; border-radius: 6px; background: var(--bg); }
+.status-column li:hover, .status-column li.open { background: var(--raised); }
 .status-column li:focus-visible { outline: 1px solid var(--focus); }
-.status-column li > .icon { color: var(--muted); flex: none; }
-.status-column li > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.status-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; cursor: grab; }
+.status-row > .icon { color: var(--muted); flex: none; }
+.status-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .status-column li small { color: var(--muted); line-height: 1.35; }
+/* ⚙ opens the item's own options under it, so the list itself stays one short row per item. */
+.status-gear { flex: none; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
+.status-gear:hover { color: var(--fg); background: var(--selected); }
+.status-gear[aria-expanded=true] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.status-gear[aria-expanded=true] .icon { rotate: 45deg; }
+.status-gear .icon { transition: rotate .15s; }
+.status-gear:focus-visible { outline: 1px solid var(--focus); }
+.status-options { display: flex; flex-direction: column; margin: 0 8px 8px 30px; padding: 2px 10px; border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border)); cursor: default; }
+.status-opt-note { margin: 6px 0 2px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.status-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.status-opt:first-child, .status-opt-note + .status-opt { border-top: 0; }
+.status-opt > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.status-opt.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
+.status-opt.stacked .usage-meter-grid { max-width: none; }
+.status-opt input[type=number] { width: 72px; }
+@media (prefers-reduced-motion: reduce) { .status-gear .icon { transition: none; } }
 .status-column li.off strong { color: var(--muted); }
 .status-column li.dragging { opacity: .4; }
 .status-column li.drop-before::before, .status-column li.drop-after::after { content: ''; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--accent); }
@@ -1228,7 +1248,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .look-usage[data-usage-style="text"] .usage-window i { display: none; }
 .setting-row:has(.usage-meter-grid) { flex-direction: column; align-items: stretch; gap: 8px; }
 .usage-meter-grid { width: 100%; max-width: 520px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(96px, 100%), 1fr)); gap: 5px; }
-.usage-meter-grid label { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; }
+.usage-meter-grid label { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; }
 .usage-meter-grid label:has(:checked) { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: var(--selected); }
 .usage-meter-grid label:hover { border-color: var(--accent); }
 .usage-meter-grid label:has(input:focus-visible) { outline: 1px solid var(--focus); outline-offset: 1px; }

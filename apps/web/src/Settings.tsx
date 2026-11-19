@@ -85,6 +85,11 @@ const statusHints: Record<string, string> = {
   codexusage: '5시간·주간 한도 사용률. Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.',
   cursorusage: '청구 주기·모델 풀·Grok Bot 한도. cursor-agent 또는 Cursor 앱 로그인 정보로 조회합니다.'
 };
+// Words that find an item through the settings search even though the row itself no longer spells them out.
+const statusKeywords: Record<string, string> = {
+  claudeusage: '5시간 주간 한도 모양 막대 알약 색 갱신 주기', codexusage: '5시간 주간 한도 모양 막대 알약 색 갱신 주기', cursorusage: '한도 모양 막대 알약 색 갱신 주기',
+  cpu: '갱신 주기', memory: '갱신 주기', clock: '12시간제 오전 오후 초', wakatime: '작업 시간 기록 API 키'
+};
 
 // How each item looks in the real status bar, with sample values; shown under the item's name so its meaning is clear at a glance.
 const usageSamples: Record<'claude' | 'codex' | 'cursor', [string, string, number][]> = {
@@ -120,14 +125,48 @@ type Side = 'left' | 'right';
 // Two columns mirror the status bar; rows drag within and across them, and Alt+arrows do the same from the keyboard.
 // `chat` edits the chat tab's status line instead: same drag layout, plus a color / icon / format override per item.
 const sampleChat = { ...emptyState(), model: 'claude-sonnet-4-5', sessionId: '0f3a9c21-0000', contextTokens: 52_000, costUsd: 0.42, turns: 6, durationMs: 185_000, tokens: { input: 48_000, output: 6_200, cacheRead: 120_000, cacheCreate: 3_000 } };
-function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Settings; onChange(settings: Settings): void; chat?: boolean }) {
+// Switches, numbers and choices for the bar items that have their own options. Each ⚙ panel lists only what changes that item.
+function StatusOpt({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return <div className="status-opt"><span><strong>{title}</strong>{hint && <small>{hint}</small>}</span><span className="setting-control">{children}</span></div>;
+}
+function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { settings: Settings; onChange(settings: Settings): void; chat?: boolean; onSection?(section: Section): void }) {
   const query = useContext(settingsQuery);
   const layout = chat ? chatStatusLayout(settings) : statusLayout(settings), items = chat ? settings.chatStatusItems : settings.statusItems, shown = new Set(items);
   const keys_ = chat ? { items: 'chatStatusItems', left: 'chatStatusLeft', right: 'chatStatusRight' } as const : { items: 'statusItems', left: 'statusLeft', right: 'statusRight' } as const;
   const labels = chat ? chatStatusLabels : statusLabels, base = statusSamples(settings);
   const sample = (id: string) => { const view = chat ? chatItemView(id, { state: sampleChat }) : null; return chat ? <span className="stat" style={{ color: view?.color }}>{view?.text}{view?.extra && ` ${view.extra.text}`}</span> : base[id]; };
-  const [dragging, setDragging] = useState(''), [drop, setDrop] = useState<{ side: Side; index: number } | null>(null);
-  const place = (id: string, side: Side, index: number) => {
+  const [dragging, setDragging] = useState(''), [drop, setDrop] = useState<{ side: Side; index: number } | null>(null), [openId, setOpenId] = useState('');
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
+  const sw = (key: 'usageColors' | 'claudeSession' | 'clock12h' | 'clockSeconds', label: string) =>
+    <input type="checkbox" role="switch" aria-label={label} checked={settings[key]} onChange={event => set(key, event.target.checked)} />;
+  const num = (key: 'systemRefresh' | 'usageRefresh', min: number, max: number, step: number, label: string) =>
+    <input type="number" aria-label={label} min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && Number.isInteger(value)) set(key, value); }} />;
+  const usagePanel = (provider: UsageProvider) => <>
+    <p className="status-opt-note">{statusHints[`${provider}usage`]}</p>
+    <div className="status-opt stacked"><span><strong>표시할 한도</strong><small>계정에 제공되는 한도만 나타납니다. 사용량 상세에는 영향이 없습니다.</small></span><UsageMeterChips provider={provider} settings={settings} onChange={onChange} /></div>
+    {provider === 'claude' && <StatusOpt title="5시간 한도가 있는 플랜" hint="Ultra처럼 5시간 한도가 없으면 끄세요. 사용량 상세에서도 숨겨집니다.">{sw('claudeSession', '5시간 한도가 있는 플랜')}</StatusOpt>}
+    <StatusOpt title="숫자 모양" hint="막대는 숫자 아래 줄, 알약은 둥근 칸입니다. 모든 사용량에 같이 적용됩니다.">
+      <Dropdown label="사용량 모양" value={settings.usageStyle} options={[{ value: 'bar', label: '막대' }, { value: 'text', label: '알약' }]} onChange={value => set('usageStyle', value as Settings['usageStyle'])} />
+    </StatusOpt>
+    <StatusOpt title="사용률 색" hint="초록 → 노랑 → 빨강으로 바꿉니다. 끄면 80% 이상만 경고색입니다. 모든 사용량에 같이 적용됩니다.">{sw('usageColors', '사용률 색')}</StatusOpt>
+    <StatusOpt title="갱신 주기 (초)" hint="60–600초. 조회 결과는 3분간 재사용됩니다. 모든 사용량에 같이 적용됩니다.">{num('usageRefresh', 60, 600, 10, '사용량 갱신 주기')}</StatusOpt>
+  </>;
+  const systemPanel = <StatusOpt title="갱신 주기 (초)" hint="2–60초. 창이 보일 때만 조회합니다. CPU와 메모리에 같이 적용됩니다.">{num('systemRefresh', 2, 60, 1, 'CPU·메모리 갱신 주기')}</StatusOpt>;
+  const panels: Record<string, ReactNode> = {
+    claudeusage: usagePanel('claude'), codexusage: usagePanel('codex'), cursorusage: usagePanel('cursor'), cpu: systemPanel, memory: systemPanel,
+    clock: <>
+      <StatusOpt title="12시간제" hint="오전/오후로 표시합니다.">{sw('clock12h', '12시간제 시계')}</StatusOpt>
+      <StatusOpt title="초 표시" hint="켜면 1초마다 갱신합니다.">{sw('clockSeconds', '시계에 초 표시')}</StatusOpt>
+    </>,
+    wakatime: <>
+      <StatusOpt title="작업 시간 기록" hint="끄면 WakaTime에 기록하지 않아 이 항목도 나타나지 않습니다.">
+        <input type="checkbox" role="switch" aria-label="작업 시간 기록" checked={settings.wakatime} onChange={event => onChange({ ...settings, wakatime: event.target.checked, statusItems: event.target.checked && !settings.statusItems.includes('wakatime') ? [...settings.statusItems, 'wakatime'] : settings.statusItems })} />
+      </StatusOpt>
+      {onSection && <StatusOpt title="API 키·백그라운드 기록" hint="WakaTime 설정에서 정합니다."><button type="button" onClick={() => onSection('wakatime')}>WakaTime 설정 열기</button></StatusOpt>}
+    </>
+  };
+  const options = (id: string) => panels[id] ?? null;
+  const place =(id: string, side: Side, index: number) => {
     const next = { left: layout.left.filter(item => item !== id), right: layout.right.filter(item => item !== id) };
     const from = layout[side].indexOf(id);
     next[side].splice(from >= 0 && from < index ? index - 1 : index, 0, id);
@@ -153,15 +192,22 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
     <h4>{side === 'left' ? '왼쪽' : '오른쪽'}</h4>
     <ul>{layout[side].map((id, index) => {
       const marker = drop?.side === side && dragging !== id ? drop.index === index ? 'drop-before' : drop.index === index + 1 && index === layout[side].length - 1 ? 'drop-after' : '' : '';
-      const hint = id === 'wakatime' && !settings.wakatime ? 'WakaTime 작업 시간 기록을 켜야 표시됩니다.' : chat ? chatStatusDefs[id]?.hint ?? statusHints[id] : statusHints[id];
-      if (!queryHit(query, `${labels[id] ?? id} ${hint ?? ''}`)) return null;
-      return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} draggable className={`setting-hit ${shown.has(id) || (chat && id === 'share') ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${marker}`}
-        onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', id); setDragging(id); }}
+      // The bar's rows stay short: what an item reads from is explained inside its ⚙ panel. The chat line has no panel, so its hints stay under the sample.
+      const hint = id === 'wakatime' && !settings.wakatime ? 'WakaTime 작업 시간 기록을 켜야 표시됩니다.' : chat ? chatStatusDefs[id]?.hint : undefined;
+      if (!queryHit(query, `${labels[id] ?? id} ${hint ?? ''} ${chat ? '' : statusHints[id] ?? ''} ${chat ? '' : statusKeywords[id] ?? ''}`)) return null;
+      const panel = chat ? null : options(id), expanded = Boolean(panel) && openId === id, name = labels[id] ?? id;
+      return <li key={id} data-status-item={`${chat ? 'chat:' : ''}${id}`} tabIndex={0} className={`setting-hit ${shown.has(id) || (chat && id === 'share') ? '' : 'off'} ${dragging === id ? 'dragging' : ''} ${expanded ? 'open' : ''} ${marker}`}
         onDragOver={event => { const box = event.currentTarget.getBoundingClientRect(); over(event, side, event.clientY < box.top + box.height / 2 ? index : index + 1); }}
-        onDrop={finish} onDragEnd={() => { setDragging(''); setDrop(null); }} onKeyDown={event => keys(event, id, side, index)}>
-        <Icon name="grip" size={14} />
-        <span><strong>{labels[id] ?? id}</strong><span className="statusbar status-sample" aria-hidden="true">{sample(id)}</span>{hint && <small>{hint}</small>}</span>
-        <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${labels[id] ?? id} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '플랜 · API 키 구분 상시 표시' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
+        onDrop={finish} onKeyDown={event => keys(event, id, side, index)}>
+        <div className="status-row" draggable
+          onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', id); setDragging(id); }}
+          onDragEnd={() => { setDragging(''); setDrop(null); }}>
+          <Icon name="grip" size={14} />
+          <span className="status-name"><strong>{name}</strong><span className="statusbar status-sample" aria-hidden="true">{sample(id)}</span>{hint && <small>{hint}</small>}</span>
+          {panel && <button type="button" className="status-gear" aria-label={`${name} 설정`} title="설정" aria-expanded={expanded} aria-controls={`status-options-${id}`} onClick={() => setOpenId(expanded ? '' : id)}><Icon name="settings" size={14} /></button>}
+          <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${name} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '플랜 · API 키 구분 상시 표시' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
+        </div>
+        {expanded && <div className="status-options" id={`status-options-${id}`} role="group" aria-label={`${name} 설정`}>{panel}</div>}
       </li>;
     })}</ul>
   </section>;
@@ -169,14 +215,13 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
   const isDefault = JSON.stringify([layout, [...items].sort()]) === JSON.stringify([defaults, [...defaultSettings[keys_.items]].sort()]) && (!chat || !settings.chatStatusSeparator);
   return <div className="setting-block">
     <div className="status-intro">
-      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. 키보드는 Alt+화살표.</p>
+      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. {!chat && <>톱니바퀴(<Icon name="settings" size={12} />)가 있는 항목은 표시 방식을 따로 정할 수 있습니다. </>}키보드는 Alt+화살표.</p>
       <button disabled={isDefault} onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
     </div>
     {chat && <Row title="항목 구분자" hint="항목 사이에 넣을 문자입니다 (최대 8자, 비우면 간격만).">
       <input type="text" maxLength={8} value={settings.chatStatusSeparator} aria-label="항목 구분자" onChange={event => onChange({ ...settings, chatStatusSeparator: event.target.value })} /></Row>}
     <div className="status-layout">{column('left')}{column('right')}</div>
-    {chat ? <p className="setting-note">모델은 계열마다, 컨텍스트는 사용률에 따라 색이 달라집니다. 브랜치·사용량·시계는 하단 상태바에서 설정합니다.</p> :
-    <p className="setting-note">사용량 색과 모양은 ‘외관’에 있고, 어떤 한도를 보일지는 ‘AI 툴’에 있습니다.</p>}
+    {chat && <p className="setting-note">모델은 계열마다, 컨텍스트는 사용률에 따라 색이 달라집니다. 브랜치·사용량·시계는 ‘하단 상태바’ 탭에서 설정합니다.</p>}
   </div>;
 }
 
@@ -299,16 +344,19 @@ function Group({ title, children }: { title?: string; children: ReactNode }) {
   return <div className="setting-block">{title && <h4 className="setting-group">{title}</h4>}{children}</div>;
 }
 
-function UsageMeters({ provider, settings, onChange }: { provider: UsageProvider; settings: Settings; onChange(settings: Settings): void }) {
+function UsageMeterChips({ provider, settings, onChange }: { provider: UsageProvider; settings: Settings; onChange(settings: Settings): void }) {
   const catalog = usageMeterCatalog[provider], selected = settings.usageShown[provider];
   const setMeter = (id: string, on: boolean) => onChange({ ...settings, usageShown: { ...settings.usageShown, [provider]: catalog.map(item => item.id).filter(item => item === id ? on : selected.includes(item)) } });
+  return <div className="usage-meter-grid" role="group" aria-label="상태바 사용량 항목">
+    {catalog.map(({ id, label }) => <label key={id}>
+      <input type="checkbox" checked={selected.includes(id)} onChange={event => setMeter(id, event.target.checked)} />
+      <span>{label}</span>
+    </label>)}
+  </div>;
+}
+function UsageMeters({ provider, settings, onChange }: { provider: UsageProvider; settings: Settings; onChange(settings: Settings): void }) {
   return <Row title="상태바에 표시" hint="선택한 항목 중 계정에 제공되는 사용량을 표시합니다. 사용량 상세는 이 선택의 영향을 받지 않습니다.">
-    <div className="usage-meter-grid" role="group" aria-label="상태바 사용량 항목">
-      {catalog.map(({ id, label }) => <label key={id}>
-        <input type="checkbox" checked={selected.includes(id)} onChange={event => setMeter(id, event.target.checked)} />
-        <span>{label}</span>
-      </label>)}
-    </div>
+    <UsageMeterChips provider={provider} settings={settings} onChange={onChange} />
   </Row>;
 }
 
@@ -711,10 +759,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             {([['bar', '하단 상태바', 'info'], ['chat', '채팅 상태 표시줄', 'chat']] as const).map(([id, label, icon]) => <button key={id} role="tab" aria-selected={statusTab === id} onClick={() => setStatusTab(id)}><Icon name={icon} size={14} />{label}</button>)}
           </div>}
           {(searching || statusTab === 'bar') && <Group title={searching ? '하단 상태바' : undefined}>
-            <StatusLayoutEditor key="bar" settings={settings} onChange={onChange} />
-            <Advanced>
-              <Row title="CPU·메모리 갱신 주기" hint="초 단위 (2–60). 창이 보일 때만 조회합니다.">{number('systemRefresh', 2, 60)}</Row>
-            </Advanced>
+            <StatusLayoutEditor key="bar" settings={settings} onChange={onChange} onSection={next => { setQuery(''); setSection(next); }} />
           </Group>}
           {(searching || statusTab === 'chat') && <Group title={searching ? '채팅 상태 표시줄' : undefined}>
             <StatusLayoutEditor key="chat" settings={settings} onChange={onChange} chat />
