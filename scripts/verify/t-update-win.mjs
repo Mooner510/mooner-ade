@@ -1,6 +1,6 @@
 // Windows: the whole self-update of a packaged build, isolated. Needs `pnpm package` first (apps/desktop/dist/MoonerADE-win32-x64).
 //   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update-win.mjs [--installed-from <packaged folder>] [--next-from <packaged folder>] [--full]
-//     [--installed-version <x.y.z>] [--next-version <x.y.z>] [--drive [--throttle <MB/s>]]
+//     [--installed-version <x.y.z>] [--next-version <x.y.z>] [--drive [--throttle <MB/s>] | --on-quit]
 // A copy of the build, renamed 0.0.1, runs from a temp folder with its own profile (ADE_USER_DATA_DIR), data, HOME and TEMP and a fake release
 // (ADE_UPDATE_URL) offering 9.9.9 as GitHub would (app-only zip + manifest, or with --full only the full zip; sha256 digests). ADE_UPDATE_ANSWER takes
 // "지금 업데이트". --installed-from / --next-from take other packaged folders: an older build as the installed one tests an update started by
@@ -29,7 +29,7 @@ if (process.platform !== 'win32') { console.error('Windows 전용입니다.'); p
 const args = process.argv.slice(2), option = name => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
 const dist = join(ROOT, 'apps/desktop/dist/MoonerADE-win32-x64');
 const installedFrom = resolve(option('--installed-from') ?? dist), nextFrom = resolve(option('--next-from') ?? dist);
-const installedVersion = option('--installed-version') ?? '0.0.1', nextVersion = option('--next-version') ?? '9.9.9', drive = args.includes('--drive'), throttle = Number(option('--throttle') ?? 6);
+const installedVersion = option('--installed-version') ?? '0.0.1', nextVersion = option('--next-version') ?? '9.9.9', onQuit = args.includes('--on-quit'), drive = args.includes('--drive') || onQuit, throttle = Number(option('--throttle') ?? 6);
 if (![installedVersion, nextVersion].every(version => /^\d+\.\d+\.\d+$/.test(version))) { console.error('--installed-version / --next-version는 x.y.z 형식이어야 합니다.'); process.exit(2); }
 for (const folder of [installedFrom, nextFrom]) if (!existsSync(join(folder, 'MoonerADE.exe'))) { console.error(`${folder}에 MoonerADE.exe가 없습니다. 먼저 pnpm package를 실행하세요.`); process.exit(2); }
 if (existsSync(join(S, 'env.json'))) { console.error(`${S}에 이미 다른 세션이 있습니다. 새 VERIFY_OUT을 쓰세요.`); process.exit(2); }
@@ -152,7 +152,7 @@ if (!existsSync(watch.ready)) throw new Error('콘솔 창 감시가 시작되지
 const started = Date.now();
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ADE_|ELECTRON_)/.test(name)));
 // ELECTRON_NO_ATTACH_CONSOLE: this first start stands in for a launch from Explorer or a shortcut, which has no console to join.
-const child = spawn(exeOf(installed), drive ? [`--remote-debugging-port=${cdpPort}`] : [], { env: { ...env, ...isolated, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: '지금 업데이트|중단하고 업데이트|확인', ELECTRON_NO_ATTACH_CONSOLE: '1' }, stdio: 'ignore', detached: true, windowsHide: true });
+const child = spawn(exeOf(installed), drive ? [`--remote-debugging-port=${cdpPort}`] : [], { env: { ...env, ...isolated, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: onQuit ? '종료할 때 업데이트|확인' : '지금 업데이트|중단하고 업데이트|확인', ELECTRON_NO_ATTACH_CONSOLE: '1' }, stdio: 'ignore', detached: true, windowsHide: true });
 child.unref();
 let exit = null;
 let exitAt = 0;
@@ -165,7 +165,24 @@ const readTicks = () => existsSync(drove.tickFile ?? '') ? readFileSync(drove.ti
 try {
   for (let i = 0; i < 200 && !before; i++) { before = mains()[0]; if (!before) await sleep(300); }
   record(`설치본(${installedVersion})이 시작`, Boolean(before), before ? `pid ${before.ProcessId}` : '프로세스 없음');
-  if (drive && before) {
+  if (drive && before && onQuit) {
+    // "종료할 때 업데이트": the package is downloaded and unpacked while the app goes on, then installed when the user quits (the window's X).
+    const page = await appPage(cdpPort);
+    offer.on = true;
+    void page.send('Runtime.evaluate', { expression: 'window.adeDesktop.checkUpdate()' }).catch(() => {});
+    const staged = () => readdirSync(dirs.tmp).filter(name => name.startsWith('mooner-update-')).some(name => {
+      const dir = join(dirs.tmp, name);
+      return existsSync(join(dir, 'new')) && readdirSync(join(dir, 'new')).length > 0 && !readdirSync(dir).some(file => file.endsWith('.zip'));
+    });
+    for (let i = 0; i < 240 && !staged(); i++) await sleep(500);
+    await sleep(3000); // the "받아 두었습니다" notice is shown for a second before the check ends
+    const stillOld = (() => { try { return JSON.parse(readFileSync(join(installed, 'resources/app/package.json'), 'utf8')).version === installedVersion; } catch { return false; } })();
+    record('종료할 때 업데이트: 받아 두는 동안 앱은 계속 실행되고 설치 폴더는 그대로', staged() && !exit && stillOld && alive(before.ProcessId), `받아 둔 폴더 ${staged() ? '있음' : '없음'}, 앱 ${exit ? '종료됨' : '실행 중'}, 설치 폴더 ${stillOld ? '그대로' : '바뀜'}`);
+    await page.shot('update-staged');
+    // The user quits: the update is installed and the app comes back.
+    void page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {});
+  }
+  if (drive && before && !onQuit) {
     const page = await appPage(cdpPort);
     drove.origin = await page.ev('return location.origin');
     await page.ev(`localStorage.setItem('ade-update-probe', '1')`);
@@ -224,13 +241,17 @@ try {
   if (drive) {
     await overlayWatch;
     const downloading = drove.values.filter(value => Number.isFinite(value));
-    record('진행 카드가 다운로드 진행률을 그림', drove.states.some(step => /다운로드 중/.test(step)) && Math.max(0, ...downloading) >= 80 && downloading.some(value => value > 0 && value < 100), `${drove.states.join(' → ')} / 진행률 ${downloading.length}번 읽음, 최대 ${Math.max(0, ...downloading)}`);
-    record('진행 카드가 재시작 단계까지 표시', drove.states.some(step => /다시 시작/.test(step)), `스크린샷 ${[drove.shotDownload, drove.shotLate, drove.shotRestart].filter(Boolean).join(', ') || '없음'}`);
+    if (!onQuit) record('진행 카드가 다운로드 진행률을 그림', drove.states.some(step => /다운로드 중/.test(step)) && Math.max(0, ...downloading) >= 80 && downloading.some(value => value > 0 && value < 100), `${drove.states.join(' → ')} / 진행률 ${downloading.length}번 읽음, 최대 ${Math.max(0, ...downloading)}`);
+    if (!onQuit) record('진행 카드가 재시작 단계까지 표시', drove.states.some(step => /다시 시작/.test(step)), `스크린샷 ${[drove.shotDownload, drove.shotLate, drove.shotRestart].filter(Boolean).join(', ') || '없음'}`);
     const page = await appPage(nextPort, 60_000);
     const info = await page.ev('return await window.adeDesktop.appInfo()');
     record('새 앱이 자기 버전을 알림', info.version === nextVersion, JSON.stringify(info));
     const origin = await page.ev('return location.origin'), probe = await page.ev(`return localStorage.getItem('ade-update-probe')`);
     console.log(`NOTE 화면 localStorage는 재시작 뒤 ${probe === '1' ? '유지됨' : '비어 있음'} (주소 ${drove.origin} → ${origin})`);
+    // The changelog's "which version ran last" must outlive the page's origin (it changes with every launch): the app keeps it in a file of its own.
+    const last = await page.ev(`return window.adeDesktop.changelogStore ? window.adeDesktop.changelogStore.getItem('ade-changelog-last') : 'no-bridge'`);
+    if (last === 'no-bridge') console.log('NOTE 이 빌드에는 changelogStore가 없습니다(옛 빌드).');
+    else record('변경 내역의 마지막 실행 버전이 앱 데이터 파일에 저장됨', last === nextVersion && existsSync(join(dirs.user, 'changelog-state.json')), `마지막 실행 ${last}, ${existsSync(join(dirs.user, 'changelog-state.json')) ? readFileSync(join(dirs.user, 'changelog-state.json'), 'utf8') : '파일 없음'}`);
     if (drove.terminal) {
       const opened = await post(page, 'project/open', { path: drove.repo });
       const kept = (opened.terminals ?? []).find(item => item.id === drove.terminal.id);
