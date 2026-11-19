@@ -16,6 +16,7 @@ import { Hint } from './Hint';
 import { nextHint } from './tips';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
+import { beginUiSend, releaseUiSends, syncUiSends, UI_SEND_GRACE_MS } from './ui-sent';
 import { Collapse, useHeightMorph } from './Collapse';
 import { FileIcon } from './FileIcon';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
@@ -1100,7 +1101,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const handle = (message: any) => {
       if (message.type === 'chat/event') {
         enqueue(message);
-        if (message.event?.kind === 'divider' && message.event.reason === 'clear') setQueue([]);
+        if (message.event?.kind === 'divider' && message.event.reason === 'clear') { setQueue([]); releaseUiSends(id); }
         // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
         // Queued steers are matched to the pictures sent with them (by text and count); applied ones are forgotten.
         const steer = message.event;
@@ -1329,16 +1330,26 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Interactive UIs in a reply (ade-ui blocks) reach this chat through window events carrying the chat id. `ade.send` goes out like a typed message
   // (queued as a follow-up only while this agent is in a turn, so it never steers a running turn; a subagent running on its own does not count).
   // `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
-  const fromUi = useRef<(kind: 'send' | 'prefill', message: string, replace?: boolean) => void>(() => {});
-  fromUi.current = (kind, message, replace) => {
+  const fromUi = useRef<(kind: 'send' | 'prefill', message: string, replace?: boolean, form?: string) => void>(() => {});
+  fromUi.current = (kind, message, replace, form) => {
     // replace: a form writes the whole next message, so it overwrites the box instead of appending under what was already typed.
     if (kind === 'prefill') { setText(current => replace || !current.trim() ? message : `${current}\n${message}`); box.current?.focus(); return; }
     if (!view.ready) return;
-    if (busy || queue.length || queueSending) setQueue(items => [...items, { text: message, images: [] }]);
+    const queued = busy || queue.length > 0 || queueSending;
+    // A form's answer goes out once while it is on its way (ui-sent.ts): a second click or submit of the same choice is dropped here too.
+    if (form && !beginUiSend(id, form, message, queued)) return;
+    if (queued) setQueue(items => [...items, { text: message, images: [] }]);
     else void transmit(message, []);
   };
+  // The state of the answers sent from forms follows the chat: queued -> working -> done, or freed when the user cancels the queued message.
   useEffect(() => {
-    const on = (kind: 'send' | 'prefill') => (event: Event) => { const { chatId, text: message, replace } = (event as CustomEvent<{ chatId: string; text: string; replace?: boolean }>).detail; if (chatId === id) fromUi.current(kind, message, replace); };
+    const follow = () => syncUiSends(id, { busy, queued: queue.map(item => item.text), sending: queueSending });
+    follow();
+    const timer = window.setTimeout(follow, UI_SEND_GRACE_MS + 200);
+    return () => window.clearTimeout(timer);
+  }, [id, busy, queue, queueSending]);
+  useEffect(() => {
+    const on = (kind: 'send' | 'prefill') => (event: Event) => { const { chatId, text: message, replace, form } = (event as CustomEvent<{ chatId: string; text: string; replace?: boolean; form?: string }>).detail; if (chatId === id) fromUi.current(kind, message, replace, form); };
     const send = on('send'), prefill = on('prefill');
     window.addEventListener('ade:ui-send', send); window.addEventListener('ade:ui-prefill', prefill);
     return () => { window.removeEventListener('ade:ui-send', send); window.removeEventListener('ade:ui-prefill', prefill); };
@@ -1570,7 +1581,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     } catch (cause) { ctx.fail(cause); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
-  const interrupt = (sendSteers = false) => void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail);
+  const interrupt = (sendSteers = false) => { releaseUiSends(id); void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail); };
   const allowBlocked = (toolUseIds: string[], retry: boolean) => ctx.call('chat/allow-blocked', { id, toolUseIds, retry }).catch(ctx.fail);
   const stopTask = (toolUseId: string) => void ctx.call('chat/stop-task', { id, toolUseId }).catch(ctx.fail);
   function resume() {

@@ -71,6 +71,11 @@ if (!stream) {
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
     // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
+    // Feedback checks: a ```ui form (the next-step choice), plan-limit reports whose rounded share keeps moving, and a reply with unbreakable tokens. ctl.json {"slowms":N} makes a `slow` turn last.
+    if (text.includes('uiformslow')) { say('느린 선택지입니다.' + '\n\n' + '```ui' + '\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', 'slow 느리게 처리', '메뉴로 이동']]) + '\n' + '```'); result(); return; } // the chosen answer contains `slow`: a turn that lasts (ctl.json slowms)
+    if (text.includes('uiform')) { say('다음 단계를 골라 주세요.\n\n```ui\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', '둘 다 제거(권장)', '메뉴로 이동']]) + '\n```'); result(); return; }
+    if (text.includes('limitwarn')) { for (const utilization of [0.91, 0.91, 0.96]) send({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'five_hour', utilization, surpassedThreshold: 0.9, resetsAt: Math.floor(Date.now() / 1000) + 5400 } }); say('한도를 알렸어요.'); result(); return; }
+    if (text.includes('longtoken')) { say(['- 최근 3주 안에 갱신된 원격 브랜치 1,677개를 시험 병합해 비교했고, 컬렉션 때문에 새로 생기는 충돌은 위 4개 브랜치뿐입니다. #18344922-' + 'a'.repeat(120) + ' 충돌이 없습니다.', '- 짧은 항목', '', '문단 https://example.com/' + 'path/'.repeat(30) + 'end'].join('\n')); result(); return; }
     if (text.includes('filechips')) { say(['고친 곳은 [[file:src/b.ts:2]] 와 [[file:README.md]] 이고, 폴더 [[file:src/]] 도 봤어요.', '', '- 링크 형태: [a.txt](a.txt)', '- 주소는 그대로: [문서](https://example.com/docs) 와 [[1, 2]]', '', '`[[file:code.ts]]`는 코드라 칩이 아니에요.'].join('\n')); result('chips'); return; }
     if (/\btables\b/.test(text)) { // markdown table samples: long prose cells, many columns, code/CJK, narrow, alignment
       const long = '이 문장은 일부러 아주 길게 써서 셀 안에서 자동 개행이 되는지 확인하기 위한 것입니다. 표가 좌우로 넓어지면 읽기 힘들기 때문에 컨테이너 폭에 맞춰 줄바꿈되어야 합니다.';
