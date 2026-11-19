@@ -13,7 +13,9 @@ export type Usage = { provider: 'claude' | 'codex' | 'cursor'; windows: UsageWin
 export const accountSources = { process: '실행 중인 에이전트', direnv: '프로젝트 .envrc', server: '앱 환경' };
 export const defaultAccountDir = { claude: '~/.claude', codex: '~/.codex', cursor: 'Cursor 로그인(기기)' };
 export const usageStatusKeys: Record<Usage['provider'], string[]> = { claude: ['session', 'weekly'], codex: ['session', 'weekly'], cursor: ['auto', 'api', 'total', 'grok'] };
-export const usageStatusShort: Record<string, string> = { session: '5h', weekly: '주', total: '전체', grok: 'Grok', auto: 'Cursor', api: '기타', 'on-demand': '추가' };
+export const usageStatusShort: Record<string, string> = { session: '5h', weekly: '주', total: '전체', grok: 'Grok', auto: 'Cursor', api: '기타', 'on-demand': '추가', fable: 'Fable', 'weekly-opus': 'Opus', 'weekly-sonnet': 'Sonnet' };
+export { barWindows, defaultUsageMeters, usageMeterCatalog, usageMetersOf } from './usage-meters';
+export type { UsageStyle } from './usage-meters';
 
 /** Cursor 상태바: 모델 풀( Cursor / 기타 ) 우선, Grok는 Cursor·전체와 %가 같으면 생략. */
 export function cursorUsageCompact(windows: UsageWindow[]): UsageWindow[] {

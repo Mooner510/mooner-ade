@@ -5,7 +5,7 @@ import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLe
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
-import { accountSources, CodexCreditRow, codexCreditsLabel, CreditRow, cursorUsageCompact, defaultAccountDir, money, placeAbove, UsageRows, usageHueStyle, usageStatusKeys, usageStatusShort, useUsage, type Usage, type UsageWindow } from './Usage';
+import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton } from './Icon';
@@ -94,25 +94,27 @@ const WakaTimeStat = memo(function WakaTimeStat() {
 });
 const usageNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 // The 5-hour and weekly plan limits of the login this project's agent CLI uses; clicking asks the server for a fresh reading.
-const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number }) {
+const UsageStat = memo(function UsageStat({ provider, colors, projectId, active, showSession, refresh, meters, style = 'bar' }: { provider: Usage['provider']; colors: boolean; projectId: string; active: boolean; showSession: boolean; refresh: number; meters?: string[]; style?: UsageStyle }) {
   const { usage, loading, load } = useUsage(provider, projectId, active, refresh), panel = `usage-${useId()}`;
+  const chosen = meters ?? defaultUsageMeters[provider];
   // Plans without a 5-hour window (Claude Ultra) still get a 0% reading from the API, so the setting hides it everywhere.
-  const windows = !usage ? [] : provider === 'cursor' ? usage.windows : (showSession ? usage.windows : usage.windows.filter(item => item.key !== 'session'));
+  const sessionOn = provider === 'cursor' || showSession;
+  const allWindows = !usage ? [] : usage.windows.filter(item => item.key !== 'session' || sessionOn);
+  const compact = barWindows(allWindows, chosen, true);
   // Not installed or not signed in here (no login found) and a failed first reading both leave no windows: show nothing instead of a dead "—".
-  // The hook keeps polling, so the item appears by itself once a reading succeeds.
-  const credit = provider === 'claude' ? usage?.credit : null;
-  const codexCredits = provider === 'codex' ? usage?.codexCredits : null;
-  if (!usage || (!windows.length && !credit && !codexCredits)) return null;
-  const preferred = usageStatusKeys[provider];
-  const main = (preferred.map(key => windows.find(item => item.key === key)).filter(Boolean) as UsageWindow[]).slice(0, provider === 'cursor' ? 3 : 2);
-  const compact = provider === 'cursor' ? cursorUsageCompact(windows) : (main.length ? main : windows.slice(0, 2));
-  const peak = Math.max(0, ...windows.map(item => item.percent));
+  // The hook keeps polling, so the item appears by itself once a reading succeeds. The detail popover still lists every window the account returned.
+  const credit = provider === 'claude' && chosen.includes('credit') ? usage?.credit : null;
+  const codexCredits = provider === 'codex' && chosen.includes('credit') ? usage?.codexCredits : null;
+  const detailCredit = provider === 'claude' ? usage?.credit : null;
+  const detailCodex = provider === 'codex' ? usage?.codexCredits : null;
+  if (!usage || (!compact.length && !credit && !codexCredits)) return null;
+  const peak = Math.max(0, ...compact.map(item => item.percent), credit?.percent ?? 0, codexCredits?.limit?.percent ?? 0);
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
   const hue = usageHueStyle;
   return <>
-    <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
+    <button className={`stat usage ${level} ${usage.error && !compact.length ? 'warn' : ''}`} data-usage-style={style} popoverTarget={panel} aria-label={`${usageNames[provider]} 사용량 상세 보기`} aria-busy={loading} onClick={() => void load(true)}>
       <Icon name={provider} size={13} />
       {compact.map(item => <span key={item.key} className={`usage-window ${colors ? 'graded' : ''}`} style={colors ? hue(item.percent) : undefined}><small>{usageStatusShort[item.key] ?? item.label}</small>{item.percent}%<i style={{ width: `${item.percent}%` }} /></span>)}
       {codexCredits && <span className={`usage-window ${colors && codexCredits.limit ? 'graded' : ''}`} style={colors && codexCredits.limit ? hue(codexCredits.limit.percent) : undefined}><small>크레딧</small>{codexCreditsLabel(codexCredits)}{codexCredits.limit && <i style={{ width: `${codexCredits.limit.percent}%` }} />}</span>}
@@ -121,9 +123,9 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     <div id={panel} popover="auto" className="usage-detail" role="dialog" aria-label={`${usageNames[provider]} 사용량`} onToggle={placeAbove}>
       <header><Icon name={provider} size={14} /><strong>{usageNames[provider]} 사용량</strong>{usage.plan && <span className="plan">{usage.plan}</span>}
         <button className="icon-btn" aria-label="새로고침" aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={13} /></button></header>
-      {windows.length > 0 && <UsageRows windows={windows} colors={colors} />}
-      {credit && <CreditRow credit={credit} colors={colors} />}
-      {codexCredits && <CodexCreditRow value={codexCredits} colors={colors} />}
+      {allWindows.length > 0 && <UsageRows windows={allWindows} colors={colors} />}
+      {detailCredit && <CreditRow credit={detailCredit} colors={colors} />}
+      {detailCodex && <CodexCreditRow value={detailCodex} colors={colors} />}
       <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
@@ -1006,9 +1008,9 @@ ${where}`, [
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
     memory: <SystemStat kind="memory" />,
-    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} />,
-    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
-    cursorusage: <UsageStat provider="cursor" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} />,
+    claudeusage: <UsageStat provider="claude" colors={settings.usageColors} projectId={project.id} active={active} showSession={settings.claudeSession} refresh={settings.usageRefresh} meters={settings.usageShown.claude} style={settings.usageStyle} />,
+    codexusage: <UsageStat provider="codex" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} meters={settings.usageShown.codex} style={settings.usageStyle} />,
+    cursorusage: <UsageStat provider="cursor" colors={settings.usageColors} projectId={project.id} active={active} showSession refresh={settings.usageRefresh} meters={settings.usageShown.cursor} style={settings.usageStyle} />,
     // Only the project on screen: every open project keeps its status bar mounted (hidden), and each would otherwise poll and tick.
     wakatime: settings.wakatime && active && <WakaTimeStat />,
     clock: active && <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,

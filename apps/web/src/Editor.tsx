@@ -2,12 +2,13 @@ import { useEffect, useRef } from 'react';
 import type * as Monaco from 'monaco-editor';
 import type { AgentMode } from './launchers';
 import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
+import { defaultUsageMeters, type UsageStyle } from './usage-meters';
 
 export type Settings = {
   theme: ThemeId; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
   terminalFont: string; lineHeight: number; scrollback: number; cursorStyle: 'bar' | 'block' | 'underline'; cursorBlink: boolean; copyOnSelect: boolean;
   sidebarWidth: number; statusItems: string[]; statusLeft: string[]; statusRight: string[]; usageColors: boolean; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; soundVolumeExtended: boolean; diffRefresh: number; wakatime: boolean; wakatimeBackground: boolean;
-  terminalShell: string; claudeSession: boolean;
+  terminalShell: string; claudeSession: boolean; usageStyle: UsageStyle; usageShown: Record<'claude' | 'codex' | 'cursor', string[]>;
   // AI tools: `agentsOff` hides an agent from the launchers, `agentsMuted` silences its alerts; *Args are appended to its launch command.
   agentsOff: string[]; agentsMuted: string[]; claudeArgs: string; codexArgs: string; cursorArgs: string; notifyLooking: boolean;
   // cacheSendWarn asks before a message goes to a Claude whose prompt cache is cold or has cacheSendWarnMinutes or less left.
@@ -107,6 +108,12 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
     next.chatStatusItems = [...saved.chatStatusItems, 'share'];
     if (saved.chatStatusRight?.includes('cost')) next.chatStatusRight = saved.chatStatusRight.flatMap(item => item === 'cost' ? ['cost', 'share'] : [item]);
   }
+  if (next.usageStyle !== 'bar' && next.usageStyle !== 'text') next.usageStyle = 'bar';
+  next.usageShown = {
+    claude: Array.isArray(saved.usageShown?.claude) ? saved.usageShown.claude : [...defaultUsageMeters.claude],
+    codex: Array.isArray(saved.usageShown?.codex) ? saved.usageShown.codex : [...defaultUsageMeters.codex],
+    cursor: Array.isArray(saved.usageShown?.cursor) ? saved.usageShown.cursor : [...defaultUsageMeters.cursor]
+  };
   return next;
 }
 // xterm's own default, so an empty-looking field means "unchanged".
@@ -114,7 +121,7 @@ const defaultWordSeparator = ' ()[]{}\',"`─‘’“”|';
 export const defaultSettings: Settings = {
   theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
-  sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
+  sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
   agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,

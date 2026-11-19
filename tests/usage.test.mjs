@@ -31,6 +31,12 @@ test('usage bodies become 5-hour and weekly windows', () => {
     { key: 'session', label: '5시간', percent: 23, resetsAt: Date.parse('2026-10-23T10:00:00Z') },
     { key: 'weekly', label: '주간', percent: 41, resetsAt: null }
   ]);
+  assert.deepEqual(parseClaudeUsage({ seven_day_fable: { utilization: 12, resets_at: null }, fable: 'claude-fable' }), [
+    { key: 'fable', label: 'Fable', percent: 12, resetsAt: null }
+  ]);
+  assert.deepEqual(parseClaudeUsage({ fable: { utilization: 7, resets_at: null } }), [
+    { key: 'fable', label: 'Fable', percent: 7, resetsAt: null }
+  ]);
   assert.deepEqual(parseCodexUsage({ rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 18000, reset_after_seconds: 60 }, secondary_window: { used_percent: 130, limit_window_seconds: 604800, reset_at: 1000 } } }, 0), [
     { key: 'session', label: '5시간', percent: 12, resetsAt: 60_000 },
     { key: 'weekly', label: '주간', percent: 100, resetsAt: 1_000_000 }

@@ -55,6 +55,8 @@ export function parseClaudeUsage(body) {
   add('weekly', '주간', body?.seven_day);
   add('weekly-opus', '주간 Opus', body?.seven_day_opus);
   add('weekly-sonnet', '주간 Sonnet', body?.seven_day_sonnet);
+  // Present only on accounts that have a Fable window. A bare `fable` object uses the same shape; a string (a model name) is ignored.
+  add('fable', 'Fable', body?.seven_day_fable ?? (body?.fable && typeof body.fable === 'object' ? body.fable : null));
   return windows;
 }
 
