@@ -470,6 +470,10 @@ export function reduce(view: ChatView, event: any): ChatView {
 export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatState; approvals?: any[] }): ChatView {
   let view = emptyView();
   for (const event of replay.events ?? []) view = reduce(view, event);
+  // A request the log still holds as waiting that the server no longer has: the app (or its server) ended while the agent waited, and the agent's process with it.
+  // Without a line the thread just stops after the request, with no card to answer.
+  for (const lost of view.approvals.filter(item => !(replay.approvals ?? []).some(live => live.requestId === item.requestId)))
+    view = append(view, { kind: 'note', key: `approval-lost-${lost.requestId}`, text: `${lost.tool === 'ExitPlanMode' ? '계획 승인' : lost.tool === 'AskUserQuestion' ? '질문 답변' : `${lost.tool} 실행 승인`}을 기다리던 중 앱이 종료되어 요청이 사라졌습니다. 에이전트에게 다시 요청해 주세요.`, fresh: false });
   return { ...view, seq: Math.max(view.seq, replay.seq ?? 0), state: replay.state ?? view.state, ready: true,
     approvals: (replay.approvals ?? []).map(item => ({ requestId: item.requestId, tool: item.tool, input: item.input, toolUseId: item.toolUseId, questions: item.questions, suggestions: item.suggestions ?? [] })) };
 }

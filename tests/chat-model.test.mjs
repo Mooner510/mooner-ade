@@ -878,3 +878,19 @@ test('a chat log written by 0.5.12 replays: every event kind it stored, a plan-l
   // A report that never had a reading says "at least" instead of passing the threshold off as the usage.
   assert.match(fromReplay({ events: [stored[7]] }).items.find(item => item.kind === 'note').text, /90% 이상 사용했습니다/);
 });
+
+test('a request still waiting in the log when the app ended says so in the thread; one the server still holds, or one that was answered, does not', () => {
+  const asked = [
+    { kind: 'user', text: 'plan 계획', images: 0, previews: [], seq: 1, at: 1 },
+    { kind: 'approval', phase: 'request', requestId: 'plan-1', tool: 'ExitPlanMode', input: { plan: '# 계획' }, toolUseId: 'toolu_plan', suggestions: [], seq: 2, at: 2 }
+  ];
+  const notes = view => view.items.filter(item => item.kind === 'note').map(item => item.text);
+  assert.deepEqual(notes(fromReplay({ events: asked, seq: 2, approvals: [] })), ['계획 승인을 기다리던 중 앱이 종료되어 요청이 사라졌습니다. 에이전트에게 다시 요청해 주세요.']);
+  const live = [{ requestId: 'plan-1', tool: 'ExitPlanMode', input: { plan: '# 계획' }, toolUseId: 'toolu_plan', suggestions: [] }];
+  assert.deepEqual(notes(fromReplay({ events: asked, seq: 2, approvals: live })), [], 'the server still holds it: the card is there');
+  const answered = [...asked, { kind: 'approval', phase: 'answer', requestId: 'plan-1', tool: 'ExitPlanMode', allow: true, seq: 3, at: 3 }];
+  assert.deepEqual(notes(fromReplay({ events: answered, seq: 3, approvals: [] })), []);
+  const cancelled = [...asked, { kind: 'approval', phase: 'cancel', requestId: 'plan-1', seq: 3, at: 3 }];
+  assert.deepEqual(notes(fromReplay({ events: cancelled, seq: 3, approvals: [] })), [], 'a request the server cancelled itself is not reported twice');
+  assert.match(notes(fromReplay({ events: [{ ...asked[1], requestId: 'b-1', tool: 'Bash', input: { command: 'npm test' } }], approvals: [] }))[0], /^Bash 실행 승인을 기다리던 중/);
+});
