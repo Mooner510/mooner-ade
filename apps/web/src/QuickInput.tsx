@@ -42,7 +42,10 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
   // The title is always a heading above the field/list (never a placeholder). A short one is bold; a sentence (a warning, a question) is plain text, and
   // whatever follows its first line is the muted detail.
   const [first, ...more] = title.split('\n'), detail = more.join('\n').trim(), sentence = first.length > 40 || Boolean(detail);
-  return <div className="quick-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) finish(null); }}>
+  // Modal(views.tsx)과 같은 규칙: 누름과 놓음이 모두 상자 바깥일 때만 닫는다(입력 칸 안에서 글자를 끌어 선택하다 배경에서 놓아도, 배경에서 눌러 안에서 놓아도 닫히지 않는다).
+  const pressedOutside = useRef(false);
+  const outside = (event: { clientX: number; clientY: number }) => { const rect = box.current?.getBoundingClientRect(); return !rect || event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom; };
+  return <div className="quick-backdrop" onMouseDown={event => { pressedOutside.current = event.target === event.currentTarget && outside(event); }} onClick={event => { if (pressedOutside.current && outside(event)) finish(null); pressedOutside.current = false; }}>
     <div className="quick" role="dialog" aria-label={first} ref={box} tabIndex={-1}
       onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); finish(null); }

@@ -162,6 +162,9 @@ test('badges, the in-this-version sentence and the news toast read as the issue 
   assert.deepEqual(progressBadge({ state: 'pending', news: false }), { text: '대기', tone: 'wait' });
   assert.deepEqual(progressBadge({ state: 'beta', version: '0.6.0-beta5', news: true }), { text: 'beta 반영 v0.6.0-beta5', tone: 'beta' });
   assert.deepEqual(progressBadge({ state: 'released', version: '0.6.0', news: true }), { text: '릴리스 반영 v0.6.0', tone: 'done' });
+  // 처리됨(closed)과 반영하지 않음(declined)은 같은 회색이 아니다.
+  assert.deepEqual(progressBadge({ state: 'closed', news: false }), { text: '처리됨', tone: 'muted' });
+  assert.deepEqual(progressBadge({ state: 'declined', news: false }), { text: '반영하지 않음', tone: 'declined' });
   assert.equal(progressBadge({ state: 'released', version: '0.6.0-beta5', news: true }).text, '릴리스 반영 (v0.6.0-beta5부터)');
   assert.equal(progressBadge({ state: 'closed', news: false }).text, '처리됨');
   assert.match(progressInApp({ state: 'beta', version: '0.6.0-beta5', inApp: true, news: false }), /이미 반영/);

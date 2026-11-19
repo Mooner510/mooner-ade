@@ -14,4 +14,13 @@ await c.click(...inside); await settle(); eq(await open(), true, 'inside click k
 await mouse('mousePressed', ...inside); await mouse('mouseReleased', ...outside); await settle(); eq(await open(), true, 'drag ending on the backdrop keeps it open');
 await mouse('mousePressed', ...outside); await mouse('mouseReleased', ...inside); await settle(); eq(await open(), true, 'press on the backdrop, release inside keeps it open');
 await c.click(...outside); await settle(); eq(await open(), false, 'backdrop click closes');
+// 명령 팔레트(QuickInput, Ctrl+Shift+P)도 같은 규칙: 안에서 눌러 바깥에서 놓기·바깥에서 눌러 안에서 놓기는 유지, 바깥 클릭만 닫는다. 안쪽은 제목 줄을 눌러 항목이 실행되지 않게 한다.
+const palette = () => c.ev(`return !!document.querySelector('.quick')`);
+await c.key('P', 'KeyP', 2 | 8, 'P'); await c.waitFor(`!!document.querySelector('.quick')`);
+const pbox = await c.ev(`return document.querySelector('.quick').getBoundingClientRect().toJSON()`);
+const pin = [pbox.left + pbox.width / 2, pbox.top + 18], pout = [pbox.left / 2, pbox.top + pbox.height / 2];
+await c.click(...pin); await settle(); eq(await palette(), true, 'palette: inside click keeps it open');
+await mouse('mousePressed', ...pin); await mouse('mouseReleased', ...pout); await settle(); eq(await palette(), true, 'palette: drag ending on the backdrop keeps it open');
+await mouse('mousePressed', ...pout); await mouse('mouseReleased', ...pin); await settle(); eq(await palette(), true, 'palette: press on the backdrop, release inside keeps it open');
+await c.click(...pout); await settle(); eq(await palette(), false, 'palette: backdrop click closes');
 console.log('ok', JSON.stringify(c.problems)); c.close();
