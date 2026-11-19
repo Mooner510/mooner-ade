@@ -23,6 +23,7 @@ import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
 import { readLastLines } from './file-util.js';
+import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -61,7 +62,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -389,6 +390,51 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     onEvent?.(stamped);
   }
   const live = () => { if (closed) throw fault('NOT_FOUND', '닫힌 채팅입니다.', 404); };
+
+  // `!command` (chat-shell.js): the user's own shell commands. Each run is a `shell` start event, live `output` ticks (not stored) and an `end` event that holds the
+  // whole output. Finished runs ride along with the user's next message (`sent`), so the agent knows what the user ran.
+  let shuttingDown = false;
+  const shellRuns = new Map(); // run id -> { abort(), done }
+  const takeShellContext = text => {
+    if (text.startsWith('/')) return '';
+    const runs = pendingShellRuns(retainedEvents());
+    if (!runs.length) return '';
+    emit({ kind: 'shell', phase: 'sent', ids: runs.map(run => run.id) });
+    return shellContext(runs);
+  };
+  function startShell(command, { timeoutMs = shellTimeoutMs } = {}) {
+    live();
+    const text = typeof command === 'string' ? command.trim() : '';
+    if (!text) throw fault('INVALID_INPUT', '실행할 명령을 입력하세요. 예: !git status', 400);
+    if (text.length > SHELL_MAX_COMMAND || text.includes('\0')) throw fault('INVALID_INPUT', '명령을 확인하세요.', 400);
+    const hint = interactiveHint(text);
+    if (hint) throw fault('SHELL_INTERACTIVE', hint, 409);
+    if (shellRuns.size >= 4) throw fault('CHAT_BUSY', '실행 중인 셸 명령이 너무 많습니다. 하나가 끝난 뒤 다시 실행하세요.', 409);
+    const runId = randomUUID(), controller = new AbortController(), where = state.cwd || cwd;
+    const picked = typeof shell === 'function' ? shell() : shell ?? { id: 'sh', label: 'sh', path: process.platform === 'win32' ? 'powershell.exe' : '/bin/sh' };
+    const accountEnv = meta.configDir ? { [agent === 'codex' ? 'CODEX_HOME' : agent === 'cursor' ? 'CURSOR_CONFIG_DIR' : 'CLAUDE_CONFIG_DIR']: meta.configDir } : {};
+    const launchEnv = withUtf8Ctype({ ...process.env, ...(typeof shellEnv === 'function' ? shellEnv() : shellEnv ?? {}), ...accountEnv });
+    emit({ kind: 'shell', phase: 'start', id: runId, command: text, cwd: where, shell: picked.label ?? picked.id });
+    // Live output goes out in batches (a chatty command would otherwise send an event per chunk).
+    let batch = { stdout: '', stderr: '' }, flushTimer = null;
+    const flush = () => { clearTimeout(flushTimer); flushTimer = null; for (const stream of ['stdout', 'stderr']) if (batch[stream]) { emit({ kind: 'shell', phase: 'output', id: runId, stream, text: batch[stream] }, { store: false }); batch[stream] = ''; } };
+    const done = runShell({ command: text, cwd: where, env: launchEnv, shell: picked, timeoutMs, signal: controller.signal,
+      onOutput: (stream, chunk) => { batch[stream] += chunk; flushTimer ??= setTimeout(flush, 80); } })
+      .then(result => {
+        flush();
+        if (closed) return result;
+        emit({ kind: 'shell', phase: 'end', id: runId, status: result.status === 'stopped' && shuttingDown ? 'interrupted' : result.status, exitCode: result.exitCode, signal: result.signal, ms: result.ms, stdout: result.stdout, stderr: result.stderr,
+          ...(result.error && { error: result.error }), ...(wantsTerminal(result.stdout, result.stderr) && { needsTerminal: true }) });
+        return result;
+      }).finally(() => { shellRuns.delete(runId); });
+    shellRuns.set(runId, { abort: () => controller.abort(), done });
+    return { id: runId, done };
+  }
+  // The server is going away (or the chat is closing): running commands end, and the card says so instead of spinning forever.
+  const endShells = async () => {
+    shuttingDown = true; const runs = [...shellRuns.values()]; for (const run of runs) run.abort();
+    await Promise.all(runs.map(run => run.done.catch(() => {})));
+  };
 
   // A steering message is "applied" when the CLI echoes it back (--replay-user-messages) at the moment the running turn takes it in.
   function dropSteers(emitCancelled = true) {
@@ -749,6 +795,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     meta.artifact = true;
   }
 
+  // A command that was running when the last server stopped never reported its end: it did not survive, and its card must not spin.
+  for (const orphan of retainedEvents().filter(event => event.kind === 'shell' && event.phase === 'start' && !events.some(item => item.kind === 'shell' && item.phase === 'end' && item.id === event.id))) emit({ kind: 'shell', phase: 'end', id: orphan.id, status: 'interrupted', exitCode: null, signal: null, ms: null, stdout: '', stderr: '' });
   await saveMeta(); setStatus();
   if (handed) await takeOver(handed);
   // The agent a stopped server left running in the pty-host: attached again with the turn, approvals and background tasks it had.
@@ -778,6 +826,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // Everything is taken in the same tick as the last line handled, so nothing is read twice or lost. Without the host it is a plain close.
     async detach() {
       if (closed) return;
+      await endShells();
       const proc = child;
       if (!proc?.detach || !proc.pid) return this.close();
       const saved = { v: 1, procKey: proc.key, ack: proc.lastLine, turnOpen, reopened, turnSeq, inflight, restartAfterTurn, lastCommandOutput,
@@ -865,17 +914,19 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
-        const uuid = randomUUID(); steers.set(uuid, { text, images: images.length, previews, data: images });
+        const uuid = randomUUID(), sendText = takeShellContext(text) + text; steers.set(uuid, { text, images: images.length, previews, data: images });
         emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews });
-        try { if (protocol) { await protocol.send(text, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews }); } else await write(userLine(text, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
+        try { if (protocol) { await protocol.send(sendText, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews }); } else await write(userLine(sendText, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
         return;
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
+      // What the user ran with `!` since their last message goes ahead of this one (the thread still shows only what they typed).
+      const sendText = takeShellContext(text) + text;
       const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
       if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
       // The message is shown right away; starting the process, a model change still in flight, or the previous turn's checkpoint must not delay it.
-      emit({ kind: 'user', text, images: images.length, previews }); inflight = { text, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
+      emit({ kind: 'user', text, images: images.length, previews }); inflight = { text: sendText, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
       setStatus();
       try {
         if (agent === 'cursor') { await new Promise(resolve => setImmediate(resolve)); await cursorSnapshot; }
@@ -913,8 +964,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
           return;
         }
-        if (protocol) await protocol.send(text, images);
-        else await write(userLine(text, images, inflight.uuid));
+        if (protocol) await protocol.send(sendText, images);
+        else await write(userLine(sendText, images, inflight.uuid));
       }
       catch (error) { turnOpen = false; if (codexCompact) emit({ kind: 'delta', phase: 'compacting', active: false }); if (protocol) restart(); setStatus(); throw error; }
       setStatus();
@@ -1190,6 +1241,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       try { return await runBtw({ agent, executable, executableArgs: argsOf(executableArgs, meta.auth), sessionId: state.sessionId ?? meta.sessionId ?? undefined, model: pick.model, effort: pick.effort, question: text, digest: agent === 'cursor' ? conversationDigest(events) : '', cwd: meta.worktreePath ?? cwd, env: launchEnv, spawnProcess, signal: controller.signal }); }
       finally { if (key) btwRuns.delete(key); }
     },
+    // `!command`: starts the run and returns at once with its id; the card is filled by `shell` events. `done` (tests, callers that wait) settles when it ends.
+    shell(command, options) { return startShell(command, options); },
+    stopShell(runId) { const run = shellRuns.get(String(runId ?? '')); run?.abort(); return run !== undefined; },
     cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.
     stats() { return { sessionId: state.sessionId ?? '', ...withSubagents(chatEventStats(retainedEvents()), events, costPerUnit) }; },
@@ -1223,6 +1277,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
+      await endShells();
       closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
       if (child) {
         const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();

@@ -386,6 +386,8 @@ async function openChat(project, id, { cwd, agent, defaults }) {
     keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
+    // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
+    shell: () => resolveShell(terminalShell), shellEnv: () => pluginEnv(),
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
   project.chats.set(id, chat);
   return chat;
@@ -1089,6 +1091,13 @@ async function route(action, input, project) {
       const ok = value => typeof value === 'string' && /^[\w.\-\[\]=,]{1,80}$/.test(value) ? value : undefined; // a model/effort id, never free text
       return chat.btw(input.question, typeof input.btwId === 'string' ? input.btwId.slice(0, 80) : '', { model: ok(input.model), effort: ok(input.effort) });
     }
+    // `!command` in the composer: the user's own shell command, run here as the local user. It returns at once; the thread's `shell` events carry the output.
+    case 'chat/shell': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return { id: chat.shell(input.command).id };
+    }
+    case 'chat/shell-stop': return { stopped: project.chats.get(input.id)?.stopShell(input.runId) === true };
     case 'chat/btw-cancel': return { cancelled: project.chats.get(input.id)?.cancelBtw(input.btwId) === true };
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
     case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
