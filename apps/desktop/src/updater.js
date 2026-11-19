@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
+import { createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
 import { APPLY, HELPER_STARTED, helperCommandLine, startHelperArguments, startHelperScript } from './update-windows.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
@@ -86,6 +86,8 @@ let running = false, applying = false;
 let stagedUpdate = null;
 // Versions the user answered "later" to; background checks leave them alone until the app is restarted.
 const declined = createDeclined();
+// Versions whose install failed (update-policy.js createFailures): the timer waits longer each time and finally leaves the version alone.
+const failures = createFailures(() => Date.now());
 
 // Resolves to 'unsupported' | 'latest' | 'declined' | 'staged' | 'updating' | 'error'. `manual` (the settings button) also answers
 // "up to date" and failures in a dialog, asks again about a version turned down earlier, and can install or drop an update already
@@ -101,11 +103,14 @@ export async function checkForUpdate({ repo, asset, window, manual = false, beta
   running = true;
   try { return await check({ repo, asset, window, manual, beta, getBusy, beforeRestart }); }
   catch (error) {
-    if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` });
+    if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${describeFailure(error)}` });
     else throw error;
     return 'error';
   } finally { running = false; }
 }
+
+// The version of an update waiting to be installed on the next quit (the quit question words itself after it), or null.
+export const stagedUpdateVersion = () => stagedUpdate?.version ?? null;
 
 // Called from the app's quit path. Starts the helper that swaps the files in once this process exits. False when nothing is staged.
 export async function applyStagedUpdate() {
@@ -228,6 +233,8 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   const { release, version } = picked, label = isPrerelease(version) ? '베타 버전' : '버전';
   // The timer does not ask again about a version the user answered "later" to (and so does not even fetch its manifest).
   if (!manual && declined.has(version)) return 'declined';
+  // It could not be installed a moment ago: the timer does not ask again about it until its wait is over (the settings button does).
+  if (!manual && failures.blocked(version)) return 'error';
   const { file, kind } = await pickPackage(release, asset, version);
   const report = await readBusy(getBusy), size = `다운로드 크기는 ${mb(file.size || 0)} MB입니다.`, listed = report.busy ? describeReasons(report.reasons) : '';
   // "나중에" is the default: the prompt can appear while typing, and a stray Enter must not end every session.
@@ -252,6 +259,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
   let progress = progressWindow(window), staged = null, held = false;
   try {
+    if (process.platform === 'win32') ensureWritable(kind === 'app' ? app.getAppPath() : path.dirname(process.execPath));
     const zip = path.join(work, file.name);
     progress.set(`v${version} 다운로드 준비 중…`);
     await fetchAsset(file, {
@@ -264,6 +272,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
       progress.close();
       holdForQuit({ version, work, staged });
       held = true;
+      failures.clear(version);
       await say(window, { type: 'info', title: '업데이트', message: `v${version}을 받아 두었습니다.`, detail: '앱을 종료하면 설치되고 다시 실행됩니다. 그 전까지 작업은 계속하면 됩니다.' });
       return 'staged';
     }
@@ -279,6 +288,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
     progress.set('설치를 위해 앱을 다시 시작합니다…');
     await staged.launch({ work, progress });
     applying = true;
+    failures.clear(version);
     // Tells the app to have its terminals kept for the new version instead of ended with this one.
     beforeRestart?.();
     // The progress overlay stays up until the app exits, so the restart does not look like a crash.
@@ -289,9 +299,19 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
     if (held && stagedUpdate?.version === version) stagedUpdate = null;
     staged?.discard();
     fs.rmSync(work, { recursive: true, force: true });
-    dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+    failures.record(version);
+    // Nothing of the installed app was touched: say so, and where to try again.
+    dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${describeFailure(error)}\n\n지금 쓰는 버전은 그대로 사용할 수 있습니다. 설정에서 업데이트를 다시 확인할 수 있습니다.`);
     return 'error';
   }
+}
+
+// Windows: the helper that swaps the files in starts only after the app has quit and cannot report back, so a folder it cannot write to would end with the same
+// old version coming up again. Asked before anything is downloaded (the macOS stage has the same check, stageMac).
+function ensureWritable(dir) {
+  const probe = path.join(dir, `.ade-update-${process.pid}.tmp`);
+  try { fs.writeFileSync(probe, ''); fs.rmSync(probe, { force: true }); }
+  catch (error) { throw new Error(`${dir} 폴더에 쓸 수 없어 업데이트를 설치할 수 없습니다. 앱을 쓰기 가능한 폴더(예: %LOCALAPPDATA%\\Programs\\MoonerADE)에 설치한 뒤 다시 시도하세요. (${error.code ?? error.message})`); }
 }
 
 // The app zip holds the `app` folder (mirrored over resources/app); the full zip holds the whole bundle folder.

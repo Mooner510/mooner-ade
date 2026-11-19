@@ -15,6 +15,7 @@ import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
 import { Changelog, entries as changelogEntries, hasUnreadChangelog, syncChangelogVersion } from './Changelog';
+import { LEGACY_CHANGELOG_VERSION } from './changelog-state';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
@@ -308,15 +309,17 @@ function Shell() {
     addEventListener('blur', onBlur);
     return () => removeEventListener('blur', onBlur);
   }, []);
+  // Once the saved settings are known: someone who had finished the tutorial has used this profile before, so a first launch of a newer version is an update.
   useEffect(() => {
+    if (!booted) return;
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
-      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0');
+      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0', undefined, onboardedOnce.current ? LEGACY_CHANGELOG_VERSION : undefined);
       const unread = hasUnreadChangelog();
       setChangelogUnread(unread);
       if (updated && unread) setChangelogPending(true);
     });
-  }, []);
+  }, [booted]);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
   const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
