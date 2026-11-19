@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
+import { UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
   assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
@@ -93,4 +93,17 @@ test('the release to offer: betas only on the beta channel, never drafts, and on
   assert.equal(pickRelease([{ tag_name: 'v0.5.0', assets: [{ name: 'other.zip' }] }, release('v0.4.0')], { beta: true, asset }).version, '0.4.0');
   assert.equal(pickRelease([release('nightly'), release('v1.0')], { beta: true, asset }), null);
   assert.equal(pickRelease([{ tag_name: 'v0.4.0' }], { beta: false, asset }), null, 'a release without assets is skipped');
+});
+
+test('a failed update is explained in words a user can act on, an unknown failure keeps its own message', () => {
+  const coded = (message, code, cause) => Object.assign(new Error(message), { code, ...cause && { cause: Object.assign(new Error('inner'), cause) } });
+  assert.match(describeFailure(coded('ENOSPC: no space left on device, write', 'ENOSPC')), /^디스크 공간이 부족합니다/);
+  assert.match(describeFailure(new Error('write failed: no space left on device')), /^디스크 공간이 부족합니다/);
+  assert.match(describeFailure(coded('EACCES: permission denied', 'EACCES')), /^파일을 쓸 권한이 없습니다/);
+  // fetch hides the real reason in `cause`; an interrupted body is just "terminated".
+  for (const error of [coded('fetch failed', undefined, { code: 'ECONNREFUSED' }), coded('terminated', undefined, { code: 'UND_ERR_SOCKET' }), new Error('terminated'), new Error('fetch failed'), Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })]) {
+    assert.match(describeFailure(error), /^네트워크 연결이 끊겼거나/, error.message);
+  }
+  for (const own of ['다운로드 실패 (HTTP 404)', '받은 업데이트 파일의 해시가 릴리스와 다릅니다.', '업데이트 파일 구성이 올바르지 않습니다.', 'C:/x 폴더에 쓸 수 없어 업데이트를 설치할 수 없습니다. (EPERM)']) assert.equal(describeFailure(new Error(own)), own);
+  assert.equal(describeFailure('plain'), 'plain');
 });

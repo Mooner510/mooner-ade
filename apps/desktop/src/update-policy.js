@@ -88,6 +88,16 @@ export function describeReasons(reasons, limit = 6) {
   return lines.join('\n');
 }
 
+// Why an update or a check failed, in words a user can act on; anything not recognised keeps its own message (it names the HTTP status, the hash...).
+// fetch wraps the real cause (ECONNREFUSED, a socket closed half way) in `cause`, so that is looked at too.
+export function describeFailure(error) {
+  const text = error instanceof Error ? error.message : String(error), codes = [error?.code, error?.cause?.code].filter(Boolean).join(' ');
+  if (/ENOSPC/.test(codes) || /no space left|ENOSPC/i.test(text)) return '디스크 공간이 부족합니다. 공간을 확보한 뒤 다시 시도하세요.';
+  if (/EACCES|EPERM|EROFS/.test(codes)) return '파일을 쓸 권한이 없습니다. 앱이 설치된 폴더와 임시 폴더에 쓸 수 있는지 확인하세요.';
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR/.test(codes) || error?.name === 'TimeoutError' || error?.name === 'AbortError' || /^(fetch failed|terminated|aborted)$/i.test(text)) return '네트워크 연결이 끊겼거나 서버에 닿지 않았습니다. 연결을 확인한 뒤 다시 시도하세요.';
+  return text;
+}
+
 // Old per-update scratch folders (a download or extraction the app never got to clean up) are removed once they are this old.
 export const STALE_UPDATE_MS = 24 * 60 * 60 * 1000;
 export const staleUpdateDirs = (entries, now, maxAge = STALE_UPDATE_MS) =>

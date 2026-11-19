@@ -19,7 +19,7 @@ const SHELL = 'a'.repeat(64), OTHER_SHELL = 'b'.repeat(64);
 const PROMPT_NOW = '지금 업데이트', PROMPT_ON_QUIT = '종료할 때 업데이트', PROMPT_LATER = '나중에';
 
 let sandbox = '', scratch = '', zips = null, counter = 0;
-const savedWarn = console.warn, saved = { TEMP: process.env.TEMP, TMP: process.env.TMP, ADE_UPDATE_URL: process.env.ADE_UPDATE_URL };
+const realExecPath = process.execPath, savedWarn = console.warn, saved = { TEMP: process.env.TEMP, TMP: process.env.TMP, ADE_UPDATE_URL: process.env.ADE_UPDATE_URL };
 
 if (windows) {
   register('./fixtures/electron-hooks.mjs', import.meta.url);
@@ -47,6 +47,7 @@ if (windows) {
 }
 test.after(() => {
   console.warn = savedWarn;
+  process.execPath = realExecPath;
   for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : process.env[name] = value;
   if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
@@ -96,6 +97,8 @@ async function setup(t, { current, beta = false, releases, shell = SHELL, answer
   fs.writeFileSync(path.join(appPath, 'package.json'), JSON.stringify({ name: 'mooner-ade', version: current }));
   fs.writeFileSync(path.join(appPath, 'old.txt'), 'old files stay while nothing was installed');
   if (shell) { fs.mkdirSync(path.join(root, 'resources', 'runtime'), { recursive: true }); fs.writeFileSync(path.join(root, 'resources', 'runtime', 'runtime.json'), JSON.stringify({ shell })); }
+  // A full update goes into the folder of the running executable: each case gets its own, writable like an installation of the user's.
+  process.execPath = path.join(root, path.basename(realExecPath));
   const github = await fakeGithub(t, releases, { delayMs });
   const electron = globalThis.__adeElectron = { version: current, appPath, messages: [], errors: [], quits: 0, onMessage: options => answer(options, electron, github) };
   process.env.ADE_UPDATE_URL = github.url;
@@ -242,14 +245,14 @@ test('a download whose sha256 differs from the release is refused', { skip }, as
 test('HTTP errors, a dropped connection and a vanished server leave the app alone', { skip }, async t => {
   await failsCleanly(t, 'HTTP 404', [release('v0.6.0', { files: { [ASSET]: { body: zips.full, status: 404 } } })], { expect: /HTTP 404/ });
   await failsCleanly(t, 'HTTP 500', [release('v0.6.0', { files: { [ASSET]: { body: zips.full, status: 500 } } })], { expect: /HTTP 500/ });
-  await failsCleanly(t, 'cut half way', [release('v0.6.0', { files: { [ASSET]: { body: zips.full, cut: true } } })]);
-  await failsCleanly(t, 'server gone after the prompt', [release('v0.6.0')], { prepare: ctx => { const answer = ctx.electron.onMessage; ctx.electron.onMessage = options => { const choice = answer(options); ctx.github.stop(); return choice; }; } });
+  await failsCleanly(t, 'cut half way', [release('v0.6.0', { files: { [ASSET]: { body: zips.full, cut: true } } })], { expect: /네트워크 연결이 끊겼/ });
+  await failsCleanly(t, 'server gone after the prompt', [release('v0.6.0')], { expect: /네트워크 연결이 끊겼/, prepare: ctx => { const answer = ctx.electron.onMessage; ctx.electron.onMessage = options => { const choice = answer(options); ctx.github.stop(); return choice; }; } });
 });
 
 test('a disk that fills up while downloading leaves the app alone', { skip }, async t => {
   const { Writable } = await import('node:stream');
   await failsCleanly(t, 'ENOSPC', [release('v0.6.0')], {
-    expect: /ENOSPC|공간/,
+    expect: /디스크 공간이 부족합니다/,
     prepare() {
       const create = fs.createWriteStream;
       fs.createWriteStream = () => new Writable({ write(_chunk, _encoding, done) { done(Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })); } });
@@ -342,4 +345,19 @@ test('"지금 업데이트" with work running asks first, and "취소" leaves ev
   assert.deepEqual(zipRequests(ctx.github), [], 'nothing was fetched before the answer');
   assert.equal(ctx.electron.quits, 0);
   assert.deepEqual(ctx.tree(), ctx.before);
+});
+
+test('an install folder the helper could not write to is reported before anything is downloaded', { skip }, async t => {
+  for (const [label, release_] of [['app-only', release('v0.6.0')], ['full', release('v0.6.0', { shell: OTHER_SHELL })]]) {
+    const ctx = await setup(t, { current: '0.5.12', releases: [release_], answer: button(PROMPT_ON_QUIT) });
+    // The folder the new files would go into is gone: what a folder without write access looks like to the probe, which cannot create a file in it.
+    fs.rmSync(label === 'full' ? ctx.root : path.join(ctx.root, 'resources', 'app'), { recursive: true });
+    assert.equal(await ctx.check(), 'error', label);
+    assert.deepEqual(zipRequests(ctx.github), [], `${label}: no zip was fetched`);
+    assert.equal(ctx.electron.errors.length, 1);
+    assert.match(ctx.electron.errors[0].content, /폴더에 쓸 수 없어 업데이트를 설치할 수 없습니다/, label);
+    assert.match(ctx.electron.errors[0].content, /지금 쓰는 버전은 그대로 사용할 수 있습니다/, label);
+    assert.equal(ctx.electron.quits, 0);
+    assert.deepEqual(updateDirs(), []);
+  }
 });

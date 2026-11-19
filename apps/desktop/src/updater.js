@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
+import { createDeclined, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
 import { APPLY, HELPER_STARTED, helperCommandLine, startHelperArguments, startHelperScript } from './update-windows.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
@@ -101,7 +101,7 @@ export async function checkForUpdate({ repo, asset, window, manual = false, beta
   running = true;
   try { return await check({ repo, asset, window, manual, beta, getBusy, beforeRestart }); }
   catch (error) {
-    if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` });
+    if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${describeFailure(error)}` });
     else throw error;
     return 'error';
   } finally { running = false; }
@@ -252,6 +252,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
   let progress = progressWindow(window), staged = null, held = false;
   try {
+    if (process.platform === 'win32') ensureWritable(kind === 'app' ? app.getAppPath() : path.dirname(process.execPath));
     const zip = path.join(work, file.name);
     progress.set(`v${version} 다운로드 준비 중…`);
     await fetchAsset(file, {
@@ -289,9 +290,18 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
     if (held && stagedUpdate?.version === version) stagedUpdate = null;
     staged?.discard();
     fs.rmSync(work, { recursive: true, force: true });
-    dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+    // Nothing of the installed app was touched: say so, and where to try again.
+    dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${describeFailure(error)}\n\n지금 쓰는 버전은 그대로 사용할 수 있습니다. 설정에서 업데이트를 다시 확인할 수 있습니다.`);
     return 'error';
   }
+}
+
+// Windows: the helper that swaps the files in starts only after the app has quit and cannot report back, so a folder it cannot write to would end with the same
+// old version coming up again. Asked before anything is downloaded (the macOS stage has the same check, stageMac).
+function ensureWritable(dir) {
+  const probe = path.join(dir, `.ade-update-${process.pid}.tmp`);
+  try { fs.writeFileSync(probe, ''); fs.rmSync(probe, { force: true }); }
+  catch (error) { throw new Error(`${dir} 폴더에 쓸 수 없어 업데이트를 설치할 수 없습니다. 앱을 쓰기 가능한 폴더(예: %LOCALAPPDATA%\\Programs\\MoonerADE)에 설치한 뒤 다시 시도하세요. (${error.code ?? error.message})`); }
 }
 
 // The app zip holds the `app` folder (mirrored over resources/app); the full zip holds the whole bundle folder.
