@@ -14,7 +14,7 @@ test('첫 실행 화면은 낮은 창에서도 테마 목록이 최소 높이를
 
 test('둘러보기의 한 칸짜리 터미널은 탭 영역을 채운다', async () => {
   const css = await read('style.css');
-  assert.match(css, /\.tour \.tab-page > \.terminal-pane \{ flex: 1; \}/);
+  assert.match(css, /\.tour \.tab-page > \.terminal-pane, \.tour \.tab-page > \.editor-group \{ flex: 1; min-width: 0; \}/);
 });
 
 test('둘러보기 연습 채팅은 실제 CLI 업데이트 안내를 띄우지 않고, 마지막 카드에는 건너뛰기 안내가 없다', async () => {
