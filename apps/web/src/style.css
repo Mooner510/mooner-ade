@@ -1899,10 +1899,16 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .usage-panel strong.usage-head { margin: 0; padding: 4px 8px; color: var(--muted); }
 .usage-panel .usage-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .usage-panel .usage-head-row .usage-settings { padding: 3px 4px; line-height: 0; }
-.usage-panel .usage-ttl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; margin: 0 8px; padding: 2px; border-radius: 6px; background: var(--hover); }
-.usage-panel .usage-ttl-option { padding: 4px 0; text-align: center; color: var(--muted); font: inherit; font-size: 12px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-.usage-panel .usage-ttl-option[aria-checked=true] { color: var(--fg); background: var(--overlay); box-shadow: 0 0 0 1px var(--border-strong); }
+.usage-panel .usage-ttl-section { display: grid; gap: 6px; margin-top: 4px; padding: 8px 8px 6px; border-top: 1px solid var(--border); }
+.usage-panel .usage-ttl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.usage-panel .usage-ttl-head strong.usage-head { padding: 0; color: var(--fg); font-size: 12px; font-weight: 600; }
+.usage-panel .usage-ttl-tag { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.usage-panel .usage-ttl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; border-radius: 6px; background: var(--hover); }
+.usage-panel .usage-ttl-option { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 5px 0; color: var(--muted); font: inherit; font-size: 12px; line-height: 16px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.usage-panel .usage-ttl-option:hover:not([aria-checked=true]) { color: var(--fg); }
+.usage-panel .usage-ttl-option[aria-checked=true] { color: var(--accent); font-weight: 600; background: var(--overlay); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 0 0 1px var(--border); }
 .usage-panel .usage-ttl-option:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.usage-panel .usage-ttl-hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .usage-panel .usage-api-row { display: flex; align-items: center; }
 .usage-panel .usage-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 6px 8px; text-align: left; color: var(--fg); font-size: 12px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 .usage-panel .usage-option small { display: block; color: var(--muted); font-size: 11px; }
