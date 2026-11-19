@@ -9,6 +9,8 @@
 // --drive also works the packaged app over its DevTools port, like a user: a terminal runs a counting loop, the update is started from the settings button
 // (adeDesktop.checkUpdate) while the fake release hands the zip out slowly (--throttle, default 6 MB/s), the progress card is captured while it fills, and after the
 // restart the same terminal (same shell process, the loop still counting) and the window are checked and captured (shots/ in VERIFY_OUT).
+// With --drive the profile is one that finished the first-run tour with a project open (a user who updates, not a first run; --first-run keeps the empty profile), and after the
+// restart the new app's own start-up is watched: its notes (changelog window) open once, alone, before the one-time Git card, and a second start of the same copy shows no notice again.
 // Checks: the app is replaced by the next version and starts again under the same isolated profile with a window, no console window is visible at any moment
 // of the update (console-watch.ps1), the restarted app is not on any console (console-tool.ps1), closing the console it would have shared does not
 // end it, the scratch folder is gone, and the real MoonerADE processes were not touched. The 9.9.9 copy gets its isolation written into its main.js
@@ -77,6 +79,35 @@ async function appPage(port, ms = 90_000) {
   throw last;
 }
 const post = (page, action, body) => page.ev(`const response = await fetch('/api/${action}', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ${JSON.stringify(JSON.stringify(body))} }); const value = await response.json(); if (!response.ok) throw new Error(JSON.stringify(value)); return value;`);
+// What is on the screen of a page, as the notices (the tour, the splash, the changelog window, the cards in the dock strip) are seen by a user.
+const SCREEN = `
+  const shown = element => Boolean(element && element.getClientRects().length);
+  const modal = document.querySelector('.changelog:not(.closing)'); // a closed dialog plays its exit (160ms) on a detached copy marked .closing
+  return JSON.stringify({ tour: shown(document.querySelector('.tour')), splash: shown(document.querySelector('.splash')), modal: shown(modal), entry: modal?.querySelector('.changelog-entry')?.getAttribute('aria-label') ?? null,
+    cards: [...document.querySelectorAll('.notice-dock > *, .hint-card, .bg-anim-tip, .chat-mode-tip')].filter(shown).map(element => element.getAttribute('aria-label') || String(element.className).slice(0, 30)),
+    dot: [...document.querySelectorAll('button[aria-label^="변경 내역"]')].map(button => button.getAttribute('aria-label')).join('|') });`;
+// From the moment the restarted app has a page: every change of what is on the screen, with the time. Stops with `stop()`.
+function watchStartup(port) {
+  const timeline = [], watching = { stop: false };
+  const done = (async () => {
+    const page = await appPage(port, 90_000);
+    let last = '';
+    while (!watching.stop) {
+      try { const now = await page.ev(SCREEN); if (now !== last) { last = now; timeline.push({ at: Date.now(), ...JSON.parse(now) }); } } catch { /* the page reloads while it starts */ }
+      await sleep(100);
+    }
+    page.close();
+  })();
+  return { timeline, stop: async () => { watching.stop = true; await done.catch(() => {}); } };
+}
+// A project the next start reopens by itself (the page saves its own open list only when the user changes it), kept in the saved state beside the profile's settings.
+async function keepProjectOpen(page, project) {
+  const state = await post(page, 'app/state', {});
+  await post(page, 'app/state', { state: { openProjects: [{ id: project.id, root: project.root }], activeProjectId: project.id, settings: state.settings } });
+  await sleep(2500); // the 0.5.12 page may save its own (empty) list once after it booted: look again
+  const now = await post(page, 'app/state', {});
+  if (!now.openProjects?.some(item => item.id === project.id)) await post(page, 'app/state', { state: { openProjects: [{ id: project.id, root: project.root }], activeProjectId: project.id, settings: now.settings } });
+}
 const visibleWindows = pids => ps(`Add-Type -TypeDefinition @'
 using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
 public static class Win { delegate bool P(IntPtr h, IntPtr l);
@@ -149,6 +180,9 @@ spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', jo
 for (let i = 0; i < 150 && !existsSync(watch.ready); i++) await sleep(200);
 if (!existsSync(watch.ready)) throw new Error('콘솔 창 감시가 시작되지 않았습니다.');
 
+// A 0.5.12 profile of someone who finished the tour: saved settings with no Git-card field (0.5.12 did not know it), no project open until the script opens one.
+const onboarded = drive && !args.includes('--first-run');
+if (onboarded) writeFileSync(join(dirs.data, 'app-state.json'), JSON.stringify({ version: 1, openProjects: [], activeProjectId: '', settings: { theme: 'dark', onboarded: true, tourVersion: 2, defaultMode: 'cli', chatTipPending: false, chatPermissionAutoSet: true } }));
 const started = Date.now();
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(ADE_|ELECTRON_)/.test(name)));
 // ELECTRON_NO_ATTACH_CONSOLE: this first start stands in for a launch from Explorer or a shortcut, which has no console to join.
@@ -168,6 +202,10 @@ try {
   if (drive && before && onQuit) {
     // "종료할 때 업데이트": the package is downloaded and unpacked while the app goes on, then installed when the user quits (the window's X).
     const page = await appPage(cdpPort);
+    if (onboarded) {
+      drove.repo = join(temp, 'repo'); mkdirSync(drove.repo); spawnSync('git', ['init', '-q', '-b', 'main', drove.repo], { windowsHide: true });
+      await keepProjectOpen(page, await post(page, 'project/open', { path: drove.repo }));
+    }
     offer.on = true;
     void page.send('Runtime.evaluate', { expression: 'window.adeDesktop.checkUpdate()' }).catch(() => {});
     const staged = () => readdirSync(dirs.tmp).filter(name => name.startsWith('mooner-update-')).some(name => {
@@ -191,6 +229,7 @@ try {
     spawnSync('git', ['init', '-q', '-b', 'main', drove.repo], { windowsHide: true });
     const project = await post(page, 'project/open', { path: drove.repo });
     drove.terminal = await post(page, 'terminal/open', { projectId: project.id });
+    if (onboarded) await keepProjectOpen(page, project);
     drove.pidFile = join(temp, 'shell.pid'); drove.tickFile = join(temp, 'ticks.txt');
     await page.ev(`
       const out = window.__ticker = { text: '' };
@@ -236,6 +275,7 @@ try {
   // The new app may start twice when an older helper starts it on a console (it hands over to a copy), so wait for one that stays.
   for (let i = 0; i < 120 && !after; i++) { await sleep(1000); after = mains().find(item => item.ProcessId !== before?.ProcessId); }
   record('새 버전이 다시 실행', Boolean(after), after ? `pid ${after.ProcessId}` : '프로세스 없음');
+  const startup = onboarded ? watchStartup(nextPort) : null;
   await sleep(10_000);
   finalMain = mains().sort((a, b) => b.ProcessId - a.ProcessId)[0] ?? null;
   if (drive) {
@@ -261,6 +301,31 @@ try {
         `셸 pid ${drove.shellPid} ${alive(drove.shellPid) ? '살아 있음' : '없음'}, 이전 앱 종료 뒤 기록 ${resumed}번, 가장 긴 간격 ${Math.max(0, ...gaps)}ms`);
     }
     await page.shot('update-after');
+    if (startup) {
+      // The notes of the new version open by themselves, once, and nothing else is on the screen with them: the Git card (this profile never saw it) waits until they are closed.
+      const screen = async () => JSON.parse(await page.ev(SCREEN));
+      for (let i = 0; i < 80 && !(await screen()).modal; i++) await sleep(250);
+      const withNotes = await screen();
+      record('업데이트 뒤 변경 내역 창이 저절로 열림', withNotes.modal && withNotes.entry?.startsWith('v'), `${withNotes.entry}, 카드 ${JSON.stringify(withNotes.cards)}, 빨간 점 "${withNotes.dot}"`);
+      record('변경 내역이 열려 있는 동안 다른 안내가 없음', withNotes.cards.length === 0 && !withNotes.tour && !withNotes.splash, JSON.stringify(withNotes));
+      await page.shot('update-after-changelog');
+      await page.ev(`document.querySelector('.changelog:not(.closing) button[aria-label="닫기"]').click()`);
+      let withCard = null;
+      for (let i = 0; i < 40 && !withCard?.cards.length; i++) { await sleep(250); withCard = await screen(); }
+      record('변경 내역을 닫으면 Git 안내 카드가 하나만 나옴', !withCard.modal && withCard.cards.length === 1 && /Git 그래프/.test(withCard.cards[0]), JSON.stringify(withCard));
+      await sleep(900); // the card slides in
+      await page.shot('update-after-gitcard');
+      record('변경 내역을 본 뒤에는 빨간 점이 없음', withCard.dot === '변경 내역', `"${withCard.dot}"`);
+      await page.ev(`[...document.querySelectorAll('.git-graph-tip button')].find(button => button.textContent.trim() === '확인').click()`);
+      await sleep(1500);
+      const quiet = await screen();
+      record('안내를 모두 마치면 화면에 안내가 남지 않음', !quiet.modal && quiet.cards.length === 0, JSON.stringify(quiet));
+      await page.shot('update-after-quiet');
+      await startup.stop();
+      const overlapping = startup.timeline.filter(item => item.tour || (item.splash && (item.modal || item.cards.length)) || (item.modal && item.cards.length) || item.cards.length > 1);
+      const order = startup.timeline.map(item => item.tour ? '둘러보기' : item.splash ? '스플래시' : item.modal ? '변경 내역' : item.cards.length ? '카드' : '-').filter((name, at, list) => name !== list[at - 1]).join(' → ');
+      record('안내가 겹친 순간이 한 번도 없음', startup.timeline.length > 0 && overlapping.length === 0, `${startup.timeline.length}개 상태, 순서 ${order}${overlapping.length ? `, 겹침 ${JSON.stringify(overlapping[0])}` : ''}`);
+    }
     page.close();
   }
   const version = (() => { try { return JSON.parse(readFileSync(join(installed, 'resources/app/package.json'), 'utf8')).version; } catch { return null; } })();
@@ -286,6 +351,20 @@ try {
     const closed = tool('close', finalMain.ProcessId);
     await sleep(4000);
     record('콘솔 창을 닫아도 앱이 살아 있음', closed === 11 || alive(finalMain.ProcessId), closed === 11 ? '닫을 콘솔이 없음' : alive(finalMain.ProcessId) ? '콘솔을 닫았지만 계속 실행' : '콘솔을 닫자 앱이 종료됨');
+  }
+  if (startup && finalMain) {
+    // Closed and opened again (the terminal's own shell may still run, so the app is ended by its pid like a crash would): the same copy now shows no notice at all.
+    try { process.kill(finalMain.ProcessId); } catch { /* gone */ }
+    for (let i = 0; i < 40 && alive(finalMain.ProcessId); i++) await sleep(250);
+    for (const item of ours().filter(entry => /--type=/.test(entry.CommandLine ?? '') && lower(entry.ExecutablePath) === lower(exeOf(installed)))) { try { process.kill(item.ProcessId); } catch { /* gone */ } }
+    await sleep(2000);
+    spawn(exeOf(installed), [], { env: { ...env, ...isolated, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: '확인', ELECTRON_NO_ATTACH_CONSOLE: '1' }, stdio: 'ignore', detached: true, windowsHide: true, cwd: dirs.home }).unref();
+    const again = watchStartup(nextPort);
+    await sleep(14_000);
+    await again.stop();
+    const shownAgain = again.timeline.filter(item => item.tour || item.modal || item.cards.length);
+    record('다시 실행하면 변경 내역·둘러보기·안내 카드가 다시 뜨지 않음', again.timeline.length > 0 && shownAgain.length === 0, `${again.timeline.length}개 상태${shownAgain.length ? `, 뜬 것 ${JSON.stringify(shownAgain[0])}` : ''}, 마지막 ${JSON.stringify(again.timeline.at(-1))}`);
+    try { const page = await appPage(nextPort, 30_000); await page.shot('update-second-start'); page.close(); } catch { /* the screenshot is only evidence */ }
   }
   const realAfter = realApps();
   record('사용 중인 실제 MoonerADE 프로세스는 그대로', JSON.stringify(realBefore) === JSON.stringify(realAfter), `${realBefore.length}개 → ${realAfter.length}개`);
