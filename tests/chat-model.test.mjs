@@ -850,3 +850,31 @@ test('blocked actions: shown from the server record, kept when only allowed, dro
   assert.deepEqual(reduce(reduce(emptyView(), denied(1, 'c')), { seq: 2, kind: 'user', text: 'hi', images: 0 }).blocked, {});
   assert.equal(reduce(emptyView(), { seq: 1, kind: 'auto_denied' }).blocked, undefined, 'a record without a call is ignored');
 });
+
+test('a chat log written by 0.5.12 replays: every event kind it stored, a plan-limit report without the newer fields, an approval and a subagent', () => {
+  // Real 0.5.12 events (kept from the update e2e). Newer builds only add fields; none of these may throw, and the replay must keep the same items.
+  const stored = [
+    { kind: 'user', text: '안녕하세요 첫 대화입니다', images: 0, previews: [], seq: 1, at: 1795110078013 },
+    { kind: 'session', sessionId: 'fake-session-27024', model: 'Model 1.0', permissionMode: 'default', tools: ['Bash', 'Agent'], slashCommands: ['compact', 'context'], seq: 2, at: 1795110078119 },
+    { kind: 'message', role: 'assistant', id: 'm1', parentToolUseId: null, blocks: [{ type: 'text', text: 'ok' }], usage: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0 }, seq: 3, at: 1795110078122 },
+    { kind: 'title', source: 'ai', text: 'AI가 붙인 제목', seq: 4, at: 1795110078122 },
+    { kind: 'result', status: 'success', text: 'ok', sessionId: 'fake-session-27024', costUsd: 0.01, usage: { input: 10, output: 5, cacheRead: 500, cacheCreate: 30 }, contextWindow: null, durationMs: 5, turns: 1, turnCostUsd: 0.01, auth: 'login', seq: 5, at: 1795110078122 },
+    { kind: 'message', role: 'assistant', id: 'm2', parentToolUseId: null, blocks: [{ type: 'tool_use', id: 'toolu_m1', name: 'mcp__claude_ai_Claude_Docs__update', input: { title: '문서 제목', container: { kind: 'doc' } } }], usage: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0 }, seq: 13, at: 1795110151786 },
+    { kind: 'tool_result', toolUseId: 'toolu_m1', isError: false, content: '{"ok":true,"url":"https://claude.ai/artifact/abc123-def"}', seq: 14, at: 1795110151786 },
+    // Before the usage reading and the "as of" clock existed, a report carried only the passed threshold (and an even older one lacked `utilization` altogether).
+    { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1795115574, overage: false, seq: 21, at: 1795110174000 },
+    { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.91, threshold: 0.9, resetsAt: 1795115574, overage: false, seq: 22, at: 1795110174828 },
+    { kind: 'approval', phase: 'request', requestId: 'perm-1', tool: 'Bash', input: { command: 'npm test', description: '테스트 실행' }, toolUseId: 'toolu_perm', suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }], seq: 38, at: 1795110318637 },
+    { kind: 'approval', phase: 'answer', requestId: 'perm-1', tool: 'Bash', allow: true, seq: 39, at: 1795110371340 },
+    { kind: 'task', phase: 'start', toolUseId: 'toolu_a1', description: '조사 A', agentType: 'general-purpose', background: false, seq: 44, at: 1795110391836 },
+    { kind: 'task', phase: 'end', toolUseId: 'toolu_a1', status: 'completed', report: 'A 결과 보고', tokens: 2400, toolUses: 4, durationMs: 1500, seq: 46, at: 1795110392459 }
+  ];
+  const view = fromReplay({ events: stored, seq: 46 });
+  assert.equal(view.items.some(item => item.fresh), false, 'a replay plays no entrance');
+  assert.equal(view.approvals.length, 0, 'the answered approval is not pending');
+  const limits = view.items.filter(item => item.kind === 'note' && /한도/.test(item.text));
+  assert.equal(limits.length, 1, 'the two readings of one window are one line');
+  assert.match(limits[0].text, /5시간 한도의 91%를 사용했습니다/, 'it follows the latest reading');
+  // A report that never had a reading says "at least" instead of passing the threshold off as the usage.
+  assert.match(fromReplay({ events: [stored[7]] }).items.find(item => item.kind === 'note').text, /90% 이상 사용했습니다/);
+});
