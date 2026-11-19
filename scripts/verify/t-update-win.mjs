@@ -1,6 +1,9 @@
 // Windows: the whole self-update of a packaged build, isolated. Needs `pnpm package` first (apps/desktop/dist/MoonerADE-win32-x64).
 //   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update-win.mjs [--installed-from <packaged folder>] [--next-from <packaged folder>] [--full]
-//     [--installed-version <x.y.z>] [--next-version <x.y.z>] [--drive [--throttle <MB/s>] | --on-quit]
+//     [--installed-version <x.y.z>] [--next-version <x.y.z>] [--drive [--throttle <MB/s>] | --on-quit | --quit-dialog]
+// --quit-dialog is --on-quit with a terminal running when the window is closed: the native "종료할까요?" question (worded after the waiting update) is read through UI Automation
+// (dialog-tool.ps1, only windows of the app's own process) and answered with its update button; the terminal has to come back in the new app. The wording is that of the
+// *installed* app, so it needs a build that has it as the installed one (--installed-from = the candidate, versions 0.6.0 → 0.6.1, with --no-startup-checks).
 // A copy of the build, renamed 0.0.1, runs from a temp folder with its own profile (ADE_USER_DATA_DIR), data, HOME and TEMP and a fake release
 // (ADE_UPDATE_URL) offering 9.9.9 as GitHub would (app-only zip + manifest, or with --full only the full zip; sha256 digests). ADE_UPDATE_ANSWER takes
 // "지금 업데이트". --installed-from / --next-from take other packaged folders: an older build as the installed one tests an update started by
@@ -31,7 +34,7 @@ if (process.platform !== 'win32') { console.error('Windows 전용입니다.'); p
 const args = process.argv.slice(2), option = name => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
 const dist = join(ROOT, 'apps/desktop/dist/MoonerADE-win32-x64');
 const installedFrom = resolve(option('--installed-from') ?? dist), nextFrom = resolve(option('--next-from') ?? dist);
-const installedVersion = option('--installed-version') ?? '0.0.1', nextVersion = option('--next-version') ?? '9.9.9', onQuit = args.includes('--on-quit'), drive = args.includes('--drive') || onQuit, throttle = Number(option('--throttle') ?? 6);
+const installedVersion = option('--installed-version') ?? '0.0.1', nextVersion = option('--next-version') ?? '9.9.9', quitDialog = args.includes('--quit-dialog'), onQuit = args.includes('--on-quit') || quitDialog, drive = args.includes('--drive') || onQuit, throttle = Number(option('--throttle') ?? 6);
 if (![installedVersion, nextVersion].every(version => /^\d+\.\d+\.\d+$/.test(version))) { console.error('--installed-version / --next-version는 x.y.z 형식이어야 합니다.'); process.exit(2); }
 for (const folder of [installedFrom, nextFrom]) if (!existsSync(join(folder, 'MoonerADE.exe'))) { console.error(`${folder}에 MoonerADE.exe가 없습니다. 먼저 pnpm package를 실행하세요.`); process.exit(2); }
 if (existsSync(join(S, 'env.json'))) { console.error(`${S}에 이미 다른 세션이 있습니다. 새 VERIFY_OUT을 쓰세요.`); process.exit(2); }
@@ -204,8 +207,11 @@ try {
     const page = await appPage(cdpPort);
     if (onboarded) {
       drove.repo = join(temp, 'repo'); mkdirSync(drove.repo); spawnSync('git', ['init', '-q', '-b', 'main', drove.repo], { windowsHide: true });
-      await keepProjectOpen(page, await post(page, 'project/open', { path: drove.repo }));
+      const project = await post(page, 'project/open', { path: drove.repo });
+      await keepProjectOpen(page, project);
+      if (quitDialog) drove.terminal = await post(page, 'terminal/open', { projectId: project.id }); // a live terminal makes the window's X ask what to do with it
     }
+    if (quitDialog && !drove.terminal) throw new Error('--quit-dialog needs the onboarded profile (not --first-run)');
     offer.on = true;
     void page.send('Runtime.evaluate', { expression: 'window.adeDesktop.checkUpdate()' }).catch(() => {});
     const staged = () => readdirSync(dirs.tmp).filter(name => name.startsWith('mooner-update-')).some(name => {
@@ -219,6 +225,20 @@ try {
     await page.shot('update-staged');
     // The user quits: the update is installed and the app comes back.
     void page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {});
+    if (quitDialog) {
+      // The question names what the quit does: with an update waiting, "종료" would promise an end that does not happen. Its buttons are not visible to UI Automation (a task dialog),
+      // so the text is read and the button is chosen with the keyboard: Electron focuses the last one (취소), Shift+Tab reaches "업데이트하고 다시 시작", Enter presses it.
+      const dialogTool = (mode, keys = '') => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(ROOT, 'scripts/verify/dialog-tool.ps1'), '-ProcessId', String(before.ProcessId), '-Mode', mode, ...(keys ? ['-Keys', keys] : [])], { encoding: 'utf8', windowsHide: true });
+      let question = null, lastRead = '';
+      for (let i = 0; i < 40 && !question; i++) {
+        await sleep(500);
+        try { const run = dialogTool('read'), out = run.stdout.trim(); lastRead = out.slice(0, 300); const list = out ? [].concat(JSON.parse(out)) : []; question = list.find(item => item.texts.some(line => /종료할까요/.test(line))) ?? null; } catch { /* not there yet */ }
+      }
+      const text = question ? question.texts.join(' ') : '';
+      record('종료 확인 창이 받아 둔 업데이트를 실제 동작대로 안내', Boolean(question) && /터미널 1개가 열려 있습니다/.test(text) && /업데이트하고 다시 시작: 받아 둔 업데이트\(v[\d.]+\)를 설치하고 앱을 다시 실행합니다\. 터미널과 채팅은 끝나지 않고 새 창에서 이어집니다/.test(text) && /백그라운드로 남기기: .*설치하지 않고 다음에 종료할 때로 미룹니다/s.test(text) && !/(^|\n)종료: /.test(text), question ? text.replace(/\s+/g, ' ').slice(0, 520) : `창을 찾지 못함 (${lastRead || '출력 없음'})`);
+      const answered = question ? dialogTool('keys', '+{TAB}~').status : null; // Shift+Tab, Enter
+      record('종료 확인 창의 "업데이트하고 다시 시작"을 키보드로 고름', answered === 0, `dialog-tool 종료 코드 ${answered}`);
+    }
   }
   if (drive && before && !onQuit) {
     const page = await appPage(cdpPort);
@@ -275,7 +295,7 @@ try {
   // The new app may start twice when an older helper starts it on a console (it hands over to a copy), so wait for one that stays.
   for (let i = 0; i < 120 && !after; i++) { await sleep(1000); after = mains().find(item => item.ProcessId !== before?.ProcessId); }
   record('새 버전이 다시 실행', Boolean(after), after ? `pid ${after.ProcessId}` : '프로세스 없음');
-  const startup = onboarded ? watchStartup(nextPort) : null;
+  const startup = onboarded && !args.includes('--no-startup-checks') ? watchStartup(nextPort) : null; // (--no-startup-checks: a version without notes of its own, e.g. 0.6.0 → 0.6.1)
   await sleep(10_000);
   finalMain = mains().sort((a, b) => b.ProcessId - a.ProcessId)[0] ?? null;
   if (drive) {
@@ -296,9 +316,11 @@ try {
       const opened = await post(page, 'project/open', { path: drove.repo });
       const kept = (opened.terminals ?? []).find(item => item.id === drove.terminal.id);
       record('터미널이 새 앱에서 같은 id로 이어짐', Boolean(kept) && !kept.exited, JSON.stringify(kept ?? opened.terminals));
-      const ticks = readTicks(), gaps = ticks.slice(1).map((time, index) => time - ticks[index]), resumed = ticks.filter(time => time > exitAt).length;
-      record('터미널 안의 셸과 반복 명령이 업데이트를 넘어 계속됨', Boolean(drove.shellPid) && alive(drove.shellPid) && resumed >= 5 && Date.now() - ticks.at(-1) < 3000,
-        `셸 pid ${drove.shellPid} ${alive(drove.shellPid) ? '살아 있음' : '없음'}, 이전 앱 종료 뒤 기록 ${resumed}번, 가장 긴 간격 ${Math.max(0, ...gaps)}ms`);
+      if (drove.tickFile) { // (--quit-dialog opens a terminal but runs no counting loop in it)
+        const ticks = readTicks(), gaps = ticks.slice(1).map((time, index) => time - ticks[index]), resumed = ticks.filter(time => time > exitAt).length;
+        record('터미널 안의 셸과 반복 명령이 업데이트를 넘어 계속됨', Boolean(drove.shellPid) && alive(drove.shellPid) && resumed >= 5 && Date.now() - ticks.at(-1) < 3000,
+          `셸 pid ${drove.shellPid} ${alive(drove.shellPid) ? '살아 있음' : '없음'}, 이전 앱 종료 뒤 기록 ${resumed}번, 가장 긴 간격 ${Math.max(0, ...gaps)}ms`);
+      }
     }
     await page.shot('update-after');
     if (startup) {
