@@ -1007,7 +1007,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
   const imageInput = useRef<HTMLInputElement>(null), fileInput = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [shrinking, setShrinking] = useState(0), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -1598,10 +1598,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (caps?.images === false && others.length < files.length) return ctx.fail(new Error('선택한 모델은 이미지 입력을 지원하지 않습니다.'));
     const accepted = files.filter(isImage);
     if (!accepted.length) return;
+    // 5MB가 넘는 그림은 줄이는 데 몇 초 걸릴 수 있어, 그동안 "줄이는 중"을 보여 준다(조용히 멈춘 것처럼 보이지 않게).
+    const large = accepted.filter(file => file.size > 4_500_000).length; if (large) setShrinking(count => count + large);
     try {
       const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, 4);
       setImages(next); toastAttached(next.length - images.length || accepted.length);
-    } catch (cause) { ctx.fail(cause); }
+    } catch (cause) { ctx.fail(cause); } finally { if (large) setShrinking(count => Math.max(0, count - large)); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
   const interrupt = (sendSteers = false) => { releaseUiSends(id); void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail); };
@@ -1773,7 +1775,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           </button></li>)}</ul>}
         {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 명령 · Enter로 실행 (승인 없이, 이 폴더에서) · 로그인처럼 입력이 필요한 명령은 터미널 탭에서 · 메시지로 보내려면 <code>{'\\!'}</code>로 시작</span></p>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
-        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
+        {shrinking > 0 && <div className="chat-attachments"><span className="chat-shrinking" role="status"><i className="chat-spin" aria-hidden="true" />이미지를 5MB 아래로 줄이는 중…</span></div>}
+        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} />{image.reduced && <small className="chat-reduced" aria-hidden="true">줄임</small>}</button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><span className="image-modal-frame"><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></span></Modal>}
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
