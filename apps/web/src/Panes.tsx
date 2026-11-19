@@ -20,6 +20,7 @@ import { ChatPane, type ChatCtx } from './ChatPane';
 import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
 import { playSound } from './sound';
 import { contextTip, nextHint, queueTip, splitTip } from './tips';
+import { useNotice } from './use-notice';
 import { Hint } from './Hint';
 import { useShells, shellLabel } from './shells';
 import { LauncherModes } from './LauncherMenu';
@@ -620,7 +621,8 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const exited = cwds[id] !== undefined && !live.has(id);
   const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = !isSsh && (agent === 'codex' || agent === 'cursor' || agent === 'claude' && attention[id] !== 'attention' && !workingSet.has(id));
   // Points at the Chat switch once; held back while the "try Chat" card (chatTipPending) is up so only one thing asks for attention.
-  const hint = focused && visible && canChat && !settings.chatTipPending ? nextHint(settings, [['tochat', true]]) : undefined;
+  const hintDue = focused && visible && canChat && !settings.chatTipPending ? nextHint(settings, [['tochat', true]]) : undefined;
+  const hint = useNotice(`hint:${id}`, hintDue !== undefined) ? hintDue : undefined;
   const hintSeen = () => { if (!settings.hintsSeen.includes('tochat')) chat.onSettingsChange({ ...settings, hintsSeen: [...settings.hintsSeen, 'tochat'] }); };
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-feedback-region="터미널 pane" data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">

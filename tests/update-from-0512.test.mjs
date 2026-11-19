@@ -80,3 +80,20 @@ test('plugin settings, approvals, stored data and the GitHub sign-in written by 
     assert.equal(JSON.parse(await readFile(path.join(dir, 'plugins.json'), 'utf8')).github.token, undefined, 'the token never lands in the plain file');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('the first launch after the update shows one thing at a time: update notes, the Git card, then the tips; and nothing again once each was dismissed', async () => {
+  const { createNotices } = await import('../apps/web/src/notices.ts');
+  const notices = createNotices(), shown = [];
+  notices.subscribe(() => shown.push(notices.current()));
+  // Everything a 0.5.12 user's first start asks for at about the same time (settings from 0.5.12, an update with an unread note, a newer Claude Code, the window losing focus, a chat pointer).
+  for (const id of ['hint:chat-1', 'bg-anim', 'chat-mode', 'git', 'changelog']) notices.want(id, true);
+  assert.equal(notices.current(), 'changelog', 'the update notes first');
+  notices.want('changelog', false); assert.equal(notices.current(), 'git', 'closing them brings the Git card');
+  notices.want('git', false); assert.equal(notices.current(), 'chat-mode');
+  notices.want('chat-mode', false); assert.equal(notices.current(), 'bg-anim');
+  notices.want('bg-anim', false); assert.equal(notices.current(), 'hint:chat-1');
+  notices.want('hint:chat-1', false);
+  assert.equal(notices.current(), null);
+  // A launch where none of them is due (their own once-only memory is spent) asks for nothing, so nothing shows.
+  assert.deepEqual(shown, ['hint:chat-1', 'bg-anim', 'chat-mode', 'git', 'changelog', 'git', 'chat-mode', 'bg-anim', 'hint:chat-1', null]);
+});

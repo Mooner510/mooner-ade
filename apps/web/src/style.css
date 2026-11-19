@@ -3213,3 +3213,16 @@ body.pane-dragging, body.pane-dragging * { cursor: grabbing !important; }
 body.pane-dragging { user-select: none; }
 .git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
+
+/* The strip below the workspaces where the app's own cards are drawn, one at a time (main.tsx, notices.ts): in the layout, so a card covers no button or tab. */
+.ws-stack { display: flex; flex-direction: column; }
+.ws-stack > .app { flex: 1; min-height: 0; height: auto; }
+.notice-dock { flex: none; }
+.notice-dock:empty { display: none; }
+.notice-dock > .chat-mode-tip.docked { position: static; z-index: auto; width: auto; margin: 0; padding: 8px 14px; align-items: center; border-width: 1px 0 0; border-radius: 0; box-shadow: none; }
+.notice-dock > .chat-mode-tip.docked > img, .notice-dock > .chat-mode-tip.docked > .git-tip-art { width: 84px; min-height: 0; height: 63px; align-self: center; }
+.notice-dock > .chat-mode-tip.docked .chat-mode-tip-body { max-width: 780px; }
+
+/* The tutorial's practice workspace puts a tab's only pane straight into .tab-page (the real one wraps it in a split slot); without this it kept its content width: the first
+   practice terminal was a 200px strip and a practice Chat pane 2px wide. */
+.tour .tab-page > .terminal-pane, .tour .tab-page > .editor-group { flex: 1; min-width: 0; }
