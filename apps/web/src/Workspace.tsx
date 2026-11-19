@@ -29,7 +29,9 @@ import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type Id
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
-import { aiContext, bytesToBase64, pendingReviewCount } from './feedback-model';
+import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
+import { statusLabels } from './Settings';
+import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
@@ -1015,6 +1017,11 @@ ${where}`, [
 
   // ---- render ----
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
+  // Git 저장소가 없는 프로젝트에서 흐린 Git 버튼을 누르면 이유를 잠깐 보여 준다(툴팁은 올려 둬야만 보인다).
+  const [gitNote, setGitNote] = useState(false);
+  useEffect(() => { if (!gitNote) return; const timer = setTimeout(() => setGitNote(false), 4000); return () => clearTimeout(timer); }, [gitNote]);
+  // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
+  const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
@@ -1085,12 +1092,12 @@ ${where}`, [
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);
-  const reviewCount = pendingReviewCount(feedback.items);
+  const reviewCount = pendingReviewCount(feedback.items), newsCount = progressNews(feedback.items).length;
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
     connection: connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>,
-    path: <span className="stat" title={project.root} data-tip-nowrap><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
+    path: <span className="stat stat-path" title={project.root} data-tip-nowrap><Icon name="folder" size={13} /><span className="stat-text">{shortPath(project.root)}</span></span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
@@ -1126,9 +1133,9 @@ ${where}`, [
       <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
-      <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (!noGit) toggleGit(); }}>
-        <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
-      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
+      <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (noGit) setGitNote(true); else toggleGit(); }}>
+        <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>{gitNote && noGit && <span className="bar-note" role="status">Git 저장소가 없는 폴더예요. 터미널에서 git init 을 하면 커밋 그래프를 쓸 수 있어요.</span>}
+      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ' · 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
@@ -1141,9 +1148,9 @@ ${where}`, [
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
     {settings.gitLogDock && gitDrawer}
-    <footer className="statusbar" data-feedback-region="상태바">
+    <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
     {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="Chat 모드 안내">

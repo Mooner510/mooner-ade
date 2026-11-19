@@ -367,8 +367,8 @@ type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>;
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
-type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; stopShell(runId: string): void };
-const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, stopShell() {} });
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; stopShell(runId: string): void; shellNote: { lastId: string; pending: number } };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, stopShell() {}, shellNote: { lastId: '', pending: 0 } });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -389,7 +389,7 @@ const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(ag
 // ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
 function StopTask({ id }: { id: string }) {
   const { stop } = useContext(AgentsContext);
-  return <span className="stop-task" role="button" tabIndex={-1} title="이 작업 중단" aria-label="이 작업 중단" onClick={event => { event.stopPropagation(); stop(id); }} />;
+  return <span className="stop-task" role="button" tabIndex={0} title="이 작업 중단" aria-label="이 작업 중단" onClick={event => { event.stopPropagation(); stop(id); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); stop(id); } }} />;
 }
 function AgentState({ status, waiting, id }: { status: AgentStatus; waiting?: boolean; id?: string }) {
   const stoppable = useContext(AgentsContext).agents.get(id ?? '')?.background === true;
@@ -769,8 +769,8 @@ function UsageCardRow({ item, enter }: { item: Extract<Item, { kind: 'usage' }>;
   return <div data-enter={enter}><UsageCard snap={item.snap} projectId={projectId} colors={colors} showSession={showSession} /></div>;
 }
 function ShellCardRow({ item, enter }: { item: Extract<Item, { kind: 'shell' }>; enter?: true }) {
-  const { stopShell } = useContext(LocalCardsContext);
-  return <ShellCard item={item} enter={enter} onStop={stopShell} />;
+  const { stopShell, shellNote } = useContext(LocalCardsContext);
+  return <ShellCard item={item} enter={enter} onStop={stopShell} note={item.id === shellNote.lastId ? { pending: shellNote.pending } : undefined} />;
 }
 function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; enter?: true }) {
   const { closeBtw, retryBtw } = useContext(LocalCardsContext);
@@ -1007,7 +1007,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
   const imageInput = useRef<HTMLInputElement>(null), fileInput = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [shrinking, setShrinking] = useState(0), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -1445,7 +1445,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const retryBtw = (key: string) => { const item = viewRef.current.items.find(entry => entry.key === key); if (item?.kind === 'btw') askBtw(key, item.question); };
   // The cards sit in memoised rows, so they reach these through a ref that always holds this render's functions.
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
-  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession]);
+  // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
+  const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
   async function runLocal(name: string, argument: string): Promise<boolean> {
     if (locked && ['model', 'effort', 'permissions'].includes(name)) { note(`지금은 설정을 바꿀 수 없습니다. ${locked}`); return true; }
     switch (name) {
@@ -1596,10 +1598,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (caps?.images === false && others.length < files.length) return ctx.fail(new Error('선택한 모델은 이미지 입력을 지원하지 않습니다.'));
     const accepted = files.filter(isImage);
     if (!accepted.length) return;
+    // 5MB가 넘는 그림은 줄이는 데 몇 초 걸릴 수 있어, 그동안 "줄이는 중"을 보여 준다(조용히 멈춘 것처럼 보이지 않게).
+    const large = accepted.filter(file => file.size > 4_500_000).length; if (large) setShrinking(count => count + large);
     try {
       const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, 4);
       setImages(next); toastAttached(next.length - images.length || accepted.length);
-    } catch (cause) { ctx.fail(cause); }
+    } catch (cause) { ctx.fail(cause); } finally { if (large) setShrinking(count => Math.max(0, count - large)); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
   const interrupt = (sendSteers = false) => { releaseUiSends(id); void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail); };
@@ -1721,7 +1725,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <SplitButton onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(id)} />
         <IconButton icon="x" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
-    {(agent === 'claude' || agent === 'codex') && <CliUpdateNotice agent={agent} />}
+    {/* 둘러보기(projectId 'tour')는 연습 화면이라 실제 CLI 업데이트 안내·실행 버튼을 띄우지 않는다. */}
+    {(agent === 'claude' || agent === 'codex') && ctx.projectId !== 'tour' && <CliUpdateNotice agent={agent} />}
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
       onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
@@ -1770,7 +1775,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           </button></li>)}</ul>}
         {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 명령 · Enter로 실행 (승인 없이, 이 폴더에서) · 로그인처럼 입력이 필요한 명령은 터미널 탭에서 · 메시지로 보내려면 <code>{'\\!'}</code>로 시작</span></p>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
-        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} /></button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
+        {shrinking > 0 && <div className="chat-attachments"><span className="chat-shrinking" role="status"><i className="chat-spin" aria-hidden="true" />이미지를 5MB 아래로 줄이는 중…</span></div>}
+        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} />{image.reduced && <small className="chat-reduced" aria-hidden="true">줄임</small>}</button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><span className="image-modal-frame"><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></span></Modal>}
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>

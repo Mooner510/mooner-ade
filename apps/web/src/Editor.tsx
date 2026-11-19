@@ -189,6 +189,9 @@ const languageOf = (monaco: typeof Monaco, hint: string) => {
   return monaco.languages.getLanguages().find(lang => lang.id === name || lang.aliases?.some(alias => alias.toLowerCase() === name)
     || (ext && lang.extensions?.includes(ext)) || lang.filenames?.some(known => known.toLowerCase() === file))?.id ?? null;
 };
+// 테마를 바꿀 때 이미 그려 둔 코드 블록(.mtk* 색은 전역 CSS)도 새 테마 색으로 따라오게 한다. 그동안은 편집기를 열거나 새 블록을 칠할 때까지 옛 테마 색이 남아 밝은 테마에서 글자가 안 보였다.
+// Monaco를 아직 안 불렀으면(코드 블록도 편집기도 없음) 할 일이 없다.
+export function syncMonacoTheme(theme: Settings['theme']) { if (monacoPromise) void monacoPromise.then(monaco => monaco.editor.setTheme(themeName(theme)), () => {}); }
 export async function colorize(code: string, hint: string): Promise<string | null> {
   if (!hint.trim() || !code || code.length > 100_000) return null;
   const monaco = await loadMonaco(), id = languageOf(monaco, hint);

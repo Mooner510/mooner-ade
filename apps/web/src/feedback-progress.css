@@ -13,3 +13,4 @@
 .feedback-progress-line { display: flex; align-items: center; gap: 8px; margin: 2px 12px 6px; font-size: 11.5px; color: var(--faint); }
 .feedback-progress-line button { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; color: var(--muted); border: 1px solid var(--border); background: none; font-size: 11px; }
 .feedback-progress-line button:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
+.feedback-progress-note { color: var(--muted); font-size: 11px; }

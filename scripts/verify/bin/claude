@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Verification fake of `claude`. No network, no model. Logs every start to $FAKE_LOG; behaviour switches via $FAKE_CTL (json) and trigger words.
-import fs from 'node:fs'; import readline from 'node:readline';
+import fs from 'node:fs'; import readline from 'node:readline'; import crypto from 'node:crypto'; import path from 'node:path'; import os from 'node:os';
 const argv = process.argv.slice(2), log = o => { try { fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ t: Date.now(), ...o }) + '\n'); } catch {} };
 const ctl = () => { try { return JSON.parse(fs.readFileSync(process.env.FAKE_CTL, 'utf8')); } catch { return {}; } };
 const send = m => process.stdout.write(JSON.stringify(m) + '\n');
@@ -29,7 +29,18 @@ if (!stream) {
 } else {
   const promptAt = argv.indexOf('--append-system-prompt-file');
   log({ kind: 'stream', argv, cwd: process.cwd(), env: envLog, systemPrompt: promptAt >= 0 ? (() => { try { return fs.readFileSync(argv[promptAt + 1], 'utf8'); } catch { return null; } })() : undefined });
-  const sid = 'fake-session-' + process.pid;
+  // ctl.sessionUuid: a UUID session id (the app reads cache clocks and stats only for real-looking ids). ctl.transcript: also leave Claude Code's own transcript lines
+  // under <config dir>/projects/<cwd slug>/<session>.jsonl for each user message: ctl.transcriptAgeSec (how long ago the request started), ctl.ttl (300|3600), ctl.compacted.
+  const sid = ctl().sessionUuid ? crypto.randomUUID() : 'fake-session-' + process.pid;
+  const writeTranscript = () => {
+    const c = ctl(); if (!c.transcript) return;
+    const dir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || process.env.USERPROFILE || os.homedir(), '.claude'), 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    const at = Date.now() - (c.transcriptAgeSec ?? 0) * 1000, iso = t => new Date(t).toISOString(), ref = 'req_' + Date.now();
+    const lines = [{ type: 'api-request', id: ref, timestamp: iso(at) }, { type: 'assistant', timestamp: iso(at + 800), requestRef: ref, promptCacheRequested: c.ttl === 3600 ? '1h' : '5m', message: { model: 'claude-opus-5-5', usage: { input_tokens: 12, output_tokens: 340, cache_creation_input_tokens: 4200, cache_read_input_tokens: 18400, ...(c.ttl === 3600 && { cache_creation: { ephemeral_1h_input_tokens: 4200 } }) }, content: [{ type: 'text', text: 'ok' }] } }];
+    if (c.compacted) lines.push({ type: 'system', subtype: 'compact_boundary', timestamp: iso(at + 2000), compactMetadata: { trigger: 'auto', preTokens: 180000, postTokens: 14000 } });
+    fs.appendFileSync(path.join(dir, sid + '.jsonl'), lines.map(line => JSON.stringify(line) + '\n').join(''));
+  };
   const init = { type: 'system', subtype: 'init', session_id: sid, model: (argv.includes('--model') ? argv[argv.indexOf('--model') + 1] : null) ?? 'Model 1.0', permissionMode: 'default', slash_commands: ['compact', 'context'], tools: ['Bash', 'Agent'] };
   send(init);
   const result = (text = 'ok', extra = {}) => send({ type: 'result', is_error: false, result: text, session_id: sid, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 30, cache_read_input_tokens: 500 }, ...extra });
@@ -60,6 +71,7 @@ if (!stream) {
     }
     if (m.type !== 'user') return;
     const parts = m.message?.content ?? [], text = parts.find?.(p => p.type === 'text')?.text ?? '';
+    writeTranscript();
     log({ kind: 'user', text, images: parts.filter?.(p => p.type === 'image').length ?? 0, uuid: m.uuid });
     if (m.uuid && slowRun) { heldSteers.set(m.uuid, { parts, text }); return; } // the running turn has not taken a steering line in yet
     if (m.uuid) send({ type: 'user', uuid: m.uuid, isReplay: true, message: { role: 'user', content: parts } });

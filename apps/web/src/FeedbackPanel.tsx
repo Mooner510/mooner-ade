@@ -170,11 +170,12 @@ const groups: FeedbackGroup[] = ['todo', 'sending', 'done'];
 // 내역: what was written or sent so far. A row opens in the same editor as everything else (no second screen to go back from).
 // "Where did my feedback get to?": when the Hub was last asked, and a button to ask now. Nothing is shown when no item is waiting on an answer or this Hub cannot say.
 function ProgressLine({ items, info, now }: { items: Feedback[]; info: FeedbackProgressInfo; now: number }) {
-  const [busy, setBusy] = useState(false), waiting = items.some(item => item.status === 'submitted' && item.progress?.state !== 'released' && item.progress?.state !== 'declined');
+  const [busy, setBusy] = useState(false), [note, setNote] = useState(''), waiting = items.some(item => item.status === 'submitted' && item.progress?.state !== 'released' && item.progress?.state !== 'declined');
   if (!waiting || info.off || info.unsupported) return null;
   return <p className="feedback-progress-line" role="status">
     <span>{info.checkedAt ? `처리 상태 확인 · ${ago(info.checkedAt, now)}` : '처리 상태를 아직 확인하지 못했어요'}</span>
-    <button type="button" disabled={busy} onClick={() => { setBusy(true); void refreshProgress().finally(() => setBusy(false)); }}><Icon name="refresh" size={12} />{busy ? '확인 중…' : '지금 확인'}</button>
+    <button type="button" disabled={busy} onClick={() => { setBusy(true); setNote(''); void refreshProgress().then(result => { setNote(result.skipped ? '방금 확인했어요 · 20초 뒤에 다시 확인할 수 있어요' : '확인했어요'); setTimeout(() => setNote(''), 4000); }).finally(() => setBusy(false)); }}><Icon name="refresh" size={12} />{busy ? '확인 중…' : '지금 확인'}</button>
+    {note && <small className="feedback-progress-note">{note}</small>}
   </p>;
 }
 function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite }: PanelProps & { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; now: number; loaded: boolean; onWrite(): void }) {

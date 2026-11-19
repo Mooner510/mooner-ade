@@ -46,7 +46,7 @@ function Rich({ text }: { text: string }) {
   return <>{text.split(/(\*\*[^*]+\*\*|\{\w+\})/).map((part, index) => part.startsWith('**') ? <b key={index}>{part.slice(2, -2)}</b>
     : part === '{alert}' ? <span key={index} className="question-alert" role="img" aria-label="⚠ 응답 필요"><Icon name="alert" size={13} /></span>
     : part === '{done}' ? <i key={index} className="attn-dot" role="img" aria-label="● 확인 필요" />
-    : part === '{diff}' ? <span key={index} className="diffstat"><ins>+3</ins><del>−1</del></span>
+    : part === '{diff}' ? <span key={index} className="diffstat"><ins>+1</ins><del>−1</del></span>
     : part === '{chat}' || part === '{cli}' ? <span key={index} className={`tour-tag ${part.slice(1, -1)}`}><Icon name={part === '{chat}' ? 'chat' : 'terminal'} size={12} />{part === '{chat}' ? 'Chat' : 'CLI'}</span>
     : part)}</>;
 }
@@ -77,7 +77,7 @@ const paletteItems = (mode: AgentMode): { id: string; label: string; keys?: stri
   { id: 'settings', label: '설정 열기', keys: 'mod+,', action: { type: 'settings', open: true } },
   { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', action: { type: 'projectCycle', step: 1 } },
   { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', action: { type: 'projectCycle', step: -1 } },
-  { id: 'tutorial', label: '튜토리얼 다시 보기' }
+  { id: 'tutorial', label: '둘러보기 다시 보기' }
 ];
 // Where a tab dropped on another lands: edges reorder, the middle merges (as in the real sidebar).
 function dropMode(event: DragEvent<Element>, sourceId: string, targetId: string) {
@@ -266,7 +266,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     const side = y(Math.max(rect.y, H - h - 48));
     // A pane header button: the bottom-right corner, clear of the pane's content (a chat's centred composer, a terminal's output).
     // A whole pane (the Chat showcase): over the sidebar at the left, next to the conversation rather than on it.
-    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, y(rect.y + 40)]
+    // A terminal fills from the top, so its card sits low (a question and its choices stay readable); a chat keeps the card high.
+    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, target?.includes('.terminal-pane') ? y(H - h - 48) : y(rect.y + 40)]
       : rect.x + rect.w + m + w <= W - m ? [rect.x + rect.w + m, side] : rect.x - m - w >= m ? [rect.x - m - w, side]
       : rect.y + rect.h + m + h <= H - m ? [x(rect.x), rect.y + rect.h + m] : rect.y - m - h >= m ? [x(rect.x), rect.y - m - h] : corner;
     card.style.left = `${spot[0]}px`; card.style.top = `${spot[1]}px`;
@@ -479,7 +480,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       {last && <div className="shortcut-list tour-summary">{summary.map(([label, keys], index) => <div key={label} style={{ '--i': index } as CSSProperties}><span>{label}</span><kbd>{showKeys(keys)}</kbd></div>)}</div>}
       </Fragment>
       {!hero && <p className={`tour-feedback ${done ? 'ok' : ''}`} role="status" aria-live="polite">{done ? step.after ?? '다 했어요. ‘다음’을 누르세요.' : feedback}</p>}
-      {hero && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
+      {hero && !last && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
       <footer>
         {!last && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
         <span className="spacer" />

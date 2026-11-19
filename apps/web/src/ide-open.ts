@@ -33,3 +33,14 @@ export const byLastUsed = (ides: IdeInfo[]) => { const last = lastIde(); return 
 
 export const FILE_EVENT = 'ade:file';
 export const requestOpen = (target: OpenTarget) => window.dispatchEvent(new CustomEvent<OpenTarget>(FILE_EVENT, { detail: target }));
+
+// JetBrains products share one glyph; these two letters and brand-like colours tell them apart (by the product name the server detected).
+const jetbrainsMarks: [RegExp, string, string][] = [
+  [/android studio/i, 'AS', '#3ddc84'], [/datagrip/i, 'DG', '#21d789'], [/webstorm/i, 'WS', '#07c3f2'], [/intellij/i, 'IJ', '#087cfa'], [/pycharm/i, 'PC', '#21d789'],
+  [/clion/i, 'CL', '#21d789'], [/goland/i, 'GO', '#079dff'], [/rider/i, 'RD', '#dd1265'], [/phpstorm/i, 'PS', '#b345f1'], [/rubymine/i, 'RM', '#fe2d2d'], [/rustrover/i, 'RR', '#f26522'], [/dataspell/i, 'DS', '#087cfa']
+];
+const lightMarks = new Set(['#3ddc84', '#21d789', '#07c3f2']); // 밝은 배경에는 어두운 글자, 나머지는 흰 글자
+export function ideMark(label: string): { text: string; color: string; ink: string } {
+  const known = jetbrainsMarks.find(([pattern]) => pattern.test(label));
+  return known ? { text: known[1], color: known[2], ink: lightMarks.has(known[2]) ? '#0b0b0b' : '#fff' } : { text: (label.replace(/[^A-Za-z]/g, '').slice(0, 2) || 'JB').toUpperCase(), color: '#6b7280', ink: '#fff' };
+}

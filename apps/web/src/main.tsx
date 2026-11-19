@@ -3,7 +3,7 @@ import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
-import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -19,7 +19,8 @@ import { LEGACY_CHANGELOG_VERSION } from './changelog-state';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
-import { byLastUsed, ideIcon, ideList, rememberIde, type IdeList } from './ide-open';
+import { byLastUsed, ideList, rememberIde, type IdeList } from './ide-open';
+import { IdeIcon } from './IdeIcon';
 import { claimTip, copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
@@ -240,7 +241,7 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
       {item('fileOpen', '파일 열기…', onPickFile)}
       {(!list || ides.length > 0) && <>
         <hr />
-        {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><Icon name={ideIcon(ide)} size={14} /><span className="menu-label">{ide.label}에서 열기</span></button>)}
+        {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><IdeIcon ide={ide} size={14} /><span className="menu-label">{ide.label}에서 열기</span></button>)}
         {!list && <button role="menuitem" disabled>편집기를 찾는 중…</button>}
       </>}
       <hr />
@@ -375,7 +376,7 @@ function Shell() {
   }, []);
   useEffect(() => {
     const theme = themeById(settings.theme), root = document.documentElement;
-    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme;
+    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme; syncMonacoTheme(theme.id);
   }, [settings.theme]);
   useEffect(() => { document.documentElement.toggleAttribute('data-keep-anim', settings.animateInBackground); syncFocus(); }, [settings.animateInBackground]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
@@ -474,7 +475,7 @@ function Shell() {
     { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', run: () => actions.current.toggle() },
     { id: 'settings', label: '설정 열기', run: () => actions.current.settings() },
     { id: 'closeProject', label: '프로젝트 닫기', run: () => actions.current.close() },
-    { id: 'tutorial', label: '튜토리얼 다시 보기', run: () => actions.current.tutorial() },
+    { id: 'tutorial', label: '둘러보기 다시 보기', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', run: () => actions.current.cycle(-1) },
     ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
@@ -688,8 +689,8 @@ function Shell() {
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
         <span className="spacer" /><AppVersion /><span className="spacer" />
-        <IconButton icon="book" label="튜토리얼 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
-        {skippedTour && !touring && !splash && <Hint title="튜토리얼은 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 둘러보기를 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
+        <IconButton icon="book" label="둘러보기 다시 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
+        {skippedTour && !touring && !splash && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}
         onPointerDown={startResize} onDoubleClick={() => setWidth(252)}

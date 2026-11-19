@@ -4,6 +4,7 @@ import { useActionKeys } from './shortcuts';
 // Material Symbols (bundled font, so it works offline). Claude Code and Codex have no Material glyph, so they stay inline SVG.
 const glyphs = {
   plus: 'add',
+  more: 'more_horiz',
   x: 'close',
   edit: 'edit',
   terminal: 'terminal',
