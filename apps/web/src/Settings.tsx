@@ -787,7 +787,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>
           <ShortcutKeys settings={settings} onChange={onChange} />
-          <Row title="튜토리얼" hint="처음 실행할 때 보여준 둘러보기를 다시 시작합니다."><button onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}><Icon name="book" />다시 보기</button></Row>
+          <Row title="둘러보기" hint="처음 실행할 때 보여준 안내를 처음부터 다시 시작합니다."><button onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}><Icon name="book" />다시 보기</button></Row>
         </SectionFrame>}
       </div>
       {appearance && <LookPreview id={look || 'theme'} previewTheme={lookTheme} settings={settings} />}

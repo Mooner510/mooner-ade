@@ -77,7 +77,7 @@ const paletteItems = (mode: AgentMode): { id: string; label: string; keys?: stri
   { id: 'settings', label: '설정 열기', keys: 'mod+,', action: { type: 'settings', open: true } },
   { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', action: { type: 'projectCycle', step: 1 } },
   { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', action: { type: 'projectCycle', step: -1 } },
-  { id: 'tutorial', label: '튜토리얼 다시 보기' }
+  { id: 'tutorial', label: '둘러보기 다시 보기' }
 ];
 // Where a tab dropped on another lands: edges reorder, the middle merges (as in the real sidebar).
 function dropMode(event: DragEvent<Element>, sourceId: string, targetId: string) {
