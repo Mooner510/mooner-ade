@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { holdBack, INLINE, parse, stableSplit } from '../apps/web/src/markdown-parse.ts';
+import { holdBack, INLINE, parse, stableSplit, tableSpans } from '../apps/web/src/markdown-parse.ts';
 import { fileHref, fileRef } from '../apps/web/src/file-ref.ts';
 
 test('a single newline inside a paragraph is kept as a line break', () => {
@@ -87,4 +87,15 @@ test('a mermaid fence is parsed as a code block with lang mermaid', () => {
 
 test('a file chip still being typed is held back until its brackets close', () => {
   for (const [text, shown] of [['a [[fi', 'a '], ['a [[file:src/a', 'a '], ['a [[file:x]', 'a '], ['a [[file:x]]', 'a [[file:x]]'], ['a [[', 'a '], ['a [[1,2', 'a [[1,2']]) assert.equal(holdBack(text), shown, text);
+});
+
+test('table cells merge downward: a blank first-column cell or ^^ continues the cell above, other blanks stay blank', () => {
+  const rows = [['Hub', 'a', ''], ['', 'b', '위치'], ['', 'c', ''], ['플러그인', 'd', ''], ['', 'e', '^^'], ['', 'f', '^^']];
+  assert.deepEqual(tableSpans(rows, 3), [[3, 1, 1], [0, 1, 1], [0, 1, 1], [3, 1, 3], [0, 1, 0], [0, 1, 0]], 'first column spans; a blank in column 3 is not a merge; ^^ merges in any column');
+  assert.deepEqual(tableSpans([['', 'x'], ['a', 'y'], ['', 'z']], 2), [[1, 1], [2, 1], [0, 1]], 'nothing above the first row: it stays an (empty) cell of its own');
+  assert.deepEqual(tableSpans([['a', '^^'], ['b', 'x']], 2), [[1, 1], [1, 1]], '^^ with nothing above it is plain text, not a merge');
+  assert.deepEqual(tableSpans([['a'], ['']], 3), [[2, 1, 1], [0, 1, 1]], 'a short row (still streaming) is padded, not crashed');
+  assert.deepEqual(tableSpans([], 2), []);
+  const [table] = parse(['| 대상 | 할 일 |', '|---|---|', '| Hub | a |', '| | b |'].join('\n'));
+  assert.deepEqual(table.rows, [['Hub', 'a'], ['', 'b']], 'the parser keeps the blank cell; merging happens at render');
 });
