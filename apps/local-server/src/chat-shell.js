@@ -51,7 +51,7 @@ export function interactiveHint(command) {
   else if (AGENT_CLIS.has(first) && !flags.some(flag => ['-p', '--print', '-h', '--help', '-v', '--version'].includes(flag)) && !['exec', 'mcp', 'config', 'doctor', 'update', 'install', 'logout', 'status', 'about', 'ls', 'list', 'models', 'whoami', 'auth'].includes(plain[0] ?? '') && plain.length < 2) why = plain[0] === 'login' || !plain.length ? '로그인과 대화 화면' : '';
   else if (LOGIN_CLIS.has(first) && /^(login|signin|sign-in)$/.test(plain.at(-1) ?? '') && !flags.some(flag => /token|with-token|password-stdin|api-key|key/.test(flag))) why = '로그인';
   else if (first === 'ssh' && plain.length === 1) why = '원격 셸 접속';
-  return why ? `${why}은(는) 입력을 직접 받아야 해서 채팅에서 실행하지 않았습니다. 터미널 탭에서 실행하세요.` : '';
+  return why ? `이 명령(${why})은 입력을 직접 받아야 해서 채팅에서 실행하지 않았습니다. 터미널 탭에서 실행하세요.` : '';
 }
 
 // Output that says a program wanted a terminal: the card points to the terminal tab even though the command did run.

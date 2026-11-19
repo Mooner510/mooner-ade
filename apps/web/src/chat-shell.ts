@@ -27,7 +27,7 @@ export const isShellDraft = (text: string) => /^\s*!/.test(text);
 // Terminal colour and cursor sequences some programs print even without a terminal; the stored output keeps them, the card does not draw them.
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\r(?!\n)/g;
-export const stripAnsi = (text: string) => text.replace(ANSI, '');
+export const stripAnsi = (text: string) => text.replace(/\r\n/g, '\n').replace(ANSI, '');
 
 /** "0.4초", "12초", "2분 5초". */
 export function shellDuration(ms: number): string {
