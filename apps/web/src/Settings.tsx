@@ -169,7 +169,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false }: { settings: Se
   const isDefault = JSON.stringify([layout, [...items].sort()]) === JSON.stringify([defaults, [...defaultSettings[keys_.items]].sort()]) && (!chat || !settings.chatStatusSeparator);
   return <div className="setting-block">
     <div className="status-intro">
-      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. 키보드는 Alt+화살표.</p>
+      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. 키보드는 Alt+화살표.{!chat && ' 창이 좁으면 CPU·메모리 → 시계·WakaTime → Codex·Cursor 사용량 순으로 접혀 하단 상태바 오른쪽 끝의 …(더 보기) 메뉴로 들어갑니다. 경로·브랜치·Claude 사용량은 끝까지 남습니다.'}</p>
       <button disabled={isDefault} onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
     </div>
     {chat && <Row title="항목 구분자" hint="항목 사이에 넣을 문자입니다 (최대 8자, 비우면 간격만).">

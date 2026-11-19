@@ -613,6 +613,16 @@ body.resizing .xterm-host { pointer-events: none; }
 .status-left, .status-right { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .status-left { flex: 1 1 auto; overflow: hidden; }
 .status-right { flex: none; }
+/* 좁은 창: StatusFit.tsx가 우선순위대로 항목을 접는다. 자리(.status-slot)는 레이아웃에 끼지 않고, 접힌 것은 "…" 메뉴로 간다. */
+.status-slot { display: contents; }
+.status-slot[data-folded] { display: none; }
+.statusbar .status-left .stat-path { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.statusbar .stat-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusbar .status-more { flex: none; padding: 0 4px; border-radius: 4px; }
+.status-more-menu { position: fixed; z-index: 30; display: flex; flex-direction: column; gap: 6px; min-width: 190px; max-width: calc(100vw - 16px); padding: 8px 10px; white-space: nowrap; font-size: 12px; color: var(--fg); background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
+.status-more-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.status-more-label { color: var(--muted); }
+.status-more-node { display: inline-flex; align-items: center; gap: 2px; }
 .statusbar button, .statusbar .stat, .statusbar summary { display: inline-flex; align-items: center; gap: 5px; }
 .statusbar .stat { padding: 0 6px; font-variant-numeric: tabular-nums; }
 .statusbar .stat.warn { color: var(--warn); }

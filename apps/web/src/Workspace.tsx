@@ -29,6 +29,8 @@ import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type Id
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
+import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
+import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
@@ -1015,6 +1017,8 @@ ${where}`, [
 
   // ---- render ----
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
+  // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
+  const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
@@ -1090,7 +1094,7 @@ ${where}`, [
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
     connection: connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>,
-    path: <span className="stat" title={project.root} data-tip-nowrap><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
+    path: <span className="stat stat-path" title={project.root} data-tip-nowrap><Icon name="folder" size={13} /><span className="stat-text">{shortPath(project.root)}</span></span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
@@ -1141,9 +1145,9 @@ ${where}`, [
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
     {settings.gitLogDock && gitDrawer}
-    <footer className="statusbar" data-feedback-region="상태바">
+    <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
     {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="Chat 모드 안내">
