@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changelogIsFresh, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
+import { changelogDue, changelogIsFresh, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, setChangelogDue, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
 
 const store = () => {
   const data = new Map();
@@ -69,4 +69,38 @@ test('the desktop app\'s own store is used when the preload offers one, a plain 
   } finally {
     for (const [name, value] of Object.entries(had)) value === undefined ? delete globalThis[name] : globalThis[name] = value;
   }
+});
+
+test('someone who used the app but never opened the changelog is updating, not new: the notes open once', () => {
+  // 0.5.x wrote no record until the window was closed once; saved settings tell this person apart from a first launch.
+  const saved = store();
+  assert.equal(syncChangelogVersion('0.6.0', saved, '0.5.12'), true, 'no record + saved settings: an update from the version below');
+  assert.equal(hasUnreadChangelogVersions(['0.5.12', '0.6.0'], saved), true, 'only the newest note counts as new');
+  assert.equal(hasUnreadChangelogVersions(['0.5.12'], saved), false, 'older notes are not marked new');
+  assert.equal(syncChangelogVersion('0.6.0', saved, '0.5.12'), false, 'the next launch is quiet, with or without the hint');
+  // A first launch (no saved settings, so no `before`) still only records the version.
+  const fresh = store();
+  assert.equal(syncChangelogVersion('0.6.0', fresh), false);
+  assert.equal(hasUnreadChangelogVersions(['0.5.12', '0.6.0'], fresh), false);
+  // A record that exists wins over the hint: it is not an update when the same version runs again.
+  const known = store(); known.setItem('ade-changelog-seen', '0.6.0');
+  assert.equal(syncChangelogVersion('0.6.0', known, '0.5.12'), false);
+  // Nothing newer than `before` (a bundle whose newest note is its own first one) is not an update.
+  assert.equal(syncChangelogVersion('0.0.0', store(), '0.0.0'), false);
+});
+
+test('notes that were due but not shown (the app was closed during the tour) are still due on the next start, until they are opened', () => {
+  const saved = store();
+  assert.equal(syncChangelogVersion('0.5.12', saved), false);
+  assert.equal(syncChangelogVersion('0.6.0', saved), true, 'the update start');
+  assert.equal(changelogDue(saved), false, 'nothing is due until the start decides to show them');
+  setChangelogDue(true, saved); // the start that found the update, before the tour ended
+  // The next start: the version is already recorded, so there is no "update" any more, but the notes were never opened.
+  assert.equal(syncChangelogVersion('0.6.0', saved), false);
+  assert.equal(changelogDue(saved), true);
+  assert.equal(hasUnreadChangelogVersions(['0.5.12', '0.6.0'], saved), true, 'so that start shows them');
+  // Opening them clears both: the due flag and (the window marks the version viewed) the unread state.
+  setChangelogDue(false, saved); saved.setItem('ade-changelog-viewed', JSON.stringify(['0.6.0']));
+  assert.equal(changelogDue(saved), false);
+  assert.equal(hasUnreadChangelogVersions(['0.5.12', '0.6.0'], saved), false);
 });

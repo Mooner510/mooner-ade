@@ -1,5 +1,5 @@
 // Which changelog versions count as new. LAST is the version that ran last time; FROM is the version before the most recent update.
-const SEEN = 'ade-changelog-seen', VIEWED = 'ade-changelog-viewed', LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
+const DUE = 'ade-changelog-due', SEEN = 'ade-changelog-seen', VIEWED = 'ade-changelog-viewed', LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
 
 export type ChangelogStore = { getItem(key: string): string | null; setItem(key: string, value: string): void };
 
@@ -48,3 +48,8 @@ export const hasUnreadChangelogVersions = (versions: string[], store = browserSt
   const viewed = readChangelogViewed(store);
   return versions.some(version => !viewed.includes(version) && changelogIsFresh(version, store));
 };
+
+// The update notes open once the tour and the launch splash are out of the way. If the app is closed before that (mid-tour), the next start has no update to detect any more
+// (the version was recorded at the first launch), so "the notes are still due" is kept here until they are opened.
+export const changelogDue = (store = browserStore()) => store.getItem(DUE) === '1';
+export const setChangelogDue = (on: boolean, store = browserStore()) => store.setItem(DUE, on ? '1' : '0');

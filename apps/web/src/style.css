@@ -1344,8 +1344,6 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .tour-dim { position: fixed; inset: 0; z-index: 55; background: color-mix(in srgb, var(--bg) 60%, transparent); animation: fade-in .25s var(--ease-out); }
 /* Pane header buttons normally appear on hover; in the tour the focused pane keeps them visible so the pointer never aims at an empty spot. */
 .tour .terminal-pane.focused .pane-tools button, .tour .terminal-pane.focused .pane-sep { opacity: 1; }
-/* 칸이 하나뿐이면 둘러보기의 pane이 .tab-page 바로 아래에 놓인다(실제 앱은 .pane-content > * 가 채운다): 채우지 않으면 글 길이만큼만 좁게 그려진다. */
-.tour .tab-page > .terminal-pane { flex: 1; }
 .tour-ring { position: fixed; z-index: 56; pointer-events: none; border: 1.5px solid var(--accent); border-radius: 7px;
   transition: left .35s var(--ease-out), top .35s var(--ease-out), width .35s var(--ease-out), height .35s var(--ease-out); animation: fade-in .25s var(--ease-out); }
 @keyframes rise-in { from { opacity: 0; translate: 0 10px; } }
@@ -3251,3 +3249,15 @@ body.pane-dragging { user-select: none; }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
 
 .ide-mark { display: inline-grid; place-items: center; flex: none; border-radius: 4px; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+/* The strip below the workspaces where the app's own cards are drawn, one at a time (main.tsx, notices.ts): in the layout, so a card covers no button or tab. */
+.ws-stack { display: flex; flex-direction: column; }
+.ws-stack > .app { flex: 1; min-height: 0; height: auto; }
+.notice-dock { flex: none; }
+.notice-dock:empty { display: none; }
+.notice-dock > .chat-mode-tip.docked { position: static; z-index: auto; width: auto; margin: 0; padding: 8px 14px; align-items: center; border-width: 1px 0 0; border-radius: 0; box-shadow: none; }
+.notice-dock > .chat-mode-tip.docked > img, .notice-dock > .chat-mode-tip.docked > .git-tip-art { width: 84px; min-height: 0; height: 63px; align-self: center; }
+.notice-dock > .chat-mode-tip.docked .chat-mode-tip-body { max-width: 780px; }
+
+/* The tutorial's practice workspace puts a tab's only pane straight into .tab-page (the real one wraps it in a split slot); without this it kept its content width: the first
+   practice terminal was a 200px strip and a practice Chat pane 2px wide. */
+.tour .tab-page > .terminal-pane, .tour .tab-page > .editor-group { flex: 1; min-width: 0; }

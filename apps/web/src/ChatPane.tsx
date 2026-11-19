@@ -14,6 +14,7 @@ import { cacheSendWarning, cacheSendWarningText } from './claude-cache-warning';
 import { authSendWarning, authSendWarningText, authWords } from './claude-auth-warning';
 import { Hint } from './Hint';
 import { nextHint } from './tips';
+import { useNotice } from './use-notice';
 import { CodeBlock, inline, LiveMarkdown, Markdown } from './Markdown';
 import { ChatUiContext } from './UiFrame';
 import { beginUiSend, releaseUiSends, syncUiSends, UI_SEND_GRACE_MS } from './ui-sent';
@@ -1214,7 +1215,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // gone again when a message is sent, and never shown once the key itself was used.
   const [answered, setAnswered] = useState(false), [picked, setPicked] = useState('');
   useEffect(() => { if (busy) setAnswered(true); }, [busy]);
-  const hint = focused && visible && view.ready ? nextHint(ctx.settings, [...['keymodel', 'keyeffort', 'keymode', 'keystash'].map(name => [name, picked === name] as [string, boolean]), ['tocli', view.state.status === 'idle'], ['stats', answered && agent === 'claude' && view.state.sessionId && view.state.status === 'idle']]) : undefined;
+  const hintDue = focused && visible && view.ready ? nextHint(ctx.settings, [...['keymodel', 'keyeffort', 'keymode', 'keystash'].map(name => [name, picked === name] as [string, boolean]), ['tocli', view.state.status === 'idle'], ['stats', answered && agent === 'claude' && view.state.sessionId && view.state.status === 'idle']]) : undefined;
+  // One pointer at a time in the whole app, after the cards (notices.ts).
+  const hint = useNotice(`hint:${leaf.id}`, hintDue !== undefined) ? hintDue : undefined;
   const pickedBy = (name: string) => (done: unknown) => { if (done !== false) setPicked(name); };
   const hintSeen = (name: string) => { if (!ctx.settings.hintsSeen.includes(name)) ctx.onSettingsChange({ ...ctx.settings, hintsSeen: [...ctx.settings.hintsSeen, name] }); };
   const canLoadModels = agent !== 'codex' || (view.ready && view.state.agent === agent);

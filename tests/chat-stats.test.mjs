@@ -176,7 +176,7 @@ test('stats: the context graph keeps the main thread, and one subagent run stays
 });
 
 test('subagent usage after the last result is priced on top of the session total; usage already in the transcript is not added twice', () => {
-  const covered = { seq: 1, kind: 'message', id: 's', parentToolUseId: 'a', at: 1_000, usage: { input: 100, output: 0, cacheRead: 0, cacheCreate: 0 } };
+  const covered = { seq: 1, kind: 'message', id: 's', parentToolUseId: 'a', at: 1_000, usage: { input: 100, output: 0, cacheRead: 7, cacheCreate: 0 } };
   const result = { seq: 2, kind: 'result', costUsd: 1, at: 2_000 };
   const later = { seq: 3, kind: 'message', id: 's2', parentToolUseId: 'b', at: 3_000, usage: { input: 0, output: 4, cacheRead: 0, cacheCreate: 0 } };
   const extra = subagentExtra([covered, result, later], { unitPrice: 0.01, since: [0] });
@@ -191,6 +191,9 @@ test('subagent usage after the last result is priced on top of the session total
   assert.equal(merged.spentSince[0], 1.2);
   const hidden = withSubagents({ ...seen, subRequests: 0, endedAt: null }, [covered, result], 0.01, [0]);
   assert.equal(hidden.tokens.input, 110); // the transcript never saw the subagent, so its tokens are added
+  // Cache reads are summed too. A NaN here is `null` in the JSON, and the statistics window crashed on it (toLocaleString of null) for a chat with subagents.
+  assert.equal(hidden.tokens.read, 7);
+  for (const value of Object.values(hidden.tokens)) assert.ok(Number.isFinite(value), 'every token count stays a number');
   assert.equal(hidden.spentSince[0], 1); // and its dollars are already in the session total, so they are not added again
 });
 
