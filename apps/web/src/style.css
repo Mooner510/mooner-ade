@@ -1290,6 +1290,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 
 /* Error toast: same surface as menus. :popover-open beats the browser's default popover box (thick border, canvas fill, centered). */
 .error-toast:popover-open { position: fixed; inset: auto 12px auto auto; top: 48px; z-index: 80; width: max-content; max-width: min(800px, calc(100vw - 24px)); height: auto; margin: 0; padding: 6px 4px 6px 10px; display: flex; align-items: center; gap: 8px; overflow: visible; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--overlay); color: var(--fg); font: inherit; box-shadow: inset 3px 0 0 var(--error), var(--shadow); -webkit-app-region: no-drag; app-region: no-drag; animation: error-toast-in .22s var(--ease-out); }
+/* 오류 토스트는 상단 바·pane 헤더 버튼 위에 10초쯤 떠 있다: 글자 영역은 클릭을 통과시키고 닫기 버튼만 받는다(전체 목록은 오류 패널에서 본다). */
+.error-toast:popover-open { pointer-events: none; }
+.error-toast:popover-open .icon-btn { pointer-events: auto; }
 .error-toast:popover-open > .icon { color: var(--error); }
 /* One line when it fits (the toast grows to its text up to 800px); longer text wraps between words (Korean too: keep-all) and scrolls past three lines. Line breaks in the message are folded into spaces here; the error panel keeps them. */
 .error-toast:popover-open p { flex: 1; min-width: 0; margin: 0; max-height: 4.2em; overflow: auto; white-space: normal; word-break: keep-all; overflow-wrap: anywhere; text-wrap: pretty; line-height: 1.4; }
