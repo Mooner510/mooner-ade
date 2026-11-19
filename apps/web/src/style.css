@@ -2337,6 +2337,10 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .hint-card > strong { font-size: 12.5px; font-weight: 600; }
 .hint-card > p { margin: 0; color: var(--muted); line-height: 1.5; word-break: keep-all; }
 .hint-card > button { justify-self: end; margin-top: 5px; padding: 3px 10px; font-size: 12px; }
+/* 팁은 눌러 가린 버튼을 막지 않는다: 카드는 클릭을 통과시키고 "알겠어요"만 받는다. 오른쪽 패널(피드백·오류·플러그인)이 열려 있는 동안 패널 쪽 화면에서는 숨긴다. */
+.hint-card { pointer-events: none; }
+.hint-card > button { pointer-events: auto; }
+.workbench:has(> .right-panel) > :not(.right-panel) .hint-card { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { .chat-mode-tip, .hint-card { animation: none; } }
 
 
