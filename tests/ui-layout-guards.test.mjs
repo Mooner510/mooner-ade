@@ -62,3 +62,19 @@ test('처리 상태가 바뀐 피드백이 있으면 상단 피드백 버튼에 
   assert.match(rule(css, '.bar-button .feedback-dot.bar-news'), /position: absolute/);
   assert.match(css, /dialog\.chat-stats > header \.icon-button \{ margin-left: auto; \}/);
 });
+
+test('테마를 바꾸면 Monaco 색(코드 블록의 .mtk*)도 새 테마로 맞춘다', async () => {
+  const main = await read('main.tsx'), editor = await read('Editor.tsx');
+  assert.match(main, /root\.dataset\.theme = theme\.id; root\.dataset\.scheme = theme\.scheme; syncMonacoTheme\(theme\.id\);/);
+  assert.match(editor, /export function syncMonacoTheme\(theme: Settings\['theme'\]\) \{ if \(monacoPromise\) void monacoPromise\.then\(monaco => monaco\.editor\.setTheme\(themeName\(theme\)\)/);
+});
+
+test('상태바 접기·셸 카드 안내·ui 폼 라벨·비 Git 안내·Mermaid 키보드가 소스에 남아 있다', async () => {
+  const workspace = await read('Workspace.tsx'), shell = await read('ShellCard.tsx'), forms = await read('UiBlocks.tsx'), mermaid = await read('mermaid-viewer.tsx'), chat = await read('ChatPane.tsx');
+  assert.match(workspace, /<StatusSlot key=\{id\} id=\{id\}>\{statusNodes\[id\]\}<\/StatusSlot>\)\}<StatusMore ids=\{foldedStatus\}/);
+  assert.match(workspace, /if \(noGit\) setGitNote\(true\); else toggleGit\(\);/);
+  assert.match(shell, /note && !running && item\.status !== 'error'/);
+  assert.match(forms, /'입력창에 채우기'/);
+  assert.match(mermaid, /onKeyDown=\{keyView\}/);
+  assert.match(chat, /이미지를 5MB 아래로 줄이는 중…/);
+});

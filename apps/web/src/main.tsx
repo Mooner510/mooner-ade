@@ -3,7 +3,7 @@ import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, basename, chooseFolder } from './api';
-import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -373,7 +373,7 @@ function Shell() {
   }, []);
   useEffect(() => {
     const theme = themeById(settings.theme), root = document.documentElement;
-    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme;
+    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme; syncMonacoTheme(theme.id);
   }, [settings.theme]);
   useEffect(() => { document.documentElement.toggleAttribute('data-keep-anim', settings.animateInBackground); syncFocus(); }, [settings.animateInBackground]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
