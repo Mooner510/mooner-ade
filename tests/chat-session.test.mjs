@@ -1111,6 +1111,12 @@ test('Claude: "always allow" (the CLI\'s own rule) on an MCP tool is also tool-w
   assert.equal(said(events), 'x=allow grants=[]');
 });
 
+test('Claude: every new reading of a plan limit is stored, a repeat of the same one is not', async t => {
+  const { session, events } = await controlSession(t);
+  await session.send('limits'); await until(() => session.state().status === 'idle');
+  assert.deepEqual(events.filter(event => event.kind === 'limit').map(event => Math.round(event.utilization * 100)), [91, 96]);
+});
+
 test('Claude: /clear forgets the tools allowed for the chat, so the next request asks again', async t => {
   const { session, events } = await controlSession(t);
   await session.send('askx:a'); await until(() => session.state().status === 'attention');

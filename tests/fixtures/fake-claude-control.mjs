@@ -64,6 +64,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'mcp__mooner_server__server_exec' }], behavior: 'allow', destination: 'session' }] } });
     return;
   }
+  if (text === 'limits') { // the CLI reports a plan limit whenever its rounded share moves: 91% twice, then 96%, and a plain allowed report that is not worth a line
+    const limit = (status, utilization) => send({ type: 'rate_limit_event', rate_limit_info: { status, rateLimitType: 'five_hour', utilization, surpassedThreshold: status === 'allowed' ? undefined : 0.9, resetsAt: 1794808800 } });
+    limit('allowed', 0.2); limit('allowed_warning', 0.91); limit('allowed_warning', 0.91); limit('allowed_warning', 0.96);
+    send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: 'ok' }] } }); result(); return;
+  }
   if (text === 'askmcp') { // an MCP tool the CLI offers no suggestions for
     mcpAnswer = 'grants';
     send({ type: 'control_request', request_id: 'req-mcp', request: { subtype: 'can_use_tool', tool_name: 'mcp__srv__run', input: { command: 'x' }, tool_use_id: 'toolu_mcp' } });

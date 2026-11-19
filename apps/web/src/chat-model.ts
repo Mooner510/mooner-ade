@@ -413,8 +413,12 @@ export function reduce(view: ChatView, event: any): ChatView {
       return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? ` · ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
     }
     case 'limit': {
-      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`;
-      return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
+      // The CLI reports again whenever the rounded share moves, so one window keeps one line that follows the latest reading (not a new line per percent, and not the first reading for good).
+      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.resetsAt}:${event.overage}`, at = view.items.findIndex(item => item.key === id);
+      if (at < 0) return append(view, { kind: 'note', key: id, ...line, fresh });
+      const old = view.items[at];
+      if (old.kind === 'note' && old.text === line.text) return view;
+      return { ...view, items: view.items.map((item, index) => index === at ? { ...item, ...line, key: id } as Item : item) };
     }
     case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), blocked: {}, live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
@@ -624,14 +628,17 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
-const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', overage: '추가 사용량' };
+const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', seven_day_overage_included: '주간', overage: '추가 사용량' };
+const dayClock = (at: Date) => `${at.toDateString() === new Date().toDateString() ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 // A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).
-export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean }): { text: string; tones: Tone[] } {
-  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected', share = event.utilization ?? event.threshold;
-  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null;
-  const clock = at ? at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '', today = at && at.toDateString() === new Date().toDateString();
-  const when = at ? ` · ${today ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${clock}에 초기화` : '';
-  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${share != null ? `${Math.round(share * 100)}%를 사용했습니다` : '대부분을 사용했습니다'}${when}`;
+// `utilization` is the CLI's own reading (a 0-1 fraction of the window, from the anthropic-ratelimit-unified-*-utilization header). `threshold` is only the warning line it
+// has passed (0.9, 0.75 ...), so without a reading the line says "at least that much" instead of passing the line off as the usage. `at` is when the CLI reported it.
+export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean; at?: number | null }): { text: string; tones: Tone[] } {
+  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected';
+  const reading = typeof event.utilization === 'number' && Number.isFinite(event.utilization) ? `${Math.round(event.utilization * 100)}%를 사용했습니다` : typeof event.threshold === 'number' && Number.isFinite(event.threshold) ? `${Math.round(event.threshold * 100)}% 이상 사용했습니다` : '대부분을 사용했습니다';
+  const seen = !hit && typeof event.at === 'number' && event.at > 0 && typeof event.utilization === 'number' ? ` · ${dayClock(new Date(event.at))} 기준` : '';
+  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null, when = at ? ` · ${dayClock(at)}에 초기화` : '';
+  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${reading}${seen}${when}`;
   return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
 }
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문' };

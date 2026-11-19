@@ -487,7 +487,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       let moved;
       if (agent === 'claude') {
         if (event.kind === 'session') lastMainModel = undefined;
-        if (event.kind === 'limit') { const sig = `${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`; if (sig === lastLimit) return; lastLimit = sig; }
+        if (event.kind === 'limit') { const sig = `${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}:${event.utilization === null ? '' : Math.round(event.utilization * 100)}`; if (sig === lastLimit) return; lastLimit = sig; }
         if (event.kind === 'message') {
           for (const block of event.blocks ?? []) if (block.type === 'tool_use' && (block.name === 'EnterWorktree' || block.name === 'ExitWorktree')) worktreeCalls.set(block.id, block);
           // A reply from another model than the one before (and than the one picked): the CLI switched on its own (plan mode, a limit). Said before that reply.
