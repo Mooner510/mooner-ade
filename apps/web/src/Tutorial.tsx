@@ -46,7 +46,7 @@ function Rich({ text }: { text: string }) {
   return <>{text.split(/(\*\*[^*]+\*\*|\{\w+\})/).map((part, index) => part.startsWith('**') ? <b key={index}>{part.slice(2, -2)}</b>
     : part === '{alert}' ? <span key={index} className="question-alert" role="img" aria-label="⚠ 응답 필요"><Icon name="alert" size={13} /></span>
     : part === '{done}' ? <i key={index} className="attn-dot" role="img" aria-label="● 확인 필요" />
-    : part === '{diff}' ? <span key={index} className="diffstat"><ins>+3</ins><del>−1</del></span>
+    : part === '{diff}' ? <span key={index} className="diffstat"><ins>+1</ins><del>−1</del></span>
     : part === '{chat}' || part === '{cli}' ? <span key={index} className={`tour-tag ${part.slice(1, -1)}`}><Icon name={part === '{chat}' ? 'chat' : 'terminal'} size={12} />{part === '{chat}' ? 'Chat' : 'CLI'}</span>
     : part)}</>;
 }
@@ -480,7 +480,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
       {last && <div className="shortcut-list tour-summary">{summary.map(([label, keys], index) => <div key={label} style={{ '--i': index } as CSSProperties}><span>{label}</span><kbd>{showKeys(keys)}</kbd></div>)}</div>}
       </Fragment>
       {!hero && <p className={`tour-feedback ${done ? 'ok' : ''}`} role="status" aria-live="polite">{done ? step.after ?? '다 했어요. ‘다음’을 누르세요.' : feedback}</p>}
-      {hero && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
+      {hero && !last && <p className="tour-skip-note">건너뛰어도 사이드바 아래 책 버튼으로 언제든 다시 볼 수 있어요.</p>}
       <footer>
         {!last && <button type="button" className="tour-skip" onClick={skip}>건너뛰기</button>}
         <span className="spacer" />
