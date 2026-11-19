@@ -1019,7 +1019,8 @@ ${where}`, [
 
   const noGit = project.repositories.length === 0;
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
-  const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
+  // A plain folder is `multiRepo` with no repositories at all: nothing to pick, and the empty drawer just says so (the dropdown made its header overflow).
+  const gitControls = project.multiRepo && !noGit && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
   const editorCtx: EditorCtx = {
     settings, gitVersion, loadDiff, fileBuffer, watchFiles,
     onDiffLayoutChange: diffLayout => setSettings(previous => ({ ...previous, diffLayout })),
@@ -1158,7 +1159,7 @@ ${where}`, [
       </div>
     </aside>}
     {/* Once, for people who knew the changes panel: it is now the Git graph. Opening the graph or "확인" ends it for good. */}
-    {active && settings.gitTipPending && settings.onboarded && <aside className="chat-mode-tip git-graph-tip" aria-label="Git 그래프 안내">
+    {active && !noGit && settings.gitTipPending && settings.onboarded && <aside className="chat-mode-tip git-graph-tip" aria-label="Git 그래프 안내">
       <svg className="git-tip-art" viewBox="0 0 112 84" aria-hidden="true">
         <path d="M20 8V76" stroke="#3cb45c" strokeWidth="2.5" fill="none" /><path d="M20 22L44 34V54L20 66" stroke="#9f79b5" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
         <path d="M44 34L68 44V50" stroke="#e1a431" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
