@@ -92,6 +92,9 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
+  // Someone who finished a tour before the version number existed counts as having finished version 1. The new tour clears `onboarded` below, and that gets saved: if the app is
+  // closed before the tour ends, the next start must not read `onboarded: false` as a first run (the theme and font screen), so the tour version is the record of "was onboarded once".
+  if (next.onboarded && next.tourVersion < 1) next.tourVersion = 1;
   if (next.tourVersion < TOUR_VERSION) next.onboarded = false;
   // Saved settings from before the Git graph belong to someone who knew the changes panel: they get the card once. New users meet it in the tutorial.
   if (saved.gitTipPending === undefined && Object.keys(saved).length > 0) next.gitTipPending = true;
@@ -189,6 +192,9 @@ const languageOf = (monaco: typeof Monaco, hint: string) => {
   return monaco.languages.getLanguages().find(lang => lang.id === name || lang.aliases?.some(alias => alias.toLowerCase() === name)
     || (ext && lang.extensions?.includes(ext)) || lang.filenames?.some(known => known.toLowerCase() === file))?.id ?? null;
 };
+// 테마를 바꿀 때 이미 그려 둔 코드 블록(.mtk* 색은 전역 CSS)도 새 테마 색으로 따라오게 한다. 그동안은 편집기를 열거나 새 블록을 칠할 때까지 옛 테마 색이 남아 밝은 테마에서 글자가 안 보였다.
+// Monaco를 아직 안 불렀으면(코드 블록도 편집기도 없음) 할 일이 없다.
+export function syncMonacoTheme(theme: Settings['theme']) { if (monacoPromise) void monacoPromise.then(monaco => monaco.editor.setTheme(themeName(theme)), () => {}); }
 export async function colorize(code: string, hint: string): Promise<string | null> {
   if (!hint.trim() || !code || code.length > 100_000) return null;
   const monaco = await loadMonaco(), id = languageOf(monaco, hint);

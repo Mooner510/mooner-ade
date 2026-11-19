@@ -4,6 +4,8 @@ import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativ
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
+import { createPortal } from 'react-dom';
+import { useNotice, useNoticeDock } from './use-notice';
 import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
@@ -29,7 +31,9 @@ import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type Id
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
-import { aiContext, bytesToBase64, pendingReviewCount } from './feedback-model';
+import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
+import { statusLabels } from './Settings';
+import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
@@ -503,7 +507,8 @@ ${where}`, [
     // Settings used to live in each project's layout; the shell adopts them once and keeps its own copy from then on.
     if (ui.settings) onLegacySettings(ui.settings);
     // `rightVisible` is the saved name of "the Git drawer is open" (it used to be the changes panel on the right).
-    setGitOpen(ui.rightVisible ?? false);
+    // Not for a project without a repository (a plain folder whose old changes panel was open): the drawer would only say there is nothing to show.
+    setGitOpen((ui.rightVisible ?? false) && state.repositories.length > 0);
     setTreeExpanded(new Set(Array.isArray(ui.projectTreeExpanded) ? ui.projectTreeExpanded.filter((path: unknown) => typeof path === 'string') : ['.']));
     // Restore project files and commit diffs. Older working-tree diff tabs reference a retired view.
     const clean = (tree: Pane | null): Pane | null => {
@@ -1015,11 +1020,22 @@ ${where}`, [
 
   // ---- render ----
   const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
+  // Git 저장소가 없는 프로젝트에서 흐린 Git 버튼을 누르면 이유를 잠깐 보여 준다(툴팁은 올려 둬야만 보인다).
+  const [gitNote, setGitNote] = useState(false);
+  useEffect(() => { if (!gitNote) return; const timer = setTimeout(() => setGitNote(false), 4000); return () => clearTimeout(timer); }, [gitNote]);
+  // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
+  const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
+  // The one-time cards wait their turn (notices.ts) and are drawn in the dock strip below the workspaces (main.tsx): none covers a button or another card.
+  const noticeDock = useNoticeDock();
+  // One id per project (the id's part before ":" is its place in the order): every open project has its own Workspace, and a shared id would let an inactive one withdraw what the active one asked for.
+  const gitCardOn = useNotice(`git:${root}`, Boolean(active && project && project.repositories.length > 0 && settings.gitTipPending && settings.onboarded));
+  const chatCardOn = useNotice(`chat-mode:${root}`, Boolean(active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)));
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
   const gitRepository = project.repositories.find(repo => repo.id === gitRepositoryId);
-  const gitControls = project.multiRepo && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
+  // A plain folder is `multiRepo` with no repositories at all: nothing to pick, and the empty drawer just says so (the dropdown made its header overflow).
+  const gitControls = project.multiRepo && !noGit && <><label>Git 저장소<Dropdown label="Git 저장소" value={gitRepositoryId} options={[{ value: '', label: '저장소 선택' }, ...project.repositories.map(repo => ({ value: repo.id, label: repo.name }))]} onChange={selectGitRepository} /></label>{gitRepository && <div className="actions"><label className="check"><input type="checkbox" checked={gitRepository.worktreeEnabled} onChange={event => run(async () => { await call('git/worktree-setting', { enabled: event.target.checked }); await refresh(); await refreshGit(); })} /> worktree 사용</label>{gitRepository.worktreeEnabled && <button onClick={() => run(async () => { if (!(await ask.confirm(`${gitRepository.branch} 브랜치의 변경을 원본 저장소에 통합할까요? (fast-forward)`))) return; await call('git/worktree/integrate', { confirm: gitRepository.branch }); await refreshGit(); })}>원본에 통합</button>}</div>}</>;
   const editorCtx: EditorCtx = {
     settings, gitVersion, loadDiff, fileBuffer, watchFiles,
     onDiffLayoutChange: diffLayout => setSettings(previous => ({ ...previous, diffLayout })),
@@ -1085,12 +1101,12 @@ ${where}`, [
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);
-  const reviewCount = pendingReviewCount(feedback.items);
+  const reviewCount = pendingReviewCount(feedback.items), newsCount = progressNews(feedback.items).length;
   const layout = statusLayout(settings);
   const statusNodes: Record<string, ReactNode> = {
     // Healthy is the normal case, so it shows nothing; only a dropped server connection appears, with words.
     connection: connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>,
-    path: <span className="stat" title={project.root} data-tip-nowrap><Icon name="folder" size={13} />{shortPath(project.root)}</span>,
+    path: <span className="stat stat-path" title={project.root} data-tip-nowrap><Icon name="folder" size={13} /><span className="stat-text">{shortPath(project.root)}</span></span>,
     branch: <button title="브랜치 전환" onClick={() => run(switchBranch)}><Icon name="branch" size={13} />{git.branch || '브랜치 없음'}</button>,
     // Only items that are shown get rendered, so the system poll runs only while one of these is on.
     cpu: <SystemStat kind="cpu" />,
@@ -1126,9 +1142,9 @@ ${where}`, [
       <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
-      <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (!noGit) toggleGit(); }}>
-        <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>
-      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" /></button>
+      <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (noGit) setGitNote(true); else toggleGit(); }}>
+        <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>{gitNote && noGit && <span className="bar-note" role="status">Git 저장소가 없는 폴더예요. 터미널에서 git init 을 하면 커밋 그래프를 쓸 수 있어요.</span>}
+      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ' · 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
@@ -1141,12 +1157,12 @@ ${where}`, [
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
     {settings.gitLogDock && gitDrawer}
-    <footer className="statusbar" data-feedback-region="상태바">
+    <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
-    {active && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, live.has(focus) ? agentOf(focus) : undefined) && <aside className="chat-mode-tip" aria-label="Chat 모드 안내">
+    {chatCardOn && noticeDock && createPortal(<aside className="chat-mode-tip docked" aria-label="Chat 모드 안내">
       <img src="/chat-mode-preview.png" alt="Chat 모드에서 도구 실행, 코드 변경 diff, 결과 요약이 대화로 정리된 화면" width="960" height="632" />
       <div className="chat-mode-tip-body">
         <strong>{{ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[agentOf(focus) ?? 'claude']}를 Chat으로 써 보세요</strong>
@@ -1156,9 +1172,9 @@ ${where}`, [
           <button onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))}>괜찮아요</button>
         </div>
       </div>
-    </aside>}
+    </aside>, noticeDock)}
     {/* Once, for people who knew the changes panel: it is now the Git graph. Opening the graph or "확인" ends it for good. */}
-    {active && settings.gitTipPending && settings.onboarded && <aside className="chat-mode-tip git-graph-tip" aria-label="Git 그래프 안내">
+    {gitCardOn && noticeDock && createPortal(<aside className="chat-mode-tip git-graph-tip docked" aria-label="Git 그래프 안내">
       <svg className="git-tip-art" viewBox="0 0 112 84" aria-hidden="true">
         <path d="M20 8V76" stroke="#3cb45c" strokeWidth="2.5" fill="none" /><path d="M20 22L44 34V54L20 66" stroke="#9f79b5" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
         <path d="M44 34L68 44V50" stroke="#e1a431" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
@@ -1173,7 +1189,7 @@ ${where}`, [
           <button onClick={() => setSettings(previous => ({ ...previous, gitTipPending: false }))}>확인</button>
         </div>
       </div>
-    </aside>}
+    </aside>, noticeDock)}
     {active && feedback.capture && <FeedbackCapture mode={feedback.capture} fallbackZoom={settings.uiZoom / 100} onCancel={endCapture} onError={cause => { endCapture(); report(cause); }}
       onCaptured={async bytes => {
         endCapture();

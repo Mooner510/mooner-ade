@@ -12,7 +12,8 @@ import { setupPlugins } from './plugins.js';
 import { localServerEnv } from './server-env.js';
 import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
-import { applyStagedUpdate, checkForUpdate, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
+import { QUIT_CANCEL, QUIT_KEEP, quitPrompt } from './update-policy.js';
+import { applyStagedUpdate, checkForUpdate, stagedUpdateVersion, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
 // (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
@@ -149,6 +150,12 @@ function startServer() {
       if (server !== child) return;
       if (message?.type === 'plugin/workspace') plugins?.fromServer(message);
       // Feedback submissions go out through the plugin that declared `feedback` (docs/PLUGINS.md); the answer goes back by id.
+      // Where the feedback sent through the account has got to: the same way round (a plugin that can answer, else "unsupported").
+      else if (message?.type === 'feedback/status-query' && Number.isSafeInteger(message.id) && Array.isArray(message.keys)) {
+        const answer = value => { if (child.connected) child.send({ type: 'feedback/status-result', id: message.id, ...value }); };
+        if (!plugins) answer({ ok: false, error: { code: 'unsupported' } });
+        else plugins.queryFeedbackStatus({ keys: message.keys.filter(key => typeof key === 'string').slice(0, 50) }).then(answer, () => answer({ ok: false, error: { code: 'network_error' } }));
+      }
       else if (message?.type === 'feedback/submit' && Number.isSafeInteger(message.id)) {
         const answer = value => { if (child.connected) child.send({ type: 'feedback/result', id: message.id, ...value }); };
         if (!plugins) answer({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: '플러그인을 쓸 수 없어 피드백을 제출할 수 없습니다.' } });
@@ -353,6 +360,19 @@ function serverBusy() {
     child.send({ type: 'busy?', id }, error => { if (error) finish(error); });
   });
 }
+// The page's origin changes with every launch (the server takes a free port), so its localStorage starts empty each time and cannot remember which
+// version ran last. The changelog keeps its few values here instead; the page reads and writes them synchronously through the preload (changelogStore).
+const changelogFile = path.join(app.getPath('userData'), 'changelog-state.json');
+const CHANGELOG_KEYS = new Set(['ade-changelog-seen', 'ade-changelog-viewed', 'ade-changelog-last', 'ade-changelog-from']);
+const readChangelogState = () => { try { const value = JSON.parse(fs.readFileSync(changelogFile, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; } };
+ipcMain.on('ade:changelog-get', (event, key) => { event.returnValue = sameOrigin(event.senderFrame?.url ?? '') && CHANGELOG_KEYS.has(key) ? readChangelogState()[key] ?? null : null; });
+ipcMain.on('ade:changelog-set', (event, key, value) => {
+  if (sameOrigin(event.senderFrame?.url ?? '') && CHANGELOG_KEYS.has(key) && typeof value === 'string' && value.length <= 100_000) {
+    try { fs.writeFileSync(`${changelogFile}.tmp`, JSON.stringify({ ...readChangelogState(), [key]: value })); fs.renameSync(`${changelogFile}.tmp`, changelogFile); }
+    catch (error) { console.warn(`변경 내역 상태를 저장하지 못했습니다: ${error.message}`); }
+  }
+  event.returnValue = null;
+});
 // Just before the update restarts the app: keep the terminals for the new version instead of ending them.
 // Beta updates are the user's choice, kept beside the other app data (not in the server's settings: the updater lives in this process).
 const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
@@ -424,14 +444,12 @@ if (leavingConsole) {
     if (!live?.terminals && !live?.chats) return true;
     const canKeep = Boolean(ptyHostInfo && report.keepsTerminals), chatsStop = live.chats > 0 && !report.keepsChats;
     const open = [live.terminals && `터미널 ${live.terminals}개`, live.chats && `채팅 ${live.chats}개${live.answering ? `(응답 중 ${live.answering}개)` : ''}`].filter(Boolean).join('와 ');
-    const detail = [`${open}가 열려 있습니다.`,
-      [canKeep && `백그라운드로 남기기: 창을 닫아도 터미널과 채팅은 계속 실행되고, 다음에 앱을 열면 그대로 이어집니다.${ptyHostInfo.features?.includes('linger-forever') ? '' : ' (이번에는 30분 동안만 남습니다.)'}${chatsStop ? ' (이번에는 채팅 응답이 중단됩니다. 앱을 한 번 다시 시작하면 채팅도 남길 수 있습니다.)' : ''}`,
-        '종료: 터미널과 채팅을 모두 끝냅니다. 대화는 저장되어 나중에 다시 열 수 있습니다.'].filter(Boolean).join('\n')].join('\n\n');
-    const buttons = canKeep ? ['백그라운드로 남기기', '종료', '취소'] : ['종료', '취소'];
+    // With an update waiting, quitting installs it and starts the app again (terminals stay), so the question says that instead of "종료".
+    const { detail, buttons } = quitPrompt({ open, canKeep, chatsStop, lingerForever: Boolean(ptyHostInfo?.features?.includes('linger-forever')), stagedVersion: stagedUpdateVersion() });
     const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
     const { response } = await dialog.showMessageBox(...(window ? [window] : []), { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, title: '무너에이드', message: '무너에이드를 종료할까요?', detail });
-    if (buttons[response] === '취소') return false;
-    if (buttons[response] === '백그라운드로 남기기') { keepTerminalsOnQuit = true; leftInBackground = true; }
+    if (buttons[response] === QUIT_CANCEL) return false;
+    if (buttons[response] === QUIT_KEEP) { keepTerminalsOnQuit = true; leftInBackground = true; }
     return true;
   }
   app.on('before-quit', event => {

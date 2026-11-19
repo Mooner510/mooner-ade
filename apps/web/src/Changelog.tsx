@@ -28,6 +28,7 @@ const newer = changelogNewer;
 const isFresh = changelogIsFresh;
 // Run once at startup with the real app version (the desktop app's; the bundle's newest entry in a plain browser). True only when this launch recorded an update.
 export { syncChangelogVersion };
+export { changelogDue, setChangelogDue } from './changelog-state';
 // Same rule as the red dots in the window: some version of the latest update has never been opened (the sidebar button shows a dot for it).
 export const hasUnreadChangelog = () => hasUnreadChangelogVersions(entries.map(item => item.version));
 

@@ -387,6 +387,14 @@ test('Cursor First Party stays white and has a readable background in the light 
 });
 
 
+test('markdown columns stay at the message width, so a long id or URL breaks inside it instead of being cut at the right edge', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../apps/web/src/style.css', import.meta.url), 'utf8');
+  // A grid's implicit `auto` column grows to its widest unbreakable token; the .md grid and the list grids need a bounded column.
+  const rule = css.match(/^\.md, \.md ul, \.md ol \{[^}]*\}/m);
+  assert.ok(rule && /grid-template-columns: minmax\(0, 1fr\)/.test(rule[0]));
+});
+
 test('Cursor labels preserve model versions and group models by provider inside each party', () => {
   for (const [id, name] of [['claude-sonnet-4', 'Claude Sonnet 4'], ['glm-5p3', 'GLM 5p3'], ['claude-opus-5-5', 'Claude Opus 5.5'], ['muse-spark-1.3', 'Muse Spark 1.3'], ['gpt-5.6-sol[fast=true]', 'GPT 5.6 Sol'], ['GPT-6-Luna', 'GPT 6 Luna']]) assert.equal(modelDisplayName(id), name);
   assert.equal(modelRows([{ id: 'gpt-6-luna', name: 'GPT-6-Luna', family: '', window: 0, main: true }], {})[0].label, 'GPT 6 Luna');
@@ -602,6 +610,16 @@ test('a background job that ends by itself leaves one 알림 rule, since the CLI
   assert.deepEqual(view.items.find(item => item.kind === 'note').tones, [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: 'Watch hub 끝남', color: 'var(--fg)' }]);
 });
 
+test('a background job a subagent started leaves no 알림 rule in the main thread, and it is still not a subagent marker', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'scan' } }] });
+  view = reduce(view, { seq: 2, kind: 'message', id: 'sm', parentToolUseId: 'ag', blocks: [{ type: 'tool_use', id: 'sh', name: 'Bash', input: { command: 'pnpm install', run_in_background: true } }] });
+  view = reduce(view, { seq: 3, kind: 'task', phase: 'start', toolUseId: 'sh', description: 'Run pnpm install', background: true, at: 1000 });
+  view = reduce(view, { seq: 4, kind: 'task', phase: 'end', toolUseId: 'sh', status: 'completed', at: 2000 });
+  assert.equal(view.items.filter(item => item.kind === 'note').length, 0);
+  assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 0);
+  assert.equal(view.tasks.sh.status, 'completed', 'its state is still tracked');
+});
+
 test('agent list and pending maps keep their identity while nothing about them changed (pane contexts read by every tool card)', () => {
   let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'a', name: 'Agent', input: { description: 'scan' } }] });
   const first = agentsOf(view.items, view.results, view.tasks, true);
@@ -801,6 +819,27 @@ test('the thread says when the agent moved into or out of a worktree, a plan lim
   assert.match(line({ kind: 'settings', model: 'gpt-5.5', by: 'agent', reason: 'highRiskCyberActivity' }).text, /보안 정책$/);
 });
 
+test('a plan-limit line follows the CLI\'s latest reading instead of freezing on the first one, and never passes a warning line off as the usage', () => {
+  const warn = (extra = {}) => ({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1794808800, ...extra });
+  let view = reduce(emptyView(), { ...warn({ utilization: 0.91 }), seq: 1, at: Date.now() });
+  assert.match(view.items[0].text, /^5시간 한도의 91%를 사용했습니다 · .*기준 · .*에 초기화$/);
+  const key = view.items[0].key;
+  view = reduce(view, { kind: 'user', text: '계속', seq: 2 });
+  view = reduce(view, { ...warn({ utilization: 0.96 }), seq: 3, at: Date.now() });
+  assert.equal(view.items.length, 2, 'the same window keeps one line');
+  assert.match(view.items[0].text, /^5시간 한도의 96%를 사용했습니다/);
+  assert.equal(view.items[0].key, key, 'the line keeps its place and key');
+  const same = reduce(view, { ...warn({ utilization: 0.96 }), seq: 4, at: Date.now() });
+  assert.equal(same.items, view.items, 'an identical reading changes nothing');
+  assert.equal(reduce(view, { ...warn({ utilization: 0.97, threshold: 0.9, resetsAt: 1794812400 }), seq: 5 }).items.length, 3, 'the next window is a new line');
+  assert.equal(reduce(view, { kind: 'limit', status: 'rejected', limit: 'five_hour', resetsAt: 1794808800, seq: 5 }).items.length, 3, 'reaching the limit is its own line');
+  // Without a reading, the warning line is only a lower bound.
+  assert.match(reduce(emptyView(), warn()).items[0].text, /^5시간 한도의 90% 이상 사용했습니다 · /);
+  assert.match(reduce(emptyView(), warn({ threshold: null })).items[0].text, /^5시간 한도의 대부분을 사용했습니다 · /);
+  assert.match(reduce(emptyView(), warn({ limit: 'seven_day_overage_included', utilization: 0.5 })).items[0].text, /^주간 한도의 50%를/);
+  assert.match(reduce(emptyView(), warn({ limit: 'unheard_of', utilization: 0.5 })).items[0].text, /^사용 한도의 50%를/);
+});
+
 test('Cursor send-now waits behind earlier send-now lines and ahead of follow-ups', () => {
   const queued = enqueueSendNow([{ text: '나중', now: false }, { text: '더 나중' }], { text: '지금', now: true });
   assert.deepEqual(queued.map(item => item.text), ['지금', '나중', '더 나중']);
@@ -820,4 +859,48 @@ test('blocked actions: shown from the server record, kept when only allowed, dro
   assert.deepEqual(Object.keys(reduce(emptyView(), denied(1, 'c')).blocked), ['c']);
   assert.deepEqual(reduce(reduce(emptyView(), denied(1, 'c')), { seq: 2, kind: 'user', text: 'hi', images: 0 }).blocked, {});
   assert.equal(reduce(emptyView(), { seq: 1, kind: 'auto_denied' }).blocked, undefined, 'a record without a call is ignored');
+});
+
+test('a chat log written by 0.5.12 replays: every event kind it stored, a plan-limit report without the newer fields, an approval and a subagent', () => {
+  // Real 0.5.12 events (kept from the update e2e). Newer builds only add fields; none of these may throw, and the replay must keep the same items.
+  const stored = [
+    { kind: 'user', text: '안녕하세요 첫 대화입니다', images: 0, previews: [], seq: 1, at: 1795110078013 },
+    { kind: 'session', sessionId: 'fake-session-27024', model: 'Model 1.0', permissionMode: 'default', tools: ['Bash', 'Agent'], slashCommands: ['compact', 'context'], seq: 2, at: 1795110078119 },
+    { kind: 'message', role: 'assistant', id: 'm1', parentToolUseId: null, blocks: [{ type: 'text', text: 'ok' }], usage: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0 }, seq: 3, at: 1795110078122 },
+    { kind: 'title', source: 'ai', text: 'AI가 붙인 제목', seq: 4, at: 1795110078122 },
+    { kind: 'result', status: 'success', text: 'ok', sessionId: 'fake-session-27024', costUsd: 0.01, usage: { input: 10, output: 5, cacheRead: 500, cacheCreate: 30 }, contextWindow: null, durationMs: 5, turns: 1, turnCostUsd: 0.01, auth: 'login', seq: 5, at: 1795110078122 },
+    { kind: 'message', role: 'assistant', id: 'm2', parentToolUseId: null, blocks: [{ type: 'tool_use', id: 'toolu_m1', name: 'mcp__claude_ai_Claude_Docs__update', input: { title: '문서 제목', container: { kind: 'doc' } } }], usage: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0 }, seq: 13, at: 1795110151786 },
+    { kind: 'tool_result', toolUseId: 'toolu_m1', isError: false, content: '{"ok":true,"url":"https://claude.ai/artifact/abc123-def"}', seq: 14, at: 1795110151786 },
+    // Before the usage reading and the "as of" clock existed, a report carried only the passed threshold (and an even older one lacked `utilization` altogether).
+    { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1795115574, overage: false, seq: 21, at: 1795110174000 },
+    { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.91, threshold: 0.9, resetsAt: 1795115574, overage: false, seq: 22, at: 1795110174828 },
+    { kind: 'approval', phase: 'request', requestId: 'perm-1', tool: 'Bash', input: { command: 'npm test', description: '테스트 실행' }, toolUseId: 'toolu_perm', suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }], seq: 38, at: 1795110318637 },
+    { kind: 'approval', phase: 'answer', requestId: 'perm-1', tool: 'Bash', allow: true, seq: 39, at: 1795110371340 },
+    { kind: 'task', phase: 'start', toolUseId: 'toolu_a1', description: '조사 A', agentType: 'general-purpose', background: false, seq: 44, at: 1795110391836 },
+    { kind: 'task', phase: 'end', toolUseId: 'toolu_a1', status: 'completed', report: 'A 결과 보고', tokens: 2400, toolUses: 4, durationMs: 1500, seq: 46, at: 1795110392459 }
+  ];
+  const view = fromReplay({ events: stored, seq: 46 });
+  assert.equal(view.items.some(item => item.fresh), false, 'a replay plays no entrance');
+  assert.equal(view.approvals.length, 0, 'the answered approval is not pending');
+  const limits = view.items.filter(item => item.kind === 'note' && /한도/.test(item.text));
+  assert.equal(limits.length, 1, 'the two readings of one window are one line');
+  assert.match(limits[0].text, /5시간 한도의 91%를 사용했습니다/, 'it follows the latest reading');
+  // A report that never had a reading says "at least" instead of passing the threshold off as the usage.
+  assert.match(fromReplay({ events: [stored[7]] }).items.find(item => item.kind === 'note').text, /90% 이상 사용했습니다/);
+});
+
+test('a request still waiting in the log when the app ended says so in the thread; one the server still holds, or one that was answered, does not', () => {
+  const asked = [
+    { kind: 'user', text: 'plan 계획', images: 0, previews: [], seq: 1, at: 1 },
+    { kind: 'approval', phase: 'request', requestId: 'plan-1', tool: 'ExitPlanMode', input: { plan: '# 계획' }, toolUseId: 'toolu_plan', suggestions: [], seq: 2, at: 2 }
+  ];
+  const notes = view => view.items.filter(item => item.kind === 'note').map(item => item.text);
+  assert.deepEqual(notes(fromReplay({ events: asked, seq: 2, approvals: [] })), ['계획 승인을 기다리던 중 앱이 종료되어 요청이 사라졌습니다. 에이전트에게 다시 요청해 주세요.']);
+  const live = [{ requestId: 'plan-1', tool: 'ExitPlanMode', input: { plan: '# 계획' }, toolUseId: 'toolu_plan', suggestions: [] }];
+  assert.deepEqual(notes(fromReplay({ events: asked, seq: 2, approvals: live })), [], 'the server still holds it: the card is there');
+  const answered = [...asked, { kind: 'approval', phase: 'answer', requestId: 'plan-1', tool: 'ExitPlanMode', allow: true, seq: 3, at: 3 }];
+  assert.deepEqual(notes(fromReplay({ events: answered, seq: 3, approvals: [] })), []);
+  const cancelled = [...asked, { kind: 'approval', phase: 'cancel', requestId: 'plan-1', seq: 3, at: 3 }];
+  assert.deepEqual(notes(fromReplay({ events: cancelled, seq: 3, approvals: [] })), [], 'a request the server cancelled itself is not reported twice');
+  assert.match(notes(fromReplay({ events: [{ ...asked[1], requestId: 'b-1', tool: 'Bash', input: { command: 'npm test' } }], approvals: [] }))[0], /^Bash 실행 승인을 기다리던 중/);
 });

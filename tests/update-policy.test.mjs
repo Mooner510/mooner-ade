@@ -1,6 +1,7 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { UPDATE_CHECK_INTERVAL_MS, compareVersions, createDeclined, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
+import { UPDATE_CHECK_INTERVAL_MS, RETRY_AFTER_FAILURE_MS, compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, quitPrompt, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
   assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
@@ -93,4 +94,76 @@ test('the release to offer: betas only on the beta channel, never drafts, and on
   assert.equal(pickRelease([{ tag_name: 'v0.5.0', assets: [{ name: 'other.zip' }] }, release('v0.4.0')], { beta: true, asset }).version, '0.4.0');
   assert.equal(pickRelease([release('nightly'), release('v1.0')], { beta: true, asset }), null);
   assert.equal(pickRelease([{ tag_name: 'v0.4.0' }], { beta: false, asset }), null, 'a release without assets is skipped');
+});
+
+test('a failed update is explained in words a user can act on, an unknown failure keeps its own message', () => {
+  const coded = (message, code, cause) => Object.assign(new Error(message), { code, ...cause && { cause: Object.assign(new Error('inner'), cause) } });
+  assert.match(describeFailure(coded('ENOSPC: no space left on device, write', 'ENOSPC')), /^디스크 공간이 부족합니다/);
+  assert.match(describeFailure(new Error('write failed: no space left on device')), /^디스크 공간이 부족합니다/);
+  assert.match(describeFailure(coded('EACCES: permission denied', 'EACCES')), /^파일을 쓸 권한이 없습니다/);
+  // fetch hides the real reason in `cause`; an interrupted body is just "terminated".
+  for (const error of [coded('fetch failed', undefined, { code: 'ECONNREFUSED' }), coded('terminated', undefined, { code: 'UND_ERR_SOCKET' }), new Error('terminated'), new Error('fetch failed'), Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })]) {
+    assert.match(describeFailure(error), /^네트워크 연결이 끊겼거나/, error.message);
+  }
+  for (const own of ['다운로드 실패 (HTTP 404)', '받은 업데이트 파일의 해시가 릴리스와 다릅니다.', '업데이트 파일 구성이 올바르지 않습니다.', 'C:/x 폴더에 쓸 수 없어 업데이트를 설치할 수 없습니다. (EPERM)']) assert.equal(describeFailure(new Error(own)), own);
+  assert.equal(describeFailure('plain'), 'plain');
+});
+
+// ---- the quit question and the wait after a failed install --------------------------------------------------------------------------------------------
+
+const NL = String.fromCharCode(10), lines = (...parts) => parts.join(NL);
+const KEEP_FOREVER = '백그라운드로 남기기: 창을 닫아도 터미널과 채팅은 계속 실행되고, 다음에 앱을 열면 그대로 이어집니다.';
+const END = '종료: 터미널과 채팅을 모두 끝냅니다. 대화는 저장되어 나중에 다시 열 수 있습니다.';
+
+test('the quit question without an update waiting is worded as it always was', () => {
+  const open = '터미널 2개와 채팅 1개(응답 중 1개)';
+  assert.deepEqual(quitPrompt({ open, canKeep: true, chatsStop: false, lingerForever: true }), { buttons: ['백그라운드로 남기기', '종료', '취소'], detail: lines(`${open}가 열려 있습니다.`, '', lines(KEEP_FOREVER, END)) });
+  assert.equal(quitPrompt({ open, canKeep: true, chatsStop: false, lingerForever: false }).detail, lines(`${open}가 열려 있습니다.`, '', lines(`${KEEP_FOREVER} (이번에는 30분 동안만 남습니다.)`, END)));
+  assert.equal(quitPrompt({ open, canKeep: true, chatsStop: true, lingerForever: true }).detail, lines(`${open}가 열려 있습니다.`, '', lines(`${KEEP_FOREVER} (이번에는 채팅 응답이 중단됩니다. 앱을 한 번 다시 시작하면 채팅도 남길 수 있습니다.)`, END)));
+  assert.deepEqual(quitPrompt({ open, canKeep: false, chatsStop: false, lingerForever: false }), { buttons: ['종료', '취소'], detail: lines(`${open}가 열려 있습니다.`, '', END) });
+});
+
+test('with an update waiting, the quit question says what the quit does: install, start again, terminals go on', () => {
+  const open = '터미널 1개', staged = quitPrompt({ open, canKeep: true, chatsStop: false, lingerForever: true, stagedVersion: '0.6.0' });
+  assert.deepEqual(staged.buttons, ['백그라운드로 남기기', '업데이트하고 다시 시작', '취소'], 'the plain 종료 is gone: it would promise an end that does not happen');
+  assert.ok(!staged.detail.includes('모두 끝냅니다'), 'nothing says the terminals end');
+  assert.match(staged.detail, /^터미널 1개가 열려 있습니다\./);
+  assert.match(staged.detail, /업데이트하고 다시 시작: 받아 둔 업데이트\(v0\.6\.0\)를 설치하고 앱을 다시 실행합니다\. 터미널과 채팅은 끝나지 않고 새 창에서 이어집니다\./);
+  assert.match(staged.detail, /백그라운드로 남기기: .*받아 둔 업데이트\(v0\.6\.0\)는 설치하지 않고 다음에 종료할 때로 미룹니다\./, 'staying in the background does not install it');
+  // Chats a pty-host of an older version cannot keep are cut off by the restart, and the question says so.
+  assert.match(quitPrompt({ open, canKeep: true, chatsStop: true, lingerForever: true, stagedVersion: '0.6.0' }).detail, /이어집니다\. \(이번에는 채팅 응답이 중단됩니다\.\)/);
+  // Where terminals cannot be kept at all, the restart ends them, and that is what the question says.
+  const noHost = quitPrompt({ open, canKeep: false, chatsStop: false, lingerForever: false, stagedVersion: '0.6.0' });
+  assert.deepEqual(noHost.buttons, ['업데이트하고 다시 시작', '취소']);
+  assert.match(noHost.detail, /이 환경에서는 터미널과 채팅이 이어지지 않고 끝납니다\./);
+  assert.ok(!noHost.detail.includes('끝나지 않고'));
+});
+
+test('a version that failed to install is held back a little longer each time, and only the settings button or a newer version brings it back', () => {
+  let time = 1_000_000;
+  const failures = createFailures(() => time), minutes = count => count * 60_000;
+  assert.equal(failures.blocked('0.6.0'), false, 'a version that never failed is not held back');
+  assert.equal(failures.record('0.6.0'), 1);
+  assert.equal(failures.blocked('0.6.0'), true);
+  time += minutes(9); assert.equal(failures.blocked('0.6.0'), true);
+  time += minutes(2); assert.equal(failures.blocked('0.6.0'), false, 'ten minutes after the first failure it is asked about again');
+  assert.equal(failures.record('0.6.0'), 2);
+  time += minutes(59); assert.equal(failures.blocked('0.6.0'), true);
+  time += minutes(2); assert.equal(failures.blocked('0.6.0'), false, 'an hour after the second');
+  assert.equal(failures.record('0.6.0'), 3);
+  time += minutes(60 * 24 * 30); assert.equal(failures.blocked('0.6.0'), true, 'after the third it stays left alone for the rest of the session');
+  assert.equal(failures.blocked('0.6.1'), false, 'a newer version is another version');
+  assert.equal(failures.count('0.6.0'), 3);
+  failures.clear('0.6.0');
+  assert.deepEqual([failures.blocked('0.6.0'), failures.count('0.6.0')], [false, 0], 'an install that worked wipes the record');
+  assert.deepEqual(RETRY_AFTER_FAILURE_MS, [minutes(10), minutes(60)]);
+});
+
+test('main.js asks the quit question through quitPrompt with the update that is waiting', () => {
+  const main = readFileSync(new URL('../apps/desktop/src/main.js', import.meta.url), 'utf8');
+  assert.match(main, /import \{[^}]*stagedUpdateVersion[^}]*\} from '\.\/updater\.js'/);
+  assert.match(main, /quitPrompt\(\{[^}]*stagedVersion: stagedUpdateVersion\(\) \}\)/, 'the staged version reaches the question');
+  assert.match(main, /buttons\[response\] === QUIT_CANCEL/);
+  assert.match(main, /buttons\[response\] === QUIT_KEEP/);
+  assert.ok(!main.includes("'종료: 터미널과 채팅을 모두 끝냅니다."), 'the wording lives in update-policy.js only');
 });

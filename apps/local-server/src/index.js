@@ -50,7 +50,8 @@ import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore, issueTitle } from './feedback-store.js';
 import { runFeedbackDraft, FEEDBACK_MODELS, FEEDBACK_EFFORTS } from './feedback-agent.js';
 import { createFeedbackQueue } from './feedback-queue.js';
-import { DEFAULT_HUB_URL, anonymousDeviceId, postAnonymousFeedback } from './feedback-hub.js';
+import { DEFAULT_HUB_URL, anonymousDeviceId, fetchAnonymousStatus, postAnonymousFeedback } from './feedback-hub.js';
+import { createFeedbackProgress, viewOf } from './feedback-progress.js';
 import { deviceUUID, feedbackIdentity } from './feedback-identity.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
@@ -114,6 +115,18 @@ const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'accoun
   : { ok: false, reason: pluginFeedback.reason || '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.' };
 const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
 let feedbackRequestId = 0;
+// Asks the signed-in plugin (through the app) how far some of this account's feedback has come; the answer is `feedback/status-result`.
+function statusThroughApp(keys) {
+  if (verifyPlugins) return verifyPlugins.queryFeedbackStatus ? verifyPlugins.queryFeedbackStatus({ keys }) : Promise.resolve({ ok: false, error: { code: 'unsupported' } });
+  if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'unsupported' } });
+  const id = ++feedbackRequestId;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { feedbackRequests.delete(id); resolve({ ok: false, error: { code: 'network_error', message: '플러그인이 제때 응답하지 않았습니다.' } }); }, 45_000);
+    timer.unref();
+    feedbackRequests.set(id, value => { clearTimeout(timer); resolve(value); });
+    process.send({ type: 'feedback/status-query', id, keys }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'unsupported', message: error.message } }); });
+  });
+}
 function submitThroughApp(meta, images) {
   if (verifyPlugins) return verifyPlugins.submitFeedback({ meta, images });
   if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: 'MoonerADE 앱이 아니어서 계정으로 제출할 수 없습니다.' } });
@@ -177,6 +190,7 @@ async function watchFeedback() {
   } catch (error) { console.warn(`피드백 폴더를 감시할 수 없습니다: ${error.message}`); }
   void importFeedback();
   feedbackQueue.kick();
+  feedbackProgress?.start();
 }
 // Opening and closing are serialized per project only, so restoring many projects at startup does not queue them behind each other.
 const openings = new Map();
@@ -196,6 +210,17 @@ await fs.rm(path.join(dataRoot, 'token'), { force: true });
 let origin;
 const appVersion = JSON.parse(await fs.readFile(path.resolve(import.meta.dirname, '../../../package.json'), 'utf8').catch(() => '{}')).version || '0.0.0';
 const wakatime = createWakaTime({ version: appVersion });
+// How far each submitted feedback has come (feedback-progress.js, docs/FEEDBACK_STATUS.md): asked of the Hub now and then, quietly. ADE_FEEDBACK_STATUS=0 turns it off.
+const feedbackProgress = process.env.ADE_FEEDBACK_STATUS === '0' ? null : createFeedbackProgress({
+  store: feedback, appVersion, intervalMs: Number(process.env.ADE_FEEDBACK_STATUS_MS) || undefined, firstMs: process.env.ADE_FEEDBACK_STATUS_FIRST_MS === undefined ? undefined : Number(process.env.ADE_FEEDBACK_STATUS_FIRST_MS),
+  canAsk: () => ({ anonymous: true, account: pluginFeedback.ok === true && pluginFeedback.statusQuery === true }),
+  fetchers: {
+    anonymous: async keys => fetchAnonymousStatus({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), keys }),
+    account: keys => statusThroughApp(keys)
+  },
+  log: { debug: message => { if (process.env.ADE_DEV) console.debug(message); } }
+});
+const withProgress = item => item.track ? { ...item, progress: viewOf(item.track, appVersion) } : item;
 const agentKeys = createAgentKeys({ file: path.join(dataRoot, 'agent-keys.json') });
 await agentKeys.load();
 const apiSpend = createApiSpend({ file: path.join(dataRoot, 'api-key-spend.json') });
@@ -386,6 +411,8 @@ async function openChat(project, id, { cwd, agent, defaults }) {
     keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
+    // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
+    shell: () => resolveShell(terminalShell), shellEnv: () => pluginEnv(),
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
   project.chats.set(id, chat);
   return chat;
@@ -755,8 +782,11 @@ async function feedbackRoute(action, input) {
     return Buffer.from(input.data, 'base64');
   };
   switch (action) {
-    case 'feedback/list': await importFeedback(); return { items: await feedback.list(), available: feedbackAvailability(), queue: await feedbackQueue.info() };
-    case 'feedback/get': return feedback.get(id());
+    case 'feedback/list': await importFeedback(); return { items: (await feedback.list()).map(withProgress), available: feedbackAvailability(), queue: await feedbackQueue.info(), progress: feedbackProgress?.info() ?? { off: true } };
+    case 'feedback/get': return withProgress(await feedback.get(id()));
+    // The person looked at an item's news (opened it); and "check now" from the list.
+    case 'feedback/seen': return withProgress(await feedback.markSeen(id()));
+    case 'feedback/refresh': return { ...(await feedbackProgress?.refresh()), ...(feedbackProgress?.info() ?? { off: true }) };
     case 'feedback/create': return feedback.create({ title: input.title, body: input.body, types: input.types });
     case 'feedback/update': return feedback.update(id(), { title: input.title, body: input.body, types: input.types, reviewed: input.reviewed });
     case 'feedback/delete': return feedback.remove(id());
@@ -1089,6 +1119,13 @@ async function route(action, input, project) {
       const ok = value => typeof value === 'string' && /^[\w.\-\[\]=,]{1,80}$/.test(value) ? value : undefined; // a model/effort id, never free text
       return chat.btw(input.question, typeof input.btwId === 'string' ? input.btwId.slice(0, 80) : '', { model: ok(input.model), effort: ok(input.effort) });
     }
+    // `!command` in the composer: the user's own shell command, run here as the local user. It returns at once; the thread's `shell` events carry the output.
+    case 'chat/shell': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return { id: chat.shell(input.command).id };
+    }
+    case 'chat/shell-stop': return { stopped: project.chats.get(input.id)?.stopShell(input.runId) === true };
     case 'chat/btw-cancel': return { cancelled: project.chats.get(input.id)?.cancelBtw(input.btwId) === true };
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
     case 'chat/interrupt': await project.chats.get(input.id)?.interrupt({ sendSteers: input.sendSteers === true }); return {};
@@ -1729,7 +1766,7 @@ async function syncSessionsBeforeExit() {
 }
 // `keep: false` (the user quit the app): chats end instead of being left to the next server. Anything else (update, dev reload, background) keeps them.
 async function shutdown({ keep = true } = {}) {
-  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop();
+  if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop(); feedbackProgress?.stop();
   verifyPlugins?.close();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
@@ -1754,12 +1791,12 @@ function fromApp(message) {
   else if (message?.type === 'feedback/status' && message.status && typeof message.status === 'object') {
     const status = message.status;
     pluginFeedback = status.ok === true
-      ? { ok: true, ...(typeof status.account === 'string' && { account: status.account.slice(0, 100) }) }
+      ? { ok: true, statusQuery: status.statusQuery === true, ...(typeof status.account === 'string' && { account: status.account.slice(0, 100) }) }
       : { ok: false, ...(typeof status.reason === 'string' && { reason: status.reason.slice(0, 200) }) };
     for (const socket of clients) send(socket, { type: 'feedback/changed' });
-    feedbackQueue.kick();
+    feedbackQueue.kick(); feedbackProgress?.kick();
   }
-  else if (message?.type === 'feedback/result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
+  else if (message?.type === 'feedback/result' || message?.type === 'feedback/status-result') feedbackRequests.get(message.id)?.(message), feedbackRequests.delete(message.id);
   // A plugin host (in the main process) relays its workspace sessions to this process this way.
   else if (message?.type === 'plugin/workspace') pluginWorkspace(message);
 }

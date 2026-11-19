@@ -36,7 +36,7 @@ export async function fitImageBytes(
     scale *= Math.min(0.9, Math.max(0.45, ratio));
     if (lossy) quality = 0.86;
   }
-  throw new Error('이미지를 5MB 아래로 줄이지 못했습니다.');
+  throw new Error('이미지를 5MB 아래로 줄이지 못했습니다. 더 작은 이미지나 화면 일부만 캡쳐해 다시 시도하세요.');
 }
 
 const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -49,7 +49,7 @@ const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
 const loadImage = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => {
   const image = new Image();
   image.onload = () => resolve(image);
-  image.onerror = () => reject(new Error('이미지를 열지 못했습니다.'));
+  image.onerror = () => reject(new Error('이미지를 열지 못했습니다. 손상되었거나 지원하지 않는 형식일 수 있어요. PNG·JPEG·WebP·GIF 파일로 다시 시도하세요.'));
   image.src = url;
 });
 
@@ -80,7 +80,7 @@ export async function prepareChatImage(file: File): Promise<{ mime: string; data
   const byteLength = Math.max(file.size, base64Bytes(data));
   if (imageWithinLimit(byteLength, data.length)) return { mime: file.type, data, url, reduced: false };
   const image = await loadImage(url);
-  if (!image.naturalWidth || !image.naturalHeight) throw new Error('이미지를 열지 못했습니다.');
+  if (!image.naturalWidth || !image.naturalHeight) throw new Error('이미지를 열지 못했습니다. 손상되었거나 지원하지 않는 형식일 수 있어요. PNG·JPEG·WebP·GIF 파일로 다시 시도하세요.');
   const fitted = await fitImageBytes({ mime: file.type, byteLength, width: image.naturalWidth, height: image.naturalHeight }, spec => encodeCanvas(image, spec));
   const out = bytesToBase64(fitted.bytes);
   return { mime: fitted.mime, data: out, url: `data:${fitted.mime};base64,${out}`, reduced: true };

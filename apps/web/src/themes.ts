@@ -70,6 +70,11 @@ const derivedMonaco = (scheme: ThemeScheme, vars: Record<string, string>) => {
   };
 };
 
+// WCAG 대비. 테마 원본 팔레트(Solarized·GitHub Dark·Latte 등)는 보조 글자색이 배경 위에서 4.5:1에 못 미치는 것이 있어, 읽히는 만큼만 본문 색 쪽으로 당긴다.
+const luminance = (hex: string) => { const [r, g, b] = [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16) / 255).map(value => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+export const contrastRatio = (a: string, b: string) => { const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (high + 0.05) / (low + 0.05); };
+export const readableOn = (hex: string, toward: string, grounds: string[], min: number) => { let color = hex; for (let step = 1; step <= 25 && grounds.some(ground => contrastRatio(color, ground) < min); step++) color = mix(hex, toward, step * 0.04); return color; };
+
 function build(spec: ThemeSpec): AppTheme {
   const colors = [spec.bg, spec.surface, spec.raised, spec.overlay, spec.border, spec.borderStrong, spec.fg, spec.muted, spec.faint, spec.accent, spec.input, spec.add, spec.del, spec.warn, spec.info, spec.ask, spec.done, spec.beta, spec.error, spec.accentStrong, spec.accentFg, spec.termBg, spec.termFg, ...spec.ansi];
   for (const color of colors) if (color !== undefined && !/^#[0-9a-f]{6}$/.test(color)) throw new Error(`${spec.id} has a bad color ${color}`);
@@ -77,12 +82,15 @@ function build(spec: ThemeSpec): AppTheme {
   if (!ansi) throw new Error(`${spec.id} needs 8 or 16 terminal colors`);
   const soft = spec.scheme === 'dark' ? '1f' : '1a', selected = spec.scheme === 'dark' ? '26' : '1f', termSel = spec.scheme === 'dark' ? '40' : '33';
   const accentFg = spec.accentFg ?? ink(spec.accent);
+  const grounds = [spec.bg, spec.surface, spec.raised, spec.overlay];
+  const muted = readableOn(spec.muted, spec.fg, grounds, 4.5), faint = readableOn(spec.faint, spec.fg, [spec.bg, spec.surface], 3);
+  const status = (color: string) => readableOn(color, spec.fg, [spec.bg], 3);
   const vars: Record<string, string> = {
     '--bg': spec.bg, '--surface': spec.surface, '--raised': spec.raised, '--overlay': spec.overlay, '--border': spec.border, '--border-strong': spec.borderStrong,
-    '--fg': spec.fg, '--muted': spec.muted, '--faint': spec.faint,
+    '--fg': spec.fg, '--muted': muted, '--faint': faint,
     '--accent': spec.accent, '--accent-strong': spec.accentStrong ?? mix(spec.accent, '#000000', 0.18), '--accent-fg': accentFg, '--accent-soft': spec.accent + soft,
     '--hover': spec.scheme === 'dark' ? '#ffffff0d' : '#0000000a', '--selected': spec.accent + selected, '--input': spec.input, '--focus': spec.accent,
-    '--add': spec.add, '--del': spec.del, '--warn': spec.warn, '--done': spec.done ?? spec.add, '--ask': spec.ask, '--error': spec.error ?? spec.del, '--info': spec.info, '--beta': spec.beta ?? spec.info,
+    '--add': status(spec.add), '--del': status(spec.del), '--warn': status(spec.warn), '--done': spec.done ?? status(spec.add), '--ask': spec.ask, '--error': spec.error ?? status(spec.del), '--info': status(spec.info), '--beta': spec.beta ?? status(spec.info),
     '--shadow': spec.scheme === 'dark' ? '0 12px 40px #000a' : '0 12px 40px #0002',
     '--term-bg': spec.termBg ?? spec.surface, '--term-fg': spec.termFg ?? spec.fg, '--term-cursor': spec.accent, '--term-selection': spec.accent + termSel
   };

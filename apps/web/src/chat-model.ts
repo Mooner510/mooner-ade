@@ -54,7 +54,10 @@ export type Item = ItemBase & (
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
+  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+/** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
+export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
 export type ChatView = {
   items: Item[]; results: Record<string, { content: string; isError: boolean }>;
@@ -292,6 +295,30 @@ export function turnTokenRows({ tokens }: TurnDone): TurnTokenRow[] {
     ...(tokens.cacheRead + tokens.cacheCreate > 0 ? [{ icon: 'database' as const, label: '캐시', up: { label: '쓰기', value: compact(tokens.cacheCreate) }, down: { label: '읽기', value: compact(tokens.cacheRead) } }] : [])];
 }
 
+// `!command` runs: `start` opens a card, `output` (live only) grows it, `end` settles it with the whole output the server kept, `sent` marks runs handed to the agent.
+const SHELL_STATUSES = new Set(['done', 'failed', 'stopped', 'timeout', 'limit', 'interrupted', 'error']);
+function reduceShell(view: ChatView, event: any, key: string, fresh: boolean): ChatView {
+  const id = typeof event.id === 'string' ? event.id : '';
+  const patch = (change: (item: Extract<Item, { kind: 'shell' }>) => Partial<Extract<Item, { kind: 'shell' }>>) => ({ ...view, items: view.items.map(item => item.kind === 'shell' && item.id === id ? { ...item, ...change(item), fresh: false } : item) });
+  const known = view.items.some(item => item.kind === 'shell' && item.id === id);
+  switch (event.phase) {
+    case 'start': return known || !id ? view : append(view, { kind: 'shell', key: `shell:${id}`, id, command: String(event.command ?? ''), cwd: String(event.cwd ?? ''), ...(event.shell && { shell: String(event.shell) }), status: 'running', startedAt: Number(event.at) || Date.now(), stdout: '', stderr: '', fresh });
+    case 'output': {
+      if (!known) return view;
+      const text = String(event.text ?? ''), stream = event.stream === 'stderr' ? 'stderr' : 'stdout';
+      return patch(item => ({ [stream]: item[stream] + text, lastOutputAt: Date.now() }));
+    }
+    case 'end': {
+      const status = SHELL_STATUSES.has(event.status) ? event.status as ShellStatus : 'failed';
+      const change = { status, ms: typeof event.ms === 'number' ? event.ms : undefined, exitCode: typeof event.exitCode === 'number' ? event.exitCode : null, signal: typeof event.signal === 'string' ? event.signal : null, stdout: String(event.stdout ?? ''), stderr: String(event.stderr ?? ''), needsTerminal: event.needsTerminal === true, ...(typeof event.error === 'string' && { error: event.error }) };
+      // An end whose start is gone (cut off the stored tail) still shows what it printed.
+      return known ? patch(() => change) : append(view, { kind: 'shell', key: `shell:${id || key}`, id: id || key, command: '', cwd: '', startedAt: Number(event.at) || Date.now(), ...change, fresh });
+    }
+    case 'sent': { const ids = new Set(Array.isArray(event.ids) ? event.ids : []); return ids.size ? { ...view, items: view.items.map(item => item.kind === 'shell' && ids.has(item.id) ? { ...item, sent: true, fresh: false } : item) } : view; }
+    default: return view;
+  }
+}
+
 // Applies one server event. Stored events carry `seq` (a replayed or doubly delivered one is ignored); `delta` events are live-only.
 export function reduce(view: ChatView, event: any): ChatView {
   if (!event || typeof event !== 'object') return view;
@@ -325,9 +352,12 @@ export function reduce(view: ChatView, event: any): ChatView {
       const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
       const tasks = { ...view.tasks, [id]: next };
       // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
-      const isJob = view.items.some(item => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      const owner = view.items.find((item): item is AssistantItem => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
+      const isJob = Boolean(owner);
+      // A job a subagent started is that subagent's to hear about (its end answers the subagent, not the main thread), so only a main-thread job gets the rule.
+      const mainJob = Boolean(owner) && !owner!.sub;
       // A shell/Monitor that ends by itself makes the CLI start a turn on its own: a rule says why that reply appears (one the user stopped stays quiet).
-      if (phase === 'end' && isJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
+      if (phase === 'end' && mainJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
         const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
         const message = `${next.description || '백그라운드 작업'} ${status}`;
         return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });
@@ -336,6 +366,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       return { ...view, tasks };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
+    case 'shell': return reduceShell(view, event, key, fresh);
     case 'command_output': {
       const text = String(event.text ?? ''), isError = event.isError === true;
       // The CLI confirms a model switch itself; the line ADE writes (with the model's colour) already says so.
@@ -413,8 +444,12 @@ export function reduce(view: ChatView, event: any): ChatView {
       return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? ` · ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
     }
     case 'limit': {
-      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.threshold}:${event.resetsAt}:${event.overage}`;
-      return view.items.some(item => item.key === id) ? view : append(view, { kind: 'note', key: id, ...line, fresh });
+      // The CLI reports again whenever the rounded share moves, so one window keeps one line that follows the latest reading (not a new line per percent, and not the first reading for good).
+      const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.resetsAt}:${event.overage}`, at = view.items.findIndex(item => item.key === id);
+      if (at < 0) return append(view, { kind: 'note', key: id, ...line, fresh });
+      const old = view.items[at];
+      if (old.kind === 'note' && old.text === line.text) return view;
+      return { ...view, items: view.items.map((item, index) => index === at ? { ...item, ...line, key: id } as Item : item) };
     }
     case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), blocked: {}, live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
@@ -438,6 +473,10 @@ export function reduce(view: ChatView, event: any): ChatView {
 export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatState; approvals?: any[] }): ChatView {
   let view = emptyView();
   for (const event of replay.events ?? []) view = reduce(view, event);
+  // A request the log still holds as waiting that the server no longer has: the app (or its server) ended while the agent waited, and the agent's process with it.
+  // Without a line the thread just stops after the request, with no card to answer.
+  for (const lost of view.approvals.filter(item => !(replay.approvals ?? []).some(live => live.requestId === item.requestId)))
+    view = append(view, { kind: 'note', key: `approval-lost-${lost.requestId}`, text: `${lost.tool === 'ExitPlanMode' ? '계획 승인' : lost.tool === 'AskUserQuestion' ? '질문 답변' : `${lost.tool} 실행 승인`}을 기다리던 중 앱이 종료되어 요청이 사라졌습니다. 에이전트에게 다시 요청해 주세요.`, fresh: false });
   return { ...view, seq: Math.max(view.seq, replay.seq ?? 0), state: replay.state ?? view.state, ready: true,
     approvals: (replay.approvals ?? []).map(item => ({ requestId: item.requestId, tool: item.tool, input: item.input, toolUseId: item.toolUseId, questions: item.questions, suggestions: item.suggestions ?? [] })) };
 }
@@ -624,14 +663,17 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
-const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', overage: '추가 사용량' };
+const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', seven_day_overage_included: '주간', overage: '추가 사용량' };
+const dayClock = (at: Date) => `${at.toDateString() === new Date().toDateString() ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 // A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).
-export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean }): { text: string; tones: Tone[] } {
-  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected', share = event.utilization ?? event.threshold;
-  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null;
-  const clock = at ? at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '', today = at && at.toDateString() === new Date().toDateString();
-  const when = at ? ` · ${today ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${clock}에 초기화` : '';
-  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${share != null ? `${Math.round(share * 100)}%를 사용했습니다` : '대부분을 사용했습니다'}${when}`;
+// `utilization` is the CLI's own reading (a 0-1 fraction of the window, from the anthropic-ratelimit-unified-*-utilization header). `threshold` is only the warning line it
+// has passed (0.9, 0.75 ...), so without a reading the line says "at least that much" instead of passing the line off as the usage. `at` is when the CLI reported it.
+export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean; at?: number | null }): { text: string; tones: Tone[] } {
+  const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected';
+  const reading = typeof event.utilization === 'number' && Number.isFinite(event.utilization) ? `${Math.round(event.utilization * 100)}%를 사용했습니다` : typeof event.threshold === 'number' && Number.isFinite(event.threshold) ? `${Math.round(event.threshold * 100)}% 이상 사용했습니다` : '대부분을 사용했습니다';
+  const seen = !hit && typeof event.at === 'number' && event.at > 0 && typeof event.utilization === 'number' ? ` · ${dayClock(new Date(event.at))} 기준` : '';
+  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null, when = at ? ` · ${dayClock(at)}에 초기화` : '';
+  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${reading}${seen}${when}`;
   return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
 }
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문' };

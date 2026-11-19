@@ -1,12 +1,18 @@
 // Which changelog versions count as new. LAST is the version that ran last time; FROM is the version before the most recent update.
-const SEEN = 'ade-changelog-seen', VIEWED = 'ade-changelog-viewed', LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
+const DUE = 'ade-changelog-due', SEEN = 'ade-changelog-seen', VIEWED = 'ade-changelog-viewed', LAST = 'ade-changelog-last', FROM = 'ade-changelog-from';
 
 export type ChangelogStore = { getItem(key: string): string | null; setItem(key: string, value: string): void };
 
-const browserStore = (): ChangelogStore => ({
-  getItem: key => { try { return localStorage.getItem(key); } catch { return null; } },
-  setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* private mode keeps the window usable */ } }
-});
+// The desktop app keeps these values in its own file (preload `changelogStore`): the page's origin changes with every launch (the server picks a free port),
+// so its localStorage is empty at each start and could never tell that the version changed. A plain browser has a fixed origin and uses localStorage.
+const browserStore = (): ChangelogStore => {
+  const desktop = (globalThis as unknown as { adeDesktop?: { changelogStore?: ChangelogStore } }).adeDesktop?.changelogStore;
+  if (desktop) return desktop;
+  return {
+    getItem: key => { try { return localStorage.getItem(key); } catch { return null; } },
+    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* private mode keeps the window usable */ } }
+  };
+};
 
 export const changelogSeen = (store = browserStore()) => store.getItem(SEEN);
 export const readChangelogViewed = (store = browserStore()): string[] => { try { const parsed = JSON.parse(store.getItem(VIEWED) ?? '[]'); return Array.isArray(parsed) ? parsed.filter(item => typeof item === 'string') : []; } catch { return []; } };
@@ -19,9 +25,13 @@ const parse = (version: string) => { const [core, pre] = version.split(/-(.*)/);
 // A beta counts as just before its release (0.5.9-beta2 -> 0.5.9 is new).
 const compare = (a: string, b: string) => { const x = parse(a), y = parse(b); for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; } return Number(y.pre) - Number(x.pre); };
 
+// The last release that did not remember which version ran: a profile that was used before (`legacyFrom` is passed for it) is taken to come from this one,
+// so its first launch of a newer version counts as an update and shows that version's notes once.
+export const LEGACY_CHANGELOG_VERSION = '0.5.12';
+
 // Records an update when `current` is newer than the last run. True only for that update, not the first launch.
-export const syncChangelogVersion = (current: string, store = browserStore()) => {
-  const last = store.getItem(LAST) ?? store.getItem(SEEN);
+export const syncChangelogVersion = (current: string, store = browserStore(), legacyFrom?: string) => {
+  const last = store.getItem(LAST) ?? store.getItem(SEEN) ?? (legacyFrom && compare(current, legacyFrom) > 0 ? legacyFrom : null);
   if (!last) { store.setItem(LAST, current); store.setItem(FROM, current); return false; }
   if (compare(current, last) > 0) { store.setItem(FROM, last); store.setItem(LAST, current); return true; }
   if (store.getItem(LAST) === null) store.setItem(LAST, last);
@@ -38,3 +48,8 @@ export const hasUnreadChangelogVersions = (versions: string[], store = browserSt
   const viewed = readChangelogViewed(store);
   return versions.some(version => !viewed.includes(version) && changelogIsFresh(version, store));
 };
+
+// The update notes open once the tour and the launch splash are out of the way. If the app is closed before that (mid-tour), the next start has no update to detect any more
+// (the version was recorded at the first launch), so "the notes are still due" is kept here until they are opened.
+export const changelogDue = (store = browserStore()) => store.getItem(DUE) === '1';
+export const setChangelogDue = (on: boolean, store = browserStore()) => store.setItem(DUE, on ? '1' : '0');

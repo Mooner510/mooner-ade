@@ -12,10 +12,17 @@ export interface Feedback {
   error?: string;
   // Server-side send queue: when it was queued, when it may be tried next (ms epoch), how many tries so far, and how it went out.
   queuedAt?: number; nextAttemptAt?: number; attempts?: number; via?: 'account' | 'anonymous';
+  // How far a submitted item has come, from the Hub (docs/FEEDBACK_STATUS.md). Absent until the Hub has answered: the item then just reads "제출됨".
+  progress?: FeedbackProgress;
 }
+export type ProgressState = 'pending' | 'beta' | 'released' | 'closed' | 'declined';
+// `inApp`: this app's own version already has the fix (undefined when not known). `news`: changed since the person last looked.
+export interface FeedbackProgress { state: ProgressState; version?: string; inApp?: boolean; news: boolean; checkedAt?: number; changedAt?: number }
 // mode: 'account' = sent with the signed-in remote-access login; 'anonymous' = no login, at most one per 5 minutes from this install.
 export interface FeedbackAvailability { ok: boolean; mode?: 'account' | 'anonymous'; account?: string; reason?: string }
 export interface FeedbackQueue { size: number; nextAt?: number }
+// What the server knows about asking the Hub: when it last got an answer; `unsupported`: this Hub has no status endpoint (only "제출됨" is shown); `off`: switched off.
+export interface FeedbackProgressInfo { checkedAt?: number; unsupported?: boolean; off?: boolean }
 
 export const MAX_IMAGES = 10;
 export const MAX_TITLE = 120;
@@ -45,6 +52,54 @@ export function ago(at: number, now: number): string {
   if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전`;
   if (minutes < 2880) return '어제';
   return new Date(at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+}
+
+// ---- progress after submitting (대기 → beta 반영 → 릴리스 반영) ----
+export const progressLabels: Record<ProgressState, string> = { pending: '대기', beta: 'beta 반영', released: '릴리스 반영', closed: '처리됨', declined: '반영하지 않음' };
+const isPre = (version: string) => /^v?\d+\.\d+\.\d+-/.test(version);
+const shownVersion = (version: string) => `v${version.replace(/^v/, '')}`;
+/** The badge on a submitted item: its words and tone. null when the Hub has not said anything (the item stays "제출됨"). */
+export function progressBadge(progress: FeedbackProgress | undefined): { text: string; tone: 'wait' | 'beta' | 'done' | 'muted' | 'declined' } | null {
+  if (!progress) return null;
+  const v = progress.version ? ` ${shownVersion(progress.version)}` : '';
+  switch (progress.state) {
+    case 'pending': return { text: progressLabels.pending, tone: 'wait' };
+    case 'beta': return { text: `${progressLabels.beta}${v}`, tone: 'beta' };
+    // A beta's fix that a stable release has since taken in: the stable number is not known here, the version it was fixed in is.
+    case 'released': return { text: progress.version && isPre(progress.version) ? `${progressLabels.released} (${shownVersion(progress.version)}부터)` : `${progressLabels.released}${v}`, tone: 'done' };
+    case 'closed': return { text: progressLabels.closed, tone: 'muted' };
+    // 처리됨(closed, 회색)과 한눈에 갈리도록 반영하지 않음은 붉은 계열 + ✕ 표시.
+    default: return { text: progressLabels.declined, tone: 'declined' };
+  }
+}
+/** Whether the running app already has the change: a sentence for the detail view, '' when that is not known or not a fix. */
+export function progressInApp(progress: FeedbackProgress | undefined, appVersion?: string): string {
+  if (!progress?.version || (progress.state !== 'beta' && progress.state !== 'released')) return '';
+  const mine = appVersion ? `(v${appVersion})` : '';
+  if (progress.inApp === true) return `지금 쓰는 버전${mine}에 이미 반영되어 있습니다.`;
+  if (progress.inApp === false) return `지금 쓰는 버전${mine}에는 아직 없습니다. ${shownVersion(progress.version)} 이상으로 업데이트하면 반영됩니다.`;
+  return '';
+}
+/** Submitted items whose progress changed since the person last looked. */
+export const progressNews = <T extends Pick<Feedback, 'status' | 'progress'>>(items: T[]): T[] => items.filter(item => item.status === 'submitted' && item.progress?.news === true);
+/** The one-line toast for news ('' when there is none): one item says what happened, several say how many. */
+export function progressNewsText(items: Pick<Feedback, 'issueNumber' | 'progress'>[]): string {
+  if (!items.length) return '';
+  if (items.length > 1) return `제출한 피드백 ${items.length}건의 처리 상태가 바뀌었어요`;
+  const [item] = items, badge = progressBadge(item.progress), name = item.issueNumber ? `피드백 #${item.issueNumber}` : '제출한 피드백';
+  return badge ? `${name}: ${badge.text}` : `${name}의 처리 상태가 바뀌었어요`;
+}
+/**
+ * News is told once per change: a function that is given the list each time it loads and returns the toast text for what it has not told yet ('' if nothing).
+ * Items the person already opened carry `news: false`, so they never come back; a later change (beta → released) is a new announcement.
+ */
+export function progressAnnouncer() {
+  const told = new Set<string>(), key = (item: Pick<Feedback, 'id' | 'progress'>) => `${item.id}:${item.progress?.state}:${item.progress?.version ?? ''}`;
+  return (items: Pick<Feedback, 'id' | 'status' | 'issueNumber' | 'progress'>[]): string => {
+    const fresh = progressNews(items).filter(item => !told.has(key(item)));
+    for (const item of fresh) told.add(key(item));
+    return progressNewsText(fresh);
+  };
 }
 
 // Title, body and images can only change in these states (the server refuses edits while drafting, queued, submitting and after submit).
