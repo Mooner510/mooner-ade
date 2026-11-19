@@ -13,6 +13,8 @@ export function terminalEditKey(event: EditKey, mac: boolean): string | undefine
     if (key === 'ArrowDown') return `\x1b[1;${shiftKey ? 6 : 5}F`;
     if (!shiftKey && key === 'Backspace') return '\x15';
     if (!shiftKey && key === 'Delete') return '\x0b';
+    // macOS text fields use Cmd+K for delete-to-end. xterm drops the chord, so send readline's kill (^K), same as Cmd+Forward Delete.
+    if (!shiftKey && key === 'k') return '\x0b';
   }
   if (altKey && !metaKey && !shiftKey && key === 'Delete') return '\x1bd';
 }
