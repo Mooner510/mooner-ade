@@ -59,7 +59,7 @@ export const progressLabels: Record<ProgressState, string> = { pending: '대기'
 const isPre = (version: string) => /^v?\d+\.\d+\.\d+-/.test(version);
 const shownVersion = (version: string) => `v${version.replace(/^v/, '')}`;
 /** The badge on a submitted item: its words and tone. null when the Hub has not said anything (the item stays "제출됨"). */
-export function progressBadge(progress: FeedbackProgress | undefined): { text: string; tone: 'wait' | 'beta' | 'done' | 'muted' } | null {
+export function progressBadge(progress: FeedbackProgress | undefined): { text: string; tone: 'wait' | 'beta' | 'done' | 'muted' | 'declined' } | null {
   if (!progress) return null;
   const v = progress.version ? ` ${shownVersion(progress.version)}` : '';
   switch (progress.state) {
@@ -68,7 +68,8 @@ export function progressBadge(progress: FeedbackProgress | undefined): { text: s
     // A beta's fix that a stable release has since taken in: the stable number is not known here, the version it was fixed in is.
     case 'released': return { text: progress.version && isPre(progress.version) ? `${progressLabels.released} (${shownVersion(progress.version)}부터)` : `${progressLabels.released}${v}`, tone: 'done' };
     case 'closed': return { text: progressLabels.closed, tone: 'muted' };
-    default: return { text: progressLabels.declined, tone: 'muted' };
+    // 처리됨(closed, 회색)과 한눈에 갈리도록 반영하지 않음은 붉은 계열 + ✕ 표시.
+    default: return { text: progressLabels.declined, tone: 'declined' };
   }
 }
 /** Whether the running app already has the change: a sentence for the detail view, '' when that is not known or not a fix. */
