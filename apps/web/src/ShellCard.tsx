@@ -26,7 +26,8 @@ function Stream({ label, text, error }: { label: string; text: string; error?: b
 }
 
 /** A `!command` the user ran from the composer: command, how it ended, and its output. Drawn like a tool card, but it is the user's own run (no approval, not the agent's). */
-export const ShellCard = memo(function ShellCard({ item, onStop, enter }: { item: ShellItem; onStop(id: string): void; enter?: true }) {
+// `note`: only the newest `!` card carries the "goes to the agent with your next message" line (`pending` = how many waiting cards it covers).
+export const ShellCard = memo(function ShellCard({ item, onStop, enter, note }: { item: ShellItem; onStop(id: string): void; enter?: true; note?: { pending: number } }) {
   const [open, setOpen] = useState(true), running = item.status === 'running';
   // Elapsed time and the "waiting for input?" hint need a clock only while the run is open.
   const [now, setNow] = useState(() => Date.now());
@@ -53,7 +54,7 @@ export const ShellCard = memo(function ShellCard({ item, onStop, enter }: { item
       {!running && empty && item.status !== 'error' && <p className="chat-tool-note">(출력 없음)</p>}
       {item.error && <p className="chat-tool-note">{item.error}</p>}
       {advice && <p className="chat-tool-note chat-shell-advice"><Icon name="terminal" size={13} />{advice}</p>}
-      {!running && item.status !== 'error' && <p className="chat-tool-note chat-shell-sent">{item.sent ? '다음 메시지와 함께 에이전트에게 전달했습니다.' : '다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.'}</p>}
+      {note && !running && item.status !== 'error' && <p className="chat-tool-note chat-shell-sent">{item.sent ? '다음 메시지와 함께 에이전트에게 전달했습니다.' : note.pending > 1 ? `위 실행 결과 ${note.pending}건이 다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.` : '다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.'}</p>}
     </div></Collapse>
   </div>;
 });
