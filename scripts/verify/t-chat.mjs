@@ -49,12 +49,13 @@ await check('C4.2', 'Artifact: CLI refuses the flag update -> not remembered; st
   await idle('art5'); return `apply_flag_settings during steer: ${after - before} (code does not call enableArtifact on steer)`;
 });
 await check('C5.1', 'interactive UI: prompt file passed via --append-system-prompt-file with ade-ui guidance; decided once per chat', async () => {
+  const promptOf = async () => { const a = (await streams()).at(-1).argv, i = a.indexOf('--append-system-prompt-file'); return i >= 0 ? readFile(a[i + 1], 'utf8') : ''; }; // the prompt file the newest start was given (file-path instructions are always there, the ade-ui guidance only when the setting is on)
   await open('ui1'); await s.call('chat/send', { id: 'ui1', text: 'hi', interactiveUi: true }); await idle('ui1');
   const a = (await streams()).at(-1).argv; const i = a.indexOf('--append-system-prompt-file'); ok(i >= 0, 'flag present: ' + a.join(' ')); const content = await readFile(a[i + 1], 'utf8'); ok(/ade-ui/.test(content) && /ade\.send/.test(content), 'prompt text'); 
   eq((await meta('ui1')).interactiveUi, true);
   await s.call('chat/send', { id: 'ui1', text: 'again', interactiveUi: false }); await idle('ui1'); eq((await meta('ui1')).interactiveUi, true, 'later setting change ignored');
-  await open('ui2'); await s.call('chat/send', { id: 'ui2', text: 'hi', interactiveUi: false }); await idle('ui2'); ok(!(await streams()).at(-1).argv.includes('--append-system-prompt-file'), 'off -> no flag'); eq((await meta('ui2')).interactiveUi, false);
-  await open('ui3'); await s.call('chat/send', { id: 'ui3', text: 'hi' }); await idle('ui3'); ok(!(await streams()).at(-1).argv.includes('--append-system-prompt-file'), 'unspecified -> no flag (web sends the setting explicitly)');
+  await open('ui2'); await s.call('chat/send', { id: 'ui2', text: 'hi', interactiveUi: false }); await idle('ui2'); ok(!(await promptOf()).includes('ade-ui'), 'off -> no ade-ui guidance in the prompt file'); eq((await meta('ui2')).interactiveUi, false);
+  await open('ui3'); await s.call('chat/send', { id: 'ui3', text: 'hi' }); await idle('ui3'); ok(!(await promptOf()).includes('ade-ui'), 'unspecified -> no ade-ui guidance (web sends the setting explicitly)');
 });
 await check('C13.1', 'MCP wait cap env and model/effort pin reach the child', async () => {
   await open('pin'); await s.call('chat/set', { id: 'pin', model: 'haiku', effort: 'low' }); await s.call('chat/send', { id: 'pin', text: 'hi' }); await idle('pin');

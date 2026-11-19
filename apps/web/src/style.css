@@ -2555,6 +2555,8 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .chat-agent-dot[data-status="running"]::after, [data-status="running"] .chat-agent-dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--agent-color, var(--agent)) 28%, transparent); pointer-events: none; animation: chat-agent-pulse 1.4s ease-in-out infinite; }
 @keyframes chat-agent-pulse { 0%, 100% { transform: scale(.5); opacity: 0; } 50% { transform: scale(1); opacity: 1; } }
 .chat-agent-dot[data-status="stopped"], [data-status="stopped"] > .chat-agent-dot { opacity: .45; }
+/* 서브에이전트 이름표의 글자색은 밝은 파스텔 한 가지(hsl 62%)라 밝은 테마에서는 연한 바탕 위에서 대비가 1.4:1까지 떨어졌다: 밝은 테마에서만 본문색을 섞어 진하게 한다. */
+:root[data-scheme=light] .chat-agent-type, :root[data-scheme=light] .chat-approval header .chat-approval-agent .chat-agent-type { color: color-mix(in srgb, var(--agent-color, var(--agent)) 35%, var(--fg)); }
 .chat-agent-type { flex: none; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--agent-color, var(--agent)) 16%, transparent); color: var(--agent-color, var(--agent)); font-size: 11px; font-weight: 600; }
 .chat-divider.agent-end { color: var(--muted); font-size: 12px; }
 .chat-divider.agent-end button { display: inline-flex; align-items: center; gap: 7px; max-width: min(88%, 640px); padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; cursor: pointer; }

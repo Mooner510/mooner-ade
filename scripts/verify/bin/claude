@@ -17,7 +17,8 @@ if (!stream) {
   process.stdin.on('end', async () => {
     const mode = ctl().fb ?? 'ok'; log({ kind: 'oneshot', argv, cwd: process.cwd(), env: envLog, stdin: input.slice(0, 4000), mode });
     // /btw (chat-btw.js passes --disable-slash-commands): a short answer with the usage the CLI reports.
-    if (argv.includes('--disable-slash-commands')) { console.log(JSON.stringify({ type: 'result', is_error: false, result: '곁다리 답입니다. 비동기 함수는 Promise를 돌려줍니다.', total_cost_usd: 0.0174, usage: { input_tokens: 812, output_tokens: 96, cache_creation_input_tokens: 0, cache_read_input_tokens: 14200 } })); process.exit(0); }
+    // The feedback AI draft passes the same isolation flags but also --allowedTools Read: only the btw run (no tools at all) gets this answer.
+    if (argv.includes('--disable-slash-commands') && !argv.includes('--allowedTools')) { console.log(JSON.stringify({ type: 'result', is_error: false, result: '곁다리 답입니다. 비동기 함수는 Promise를 돌려줍니다.', total_cost_usd: 0.0174, usage: { input_tokens: 812, output_tokens: 96, cache_creation_input_tokens: 0, cache_read_input_tokens: 14200 } })); process.exit(0); }
     if (mode === 'fail') { console.error('boom'); process.exit(1); }
     if (mode === 'badjson') { console.log('this is not json'); process.exit(0); }
     if (mode === 'empty') { console.log(JSON.stringify({ type: 'result', is_error: false, result: '' })); process.exit(0); }
@@ -87,6 +88,8 @@ if (!stream) {
     if (text.includes('uiformslow')) { say('느린 선택지입니다.' + '\n\n' + '```ui' + '\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', 'slow 느리게 처리', '메뉴로 이동']]) + '\n' + '```'); result(); return; } // the chosen answer contains `slow`: a turn that lasts (ctl.json slowms)
     if (text.includes('uiform')) { say('다음 단계를 골라 주세요.\n\n```ui\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', '둘 다 제거(권장)', '메뉴로 이동']]) + '\n```'); result(); return; }
     if (text.includes('limitwarn')) { for (const utilization of [0.91, 0.91, 0.96]) send({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'five_hour', utilization, surpassedThreshold: 0.9, resetsAt: Math.floor(Date.now() / 1000) + 5400 } }); say('한도를 알렸어요.'); result(); return; }
+    // Table cell merging: a blank first-column cell and a `^^` cell join the cell above (the last case keeps a blank cell in a middle column as it is).
+    if (text.includes('tablemerge')) { say(['| 영역 | 항목 | 비고 |', '| --- | --- | --- |', '| 화면 | 상태바 | 접기 |', '| | 둘러보기 | 용어 통일 |', '| | 안내 카드 | ^^ |', '| 서버 | 업데이트 | |', '| | 피드백 | 상태 배지 |'].join('\n')); result(); return; }
     if (text.includes('longtoken')) { say(['- 최근 3주 안에 갱신된 원격 브랜치 1,677개를 시험 병합해 비교했고, 컬렉션 때문에 새로 생기는 충돌은 위 4개 브랜치뿐입니다. #18344922-' + 'a'.repeat(120) + ' 충돌이 없습니다.', '- 짧은 항목', '', '문단 https://example.com/' + 'path/'.repeat(30) + 'end'].join('\n')); result(); return; }
     if (text.includes('filechips')) { say(['고친 곳은 [[file:src/b.ts:2]] 와 [[file:README.md]] 이고, 폴더 [[file:src/]] 도 봤어요.', '', '- 링크 형태: [a.txt](a.txt)', '- 주소는 그대로: [문서](https://example.com/docs) 와 [[1, 2]]', '', '`[[file:code.ts]]`는 코드라 칩이 아니에요.'].join('\n')); result('chips'); return; }
     if (/\btables\b/.test(text)) { // markdown table samples: long prose cells, many columns, code/CJK, narrow, alignment
