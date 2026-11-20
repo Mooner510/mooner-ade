@@ -262,10 +262,11 @@ test('server: an anonymous submission is followed on the Hub, news shows until i
   await api('feedback/refresh');
   listed = await eventually('feedback/list', {}, value => value.items[0].progress);
   assert.deepEqual([listed.items[0].progress.state, listed.items[0].progress.news], ['pending', false]);
-  hub.state.status = () => ({ status: 200, body: { items: { [item.id]: { state: 'beta', version: '0.6.0-beta5' } }, latestStable: '0.5.7' } });
+  // The app reads its own version from package.json (now a stable 0.6.0): a beta it has already taken in is "released", so name a beta newer than the app.
+  hub.state.status = () => ({ status: 200, body: { items: { [item.id]: { state: 'beta', version: '99.0.0-beta1' } }, latestStable: '0.5.7' } });
   listed = await eventually('feedback/list', {}, value => value.items[0].progress?.state === 'beta', 600);
   const progress = listed.items[0].progress;
-  assert.equal(progress.news, true); assert.equal(progress.version, '0.6.0-beta5'); assert.equal(typeof progress.inApp, 'boolean');
+  assert.equal(progress.news, true); assert.equal(progress.version, '99.0.0-beta1'); assert.equal(typeof progress.inApp, 'boolean');
   // Opening it reads the news; the later release is news again.
   assert.equal((await api('feedback/seen', { id: item.id })).progress.news, false);
   assert.equal((await api('feedback/list')).items[0].progress.news, false);
