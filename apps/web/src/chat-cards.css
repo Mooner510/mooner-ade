@@ -107,3 +107,6 @@
 .chat-shell .chat-tool-note.chat-shell-sent { color: var(--faint); font-size: 11.5px; }
 .chat-shell-mode code { color: var(--accent); }
 .chat-command-args.chat-shell-mode span { white-space: normal; overflow: visible; }
+/* A leading `!` turns the composer's border pink (its focus glow too), so the input reads as a shell command. */
+.chat-composer[data-shell], .chat-composer[data-shell]:focus-within { border-color: var(--shell); }
+.chat-composer[data-shell]:focus-within { box-shadow: 0 6px 22px color-mix(in srgb, var(--shell) 14%, transparent), 0 0 0 1px color-mix(in srgb, var(--shell) 30%, transparent); }

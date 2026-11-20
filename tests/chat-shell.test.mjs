@@ -168,6 +168,7 @@ test('chat session: what the user ran goes ahead of their next message once; the
   await until(() => session.state().status === 'idle');
   const user = events.filter(event => event.kind === 'user').at(-1);
   assert.equal(user.text, '요약해줘');
+  assert.equal(user.shells, 1);
   const sent = shellEvents(events, 'sent');
   assert.equal(sent.length, 1);
   assert.ok(sent[0].seq < user.seq);

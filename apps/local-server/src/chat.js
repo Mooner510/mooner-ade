@@ -395,10 +395,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // whole output. Finished runs ride along with the user's next message (`sent`), so the agent knows what the user ran.
   let shuttingDown = false;
   const shellRuns = new Map(); // run id -> { abort(), done }
+  let shellTaken = 0; // how many runs the last takeShellContext put ahead of a message; the message's own event says so ("콘솔 N건 포함")
   const takeShellContext = text => {
+    shellTaken = 0;
     if (text.startsWith('/')) return '';
     const runs = pendingShellRuns(retainedEvents());
     if (!runs.length) return '';
+    shellTaken = runs.length;
     emit({ kind: 'shell', phase: 'sent', ids: runs.map(run => run.id) });
     return shellContext(runs);
   };
@@ -916,19 +919,19 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
-        const uuid = randomUUID(), sendText = takeShellContext(text) + text; steers.set(uuid, { text, images: images.length, previews, data: images });
-        emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews });
-        try { if (protocol) { await protocol.send(sendText, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews }); } else await write(userLine(sendText, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
+        const uuid = randomUUID(), sendText = takeShellContext(text) + text, shells = shellTaken; steers.set(uuid, { text, images: images.length, previews, data: images });
+        emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews, shells });
+        try { if (protocol) { await protocol.send(sendText, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews, shells }); } else await write(userLine(sendText, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
         return;
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
       // What the user ran with `!` since their last message goes ahead of this one (the thread still shows only what they typed).
-      const sendText = takeShellContext(text) + text;
+      const sendText = takeShellContext(text) + text, shells = shellTaken;
       const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
       if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
       // The message is shown right away; starting the process, a model change still in flight, or the previous turn's checkpoint must not delay it.
-      emit({ kind: 'user', text, images: images.length, previews }); inflight = { text: sendText, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
+      emit({ kind: 'user', text, images: images.length, previews, shells }); inflight = { text: sendText, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
       setStatus();
       try {
         if (agent === 'cursor') { await new Promise(resolve => setImmediate(resolve)); await cursorSnapshot; }

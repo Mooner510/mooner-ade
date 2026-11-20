@@ -44,7 +44,7 @@ const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previe
 /** How a turn ended, kept on its last answer: when, how long it took and the tokens it used (no tokens for a CLI that does not report them). */
 export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd?: number };
 export type Item = ItemBase & (
-  | { kind: 'user'; text: string; images: number; previews?: string[] }
+  | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
@@ -326,7 +326,7 @@ export function reduce(view: ChatView, event: any): ChatView {
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
+    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), view.state.segmentTitles ?? {});
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -458,7 +458,7 @@ export function reduce(view: ChatView, event: any): ChatView {
     case 'steer': {
       const rest = view.steers.filter(item => item.uuid !== event.uuid);
       if (event.phase === 'queued') return { ...view, steers: [...rest, { uuid: String(event.uuid), text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event) }] };
-      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), steers: rest };
+      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), steers: rest };
       return { ...view, steers: rest };
     }
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).

@@ -1,7 +1,7 @@
 :root {
   --bg: #0c0d0f; --surface: #141518; --raised: #1b1d21; --overlay: #202227; --border: #24262b; --border-strong: #33363d;
   --fg: #e4e6ea; --muted: #8b9099; --faint: #616670; --accent: #5ec8e5; --accent-strong: #2fb3d6; --accent-fg: #06141a; --accent-soft: #5ec8e51f;
-  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
+  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --shell: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
   --shadow: 0 12px 40px #000a;
   --brand-claude: #d97757; --brand-codex: #b1a7ff; --brand-cursor: #ffffff;
   --term-bg: #141518; --term-fg: #e4e6ea; --term-cursor: #5ec8e5; --term-selection: #5ec8e540;
@@ -1550,6 +1550,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 /* A message with pictures: the pictures sit on their own row above, the text bubble stays below. */
 .chat-msg.user:has(> .chat-user-images, > .chat-images) { flex-direction: column; align-items: flex-end; gap: 6px; }
 .chat-msg.user > .chat-user-images { margin-top: 0; max-width: 85%; } .chat-msg.user > .chat-images { margin-top: 0; }
+.chat-msg.user:has(> .chat-shell-included) { flex-direction: column; align-items: flex-end; gap: 4px; }
+.chat-shell-included { display: inline-flex; align-items: center; gap: 4px; max-width: 85%; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .chat-msg.user:has(.md-table) .chat-bubble { max-width: 100%; width: 100%; }
 .chat-bubble.steer { --chat-bubble-surface: color-mix(in srgb, var(--fg) 9%, var(--raised)); border: 1px dashed color-mix(in srgb, var(--fg) 50%, transparent); background: var(--chat-bubble-surface); }
 .chat-steer { display: block; margin-bottom: 2px; font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
