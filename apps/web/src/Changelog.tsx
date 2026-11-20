@@ -9,6 +9,8 @@ type Entry = { version: string; date: string; time?: string; items: { kind: stri
 // Items are listed by kind, in the order of changelog-kinds.json (the release notes use the same order).
 const rank = (kind: string) => kinds.indexOf(kind);
 export const entries = (changelog as Entry[]).map(entry => ({ ...entry, items: [...entry.items].sort((a, b) => rank(a.kind) - rank(b.kind)) }));
+// One section per kind (same order as the release notes), so a long version reads as a patch-note page instead of one flat list.
+const groups = (entry: Entry) => kinds.map(kind => ({ kind, items: entry.items.filter(item => item.kind === kind) })).filter(group => group.items.length);
 const seenVersion = changelogSeen;
 const readViewed = readChangelogViewed;
 const writeViewed = writeChangelogViewed;
@@ -57,10 +59,14 @@ export function Changelog({ onClose }: { onClose(): void }) {
       <div className="changelog-body">
         {entry && <section key={entry.version} className="changelog-entry" aria-label={`v${entry.version}`}>
           <h3><span className="changelog-version">v{entry.version}</span>{seen && newer(entry.version, seen) && <span className="changelog-new">새 소식</span>}<time>{entry.time ? `${entry.date} ${entry.time}` : entry.date}</time></h3>
-          <ul>{entry.items.map(item => <li key={item.title} data-kind={item.kind}>
-            <Icon name={(item.icon ?? 'sparkles') as Parameters<typeof Icon>[0]['name']} size={18} />
-            <div><strong>{item.title}<span className="changelog-kind">{item.kind}</span></strong><p>{item.text}</p>{item.image && <img src={`/changelog/${item.image}`} alt={item.title} loading="lazy" />}</div>
-          </li>)}</ul>
+          <p className="changelog-summary">{groups(entry).map(group => <span key={group.kind} data-kind={group.kind}>{group.kind} <b>{group.items.length}</b></span>)}</p>
+          {groups(entry).map(group => <div key={group.kind} className="changelog-group" data-kind={group.kind}>
+            <h4>{group.kind}<small>{group.items.length}</small></h4>
+            <ul>{group.items.map(item => <li key={item.title} data-kind={item.kind} data-image={item.image ? '' : undefined}>
+              <Icon name={(item.icon ?? 'sparkles') as Parameters<typeof Icon>[0]['name']} size={18} />
+              <div><strong>{item.title}</strong><p>{item.text}</p>{item.image && <img src={`/changelog/${item.image}`} alt={item.title} loading="lazy" />}</div>
+            </li>)}</ul>
+          </div>)}
         </section>}
       </div>
     </div>

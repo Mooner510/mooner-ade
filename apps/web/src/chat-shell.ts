@@ -23,6 +23,10 @@ export function parseShellInput(raw: string): ShellInput {
 
 /** True while the composer holds a `!` command (the composer shows its shell mode then). */
 export const isShellDraft = (text: string) => /^\s*!/.test(text);
+/** The `!` that opens shell mode, with any spaces before it, or '' for an ordinary message. */
+export const shellBang = (text: string) => /^\s*!/.exec(text)?.[0] ?? '';
+/** What the composer's textarea shows: the text without that `!`. The `!` stays in the text itself, so drafts, stash and recall keep the mode. */
+export const shownDraft = (text: string) => text.slice(shellBang(text).length);
 
 // Terminal colour and cursor sequences some programs print even without a terminal; the stored output keeps them, the card does not draw them.
 // eslint-disable-next-line no-control-regex
