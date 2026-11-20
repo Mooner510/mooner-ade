@@ -2,7 +2,6 @@ import { AppKeysContext, showAppKey } from './shortcuts';
 import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createPortal } from 'react-dom';
 import { NoticeDock, useNotice } from './use-notice';
 import { api, basename, chooseFolder } from './api';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
@@ -515,7 +514,7 @@ function Shell() {
   useNotice('tour', touring || splash);
   useNotice('changelog', changelogPending || changelogOpen);
   const animShown = useNotice('bg-anim', animTip);
-  const animCard = <aside className={`chat-mode-tip bg-anim-tip${dock ? ' docked' : ''}`} role="status" aria-label="백그라운드 애니메이션">
+  const animCard = <aside className="chat-mode-tip bg-anim-tip" role="status" aria-label="백그라운드 애니메이션">
     <div className="chat-mode-tip-body">
       <strong>다른 앱을 보는 동안 애니메이션이 멈춥니다</strong>
       <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
@@ -525,7 +524,8 @@ function Shell() {
       </div>
     </div>
   </aside>;
-  const animTipCard = animShown && (dock ? createPortal(animCard, dock) : animCard);
+  // Floats at the bottom right like before (not in the dock strip under the status bar): this tip points at a setting, not at a button it could cover.
+  const animTipCard = animShown && animCard;
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
   const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
