@@ -130,11 +130,13 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
           {needsKey && (onSettings ? <button type="button" className="usage-panel-action" onClick={openSettings}>키 등록</button> : <span className="usage-note">키 필요</span>)}
         </span>
       </span>
-      <strong className="usage-head">캐시 유지 시간</strong>
-      <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
-        {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} title={ttl === option.value ? undefined : option.hint} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
-      </span>
-      <span className="usage-note">{cacheTtlOptions.find(option => option.value === ttl)?.hint}. 다음 응답부터 적용됩니다.</span>
+      <div className="usage-ttl-section">
+        <div className="usage-ttl-head"><strong className="usage-head">캐시 유지 시간</strong><span className="usage-ttl-tag">다음 응답부터 적용</span></div>
+        <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
+          {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
+        </span>
+        <span className="usage-ttl-hint">{cacheTtlOptions.find(option => option.value === ttl)?.hint}</span>
+      </div>
       {locked && <span className="usage-note">로그인 방식은 응답이 끝난 뒤 바꿀 수 있습니다.</span>}
     </span>
   </>;
