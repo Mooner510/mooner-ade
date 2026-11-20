@@ -7,6 +7,7 @@ import { QuestionCard, QuestionList, usePlayedEntrance } from './QuestionCard';
 import { ChatStatusLine } from './ChatStatus';
 import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
+import { McpCard } from './McpCard';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
 import { CliUpdateNotice } from './ClaudeUpdateNotice';
@@ -53,6 +54,11 @@ export type ChatCtx = {
 };
 type Props = { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: ChatCtx; onFocus(id: string): void; onZoom(id: string): void; onSplit(id: string, direction: 'row' | 'column'): void };
 type Attachment = { mime: string; data: string; url: string; reduced?: boolean };
+
+/** The composer's picture thumbnails: open one large, or remove it. "줄임" marks a picture that was over 5MB and was shrunk before sending. */
+export function AttachmentStrip({ images, onOpen, onRemove }: { images: Pick<Attachment, 'url' | 'reduced'>[]; onOpen(url: string): void; onRemove(index: number): void }) {
+  return <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => onOpen(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} />{image.reduced && <small className="chat-reduced" aria-hidden="true">줄임</small>}</button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => onRemove(index)}><Icon name="x" size={11} /></button></span>)}</div>;
+}
 type CommandInfo = { name: string; description: string; hint?: string };
 
 const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' } as const;
@@ -200,7 +206,7 @@ const LOCAL: CommandInfo[] = [
   { name: 'effort', description: 'Effort(추론 노력 수준)를 바꿉니다', hint: '[low|medium|high|max]' },
   { name: 'permissions', description: '권한 모드를 바꿉니다', hint: '[default|acceptEdits|plan|auto]' },
   { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
-  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: '연결된 MCP 서버와 도구 수를 보여 줍니다' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
+  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
   { name: 'cost', description: '이 채팅의 비용·토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰·비용·도구·컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
   { name: 'config', description: 'ADE 설정을 엽니다' }, { name: 'exit', description: '이 채팅을 닫습니다' }
 ];
@@ -368,8 +374,8 @@ type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>;
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
-type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
-const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; mcpCall(input: Record<string, unknown>): Promise<any>; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, mcpCall: async () => ({}), stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -593,7 +599,7 @@ const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type =
 const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw') && entry.local === true;
+  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw' || entry?.kind === 'mcp') && entry.local === true;
   // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
   // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
   const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
@@ -735,7 +741,7 @@ function CommandOutput({ text, isError, enter }: { text: string; isError: boolea
 }
 
 // A system message (a changed setting, an interrupted answer, a short command result) as a rule with the text in the middle, like the compact divider.
-function SystemLine({ text, error, enter, tones, rev }: { text: string; error?: boolean; enter?: boolean; tones?: Tone[]; rev?: number }) {
+export function SystemLine({ text, error, enter, tones, rev }: { text: string; error?: boolean; enter?: boolean; tones?: Tone[]; rev?: number }) {
   // Each changed value (a model, an Effort, a permission mode) is drawn in the colour it has in the footer; the rules stay the default colour.
   const nodes: ReactNode[] = []; let cursor = 0;
   for (const tone of tones ?? []) {
@@ -770,11 +776,16 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'note') return <SystemLine text={item.text} tones={item.tones} rev={item.rev} enter={enter} />;
   if (item.kind === 'agent_end') return <AgentEnd id={item.toolUseId} enter={enter} />;
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
+  if (item.kind === 'mcp') return <McpCardRow enter={enter} />;
   if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
   if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
   if (item.kind === 'shell') return <ShellCardRow item={item} enter={enter} />;
   return null;
 });
+function McpCardRow({ enter }: { enter?: true }) {
+  const { mcpCall } = useContext(LocalCardsContext);
+  return <div data-enter={enter}><McpCard call={mcpCall} /></div>;
+}
 function UsageCardRow({ item, enter }: { item: Extract<Item, { kind: 'usage' }>; enter?: true }) {
   const { projectId, colors, showSession } = useContext(LocalCardsContext);
   return <div data-enter={enter}><UsageCard snap={item.snap} projectId={projectId} colors={colors} showSession={showSession} /></div>;
@@ -869,7 +880,7 @@ const writeLabel = (file: string, content: string, exists?: boolean) => {
 };
 // What auto mode refused since the user's last message, with the choice the CLI's /permissions "Recently blocked" tab gives: allow for this chat (Enter), or allow and
 // have the agent run it again (r). Rows are picked by checkbox (all by default); the server applies what it recorded for each refusal, the page only names them.
-function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: string[], retry: boolean): Promise<unknown> }) {
+export function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: string[], retry: boolean): Promise<unknown> }) {
   const played = usePlayedEntrance();
   const cwd = useContext(CwdContext), [hidden, setHidden] = useState<ReadonlySet<string>>(new Set()), [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set()), [busy, setBusy] = useState(false);
   const shown = items.filter(item => !hidden.has(item.toolUseId)), chosen = shown.filter(item => !skipped.has(item.toolUseId));
@@ -894,7 +905,7 @@ function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllow(ids: 
     </footer>
   </div>;
 }
-function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
+export function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
   const played = usePlayedEntrance();
   const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
   const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
@@ -1460,7 +1471,19 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
   // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
   const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
-  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
+  // The model and Effort pickers (menus, models window) and the /model, /effort commands all end here, so each leaves the same 변경 line in the chat.
+  async function chooseModel(value: string) {
+    if (await setChat({ id, model: value }) === false) return false;
+    const row = modelRows(catalog, aliases).find(item => item.value === value), label = row?.label ?? displayModel(value, agent);
+    changed({ model: { value: label, color: modelAppearance(row ? `${row.family} ${row.id} ${row.label}` : value, agent).color ?? 'currentColor' } });
+    return true;
+  }
+  async function chooseEffort(value: string) {
+    if (await setChat({ id, effort: value || null }) === false) return false;
+    if (value) { const style = effortStyle[effortLevel(value)] ?? effortStyle.medium; changed({ effort: { value: effortLabel(value), color: style.color, icon: style.icon, bars: style.bars } }); }
+    return true;
+  }
   async function runLocal(name: string, argument: string): Promise<boolean> {
     if (locked && ['model', 'effort', 'permissions'].includes(name)) { note(`지금은 설정을 바꿀 수 없습니다. ${locked}`); return true; }
     switch (name) {
@@ -1476,13 +1499,13 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       case 'model': {
         if (agent === 'cursor' && !argument) { setModelsOpen(true); return true; }
         const value = argument || await ctx.pick('모델 선택', modelRows(catalog, aliases).map(row => ({ id: row.value, label: row.label })));
-        if (value && await setChat({ id, model: value }) !== false) { const row = modelRows(catalog, aliases).find(item => item.value === value), label = row?.label ?? displayModel(value, agent); changed({ model: { value: label, color: modelAppearance(row ? `${row.family} ${row.id} ${row.label}` : value, agent).color ?? 'currentColor' } }); }
+        if (value) await chooseModel(value);
         return true;
       }
       case 'effort': {
         if (!effortOptions.length) { note('이 CLI는 별도의 Effort 선택지를 제공하지 않습니다. 지원되는 모델 변형을 모델 메뉴에서 선택하세요.'); return true; }
         const value = argument || await ctx.pick('Effort 선택', effortOptions.map(item => ({ id: item, label: `${item} · ${effortLabel(item)}` })));
-        if (value) { if (!effortOptions.includes(value)) note(`알 수 없는 Effort: ${value} (${effortOptions.join(', ')})`); else { await setChat({ id, effort: value }); const style = effortStyle[effortLevel(value)] ?? effortStyle.medium; changed({ effort: { value: effortLabel(value), color: style.color, icon: style.icon, bars: style.bars } }); } }
+        if (value) { if (!effortOptions.includes(value)) note(`알 수 없는 Effort: ${value} (${effortOptions.join(', ')})`); else await chooseEffort(value); }
         return true;
       }
       case 'permissions': {
@@ -1505,6 +1528,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         return true;
       }
       case 'mcp': {
+        if (agent === 'claude') { apply(view => ({ ...view, items: [...view.items, { kind: 'mcp', key: `m${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true; }
         const servers = new Map<string, number>();
         for (const tool of state.tools) { const match = /^mcp__(.+?)__/.exec(tool); if (match) servers.set(match[1], (servers.get(match[1]) ?? 0) + 1); }
         if (!servers.size) note(state.tools.length ? '이 채팅에 연결된 MCP 서버가 없습니다.' : '첫 응답 후 연결된 MCP 서버가 표시됩니다.');
@@ -1707,7 +1731,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
   const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || '명령 실행 확인 생략'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
   const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
-  const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}${hint === 'keyeffort' ? ' hint-anchor' : ''}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void setChat({ id, effort: effort || null }).then(pickedBy('keyeffort'), ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
+  const effortCtl = <>{effortOptions.length > 0 && <span className="effort-wrap"><Dropdown locked={locked} label="Effort" className={`chat-effort effort-${effortLevel(state.effort) || 'medium'}${hint === 'keyeffort' ? ' hint-anchor' : ''}`} value={state.effort ?? (effortOptions.includes('medium') ? 'medium' : '')} placeholder="Effort" options={effortOptions.map(item => ({ value: item, label: effortLabel(item), ...effortStyle[effortLevel(item)] }))} onChange={effort => void chooseEffort(effort).then(pickedBy('keyeffort'), ctx.fail)} /><EffortSparks level={effortLevel(state.effort) || 'medium'} /></span>}</>;
   const optionItems = <>{cursorOptions.filter(isCursorSwitch).map(option => <button type="button" key={option.id} className={`chat-switch${option.id === 'fast' ? ' fast' : ''}`} aria-pressed={option.currentValue === 'true'} disabled={Boolean(locked)} title={locked || undefined} onClick={() => setOption(option.id, option.currentValue === 'true' ? 'false' : 'true')}>{option.id === 'fast' ? 'Fast' : option.name}</button>)}{maxOption && <button type="button" className="chat-max" aria-pressed={maxSelected(maxOption)} disabled={Boolean(locked)} title={locked || '최대 컨텍스트'} onClick={() => setOption(maxOption.id, maxSelected(maxOption) ? maxOffValue(maxOption) : maxOnValue(maxOption))}>MAX</button>}{!maxOption && maxContext && <button type="button" className="chat-max" aria-pressed={contextOption?.currentValue === maxContext.on} disabled={Boolean(locked)} title={locked || '이 모델의 최대 컨텍스트'} onClick={() => setOption(contextOption!.id, contextOption?.currentValue === maxContext.on ? maxContext.off : maxContext.on)}>MAX</button>}{cursorOptions.filter(option => !isCursorSwitch(option) && !isCursorEffort(option) && !(maxOption && option.id === maxOption.id)).map(option => { const name = cursorSettingName(option); return <span key={option.id}><Dropdown locked={locked} label={name} className="chat-model-config" value={option.currentValue} placeholder={name} options={option.options.map(item => ({ value: item.value, label: `${name}: ${item.name}`, hint: item.description }))} onChange={value => setOption(option.id, value)} /></span>; })}</>;
   const hasMore = forcePanel || Boolean(bypassBtn) || (!empty && state.addDirs.length > 0) || (agent === 'cursor' && state.restartPending) || cursorOptions.some(option => isCursorSwitch(option) || (!isCursorEffort(option) && !(maxOption && option.id === maxOption.id))) || Boolean(maxOption || maxContext);
   const panelItems = <>{bypassBtn}{optionItems}{noteItems}</>;
@@ -1760,7 +1784,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰·비용·도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
     {statsOpen && <ChatStatsModal id={id} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
     {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
-    {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} id={id} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void setChat({ id, model: value }).catch(ctx.fail); }} />}
+    {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} id={id} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void chooseModel(value).catch(ctx.fail); }} />}
     <div className="chat-start-slot chat-greeting" inert={!startScreen} aria-hidden={!startScreen}>
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span>{greeting}</h2></div></div>
     </div>
@@ -1786,10 +1810,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <span className="chat-command-head"><b>{file.replace(/\/$/, '').split('/').pop()}{file.endsWith('/') ? '/' : ''}</b></span>
             <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
           </button></li>)}</ul>}
-        {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>Enter를 누르면 승인 없이 이 폴더에서 실행합니다. 메시지로 보내려면 앞에 <code>{'\\!'}</code>를 붙이세요.</span></p>}
+        {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 모드: {ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}로 터미널 명령어 실행</span></p>}
         {commandDraft && <p className="chat-command-args" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {shrinking > 0 && <div className="chat-attachments"><span className="chat-shrinking" role="status"><i className="chat-spin" aria-hidden="true" />이미지를 5MB 아래로 줄이는 중…</span></div>}
-        {images.length > 0 && <div className="chat-attachments">{images.map((image, index) => <span key={index}><button type="button" className="chat-attachment-open" title={image.reduced ? '5MB를 넘겨 조금 줄였습니다. 크게 보기' : '크게 보기'} aria-label={image.reduced ? `첨부 이미지 ${index + 1} (5MB 아래로 줄임) 크게 보기` : `첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBigImage(image.url)}><img src={image.url} alt={`첨부 이미지 ${index + 1}`} />{image.reduced && <small className="chat-reduced" aria-hidden="true">줄임</small>}</button><button type="button" className="chat-attachment-remove" aria-label="첨부 제거" onClick={() => setImages(items => items.filter((_, i) => i !== index))}><Icon name="x" size={11} /></button></span>)}</div>}
+        {images.length > 0 && <AttachmentStrip images={images} onOpen={setBigImage} onRemove={index => setImages(items => items.filter((_, i) => i !== index))} />}
         {bigImage && <Modal className="image-modal" labelledBy={`image-modal-${id}`} region="이미지 크게 보기" onClose={() => setBigImage(null)}><span className="image-modal-frame"><img id={`image-modal-${id}`} src={bigImage} alt="첨부 이미지 크게 보기" onClick={() => setBigImage(null)} /><IconButton icon="x" label="닫기" onClick={() => setBigImage(null)} /></span></Modal>}
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
@@ -1856,7 +1880,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
         <span className="drag-space" />
-        {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className={`chat-model${hint === 'keymodel' ? ' hint-anchor' : ''}`} value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void setChat({ id, model }).then(pickedBy('keymodel'), ctx.fail); }} />}
+        {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || undefined} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown label="모델" className={`chat-model${hint === 'keymodel' ? ' hint-anchor' : ''}`} value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void chooseModel(model).then(pickedBy('keymodel'), ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
         <ContextRing state={state} ctx={ctx} active={visible} agent={agent} chatId={id} />
         {busy ? <button type="button" className="chat-send stop" title="중단 (Esc)" aria-label="응답 중단" onClick={() => interrupt()}><Icon name="stop" size={16} /></button>

@@ -90,6 +90,17 @@ export const cacheTtlOptions: { value: CacheTtl; label: string; hint: string }[]
 ];
 export type CacheTtl = 'auto' | '5m' | '1h';
 
+/** The 자동 / 5분 / 1시간 choice and what the selected one costs, as the chat's usage panel shows it. */
+export function CacheTtlPicker({ value, onChange }: { value: CacheTtl; onChange(value: CacheTtl): void }) {
+  return <div className="usage-ttl-section">
+    <div className="usage-ttl-head"><strong className="usage-head">캐시 유지 시간</strong><span className="usage-ttl-tag">다음 응답부터 적용</span></div>
+    <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
+      {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className="usage-ttl-option" onClick={() => onChange(option.value)}>{option.label}</button>)}
+    </span>
+    <span className="usage-ttl-hint">{cacheTtlOptions.find(option => option.value === value)?.hint}</span>
+  </div>;
+}
+
 // The usage text fades in when what it names changes while it is shown (Plan Usage → a measured share, Plan ↔ API). A fresh mount does not fade:
 // moving the item to the other side of the line (a layout change) mounts it again, and the keyframes run on every insertion.
 function SwapText({ name, children }: { name: string; children: ReactNode }) {
@@ -130,13 +141,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
           {needsKey && (onSettings ? <button type="button" className="usage-panel-action" onClick={openSettings}>키 등록</button> : <span className="usage-note">키 필요</span>)}
         </span>
       </span>
-      <div className="usage-ttl-section">
-        <div className="usage-ttl-head"><strong className="usage-head">캐시 유지 시간</strong><span className="usage-ttl-tag">다음 응답부터 적용</span></div>
-        <span className="usage-ttl" role="radiogroup" aria-label="캐시 유지 시간">
-          {cacheTtlOptions.map(option => <button key={option.value} type="button" role="radio" aria-checked={ttl === option.value} className="usage-ttl-option" onClick={() => chooseTtl(option.value)}>{option.label}</button>)}
-        </span>
-        <span className="usage-ttl-hint">{cacheTtlOptions.find(option => option.value === ttl)?.hint}</span>
-      </div>
+      <CacheTtlPicker value={ttl} onChange={chooseTtl} />
       {locked && <span className="usage-note">로그인 방식은 응답이 끝난 뒤 바꿀 수 있습니다.</span>}
     </span>
   </>;

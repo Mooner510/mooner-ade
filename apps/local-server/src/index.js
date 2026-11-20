@@ -1166,6 +1166,12 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       return chat.setAutoCompact(text(input.value, '창 크기', 40));
     }
+    case 'chat/mcp': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      const str = value => typeof value === 'string' ? value : undefined;
+      return chat.mcp({ action: str(input.action), server: str(input.server), enabled: input.enabled === true, url: str(input.url) });
+    }
     case 'chat/warm': await project.chats.get(input.id)?.warm(); return {};
     case 'chat/reset': await project.chats.get(input.id)?.reset({ force: input.force === true }); return {};
     case 'chat/close': {

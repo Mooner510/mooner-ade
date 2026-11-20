@@ -181,7 +181,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     push: () => { push(); manager.serverReset(); },
     // Workspace session traffic from the server for a plugin host.
     fromServer: message => manager.fromServer(message),
-    // A feedback submission from the server: { meta, images:[{path, mime}] } -> { ok, issueUrl?, issueNumber?, error? }.
+    // A feedback submission from the server: { meta, images:[{path, mime}] } -> { ok, issueNumber?, error? }.
     submitFeedback: ({ meta, images }) => manager.submitFeedback({ meta, images }),
     queryFeedbackStatus: ({ keys }) => manager.queryFeedbackStatus({ keys }),
     close: () => manager.close()

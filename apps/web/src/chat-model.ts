@@ -53,6 +53,7 @@ export type Item = ItemBase & (
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
+  | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers

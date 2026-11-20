@@ -27,7 +27,7 @@ const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).a
 function FeedbackAvailabilityRow() {
   const { available, loaded, error } = useFeedback();
   const kind = !loaded ? 'checking' : error || !available?.ok ? 'off' : available.mode === 'anonymous' ? 'anonymous' : 'account', note = loaded && !error ? submitModeNote(available) : '';
-  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 익명으로 개발자의 비공개 GitHub 저장소에 이슈로 올라갑니다.">
+  return <Row title="제출 방식" hint="원격 접속에 로그인했으면 그 계정으로, 아니면 익명으로 개발자에게 전달됩니다.">
     <span className="feedback-mode-wrap">
       <span className={`feedback-mode ${kind}`}><Icon name={kind === 'account' ? 'person' : kind === 'off' ? 'alert' : 'info'} size={14} />{!loaded ? '확인 중…' : error || submitModeText(available)}</span>
       {note && <small>{note}</small>}
@@ -97,7 +97,7 @@ const usageSamples: Record<'claude' | 'codex' | 'cursor', [string, string, numbe
   codex: [['session', '5h', 8], ['weekly', '주', 17], ['credit', '크레딧', 40]],
   cursor: [['auto', 'Cursor', 20], ['api', '기타', 40], ['total', '전체', 25], ['grok', 'Grok', 12], ['on-demand', '추가', 5]]
 };
-function statusSamples(settings: Settings): Record<string, ReactNode> {
+export function statusSamples(settings: Settings): Record<string, ReactNode> {
   const usage = (provider: 'claude' | 'codex' | 'cursor') => {
     const on = settings.usageShown[provider];
     const windows = usageSamples[provider].filter(([id]) => on.includes(id) && !(provider === 'claude' && id === 'session' && !settings.claudeSession));
@@ -328,7 +328,7 @@ function Advanced({ children }: { children: ReactNode }) {
 
 // `preview` names the appearance sample. `false` keeps the preview column and says there is nothing to show.
 // A theme card handles its own sample, so the row does not wipe the theme the pointer is already on.
-const lookHover = createContext<{ id: string; set(id: string, theme?: string): void }>({ id: '', set() {} });
+export const lookHover = createContext<{ id: string; set(id: string, theme?: string): void }>({ id: '', set() {} });
 function Row({ title, hint, preview, children }: { title: string; hint?: string; preview?: string | false; children: ReactNode }) {
   const look = useContext(lookHover);
   if (!queryHit(useContext(settingsQuery), `${title} ${hint ?? ''}`)) return null;
@@ -460,7 +460,7 @@ const lookNames: Record<string, string> = {
   usage: '사용량 색', clock12: '12시간제', clockSec: '초 표시'
 };
 const TOOL_PREVIEW = ['Read src/app.ts', 'Grep PORT', 'Edit src/server.ts', 'Bash npm test'];
-function LookPreview({ id, settings, previewTheme = '' }: { id: string; settings: Settings; previewTheme?: string }) {
+export function LookPreview({ id, settings, previewTheme = '' }: { id: string; settings: Settings; previewTheme?: string }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     if ((id !== 'clock12' && id !== 'clockSec') || !settings.clockSeconds) return;
@@ -522,7 +522,7 @@ function LookPreview({ id, settings, previewTheme = '' }: { id: string; settings
   </aside>;
 }
 
-function ThemePicker({ value, onChange }: { value: ThemeId; onChange(id: ThemeId): void }) {
+export function ThemePicker({ value, onChange }: { value: ThemeId; onChange(id: ThemeId): void }) {
   const look = useContext(lookHover);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

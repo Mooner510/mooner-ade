@@ -862,6 +862,22 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       await refreshAutoCompact(model);
       return { autoCompact: state.autoCompact };
     },
+    // /mcp: the CLI's own MCP controls over its control channel (status, reconnect, enable/disable, OAuth), so nothing restarts. env/headers never leave this process.
+    async mcp({ action, server, enabled, url }) {
+      live();
+      if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', 'MCP 관리는 Claude 채팅에서만 쓸 수 있습니다.', 409);
+      const requests = { status: { subtype: 'mcp_status' }, reconnect: { subtype: 'mcp_reconnect', serverName: server }, toggle: { subtype: 'mcp_toggle', serverName: server, enabled: enabled === true },
+        auth: { subtype: 'mcp_authenticate', serverName: server }, clearAuth: { subtype: 'mcp_clear_auth', serverName: server }, callback: { subtype: 'mcp_oauth_callback_url', serverName: server, callbackUrl: url } };
+      if (!requests[action] || (action !== 'status' && !server) || (action === 'callback' && !url)) throw fault('INVALID_INPUT', '잘못된 MCP 요청입니다.');
+      await start();
+      const response = await control(requests[action], action === 'status' ? 10000 : 60000);
+      if (!response) throw fault('CHAT_MCP', 'MCP 응답이 없습니다. 잠시 뒤 다시 시도하세요.', 504);
+      if (response.subtype === 'error') throw fault('CHAT_MCP', String(response.error ?? 'MCP 요청이 실패했습니다.'), 409);
+      if (action !== 'status') return { result: response.response ?? null };
+      return { servers: (response.response?.mcpServers ?? []).map(s => ({ name: s.name, status: s.status, error: s.error, info: s.serverInfo, transport: s.transport, scope: s.scope,
+        config: s.config && { type: s.config.type, command: s.config.command, args: s.config.args, url: s.config.url },
+        tools: (s.tools ?? []).map(t => ({ name: t.name, description: t.description, annotations: t.annotations })) })) };
+    },
     loadCatalog(catalog, defaultModel, configOptions = []) {
       if (agent === 'cursor' && child) return;
       state.capabilities.catalog = catalog;

@@ -6,12 +6,19 @@ import { toast } from './toast';
 import { Dropdown, type Ask } from './views';
 import { effortLabel, effortStyle, modelColor, showCombo } from './chat-model';
 import { AnnotateImage } from './AnnotateImage';
-import { ago, base64Bytes, canSubmit, displayTitle, feedbackGroup, feedbackTypes, groupLabels, toggleType, typeTag, feedbackEffort, feedbackModelId, isEditable, isEmptyDraft, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, progressBadge, progressInApp, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackGroup, type FeedbackProgressInfo, type FeedbackQueue, type FeedbackSource } from './feedback-model';
+import { ago, base64Bytes, canSubmit, displayTitle, feedbackGroup, feedbackTypes, groupLabels, toggleType, typeTag, feedbackEffort, feedbackModelId, isEditable, isEmptyDraft, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TITLE, needsReview, progressBadge, progressInApp, queueEta, sourceLabels, statusLabels, type Feedback, type FeedbackAvailability, type FeedbackGroup, type FeedbackProgress, type FeedbackProgressInfo, type FeedbackQueue, type FeedbackSource } from './feedback-model';
 import './feedback-progress.css';
 import { canCapture, ensureDraft, feedbackCall, openFeedback, refreshProgress, removeLocal, requestCapture, startDraft, useFeedback, useQueueClock, type CaptureMode } from './feedback-store';
 
 export const feedbackFileUrl = (item: Pick<Feedback, 'id' | 'updatedAt'>, name: string) => `/feedback-file/${encodeURIComponent(item.id)}/${encodeURIComponent(name)}?v=${item.updatedAt}`;
 const sourceIcons: Record<FeedbackSource, IconName> = { human: 'person', ai: 'sparkles', agent: 'bot' };
+
+/** Where a submitted feedback stands (대기 / beta 반영 / 릴리스 반영 …), as the Hub reported it. */
+export function FeedbackProgressBadge({ progress, stamp }: { progress: FeedbackProgress | undefined; stamp: number }) {
+  const badge = progressBadge(progress);
+  if (!badge) return null;
+  return <span className={`feedback-status status-submitted progress-${badge.tone}`} title={`제출됨 · 처리 상태는 Hub가 알려 준 값입니다${progress?.checkedAt ? ` (${ago(progress.checkedAt, stamp)} 확인)` : ''}`}>{badge.text}</span>;
+}
 const feedbackTypeOptions = feedbackTypes.filter(({ id }) => id !== 'question' && id !== 'praise');
 
 const readDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
@@ -213,7 +220,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
               <strong className={title ? '' : 'untitled'}>{title || '(내용 없음)'}</strong>
               <small>
                 {item.status === 'submitted' && progressBadge(item.progress)
-                  ? <span className={`feedback-status status-submitted progress-${progressBadge(item.progress)!.tone}`} title={`제출됨 · 처리 상태는 Hub가 알려 준 값입니다${item.progress?.checkedAt ? ` (${ago(item.progress.checkedAt, stamp)} 확인)` : ''}`}>{progressBadge(item.progress)!.text}</span>
+                  ? <FeedbackProgressBadge progress={item.progress} stamp={stamp} />
                   : <span className={`feedback-status status-${item.status}`}>{statusLabels[item.status]}</span>}
                 {item.status === 'submitted' && item.progress?.state === 'beta' && item.progress.inApp === true && <span className="feedback-inapp">이 버전에 포함</span>}
                 {(item.status === 'queued' || item.status === 'submitting') && <span className="feedback-eta">{queueEta(item, queue, now)}</span>}
@@ -353,9 +360,8 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
         {item.status === 'queued' && item.error && <small className="feedback-last-error">마지막 시도: {item.error}</small>}
       </div>}
       {item.status === 'submitted' && <div className="feedback-note ok">
-        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? ` · 이슈 #${item.issueNumber}` : ''}{progressBadge(item.progress) && <> · <b className={`feedback-progress-word progress-${progressBadge(item.progress)!.tone}`}>{progressBadge(item.progress)!.text}</b></>}</span>
+        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? ` · #${item.issueNumber}` : ''}{progressBadge(item.progress) && <> · <b className={`feedback-progress-word progress-${progressBadge(item.progress)!.tone}`}>{progressBadge(item.progress)!.text}</b></>}</span>
         {progressInApp(item.progress) && <small className="feedback-inapp-note">{progressInApp(item.progress)}</small>}
-        {item.issueUrl && <button type="button" onClick={() => window.open(item.issueUrl, '_blank', 'noopener')}><Icon name="externalLink" size={13} />이슈 열기</button>}
       </div>}
       {item.status === 'failed' && item.error && <p className="feedback-note warn" role="alert"><Icon name="alert" size={14} />{item.error}</p>}
       {drafting && <DraftProgress since={item.status === 'drafting' ? item.updatedAt : started.current || Date.now()} label="AI가 다듬는 중…" />}

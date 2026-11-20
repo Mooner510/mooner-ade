@@ -84,6 +84,7 @@ test('submitted and in-flight items are locked; a failed one becomes a draft aga
   const edited = await store.update(item.id, { body: 'b2' });
   assert.equal(edited.status, 'draft'); assert.equal(edited.error, undefined);
   await store.setStatus(item.id, 'submitted', { issueUrl: 'https://github.com/o/r/issues/1' });
+  assert.equal((await store.get(item.id)).issueUrl, undefined); // an older stored link never reaches the app
   await assert.rejects(store.update(item.id, { title: 'x' }), /제출한 피드백/);
   assert.equal((await store.update(item.id, { reviewed: true })).status, 'submitted');
 });
@@ -277,7 +278,7 @@ test('anonymous posts carry the install id and the multipart body, and map refus
   assert.equal(await anonymousDeviceId(root), deviceId);
   const shot = join(root, 'a.png'); await writeFile(shot, png());
   const ok = await postAnonymousFeedback({ hubUrl: hub.url, deviceId, meta: { clientKey: 'k', title: 't' }, images: [{ path: shot, mime: 'image/png' }] });
-  assert.deepEqual(ok, { ok: true, issueUrl: 'https://github.com/o/r/issues/1', issueNumber: 1 });
+  assert.deepEqual(ok, { ok: true, issueNumber: 1 });
   assert.equal(hub.requests[0].url, '/v1/feedback/anonymous'); assert.equal(hub.requests[0].device, deviceId);
   assert.deepEqual(hub.requests[0].meta, { clientKey: 'k', title: 't' });
   assert.equal(hub.requests[0].images[0].name, 'image-1.png'); assert.equal(hub.requests[0].images[0].type, 'image/png');

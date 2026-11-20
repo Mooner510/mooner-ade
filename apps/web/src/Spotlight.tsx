@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 // The blur is one fixed layer whose mask has a hole at that element; it never takes clicks. ponytail: the hole follows by polling (4x/s), a layout watcher if that ever shows.
 const PAD = 4;
 // `ring`: also outline the element in the accent colour (the same border and tint a button pointer gets); a Hint's button already draws its own.
-export function Spotlight({ target, ring = true }: { target?: string | HTMLElement | null; ring?: boolean }) {
+export function Spotlight({ target, ring = true, closing }: { target?: string | HTMLElement | null; ring?: boolean; closing?: boolean }) {
   const [hole, setHole] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   useEffect(() => {
     const measure = () => {
@@ -18,5 +18,5 @@ export function Spotlight({ target, ring = true }: { target?: string | HTMLEleme
     return () => { clearInterval(timer); removeEventListener('resize', measure); };
   }, [target]);
   const style = hole ? { '--hx': `${hole.x}px`, '--hy': `${hole.y}px`, '--hw': `${hole.w}px`, '--hh': `${hole.h}px` } as React.CSSProperties : undefined;
-  return createPortal(<><div className="notice-scrim" aria-hidden="true" style={style} />{ring && hole && <div className="notice-ring" aria-hidden="true" style={style} />}</>, document.body);
+  return createPortal(<><div className="notice-scrim" aria-hidden="true" style={style} data-closing={closing || undefined} />{ring && hole && <div className="notice-ring" aria-hidden="true" style={style} data-closing={closing || undefined} />}</>, document.body);
 }

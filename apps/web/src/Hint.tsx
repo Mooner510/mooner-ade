@@ -1,12 +1,13 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Spotlight } from './Spotlight';
+import { EXIT_MS } from './use-notice';
 
 // A one-time pointer at an easy-to-miss button. The button gets the `hint-anchor` class (CSS anchor-name) and this card sits right under it
 // in the top layer, so pane edges never clip it. It never takes focus; "알겠어요" records it, and tips.ts nextHint decides which one is due.
 // The card flips above or sideways when there is no room (composer controls sit at the bottom), so its tip is aimed here, at the anchor's centre.
 // `wide`: the anchor is wider than the card (the whole input box), so the card is centred on it instead of hanging from its right end.
 export function Hint({ title, text, onDone, wide }: { title: string; text: ReactNode; onDone(): void; wide?: boolean }) {
-  const card = useRef<HTMLDivElement>(null), [anchor, setAnchor] = useState<HTMLElement | null>(null), anchorName = `--ade-hint-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
+  const card = useRef<HTMLDivElement>(null), [closing, setClosing] = useState(false), [anchor, setAnchor] = useState<HTMLElement | null>(null), anchorName = `--ade-hint-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   useLayoutEffect(() => {
     const el = card.current; if (!el?.showPopover) return;
     el.showPopover();
@@ -23,9 +24,9 @@ export function Hint({ title, text, onDone, wide }: { title: string; text: React
     const watch = new ResizeObserver(aim); watch.observe(target); addEventListener('resize', aim);
     return () => { watch.disconnect(); removeEventListener('resize', aim); target.style.removeProperty('anchor-name'); };
   }, [anchorName]);
-  return <><Spotlight target={anchor} ring={false} /><div ref={card} popover="manual" className={`hint-card${wide ? ' wide' : ''}`} role="status" aria-label={title}>
+  return <><Spotlight target={anchor} ring={false} closing={closing} /><div ref={card} popover="manual" className={`hint-card${wide ? ' wide' : ''}`} role="status" aria-label={title} data-closing={closing || undefined}>
     <strong>{title}</strong>
     <p>{text}</p>
-    <button type="button" className="primary" onClick={onDone}>알겠어요</button>
+    <button type="button" className="primary" disabled={closing} onClick={() => { setClosing(true); setTimeout(onDone, EXIT_MS); }}>알겠어요</button>
   </div></>;
 }

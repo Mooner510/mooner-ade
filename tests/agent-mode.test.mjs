@@ -7,8 +7,8 @@ import { validateAppState } from '../apps/local-server/src/ui-state.js';
 
 const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
-const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings, TOUR_VERSION } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
-const { defaultSettings, migrateSettings, TOUR_VERSION, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings, TIPS_VERSION, TOUR_VERSION } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
+const { defaultSettings, migrateSettings, TIPS_VERSION, TOUR_VERSION, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const app = settings => ({ openProjects: [], activeProjectId: '', settings });
 
 test('each mode has one launcher per provider and keeps the shell', () => {
@@ -19,6 +19,14 @@ test('each mode has one launcher per provider and keeps the shell', () => {
     assert.deepEqual(items.map(item => item.command), mode === 'chat'
       ? ['', 'ade:chat:claude', 'ade:chat:codex', 'ade:chat:cursor'] : ['', 'claude', 'codex', 'cursor-agent']);
   }
+});
+
+test('a release that raises TIPS_VERSION brings every tip back once, and keeps the tips switch', () => {
+  const seen = { onboarded: true, tourVersion: TOUR_VERSION, defaultMode: 'chat', chatTipPending: false, gitTipPending: false, hintsSeen: ['tochat', 'stats'], tips: false };
+  const next = migrateSettings(seen);
+  assert.deepEqual([next.hintsSeen, next.gitTipPending, next.chatTipPending, next.tips, next.tipsVersion], [[], true, true, false, TIPS_VERSION]);
+  const again = migrateSettings({ ...next, hintsSeen: ['tochat'], gitTipPending: false, chatTipPending: false });
+  assert.deepEqual([again.hintsSeen, again.gitTipPending, again.chatTipPending], [['tochat'], false, false], 'a second start does not reset again');
 });
 
 test('new users start in Chat and are invited until they open it; old users retain CLI on their first upgrade', () => {

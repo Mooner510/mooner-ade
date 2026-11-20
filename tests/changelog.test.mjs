@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,25 @@ test('changelog entries are ready to publish: a real date and KST time, an icon 
   // The release commit bumps package.json to a stable version; CI then fails until its notes exist, before anyone tags it (release.mjs checks again).
   const { version } = read('../package.json');
   if (!version.includes('-')) assert.ok(notes(version, changelog), `package.json is ${version}: add it to apps/web/src/changelog.json`);
+});
+
+test('notes from 0.6.0 on carry their intro (a colour and a line) and every demo they name exists', () => {
+  const demos = readFileSync(new URL('../apps/web/src/ChangelogDemo.tsx', import.meta.url), 'utf8');
+  const known = new Set([...demos.matchAll(/^  '?([\w-]+)'?: \{ render:/gm)].map(match => match[1]));
+  assert.ok(known.size >= 20, 'the demo registry is where the test looks for demo names');
+  const rich = version => version.localeCompare('0.6.0', undefined, { numeric: true }) >= 0;
+  for (const entry of changelog) {
+    if (rich(entry.version)) {
+      assert.ok(Number.isInteger(entry.intro?.hue) && entry.intro.hue >= 0 && entry.intro.hue < 360, `${entry.version}: intro.hue is the version's colour (0-359), the intro and the page header use it`);
+      assert.ok(entry.intro?.tagline?.trim(), `${entry.version}: intro.tagline is the line under the big version`);
+    } else {
+      assert.ok(!entry.intro && entry.items.every(item => !item.demo), `${entry.version}: notes before 0.6.0 keep the plain page`);
+    }
+    for (const item of entry.items) {
+      if (item.demo) assert.ok(known.has(item.demo), `${entry.version} "${item.title}": no demo called ${item.demo}`);
+      if (item.image) assert.ok(existsSync(new URL(`../apps/web/public/changelog/${item.image}`, import.meta.url)), `${entry.version} "${item.title}": missing picture ${item.image}`);
+    }
+  }
 });
 
 test('the release notes script prints the body when run from the command line, on every OS, and fails for a version with no entry', () => {

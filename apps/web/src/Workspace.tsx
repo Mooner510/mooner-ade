@@ -5,7 +5,7 @@ import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLe
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
-import { useNotice } from './use-notice';
+import { useExit, useNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
@@ -1030,6 +1030,7 @@ ${where}`, [
   // One id per project (the id's part before ":" is its place in the order): every open project has its own Workspace, and a shared id would let an inactive one withdraw what the active one asked for.
   const gitCardOn = useNotice(`git:${root}`, Boolean(active && project && project.repositories.length > 0 && settings.gitTipPending && settings.onboarded));
   const chatCardOn = useNotice(`chat-mode:${root}`, Boolean(active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)));
+  const gitCard = useExit(gitCardOn), chatCard = useExit(chatCardOn);
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
@@ -1162,8 +1163,8 @@ ${where}`, [
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
-    {chatCardOn && <Spotlight target=".terminal-pane.focused" />}
-    {chatCardOn && createPortal(<aside className="chat-mode-tip notice-card" aria-label="Chat 모드 안내">
+    {chatCard.mounted && <Spotlight target=".terminal-pane.focused" closing={chatCard.closing} />}
+    {chatCard.mounted && createPortal(<aside className="chat-mode-tip notice-card" aria-label="Chat 모드 안내" data-closing={chatCard.closing || undefined}>
       <img src="/chat-mode-preview.png" alt="Chat 모드에서 도구 실행, 코드 변경 diff, 결과 요약이 대화로 정리된 화면" width="960" height="632" />
       <div className="chat-mode-tip-body">
         <strong>{{ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[agentOf(focus) ?? 'claude']}를 Chat으로 써 보세요</strong>
@@ -1175,8 +1176,8 @@ ${where}`, [
       </div>
     </aside>, document.body)}
     {/* Once, for people who knew the changes panel: it is now the Git graph. Opening the graph or "확인" ends it for good. */}
-    {gitCardOn && <Spotlight target='button[aria-label="Git 커밋 그래프"]' />}
-    {gitCardOn && createPortal(<aside className="chat-mode-tip git-graph-tip notice-card" aria-label="Git 그래프 안내">
+    {gitCard.mounted && <Spotlight target='button[aria-label="Git 커밋 그래프"]' closing={gitCard.closing} />}
+    {gitCard.mounted && createPortal(<aside className="chat-mode-tip git-graph-tip notice-card" aria-label="Git 그래프 안내" data-closing={gitCard.closing || undefined}>
       {/* Same metrics as the real graph (GitLog.tsx): a row is 22px, a lane 16px, a commit dot r4, the HEAD dot a ring r6, lines 1.5px. Chips sit centred on their row. */}
       <svg className="git-tip-art" viewBox="0 0 144 88" aria-hidden="true">
         <path d="M12 0V88" fill="none" strokeWidth="1.5" style={{ stroke: 'var(--git-ref-local)' }} />
