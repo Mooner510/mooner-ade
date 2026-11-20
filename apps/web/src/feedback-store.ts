@@ -1,23 +1,29 @@
 import { useSyncExternalStore } from 'react';
 import { api } from './api';
-import { isEditable, type Feedback, type FeedbackAvailability, type FeedbackQueue } from './feedback-model';
+import { isEditable, progressAnnouncer, progressNews, type Feedback, type FeedbackAvailability, type FeedbackProgressInfo, type FeedbackQueue } from './feedback-model';
+import { toast } from './toast';
 
 // The feedback inbox is global (not per project), so every open workspace shares this one store: the list, which item is open,
 // and a pending screen capture. It loads on first use and again whenever the server pushes {type:'feedback/changed'}.
 export type CaptureMode = 'element' | 'window' | 'range';
-export type FeedbackState = { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; loaded: boolean; error: string; currentId: string; capture: CaptureMode | null };
+export type FeedbackState = { items: Feedback[]; available: FeedbackAvailability | null; queue: FeedbackQueue; progress: FeedbackProgressInfo; loaded: boolean; error: string; currentId: string; capture: CaptureMode | null };
 
-let state: FeedbackState = { items: [], available: null, queue: { size: 0 }, loaded: false, error: '', currentId: '', capture: null };
+let state: FeedbackState = { items: [], available: null, queue: { size: 0 }, progress: {}, loaded: false, error: '', currentId: '', capture: null };
 const listeners = new Set<() => void>();
 let started = false, timer = 0, loading: Promise<void> | null = null, again = false;
 
 const set = (patch: Partial<FeedbackState>) => { state = { ...state, ...patch }; listeners.forEach(listener => listener()); };
 export const feedbackState = () => state;
 
+// News is announced once per change: what was already told this session (the item and the change it was about) is not told again. The first load after the
+// app starts announces what changed while it was closed; the dot on the row stays until the item is opened.
+const announce = progressAnnouncer();
 async function load() {
   try {
-    const result = await api<{ items: Feedback[]; available: FeedbackAvailability; queue?: FeedbackQueue }>('feedback/list');
-    set({ items: result.items, available: result.available, queue: result.queue ?? { size: 0 }, loaded: true, error: '' });
+    const result = await api<{ items: Feedback[]; available: FeedbackAvailability; queue?: FeedbackQueue; progress?: FeedbackProgressInfo }>('feedback/list');
+    set({ items: result.items, available: result.available, queue: result.queue ?? { size: 0 }, progress: result.progress ?? {}, loaded: true, error: '' });
+    const news = announce(result.items);
+    if (news) toast('notifications', news);
   } catch (cause) { set({ loaded: true, error: cause instanceof Error ? cause.message : String(cause) }); }
 }
 // Every workspace receives the push, so calls within a short window share one request.
@@ -45,7 +51,14 @@ export function applyItem(item: Feedback) {
   return item;
 }
 export const feedbackCall = async (action: string, input: object) => applyItem(await api<Feedback>(action, input));
-export const openFeedback = (id: string) => set({ currentId: id });
+// Opening an item reads its news: the server stops counting it (and the dot goes).
+export const openFeedback = (id: string) => {
+  set({ currentId: id });
+  if (progressNews(state.items.filter(item => item.id === id)).length) void api<Feedback>('feedback/seen', { id }).then(applyItem, () => {});
+};
+// "지금 확인": asks the Hub again now and reloads the list (quietly when there is nothing to ask).
+// `skipped`: the server answered within its 20-second gap and did not ask the Hub again (the panel says so instead of staying silent).
+export const refreshProgress = (): Promise<{ skipped: boolean }> => api<{ skipped?: boolean }>('feedback/refresh', {}).then(async result => { await refreshFeedback(0); return { skipped: Boolean(result?.skipped) }; }, () => ({ skipped: false }));
 export const removeLocal = (id: string) => set({ items: state.items.filter(item => item.id !== id), currentId: state.currentId === id ? '' : state.currentId });
 export const createFeedback = async () => { const item = await feedbackCall('feedback/create', {}); set({ currentId: item.id }); return item; };
 // A fresh draft for the write screen; calls while one is being made share it (the panel opens straight into an editor, so nothing may create two).

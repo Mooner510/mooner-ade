@@ -288,7 +288,7 @@ export function subagentExtra(events, { unitPrice = 0, since = [], transcriptSaw
   }
   let messages = [...byId.values()];
   if (transcriptSawSubagents) messages = messages.filter(message => Number.isFinite(message.at) && endedAt != null && message.at > endedAt);
-  const tokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+  const tokens = { input: 0, output: 0, read: 0, cacheCreate: 0 }; // `read` is what the loop below and withSubagents add to
   let cost = 0;
   const spent = since.map(() => 0);
   for (const message of messages) {

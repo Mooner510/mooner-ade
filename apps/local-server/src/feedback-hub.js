@@ -53,3 +53,20 @@ export async function postAnonymousFeedback({ hubUrl = DEFAULT_HUB_URL, deviceId
     return { ok: false, error: { code: 'network_error', message: error?.name === 'TimeoutError' ? 'Hub가 제때 응답하지 않았습니다.' : `Hub에 연결하지 못했습니다: ${error?.message ?? error}` } };
   }
 }
+
+// How far the feedback this install sent anonymously has come (`GET /v1/feedback/status`, docs/FEEDBACK_STATUS.md): only keys go out and only
+// {state, version} per key comes back. Resolves { ok, items, latestStable? } or { ok:false, error:{ code, message, retryAfter? } }; never rejects.
+// 404/405/501 mean this Hub has no such endpoint yet: code `unsupported`, which the caller treats as "stay quiet for a day".
+export async function fetchAnonymousStatus({ hubUrl = DEFAULT_HUB_URL, deviceId, keys, fetchImpl = fetch, timeoutMs = 20_000 }) {
+  try {
+    const url = new URL('/v1/feedback/status', hubUrl);
+    url.searchParams.set('keys', keys.join(','));
+    const response = await fetchImpl(url, { headers: { 'X-ADE-Device': deviceId, Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json().catch(() => null);
+    if (response.ok && body && typeof body === 'object' && body.items && typeof body.items === 'object') return { ok: true, items: body.items, ...(typeof body.latestStable === 'string' && { latestStable: body.latestStable }) };
+    if ([404, 405, 501].includes(response.status) && !body?.error?.code?.startsWith?.('rate')) return { ok: false, error: { code: 'unsupported', message: `Hub가 처리 상태 조회를 지원하지 않습니다 (${response.status}).` } };
+    return { ok: false, error: { code: response.status === 429 ? 'rate_limited' : response.status === 401 ? 'unauthorized' : `http_${response.status}`, message: `Hub 응답 ${response.status}`, ...(response.status === 429 && retryAfterOf(response, body) && { retryAfter: retryAfterOf(response, body) }) } };
+  } catch (error) {
+    return { ok: false, error: { code: 'network_error', message: error?.message ?? String(error) } };
+  }
+}

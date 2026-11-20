@@ -2,8 +2,10 @@ import { AppKeysContext, showAppKey } from './shortcuts';
 import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
+import { NoticeDock, useNotice } from './use-notice';
 import { api, basename, chooseFolder } from './api';
-import { agentNames, defaultSettings, migrateSettings, TOUR_VERSION, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -14,11 +16,13 @@ import { CacheTimer } from './Panes';
 import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
-import { Changelog, entries as changelogEntries, hasUnreadChangelog, syncChangelogVersion } from './Changelog';
+import { Changelog, changelogDue, entries as changelogEntries, hasUnreadChangelog, setChangelogDue, syncChangelogVersion } from './Changelog';
+import { LEGACY_CHANGELOG_VERSION } from './changelog-state';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
-import { byLastUsed, ideIcon, ideList, rememberIde, type IdeList } from './ide-open';
+import { byLastUsed, ideList, rememberIde, type IdeList } from './ide-open';
+import { IdeIcon } from './IdeIcon';
 import { claimTip, copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
@@ -239,7 +243,7 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
       {item('fileOpen', '파일 열기…', onPickFile)}
       {(!list || ides.length > 0) && <>
         <hr />
-        {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><Icon name={ideIcon(ide)} size={14} /><span className="menu-label">{ide.label}에서 열기</span></button>)}
+        {ides.map(ide => <button key={ide.id} role="menuitem" onClick={() => open(ide.id)}><IdeIcon ide={ide} size={14} /><span className="menu-label">{ide.label}에서 열기</span></button>)}
         {!list && <button role="menuitem" disabled>편집기를 찾는 중…</button>}
       </>}
       <hr />
@@ -308,13 +312,16 @@ function Shell() {
     addEventListener('blur', onBlur);
     return () => removeEventListener('blur', onBlur);
   }, []);
-  useEffect(() => {
+  // Run once at boot, when it is known whether settings were saved: someone who used the app before but left no record here (never opened the changelog)
+  // is updating, so the notes open for them too instead of being recorded as a first launch.
+  const checkChangelog = useCallback((existingUser: boolean) => {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
-      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0');
+      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0', undefined, existingUser ? LEGACY_CHANGELOG_VERSION : undefined);
       const unread = hasUnreadChangelog();
       setChangelogUnread(unread);
-      if (updated && unread) setChangelogPending(true);
+      // `changelogDue`: this start is not the update itself, but an earlier start that did not get to show the notes (closed during the tour) left them due.
+      if (unread && (updated || changelogDue())) { setChangelogDue(true); setChangelogPending(true); }
     });
   }, []);
   const shell = useRef<HTMLDivElement>(null);
@@ -360,7 +367,8 @@ function Shell() {
       globalSettings.current = Boolean(saved.settings);
       const loaded = saved.settings ? migrateSettings(saved.settings) : null;
       // Someone who finished an older tutorial gets the new one again (migrateSettings clears `onboarded`), but not the theme and font screen.
-      if (saved.settings && saved.settings.onboarded !== false) onboardedOnce.current = true;
+      // (`onboarded: false` with a tour version above 0 is a tour that is due again or was replayed and left unfinished, not a first run.)
+      if (saved.settings && (saved.settings.onboarded !== false || (saved.settings.tourVersion ?? 0) > 0)) onboardedOnce.current = true;
       // The rail state used to live only in this browser's localStorage; carry it over once.
       const wasCompact = saved.settings?.sidebarCompact === undefined && (() => { try { return localStorage.getItem('ade-sidebar-compact') === '1'; } catch { return false; } })();
       if (loaded) setSettings(wasCompact ? { ...loaded, sidebarCompact: true } : loaded);
@@ -368,11 +376,12 @@ function Shell() {
       setSplash(Boolean(loaded?.onboarded));
       const open: Entry[] = saved.openProjects || [], active = open.find(entry => entry.id === saved.activeProjectId)?.root ?? open[0]?.root ?? '';
       commit(open); setActiveRoot(active); setReady(true); setBooted(true);
+      checkChangelog(Boolean(saved.settings));
     }).catch(cause => setBootError(errorText(cause)));
-  }, []);
+  }, [checkChangelog]);
   useEffect(() => {
     const theme = themeById(settings.theme), root = document.documentElement;
-    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme;
+    root.dataset.theme = theme.id; root.dataset.scheme = theme.scheme; syncMonacoTheme(theme.id);
   }, [settings.theme]);
   useEffect(() => { document.documentElement.toggleAttribute('data-keep-anim', settings.animateInBackground); syncFocus(); }, [settings.animateInBackground]);
   // Whole-window zoom through Electron (same as browser zoom, so terminal and diff coordinates stay right). A plain browser has its own Ctrl +/-.
@@ -471,7 +480,7 @@ function Shell() {
     { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', run: () => actions.current.toggle() },
     { id: 'settings', label: '설정 열기', run: () => actions.current.settings() },
     { id: 'closeProject', label: '프로젝트 닫기', run: () => actions.current.close() },
-    { id: 'tutorial', label: '튜토리얼 다시 보기', run: () => actions.current.tutorial() },
+    { id: 'tutorial', label: '둘러보기 다시 보기', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', run: () => actions.current.cycle(-1) },
     ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
@@ -500,7 +509,13 @@ function Shell() {
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
   touringRef.current = touring;
-  const animTipCard = animTip && <aside className="chat-mode-tip bg-anim-tip" role="status" aria-label="백그라운드 애니메이션">
+  // Every card the app starts by itself waits its turn (notices.ts): the tour, then the changelog after an update, the Git card, the Chat card, this tip, the pointers; and is drawn in the dock strip
+  // below the workspaces (in the layout, so it covers no button). Without a dock (the start screen has no workspace) the tip floats as before.
+  const [dock, setDock] = useState<HTMLElement | null>(null);
+  useNotice('tour', touring || splash);
+  useNotice('changelog', changelogPending || changelogOpen);
+  const animShown = useNotice('bg-anim', animTip);
+  const animCard = <aside className={`chat-mode-tip bg-anim-tip${dock ? ' docked' : ''}`} role="status" aria-label="백그라운드 애니메이션">
     <div className="chat-mode-tip-body">
       <strong>다른 화면으로 가면 애니메이션이 멈춥니다</strong>
       <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
@@ -510,23 +525,26 @@ function Shell() {
       </div>
     </div>
   </aside>;
+  const animTipCard = animShown && (dock ? createPortal(animCard, dock) : animCard);
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
   const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
   const [skippedTour, setSkippedTour] = useState(false); // a skipped tour counts as done; the book button then gets a one-time pointer
+  const tourHintShown = useNotice('tour-hint', skippedTour && !touring && !splash);
   // After an update, open the notes once the tour and the launch splash are out of the way. Opening marks that version viewed, so the next launch stays quiet.
   useEffect(() => {
     if (!changelogPending || !booted || touring || splash) return;
-    setChangelogPending(false);
+    setChangelogPending(false); setChangelogDue(false);
     setChangelogOpen(true);
   }, [changelogPending, booted, touring, splash]);
-  const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION })), 450); };
+  // Seeing the tour to its end means seeing its Git graph step, which is what the one-time Git card says; skipping it does not (the card stays for that person).
+  const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION, ...(skipped ? {} : { gitTipPending: false }) })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
-  return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
+  return <AppKeysContext.Provider value={settings.appKeys}><NoticeDock.Provider value={dock}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
@@ -685,8 +703,8 @@ function Shell() {
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
         <span className="spacer" /><AppVersion /><span className="spacer" />
-        <IconButton icon="book" label="튜토리얼 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
-        {skippedTour && !touring && !splash && <Hint title="튜토리얼은 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 둘러보기를 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
+        <IconButton icon="book" label="둘러보기 다시 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
+        {tourHintShown && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}
         onPointerDown={startResize} onDoubleClick={() => setWidth(252)}
@@ -696,6 +714,7 @@ function Shell() {
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+      <div className="notice-dock" ref={setDock} />
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
@@ -703,7 +722,7 @@ function Shell() {
     {animTipCard}
     {changelogModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
-  </div>{tutorial}</AppKeysContext.Provider>;
+  </div></NoticeDock.Provider>{tutorial}</AppKeysContext.Provider>;
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));

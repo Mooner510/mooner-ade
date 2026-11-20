@@ -127,7 +127,7 @@ function Body({ stats, costUsd }: { stats: Stats; costUsd: number | null }) {
 
     <section><h3>컨텍스트 크기와 턴 <small>이 대화 {stats.turnSeries.length}턴</small></h3>
       {stats.contextAvailable === false ? <p className="stats-empty">컨텍스트 정보가 제공되지 않았습니다.</p> : <TurnChart stats={stats} value={turnValue} unitName={hasTurnCost ? '턴 비용' : stats.tokensAvailable === false ? '완료 응답' : '턴 출력 토큰'} unit={turn => hasTurnCost ? money(turn.costUsd) : stats.tokensAvailable === false ? '완료 응답 1회' : `출력 ${compact(turn.output)}`} short={turn => hasTurnCost ? money(turn.costUsd) : stats.tokensAvailable === false ? '1' : compact(turn.output)} />}
-      {stats.compactions > 0 && <p className="stats-note">세로 점선은 컴팩션 {stats.compactions}회입니다.</p>}
+      {/* 그래프를 그린 때만 점선 설명을 단다(그래프가 없는데 "세로 점선"만 말하면 어긋난다). */}{stats.compactions > 0 && stats.contextAvailable !== false && stats.timeline.filter(point => !point.sub).length >= 2 && stats.turnSeries.length > 0 && <p className="stats-note">세로 점선은 컴팩션 {stats.compactions}회입니다.</p>}
       {subagents.length > 0 && <p className="stats-note">이 그래프는 현재 대화의 컨텍스트와 턴입니다. 서브에이전트 컨텍스트는 아래에 실행마다 표시됩니다.</p>}
       {(hasTurnCost || hasSubCost) && <p className="stats-note">{subagents.length ? '턴별 비용과 서브에이전트 비용은' : '턴별 비용은'} 실제 비용을 요청별 토큰 사용량으로 나눈 추정치입니다.</p>}
     </section>

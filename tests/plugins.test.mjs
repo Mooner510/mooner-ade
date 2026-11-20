@@ -569,6 +569,34 @@ test('feedback is an explicit permission; only a declaring, signed-in plugin sub
   assert.equal(statuses.at(-1).ok, false);
 });
 
+test('feedback status lookups go only to a signed-in plugin that said it can, and only well-formed answers pass', async t => {
+  const env = setup(t, { answers: [0, 0] });
+  plugin(env.dir, 'example', manifest({ feedback: true }));
+  await env.manager.setEnabled(true);
+  await env.manager.approve('example');
+  const { child } = env.hosts.at(-1);
+  child.emit('message', { type: 'ready' });
+  child.emit('message', { type: 'feedback', available: true, account: 'tester' });
+  assert.equal(env.manager.feedbackStatus().statusQuery, undefined);
+  assert.deepEqual(await env.manager.queryFeedbackStatus({ keys: ['abcdefgh'] }), { ok: false, error: { code: 'unsupported' } });
+  assert.ok(!child.sent.some(message => message.type === 'feedback/status'));
+  child.emit('message', { type: 'feedback', available: true, account: 'tester', statusQuery: true });
+  assert.equal(env.manager.feedbackStatus().statusQuery, true);
+  const asked = env.manager.queryFeedbackStatus({ keys: ['abcdefgh', 'ijklmnop'] });
+  const request = child.sent.find(message => message.type === 'feedback/status');
+  assert.deepEqual(request.keys, ['abcdefgh', 'ijklmnop']);
+  child.emit('message', { type: 'feedback/status-result', id: request.id, ok: true, latestStable: '0.6.0', items: {
+    abcdefgh: { state: 'beta', version: '0.6.0-beta5', body: 'never passed on' }, ijklmnop: { state: 'shipped' }, 'bad key': { state: 'pending' }, qrstuvwx: { state: 'released', version: 'javascript:alert(1)' } } });
+  assert.deepEqual(await asked, { ok: true, latestStable: '0.6.0', items: { abcdefgh: { state: 'beta', version: '0.6.0-beta5' }, qrstuvwx: { state: 'released' } } });
+  const failed = env.manager.queryFeedbackStatus({ keys: ['abcdefgh'] });
+  const second = child.sent.filter(message => message.type === 'feedback/status').at(-1);
+  child.emit('message', { type: 'feedback/status-result', id: second.id, ok: false, error: { code: 'rate_limited', retryAfter: 999999 } });
+  assert.deepEqual(await failed, { ok: false, error: { code: 'rate_limited', retryAfter: 86_400 } });
+  const dying = env.manager.queryFeedbackStatus({ keys: ['abcdefgh'] });
+  child.exit(1);
+  assert.equal((await dying).error.code, 'network_error');
+});
+
 test('a plugin that did not declare feedback is never asked and never counted', async t => {
   const statuses = [];
   const env = setup(t, { answers: [0, 0], onFeedback: status => statuses.push(status) });

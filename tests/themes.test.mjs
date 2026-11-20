@@ -80,3 +80,13 @@ test('saved theme ids are accepted and junk is not', () => {
   assert.equal(validateAppState(app({ theme: 'rose-pine-dawn' })).settings.theme, 'rose-pine-dawn');
   for (const theme of ['Light', 'dark mode', 'a'.repeat(25), '../x', '']) assert.throws(() => validateAppState(app({ theme })), { code: 'INVALID_INPUT' }, theme);
 });
+
+test('보조 글자색(muted)은 모든 면에서 4.5:1, 힌트(faint)와 상태색(add·del·warn·info)은 3:1을 넘는다', () => {
+  for (const theme of APP_THEMES) {
+    const v = theme.vars;
+    // 본문색(fg) 자체가 그 면에서 4.5:1에 못 미치는 팔레트(Solarized)는 muted도 fg를 넘을 수 없어, 그때는 fg와 같은 수준까지만 요구한다.
+    for (const ground of ['--bg', '--surface', '--raised', '--overlay']) assert.ok(contrast(v['--muted'], v[ground]) >= Math.min(4.5, contrast(v['--fg'], v[ground])) - 0.01, `${theme.id}: muted on ${ground} ${contrast(v['--muted'], v[ground]).toFixed(2)}`);
+    for (const ground of ['--bg', '--surface']) assert.ok(contrast(v['--faint'], v[ground]) >= 3, `${theme.id}: faint on ${ground} ${contrast(v['--faint'], v[ground]).toFixed(2)}`);
+    for (const key of ['--add', '--del', '--warn', '--info']) assert.ok(contrast(v[key], v['--bg']) >= 3, `${theme.id}: ${key} ${contrast(v[key], v['--bg']).toFixed(2)}`);
+  }
+});

@@ -215,7 +215,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { s
   const isDefault = JSON.stringify([layout, [...items].sort()]) === JSON.stringify([defaults, [...defaultSettings[keys_.items]].sort()]) && (!chat || !settings.chatStatusSeparator);
   return <div className="setting-block">
     <div className="status-intro">
-      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. {!chat && <>톱니바퀴(<Icon name="settings" size={12} />)가 있는 항목은 표시 방식을 따로 정할 수 있습니다. </>}키보드는 Alt+화살표.</p>
+      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. {!chat && <>톱니바퀴(<Icon name="settings" size={12} />)가 있는 항목은 표시 방식을 따로 정할 수 있습니다. </>}키보드는 Alt+화살표.{!chat && ' 창이 좁으면 CPU·메모리 → 시계·WakaTime → Codex·Cursor 사용량 순으로 접혀 하단 상태바 오른쪽 끝의 …(더 보기) 메뉴로 들어갑니다. 경로·브랜치·Claude 사용량은 끝까지 남습니다.'}</p>
       <button disabled={isDefault} onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
     </div>
     {chat && <Row title="항목 구분자" hint="항목 사이에 넣을 문자입니다 (최대 8자, 비우면 간격만).">
@@ -832,7 +832,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
         {(searching || section === 'keys') && <SectionFrame label="단축키" searching={searching}>
           <ShortcutKeys settings={settings} onChange={onChange} />
-          <Row title="튜토리얼" hint="처음 실행할 때 보여준 둘러보기를 다시 시작합니다."><button onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}><Icon name="book" />다시 보기</button></Row>
+          <Row title="둘러보기" hint="처음 실행할 때 보여준 안내를 처음부터 다시 시작합니다."><button onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}><Icon name="book" />다시 보기</button></Row>
         </SectionFrame>}
       </div>
       {appearance && <LookPreview id={look || 'theme'} previewTheme={lookTheme} settings={settings} />}
