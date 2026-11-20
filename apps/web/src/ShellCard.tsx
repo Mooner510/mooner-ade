@@ -27,7 +27,7 @@ function Stream({ label, text, error }: { label: string; text: string; error?: b
 
 /** A `!command` the user ran from the composer: command, how it ended, and its output. Drawn like a tool card, but it is the user's own run (no approval, not the agent's). */
 // `note`: only the newest `!` card carries the "goes to the agent with your next message" line (`pending` = how many waiting cards it covers).
-export const ShellCard = memo(function ShellCard({ item, onStop, enter, note }: { item: ShellItem; onStop(id: string): void; enter?: true; note?: { pending: number } }) {
+export const ShellCard = memo(function ShellCard({ item, onStop, onSkip, enter, note }: { item: ShellItem; onStop(id: string): void; onSkip(id: string, on: boolean): void; enter?: true; note?: { pending: number } }) {
   const [open, setOpen] = useState(true), running = item.status === 'running';
   // Elapsed time and the "waiting for input?" hint need a clock only while the run is open.
   const [now, setNow] = useState(() => Date.now());
@@ -56,7 +56,8 @@ export const ShellCard = memo(function ShellCard({ item, onStop, enter, note }: 
       {!running && empty && item.status !== 'error' && <p className="chat-tool-note">(출력 없음)</p>}
       {item.error && <p className="chat-tool-note">{item.error}</p>}
       {advice && <p className="chat-tool-note chat-shell-advice"><Icon name="terminal" size={13} />{advice}</p>}
-      {note && !running && item.status !== 'error' && <p className="chat-tool-note chat-shell-sent">{item.sent ? '다음 메시지와 함께 에이전트에게 전달했습니다.' : note.pending > 1 ? `위 실행 결과 ${note.pending}건이 다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.` : '다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.'}</p>}
+      {!running && item.status !== 'error' && (item.sent ? note && <p className="chat-tool-note chat-shell-sent">다음 메시지와 함께 에이전트에게 전달했습니다.</p>
+        : <p className="chat-tool-note chat-shell-sent">{item.skipped ? '이 실행 결과는 에이전트에게 전달하지 않습니다.' : !note ? '' : note.pending > 1 ? `위 실행 결과 ${note.pending}건이 다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.` : '다음에 보내는 메시지와 함께 에이전트에게 전달됩니다.'} <button type="button" className="chat-command-more" onClick={() => onSkip(item.id, !item.skipped)}>{item.skipped ? '다시 포함하기' : '이 메시지는 제외하기'}</button></p>)}
     </div></Collapse>
   </div>;
 });

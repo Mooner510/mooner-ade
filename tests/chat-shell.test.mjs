@@ -128,6 +128,17 @@ test('chat session: ! runs without a turn, stores start and the whole end, and l
   assert.ok(session.replay().events.some(event => event.kind === 'shell' && event.phase === 'end'));
 });
 
+test('chat session: skipShell toggles one waiting run out of (and back into) what rides with the next message', async t => {
+  const { session, events } = await open(t);
+  const { id, done } = session.shell(node('echo', 0)); await done;
+  assert.equal(pendingShellRuns(events).length, 1);
+  assert.equal(session.skipShell(id, true), true);
+  assert.equal(pendingShellRuns(events).length, 0);
+  assert.equal(session.skipShell(id, false), true);
+  assert.equal(pendingShellRuns(events).length, 1);
+  assert.equal(session.skipShell('nope', true), false);
+});
+
 test('chat session: stop ends a running command; an interactive command is refused; at most four run at once', async t => {
   const { session, events } = await open(t);
   const { id, done } = session.shell(node('sleep'));
@@ -157,6 +168,7 @@ test('chat session: what the user ran goes ahead of their next message once; the
   await until(() => session.state().status === 'idle');
   const user = events.filter(event => event.kind === 'user').at(-1);
   assert.equal(user.text, '요약해줘');
+  assert.equal(user.shells, 1);
   const sent = shellEvents(events, 'sent');
   assert.equal(sent.length, 1);
   assert.ok(sent[0].seq < user.seq);
