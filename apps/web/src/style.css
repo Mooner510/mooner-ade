@@ -3280,7 +3280,7 @@ body.pane-dragging { user-select: none; }
 /* The app's own cards float over the window; a very light blur sits behind them (Spotlight.tsx) with a hole where the element they are about is. */
 .ws-stack { display: flex; flex-direction: column; }
 .ws-stack > .app { flex: 1; min-height: 0; height: auto; }
-.notice-scrim { position: fixed; inset: 0; z-index: 900; pointer-events: none; backdrop-filter: blur(.7px); background: rgb(0 0 0 / .06);
+.notice-scrim { position: fixed; inset: 0; z-index: 900; pointer-events: none; backdrop-filter: blur(1.3px); background: rgb(0 0 0 / .07);
   mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0); mask-size: 100% 100%, var(--hw, 0) var(--hh, 0); mask-position: 0 0, var(--hx, 0) var(--hy, 0); mask-repeat: no-repeat; mask-composite: exclude; }
 .notice-ring { position: fixed; left: calc(var(--hx) + 2px); top: calc(var(--hy) + 2px); width: calc(var(--hw) - 4px); height: calc(var(--hh) - 4px); z-index: 900; pointer-events: none; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .chat-mode-tip.notice-card { position: fixed; z-index: 901; }

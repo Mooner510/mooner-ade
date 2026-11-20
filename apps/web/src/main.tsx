@@ -516,6 +516,12 @@ function Shell() {
   useNotice('changelog', changelogPending || changelogOpen);
   const animShown = useNotice('bg-anim', animTip);
   const animCard = <aside className="chat-mode-tip bg-anim-tip notice-card" role="status" aria-label="백그라운드 애니메이션">
+    <svg className="git-tip-art" viewBox="0 0 112 84" aria-hidden="true">
+      <rect x="6" y="6" width="100" height="72" rx="8" fill="none" stroke="var(--border-strong)" strokeWidth="2" /><path d="M6 20H106" stroke="var(--border-strong)" strokeWidth="2" />
+      <circle cx="16" cy="13" r="2.4" fill="var(--faint)" /><circle cx="24" cy="13" r="2.4" fill="var(--faint)" />
+      <circle cx="40" cy="50" r="13" fill="none" stroke="var(--border-strong)" strokeWidth="4" /><path d="M40 37A13 13 0 0 1 53 50" fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" />
+      <rect x="66" y="40" width="7" height="20" rx="2" fill="var(--muted)" /><rect x="79" y="40" width="7" height="20" rx="2" fill="var(--muted)" />
+    </svg>
     <div className="chat-mode-tip-body">
       <strong>다른 앱을 보는 동안 애니메이션이 멈춥니다</strong>
       <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
