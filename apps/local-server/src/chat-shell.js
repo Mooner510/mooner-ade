@@ -123,12 +123,13 @@ export function shellContext(runs) {
 
 // Shell runs that finished but were not yet handed to the agent: from the events since the last /clear, minus the ones a later `sent` event named.
 export function pendingShellRuns(events) {
-  const since = events.findLastIndex(event => event.kind === 'divider'), runs = new Map(), sent = new Set();
+  const since = events.findLastIndex(event => event.kind === 'divider'), runs = new Map(), sent = new Set(), skipped = new Set();
   for (const event of since >= 0 ? events.slice(since + 1) : events) {
     if (event.kind !== 'shell') continue;
     if (event.phase === 'start') runs.set(event.id, { command: event.command, cwd: event.cwd });
     else if (event.phase === 'end') { if (runs.has(event.id)) runs.set(event.id, { ...runs.get(event.id), ...event }); }
+    else if (event.phase === 'skip') { if (event.on) skipped.add(event.id); else skipped.delete(event.id); } // the user's "이 메시지는 제외하기" toggle
     else if (event.phase === 'sent') for (const id of event.ids ?? []) sent.add(id);
   }
-  return [...runs].filter(([id, run]) => run.phase === 'end' && !sent.has(id) && run.status !== 'error').map(([id, run]) => ({ id, ...run }));
+  return [...runs].filter(([id, run]) => run.phase === 'end' && !sent.has(id) && !skipped.has(id) && run.status !== 'error').map(([id, run]) => ({ id, ...run }));
 }
