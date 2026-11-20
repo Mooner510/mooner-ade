@@ -3273,18 +3273,18 @@ dialog.image-modal { width: fit-content; height: fit-content; }
 }
 body.pane-dragging, body.pane-dragging * { cursor: grabbing !important; }
 body.pane-dragging { user-select: none; }
-.git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.git-tip-art { flex: none; align-self: flex-start; width: 146px; height: 90px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
 
 .ide-mark { display: inline-grid; place-items: center; flex: none; border-radius: 4px; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
-/* The strip below the workspaces where the app's own cards are drawn, one at a time (main.tsx, notices.ts): in the layout, so a card covers no button or tab. */
+/* The app's own cards float over the window; a very light blur sits behind them (Spotlight.tsx) with a hole where the element they are about is. */
 .ws-stack { display: flex; flex-direction: column; }
 .ws-stack > .app { flex: 1; min-height: 0; height: auto; }
-.notice-dock { flex: none; }
-.notice-dock:empty { display: none; }
-.notice-dock > .chat-mode-tip.docked { position: static; z-index: auto; width: auto; margin: 0; padding: 8px 14px; align-items: center; border-width: 1px 0 0; border-radius: 0; box-shadow: none; }
-.notice-dock > .chat-mode-tip.docked > img, .notice-dock > .chat-mode-tip.docked > .git-tip-art { width: 84px; min-height: 0; height: 63px; align-self: center; }
-.notice-dock > .chat-mode-tip.docked .chat-mode-tip-body { max-width: 780px; }
+.notice-scrim { position: fixed; inset: 0; z-index: 900; pointer-events: none; backdrop-filter: blur(.7px); background: rgb(0 0 0 / .06);
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0); mask-size: 100% 100%, var(--hw, 0) var(--hh, 0); mask-position: 0 0, var(--hx, 0) var(--hy, 0); mask-repeat: no-repeat; mask-composite: exclude; }
+.notice-ring { position: fixed; left: calc(var(--hx) + 2px); top: calc(var(--hy) + 2px); width: calc(var(--hw) - 4px); height: calc(var(--hh) - 4px); z-index: 900; pointer-events: none; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.chat-mode-tip.notice-card { position: fixed; z-index: 901; }
+@media (prefers-reduced-motion: no-preference) { .notice-scrim { animation: notice-scrim-in .25s ease-out; } @keyframes notice-scrim-in { from { opacity: 0; } } }
 
 /* The tutorial's practice workspace puts a tab's only pane straight into .tab-page (the real one wraps it in a split slot); without this it kept its content width: the first
    practice terminal was a 200px strip and a practice Chat pane 2px wide. */

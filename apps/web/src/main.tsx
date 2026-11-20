@@ -2,7 +2,9 @@ import { AppKeysContext, showAppKey } from './shortcuts';
 import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
-import { NoticeDock, useNotice } from './use-notice';
+import { createPortal } from 'react-dom';
+import { useNotice } from './use-notice';
+import { Spotlight } from './Spotlight';
 import { api, basename, chooseFolder } from './api';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
@@ -508,13 +510,12 @@ function Shell() {
   // fades away onto it; finishing or skipping saves `onboarded` with the other settings.
   const touring = booted && !settings.onboarded;
   touringRef.current = touring;
-  // Every card the app starts by itself waits its turn (notices.ts): the tour, then the changelog after an update, the Git card, the Chat card, this tip, the pointers; and is drawn in the dock strip
-  // below the workspaces (in the layout, so it covers no button). Without a dock (the start screen has no workspace) the tip floats as before.
-  const [dock, setDock] = useState<HTMLElement | null>(null);
+  // Every card the app starts by itself waits its turn (notices.ts): the tour, then the changelog after an update, the Git card, the Chat card, this tip, the pointers. A card floats over the
+  // window with a very light blur behind it (Spotlight) that leaves the element it is about sharp.
   useNotice('tour', touring || splash);
   useNotice('changelog', changelogPending || changelogOpen);
   const animShown = useNotice('bg-anim', animTip);
-  const animCard = <aside className="chat-mode-tip bg-anim-tip" role="status" aria-label="백그라운드 애니메이션">
+  const animCard = <aside className="chat-mode-tip bg-anim-tip notice-card" role="status" aria-label="백그라운드 애니메이션">
     <div className="chat-mode-tip-body">
       <strong>다른 앱을 보는 동안 애니메이션이 멈춥니다</strong>
       <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
@@ -524,8 +525,7 @@ function Shell() {
       </div>
     </div>
   </aside>;
-  // Floats at the bottom right like before (not in the dock strip under the status bar): this tip points at a setting, not at a button it could cover.
-  const animTipCard = animShown && animCard;
+  const animTipCard = animShown && <>{<Spotlight target='button[aria-label="설정"]' />}{createPortal(animCard, document.body)}</>;
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
   const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
@@ -544,7 +544,7 @@ function Shell() {
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
-  return <AppKeysContext.Provider value={settings.appKeys}><NoticeDock.Provider value={dock}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
+  return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
@@ -714,7 +714,6 @@ function Shell() {
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
-      <div className="notice-dock" ref={setDock} />
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
@@ -722,7 +721,7 @@ function Shell() {
     {animTipCard}
     {changelogModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
-  </div></NoticeDock.Provider>{tutorial}</AppKeysContext.Provider>;
+  </div>{tutorial}</AppKeysContext.Provider>;
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
