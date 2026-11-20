@@ -517,8 +517,8 @@ function Shell() {
   const animShown = useNotice('bg-anim', animTip);
   const animCard = <aside className={`chat-mode-tip bg-anim-tip${dock ? ' docked' : ''}`} role="status" aria-label="백그라운드 애니메이션">
     <div className="chat-mode-tip-body">
-      <strong>다른 화면으로 가면 애니메이션이 멈춥니다</strong>
-      <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
+      <strong>다른 앱을 보는 동안 애니메이션이 멈춥니다</strong>
+      <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
       <div className="chat-mode-tip-actions">
         <button type="button" className="primary" onClick={() => { setAnimTip(false); setSettingsOpen('default'); }}>설정 열기</button>
         <button type="button" onClick={() => setAnimTip(false)}>확인</button>
