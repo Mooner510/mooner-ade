@@ -73,7 +73,7 @@ test('상태바 접기·셸 카드 안내·ui 폼 라벨·비 Git 안내·Mermai
   const workspace = await read('Workspace.tsx'), shell = await read('ShellCard.tsx'), forms = await read('UiBlocks.tsx'), mermaid = await read('mermaid-viewer.tsx'), chat = await read('ChatPane.tsx');
   assert.match(workspace, /<StatusSlot key=\{id\} id=\{id\}>\{statusNodes\[id\]\}<\/StatusSlot>\)\}<StatusMore ids=\{foldedStatus\}/);
   assert.match(workspace, /if \(noGit\) setGitNote\(true\); else toggleGit\(\);/);
-  assert.match(shell, /note && !running && item\.status !== 'error'/);
+  assert.match(shell, /!running && item\.status !== 'error' && \(item\.sent \? note && /);
   assert.match(forms, /'입력창에 채우기'/);
   assert.match(mermaid, /onKeyDown=\{keyView\}/);
   assert.match(chat, /이미지를 5MB 아래로 줄이는 중…/);

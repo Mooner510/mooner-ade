@@ -26,7 +26,7 @@ const MESSAGES = {
   413: ['too_large', '이미지가 너무 커서 Hub가 받지 않았습니다.'],
   426: ['update_required', '최신 ADE로 업데이트한 뒤 피드백을 다시 제출하세요.'],
   429: ['rate_limited', '로그인 없는 제출은 5분에 1건씩 보낼 수 있습니다. 순서대로 자동 전송합니다.'],
-  502: ['upstream_failed', 'Hub가 GitHub에 올리지 못했습니다. 잠시 뒤 다시 보냅니다.'],
+  502: ['upstream_failed', 'Hub가 피드백을 저장하지 못했습니다. 잠시 뒤 다시 보냅니다.'],
   503: ['feedback_disabled', 'Hub가 지금 로그인 없는 피드백을 받지 않습니다.']
 };
 const retryAfterOf = (response, body) => {
@@ -34,7 +34,7 @@ const retryAfterOf = (response, body) => {
   return Number.isInteger(value) && value > 0 ? Math.min(value, 86_400) : undefined;
 };
 
-// Resolves { ok, issueUrl?, issueNumber? } or { ok:false, error:{ code, message, retryAfter? } }; never rejects.
+// Resolves { ok, issueNumber? } (the Hub's link to its own storage is never passed on) or { ok:false, error:{ code, message, retryAfter? } }; never rejects.
 export async function postAnonymousFeedback({ hubUrl = DEFAULT_HUB_URL, deviceId, meta, images, fetchImpl = fetch, timeoutMs = 90_000 }) {
   try {
     const form = new FormData();
@@ -45,7 +45,7 @@ export async function postAnonymousFeedback({ hubUrl = DEFAULT_HUB_URL, deviceId
     }
     const response = await fetchImpl(new URL('/v1/feedback/anonymous', hubUrl), { method: 'POST', headers: { 'X-ADE-Device': deviceId }, body: form, signal: AbortSignal.timeout(timeoutMs) });
     const body = await response.json().catch(() => null);
-    if (response.ok && typeof body?.issueUrl === 'string') return { ok: true, issueUrl: body.issueUrl, ...(Number.isSafeInteger(body.issueNumber) && { issueNumber: body.issueNumber }) };
+    if (response.ok && (typeof body?.issueUrl === 'string' || Number.isSafeInteger(body?.issueNumber))) return { ok: true, ...(Number.isSafeInteger(body.issueNumber) && { issueNumber: body.issueNumber }) };
     const [code, fallback] = MESSAGES[response.status] ?? (response.status >= 500 ? ['upstream_failed', `Hub 오류 (${response.status})`] : ['bad_request', `Hub가 피드백을 받지 않았습니다 (${response.status}).`]);
     const retryAfter = response.status === 429 ? retryAfterOf(response, body) : undefined;
     return { ok: false, error: { code: typeof body?.error?.code === 'string' && (response.status !== 503 || body.error.code === 'version_check_failed') ? body.error.code.replace(/-/g, '_') : code, message: typeof body?.error?.message === 'string' ? body.error.message.slice(0, 500) : fallback, ...(retryAfter && { retryAfter }) } };

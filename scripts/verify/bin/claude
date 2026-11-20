@@ -52,6 +52,10 @@ if (!stream) {
   let allow = []; // permissions.allow the host put into the flag settings (apply_flag_settings)
   let asking = false; // a can_use_tool request (approval, question, plan) is waiting for its reply
   let slowRun = null; const heldSteers = new Map(); // `slow` turn in flight (ctl.json {"slowms":N}, default 4 s) and steering lines queued behind it: uuid -> line
+  // MCP servers for /mcp: alpha is fine, beta fails until reconnected twice, gamma needs a sign-in (mcp_authenticate answers a fake authUrl; the sign-in finishes 2 s later).
+  const mcp = new Map([['alpha', { status: 'connected' }], ['beta', { status: 'failed', error: 'Connection closed', tries: 0 }], ['gamma', { status: 'needs-auth', http: true }]]);
+  const mcpOut = ([name, v]) => ({ name, status: v.status, ...(v.error && v.status === 'failed' && { error: v.error }), transport: v.http ? 'http' : 'stdio', scope: 'user', config: v.http ? { type: 'http', url: 'https://example.invalid/mcp' } : { type: 'stdio', command: 'node', args: [name + '.mjs'] },
+    ...(v.status === 'connected' && { serverInfo: { name, version: '1.0' }, tools: [{ name: 'list_things', description: 'List the things', annotations: { readOnlyHint: true } }, { name: 'delete_thing', annotations: { destructiveHint: true } }] }) });
   const bgTasks = new Map(); // task_id -> { toolUseId, timer }: `bgtask` jobs still running
   readline.createInterface({ input: process.stdin }).on('line', async line => {
     let m; try { m = JSON.parse(line); } catch { return; }
@@ -61,6 +65,16 @@ if (!stream) {
       else if (sub === 'cancel_async_message') send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { cancelled: heldSteers.delete(m.request.message_uuid) } } });
       else if (sub === 'interrupt') { send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); if (slowRun) { slowRun.abort(); setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } else if (asking) { asking = false; setTimeout(() => result('', { is_error: true, terminal_reason: 'aborted_streaming' }), 150); } } // a turn waiting on an approval/question ends with the interrupt's `result`, like the real CLI
       else if (sub === 'apply_flag_settings') { allow = m.request.settings?.permissions?.allow ?? allow; send({ type: 'control_response', response: { subtype: ctl().flag === 'error' ? 'error' : 'success', request_id: m.request_id, response: {} } }); }
+      else if (sub?.startsWith('mcp_')) {
+        const v = mcp.get(m.request.serverName), ok = response => send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, ...(response && { response }) } });
+        if (sub === 'mcp_status') ok({ mcpServers: [...mcp].map(mcpOut) });
+        else if (!v) send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Server not found: ' + m.request.serverName } });
+        else if (sub === 'mcp_toggle') { v.status = m.request.enabled ? 'connected' : 'disabled'; ok(); }
+        else if (sub === 'mcp_reconnect') { if (v.status === 'failed' && ++v.tries < 2) send({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'Connection closed' } }); else { v.status = 'connected'; ok(); } }
+        else if (sub === 'mcp_authenticate') { ok({ authUrl: 'https://example.invalid/oauth', requiresUserAction: true }); setTimeout(() => { v.status = 'connected'; }, 2000); }
+        else if (sub === 'mcp_clear_auth') { v.status = 'needs-auth'; ok(); }
+        else ok();
+      }
       else send({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
       // stop_task: the CLI reports the stopped task itself, after its control reply
       if (sub === 'stop_task' && bgTasks.has(m.request.task_id)) { const t = bgTasks.get(m.request.task_id); clearTimeout(t.timer); bgTasks.delete(m.request.task_id); task('task_notification', t.toolUseId, { status: 'stopped' }); }
@@ -107,6 +121,7 @@ if (!stream) {
       return;
     }
     // An MCP tool a subagent asks for: the CLI sent no permission_suggestions with it (as in the field), so "항상 허용" has to come from ADE.
+    if (text.includes('mcpreset')) { mcp.set('alpha', { status: 'connected' }); mcp.set('beta', { status: 'failed', error: 'Connection closed', tries: 0 }); mcp.set('gamma', { status: 'needs-auth', http: true }); }
     if (text.includes('mcpperm')) { asking = true; send({ type: 'control_request', request_id: 'mcp-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'mcp__mooner_server__server_exec', tool_use_id: 'toolu_mcp', input: { command: 'ls -la /etc/stacks' } } }); return; }
     if (text.includes('bashperm')) { asking = true; send({ type: 'control_request', request_id: 'perm-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'toolu_perm', input: { command: 'npm test', description: '테스트 실행' }, permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'session' }] } }); return; }
     if (/\bask\b/.test(text)) { asking = true; send({ type: 'control_request', request_id: 'ask-' + Date.now(), request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [{ question: '고르세요', header: '선택', multiSelect: false, options: [{ label: 'A', description: '첫째' }, { label: 'B', description: '둘째' }] }] } } }); return; }

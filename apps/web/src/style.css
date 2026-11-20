@@ -1,7 +1,7 @@
 :root {
   --bg: #0c0d0f; --surface: #141518; --raised: #1b1d21; --overlay: #202227; --border: #24262b; --border-strong: #33363d;
   --fg: #e4e6ea; --muted: #8b9099; --faint: #616670; --accent: #5ec8e5; --accent-strong: #2fb3d6; --accent-fg: #06141a; --accent-soft: #5ec8e51f;
-  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
+  --hover: #ffffff0d; --selected: #5ec8e526; --input: #101114; --focus: #5ec8e5; --add: #3fb950; --del: #f85149; --warn: #e3b341; --done: #9bd94b; --ask: #e879ad; --shell: #e879ad; --error: #f85149; --info: #58a6ff; --beta: #38bdf8;
   --shadow: 0 12px 40px #000a;
   --brand-claude: #d97757; --brand-codex: #b1a7ff; --brand-cursor: #ffffff;
   --term-bg: #141518; --term-fg: #e4e6ea; --term-cursor: #5ec8e5; --term-selection: #5ec8e540;
@@ -496,6 +496,15 @@ dialog.settings-modal.bar-live::backdrop { mask-image: linear-gradient(#000 0, #
 .project-modal h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 20px; }
 
 /* sidebar: each project is a folder holding its own tabs */
+/* Folding or unfolding the sidebar animates --rail-w itself, so the sidebar, the title-bar padding and the workspace move together. Dragging the resizer sets the same
+   variable inline, so the transition is off while body.resizing. The folder rows / icons swap at once and fade in over the moving edge. */
+@property --rail-w { syntax: '<length>'; inherits: true; initial-value: 240px; }
+.shell { transition: --rail-w .2s cubic-bezier(.4, 0, .2, 1); }
+body.resizing .shell { transition: none; }
+.projects-head, .projects-foot { overflow: hidden; }
+.folder, .rail-item { animation: rail-in .2s ease-out; }
+@keyframes rail-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .shell { transition: none; } .folder, .rail-item { animation: none; } }
 .projects { position: relative; width: var(--rail-w); flex: none; display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; min-height: 0; background: var(--bg); border-right: 1px solid var(--border); }
 .projects::before { content: ''; flex: none; height: max(env(titlebar-area-height, 0px), var(--desktop-titlebar-height, 8px)); -webkit-app-region: drag; app-region: drag; }
 .projects-head { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 8px 6px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
@@ -1402,7 +1411,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
   transition: left .4s var(--ease-out), top .4s var(--ease-out); animation: fade-in .2s var(--ease-out); }
 .tour-coach[popover] { right: auto; bottom: auto; margin: 0; color: inherit; } /* above the settings window; undo the popover UA box */
 .tour-coach.center { left: 50%; top: 50%; translate: -50% -50%; transition: none; }
-.tour-coach.hero { width: min(440px, calc(100vw - 32px)); padding: 20px 22px; gap: 14px; }
+.tour-coach.hero { width: min(500px, calc(100vw - 32px)); padding: 26px 28px; gap: 20px; }
 .tour-head { display: flex; align-items: baseline; gap: 10px; }
 .tour-head small { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .tour-hero-head { display: flex; align-items: center; gap: 12px; }
@@ -1421,10 +1430,10 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .tour-coach .diffstat { gap: 4px; font-size: 11.5px; vertical-align: -1px; }
 .tour-tag { display: inline-flex; align-items: center; gap: 4px; margin-right: 3px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 5px; color: var(--fg); font-size: 11.5px; font-weight: 600; line-height: 18px; }
 .tour-tag.chat .icon { color: var(--accent); } .tour-tag.cli .icon { color: var(--add); }
-.tour-features { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.tour-features li { display: flex; align-items: flex-start; gap: 10px; }
+.tour-features { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+.tour-features li { display: flex; align-items: flex-start; gap: 12px; }
 .tour-features li > span { flex: none; display: grid; place-items: center; width: 18px; height: 20px; color: var(--muted); }
-.tour-features strong { font-size: 12.5px; font-weight: 600; } .tour-features small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.tour-features strong { font-size: 13px; font-weight: 600; } .tour-features small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .tour-keys { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .tour-keys span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .tour-keys kbd, .tour-summary kbd { font-size: 11.5px; padding: 0 5px; }
@@ -1445,7 +1454,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .tour-coach.hero footer .primary { padding: 6px 14px; font-size: 13px; }
 .tour-coach footer .primary:disabled { opacity: .45; cursor: default; }
 .tour-skip { color: var(--muted); }
-.tour-skip-note { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.tour-skip-note { margin: 0; font-size: 12px; color: var(--muted); }
 .tour-summary { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
 .tour-summary > div { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
 .tour-summary kbd, .tour-keys kbd { white-space: nowrap; }
@@ -1550,6 +1559,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 /* A message with pictures: the pictures sit on their own row above, the text bubble stays below. */
 .chat-msg.user:has(> .chat-user-images, > .chat-images) { flex-direction: column; align-items: flex-end; gap: 6px; }
 .chat-msg.user > .chat-user-images { margin-top: 0; max-width: 85%; } .chat-msg.user > .chat-images { margin-top: 0; }
+.chat-msg.user:has(> .chat-shell-included) { flex-direction: column; align-items: flex-end; gap: 4px; }
+.chat-shell-included { display: inline-flex; align-items: center; gap: 4px; max-width: 85%; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .chat-msg.user:has(.md-table) .chat-bubble { max-width: 100%; width: 100%; }
 .chat-bubble.steer { --chat-bubble-surface: color-mix(in srgb, var(--fg) 9%, var(--raised)); border: 1px dashed color-mix(in srgb, var(--fg) 50%, transparent); background: var(--chat-bubble-surface); }
 .chat-steer { display: block; margin-bottom: 2px; font-size: 10.5px; color: var(--muted); letter-spacing: .02em; }
@@ -1565,17 +1576,17 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-bubble { --chat-bubble-surface: var(--raised); max-width: 85%; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: var(--chat-bubble-surface); border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .chat-bubble:has(> .md) { white-space: normal; overflow-wrap: anywhere; }
 .chat-bubble > .md { gap: 4px; font-size: inherit; min-width: 0; max-width: 100%; }
-.chat-bubble.clipped { cursor: zoom-in; position: relative; padding-top: 28px; overflow: hidden; }
-.chat-bubble.clipped:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.chat-bubble-open { position: absolute; top: 5px; right: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--chat-bubble-surface) 90%, transparent); border: 1px solid var(--border); }
-.chat-bubble-open:hover { background: var(--hover); color: var(--fg); }
-.chat-bubble.clipped .chat-bubble-preview { position: relative; overflow: hidden; min-height: 0; }
+.chat-bubble.clipped { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.chat-bubble-toggle { display: flex; align-items: center; gap: 4px; margin: 6px 0 0 auto; padding: 2px 7px; border-radius: 6px; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--chat-bubble-surface) 90%, transparent); border: 1px solid var(--border); }
+.chat-bubble-toggle:hover { background: var(--hover); color: var(--fg); }
+.chat-bubble-toggle[aria-expanded=true] .icon { transform: rotate(180deg); }
+.chat-bubble.clipped .chat-bubble-toggle { position: absolute; bottom: 8px; right: 12px; z-index: 2; margin: 0; }
+.chat-bubble.clipped .chat-bubble-preview { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 30px; } /* scrolls inside while folded; the bottom padding lets the last line clear the toggle */
 /* Fade ends in each bubble's own background so Solarized, Gruvbox, etc. do not get a gray wash; shade follows data-scheme (see --chat-bubble-fade-shade above chat rules). */
 :root, :root[data-scheme=dark] { --chat-bubble-fade-shade: #000; }
 :root[data-scheme=light] { --chat-bubble-fade-shade: var(--fg); }
-.chat-bubble.clipped .chat-bubble-preview::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 80px; pointer-events: none;
+.chat-bubble.clipped::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 80px; pointer-events: none;
   background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--chat-bubble-fade-shade) 11%, transparent) 42%, var(--chat-bubble-surface) 100%); }
-.user-msg-modal-body { flex: 1; min-height: 0; }
 .chat-images { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--muted); }
 .chat-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .chat-user-images:first-child { margin-top: 0; }
@@ -1887,11 +1898,13 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 /* The circle behind the icon breathes, not the button: the button turns into "stop" while its own colour transitions run, and Chromium then keeps
    a transform animation on that element off the compositor for good (restyling the document every frame for the whole turn). */
 .chat-send.stop::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); }
-.chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
-/* Thumbnails keep the picture's own shape inside 240×80 (never past the composer): nothing is cropped, so a wide screenshot is not cut to a scrap of text. */
+.chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; container-type: inline-size; }
+/* Thumbnails keep the picture's own shape, at most 80px tall and as wide as the composer: nothing is cropped, so a wide screenshot is not cut to a scrap of text.
+   The width cap is 100cqw, not 100%: a percentage max-width on the img is cyclic and ignored when the wrapper is sized, so the wrapper took the picture's natural
+   width and the remove button sat far outside the thumbnail. */
 .chat-attachments > span { position: relative; max-width: 100%; }
 .chat-attachments .chat-attachment-open { display: block; padding: 0; border: 0; border-radius: 8px; cursor: zoom-in; }
-.chat-attachments img { display: block; width: auto; height: auto; max-width: min(240px, 100%); max-height: 80px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
+.chat-attachments img { display: block; width: auto; height: auto; max-width: 100cqw; max-height: 80px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
 .chat-attachments .chat-attachment-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; box-sizing: border-box; display: grid; place-items: center; padding: 0; border-radius: 50%; background: var(--overlay); color: var(--muted); border: 1px solid var(--border-strong); line-height: 0; }
 .chat-attachments .chat-attachment-open { position: relative; }
 .chat-attachments .chat-reduced { position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 999px; font-size: 10px; line-height: 1.4; color: #fff; background: #000a; }
@@ -2956,12 +2969,17 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .split-menu button { width: auto; height: auto; color: var(--fg); display: flex; align-items: center; gap: 8px; padding: 6px 10px; text-align: left; border-radius: 6px; white-space: nowrap; }
 .split-menu button:hover, .split-menu button:focus-visible { background: var(--selected); }
 .split-menu kbd { margin-left: auto; padding-left: 12px; font-size: 11px; color: var(--muted); }
-.changelog { width: min(720px, 94vw); height: min(640px, 92dvh); }
-.changelog[open] { display: flex; flex-direction: column; }
-.changelog-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 14px 24px; border-bottom: 1px solid var(--border); }
-.changelog-head h2 { margin: 0; font-size: 15px; }
-.changelog-main { flex: 1; min-height: 0; display: flex; }
-.changelog-nav { width: 160px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: 10px; overflow-y: auto; border-right: 1px solid var(--border); }
+/* The whole window (every version): a version list and the notes. The title stays for screen readers, the close button floats at the corner (Esc closes too). --bar and --edge keep the sidebar and the
+   corner clear of the desktop app's window controls (macOS lights on the left, Windows buttons on the right), the same env() pattern as the tab bar. */
+.changelog { --bar: max(env(titlebar-area-height, 0px), var(--desktop-titlebar-height, 0px)); --edge: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+  width: 100vw; height: 100dvh; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; background: var(--bg); }
+.changelog[open] { display: flex; flex-direction: column; animation: fade-in .2s var(--ease-out); }
+.changelog.closing[open] { animation: fade-out .14s cubic-bezier(.4, 0, 1, 1) forwards; }
+.changelog::before { content: ""; position: absolute; inset: 0 0 auto 0; height: var(--bar); -webkit-app-region: drag; app-region: drag; }
+.changelog-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
+.changelog-close { position: absolute; top: 8px; right: calc(var(--edge) + 12px); z-index: 3; -webkit-app-region: no-drag; app-region: no-drag; }
+.changelog-main { flex: 1; min-height: 0; display: flex; position: relative; }
+.changelog-nav { width: 220px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: calc(var(--bar) + 10px) 10px 10px; overflow-y: auto; border-right: 1px solid var(--border); }
 .changelog-nav button { display: flex; align-items: center; gap: 6px; padding: 7px 10px; text-align: left; color: var(--muted); }
 .changelog-nav button[aria-pressed=true] { color: var(--fg); background: var(--selected); }
 /* Versions already opened read a little darker in the sidebar; the selected one stays full strength. */
@@ -2969,28 +2987,135 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-nav-version { font-weight: 600; font-variant-numeric: tabular-nums; }
 .changelog-nav-date { margin-left: auto; font-size: 11px; white-space: nowrap; opacity: .7; }
 .changelog-new-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--error); }
-.changelog-body { flex: 1; min-width: 0; overflow-y: auto; padding: 0 24px 12px; }
-.changelog-entry { padding: 0 0 8px; }
+.changelog-body { flex: 1; min-width: 0; overflow-y: auto; padding: 0 40px 48px; }
+.changelog-entry { max-width: 1040px; margin: 0 auto; padding: 0 0 8px; }
 /* The version and its date stay at the top while the notes scroll; the negative margin lets the background cover the body padding. */
-.changelog-entry h3 { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 10px; margin: 0 -24px 18px; padding: 18px 24px 12px; background: var(--bg); }
-.changelog-entry h3::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 28px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
+.changelog-entry > h3 { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 10px; margin: 0 -40px 8px; padding: calc(var(--bar) * .5 + 22px) calc(var(--edge) + 56px) 12px 40px; background: var(--bg); }
+.changelog-entry > h3::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 28px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
 .changelog-version { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
 .changelog-new { align-self: center; font-size: 12px; font-weight: 600; color: var(--accent); }
-.changelog-entry time { align-self: center; margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.changelog-entry ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
-.changelog-entry li { display: flex; align-items: flex-start; gap: 12px; --kind: var(--muted); padding: 8px 10px; margin: -8px -10px; border-radius: 8px; transition: background-color .15s; }
-.changelog-entry li:hover { background: color-mix(in srgb, var(--kind) 5%, transparent); }
-.changelog-entry li > .icon { flex: none; margin-top: 1px; color: var(--kind); }
-.changelog-entry li strong { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; line-height: 1.4; }
-.changelog-kind { font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 4px; color: var(--kind); background: color-mix(in srgb, var(--kind) 14%, transparent); }
-.changelog-entry li p { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.changelog-entry li img { display: block; max-width: 100%; margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; }
-.changelog-entry li[data-kind="신규 기능"] { --kind: var(--info); }
-.changelog-entry li[data-kind="개선"] { --kind: var(--add); }
-.changelog-entry li[data-kind="변경"] { --kind: var(--ask); }
-.changelog-entry li[data-kind="버그 수정"] { --kind: var(--error); }
-.changelog-entry li[data-kind="최적화"] { --kind: var(--warn); }
-@media (max-width: 640px) { .changelog-main { flex-direction: column; } .changelog-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .changelog-nav button { flex: none; } }
+.changelog-entry > h3 > time { align-self: center; margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Patch-note page: a counts line, then one section per kind with its heading; items with a screenshot show it wide under the text. */
+/* 20 + the heading's 8 clears its 28px fade, which dimmed this row */
+.changelog-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 20px 0 8px; padding-bottom: 16px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.changelog-summary > span { --kind: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+.changelog-summary > span::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--kind); }
+.changelog-summary b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.changelog-group { --kind: var(--muted); margin-top: 26px; }
+.changelog-group > h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; font-weight: 700; color: var(--kind); }
+.changelog-group > h4 small { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--kind) 14%, transparent); }
+/* Every rule below names the note's own markup (ul > li > div > …): a live demo inside a note has lists, headings, paragraphs and pictures of its own. */
+.changelog-group > ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.changelog-group > ul > li { display: flex; align-items: flex-start; gap: 12px; --kind: var(--muted); padding: 10px 12px; border-radius: 8px; transition: background-color .15s; }
+.changelog-group > ul > li:hover { background: color-mix(in srgb, var(--kind) 5%, transparent); }
+.changelog-group > ul > li > div { min-width: 0; flex: 1; }
+.changelog-group > ul > li > .icon { flex: none; margin-top: 1px; color: var(--kind); }
+.changelog-group > ul > li > div > strong { display: block; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.changelog-group > ul > li > div > p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.changelog-group > ul > li[data-image] { padding: 14px; margin: 6px 0; border: 1px solid var(--border); background: var(--surface); }
+.changelog-group > ul > li > div > img { display: block; width: 100%; margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.changelog-entry [data-kind="신규 기능"] { --kind: var(--info); }
+.changelog-entry [data-kind="개선"] { --kind: var(--add); }
+.changelog-entry [data-kind="변경"] { --kind: var(--ask); }
+.changelog-entry [data-kind="버그 수정"] { --kind: var(--error); }
+.changelog-entry [data-kind="최적화"] { --kind: var(--warn); }
+/* Opening a version: the heading fades in, then the counts, section titles and notes rise in one after another. The entry is remounted per version, so this replays on every switch. */
+@media (prefers-reduced-motion: no-preference) {
+  .changelog-nav button { transition: background-color .15s, color .15s, opacity .15s; }
+  .changelog-entry > h3 { animation: fade-in .25s ease-out backwards; }
+  .changelog-summary, .changelog-group > h4 { animation: rise-in .34s var(--ease-out) .05s backwards; }
+  .changelog-group > ul > li { animation: rise-in .4s var(--ease-out) calc(var(--i, 0) * 45ms + 90ms) backwards; }
+}
+@media (max-width: 640px) { .changelog-main { flex-direction: column; } .changelog-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: calc(var(--bar) + 6px) 48px 6px 10px; } .changelog-nav button { flex: none; } .changelog-body { padding: 0 16px 32px; } .changelog-entry > h3 { margin: 0 -16px 8px; padding-left: 16px; } }
+
+/* Notes from 0.6.0 on (Changelog.tsx `data-rich`): a full-screen intro, then a wider page whose notes carry live demos. --intro-hue is the version's own colour (changelog.json `intro`). */
+.changelog-main { --g1: color-mix(in oklch, hsl(var(--intro-hue, 268) 90% 62%) 80%, var(--fg)); --ver: 48px; }
+@media (max-width: 640px) { .changelog-main { --ver: 38px; } }
+.changelog-main[data-phase=intro] .changelog-nav { opacity: 0; pointer-events: none; }
+.changelog-main[data-phase=intro] .changelog-entry > h3 > * { visibility: hidden; }
+.changelog-entry[data-rich] { max-width: 1240px; }
+/* The version sits in the middle of the top (columns: free | version | tag and date), with room above it so nothing looks cut off; the same inset on both sides keeps it exactly centred under the close button's width. */
+.changelog-entry[data-rich] > h3 { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: calc(var(--bar) + 30px) calc(var(--edge) + 56px) 14px; animation: none; }
+/* At rest the header is see-through, so the light at the top of the page (below) reaches the version with no box around it. Once the notes scroll under it, a solid backing (with a soft lower edge) fades in
+   over the first 48px of scrolling (scroll-driven; a browser without it keeps the backing always on). */
+.changelog-entry[data-rich] > h3 { background: transparent; }
+.changelog-entry[data-rich] > h3::after { content: none; }
+.changelog-entry[data-rich] > h3::before { content: ""; position: absolute; inset: 0 0 -28px; z-index: -1; pointer-events: none; background: linear-gradient(var(--bg) calc(100% - 28px), transparent); opacity: 0; animation: changelog-header-solid linear both; animation-timeline: scroll(); animation-range: 0 48px; }
+@keyframes changelog-header-solid { to { opacity: 1; } }
+@supports not (animation-timeline: scroll()) { .changelog-entry[data-rich] > h3::before { opacity: 1; animation: none; } }
+/* The light at the top of the page: wide, soft and very faint, in the version's colour, strongest at the top edge and gone well before the notes begin. It belongs to the page, not to the header, so it scrolls away with it. */
+.changelog-main[data-rich] .changelog-body { position: relative; isolation: isolate; }
+.changelog-main[data-rich] .changelog-body::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 440px; pointer-events: none;
+  background: radial-gradient(ellipse 58% 100% at 50% 0, hsl(var(--intro-hue, 268) 85% 60% / .13), transparent 72%),
+    radial-gradient(ellipse 36% 78% at 6% 0, hsl(calc(var(--intro-hue, 268) + 40) 85% 60% / .07), transparent 72%),
+    radial-gradient(ellipse 36% 78% at 94% 0, hsl(calc(var(--intro-hue, 268) - 30) 85% 60% / .06), transparent 72%); }
+.changelog-main[data-rich][data-phase=intro] .changelog-body::before { opacity: 0; }
+.changelog-entry[data-rich] > h3 > .changelog-version { grid-column: 2; }
+.changelog-entry[data-rich] > h3 > .changelog-new { grid-column: 3; grid-row: 1; justify-self: start; margin-left: 16px; }
+.changelog-entry[data-rich] > h3 > time { grid-column: 3; grid-row: 1; justify-self: end; margin-left: 0; }
+.changelog-entry[data-rich] .changelog-version { display: inline-flex; font-size: var(--ver); color: var(--g1); }
+.changelog-version > span, .changelog-hero > span { display: inline-block; }
+.changelog-tagline { margin: 26px 0 0; text-align: center; font-size: 16px; color: var(--muted); }
+.changelog-entry[data-rich] .changelog-summary { justify-content: center; }
+@media (max-width: 760px) { .changelog-entry[data-rich] > h3 { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 6px 12px; padding-inline: 16px; } .changelog-entry[data-rich] > h3 > .changelog-new { margin-left: 0; } .changelog-entry[data-rich] > h3 > time { margin-left: 0; } }
+/* Two columns of notes (one when the page is narrow); a demo that needs the width takes a whole row. */
+.changelog-entry[data-rich] .changelog-group > ul { display: block; columns: 2 460px; column-gap: 14px; }
+.changelog-entry[data-rich] .changelog-group > ul > li { break-inside: avoid; margin: 0 0 8px; }
+.changelog-entry[data-rich] .changelog-group > ul > li[data-wide] { column-span: all; }
+.changelog-entry[data-rich] .changelog-group > ul > li[data-demo] { padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.changelog-entry[data-rich] .changelog-group > ul > li[data-demo]:hover { background: color-mix(in srgb, var(--kind) 5%, var(--surface)); }
+
+/* The intro: the version fills the screen, shrinks a little, then travels to its place in the header (--t0 / --t1 are measured in Changelog.tsx) while the cover fades away. */
+.changelog-intro { position: absolute; inset: 0; z-index: 2; overflow: hidden; cursor: pointer; }
+.changelog-intro[data-locked] { cursor: default; }
+.changelog-intro-bg { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 46%, color-mix(in srgb, hsl(var(--intro-hue, 268) 70% 52%) 24%, var(--bg)), var(--bg) 72%); animation: fade-in .5s ease-out backwards, changelog-cover-out .9s ease-in-out 1.9s forwards; }
+.changelog-intro-bg::before, .changelog-intro-bg::after { content: ""; position: absolute; width: 46vmax; height: 46vmax; border-radius: 50%; filter: blur(70px); background: hsl(var(--intro-hue, 268) 85% 58% / .36); animation: changelog-drift 6s ease-in-out infinite alternate; }
+.changelog-intro-bg::before { left: -12vmax; top: -16vmax; }
+.changelog-intro-bg::after { right: -14vmax; bottom: -18vmax; background: hsl(calc(var(--intro-hue, 268) + 60) 85% 58% / .3); animation-direction: alternate-reverse; }
+@keyframes changelog-cover-out { to { opacity: 0; } }
+@keyframes changelog-drift { to { translate: 6vmax 4vmax; scale: 1.15; } }
+.changelog-hero { position: absolute; left: var(--hx); top: var(--hy); transform-origin: 0 0; display: flex; font-size: var(--ver); font-weight: 700; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; pointer-events: none;
+  transform: var(--t0); filter: drop-shadow(0 0 6px hsl(var(--intro-hue, 268) 90% 60% / .5)); animation: changelog-hero-move 1.3s 1.5s both; }
+/* each character: rises out of a blur, then a highlight sweeps across it; the resting colour is --g1, the same as the header's */
+.changelog-hero > span { color: transparent; background: linear-gradient(105deg, var(--g1) 42%, color-mix(in oklch, var(--g1) 25%, white) 50%, var(--g1) 58%) 100% 0 / 300% 100% no-repeat; -webkit-background-clip: text; background-clip: text;
+  animation: changelog-letter .7s var(--ease-out) calc(.15s + var(--i) * .07s) backwards, changelog-shine .9s ease-in-out calc(.8s + var(--i) * .06s) backwards; }
+@keyframes changelog-letter { from { opacity: 0; translate: 0 .35em; filter: blur(.14em); } }
+@keyframes changelog-shine { from { background-position: 0% 0; } }
+@keyframes changelog-hero-move {
+  0% { transform: var(--t0); animation-timing-function: cubic-bezier(.45, 0, .2, 1); }
+  30% { transform: var(--t1); animation-timing-function: cubic-bezier(.6, 0, .2, 1); }
+  100% { transform: none; filter: drop-shadow(0 0 0 hsl(var(--intro-hue, 268) 90% 60% / 0)); }
+}
+.changelog-intro-tagline { position: absolute; left: 0; right: 0; top: var(--tag-top); margin: 0; text-align: center; font-size: clamp(14px, 1.6vw, 20px); letter-spacing: .01em; color: var(--muted); pointer-events: none; animation: changelog-tagline 1s ease-out .9s both; }
+@keyframes changelog-tagline { 0% { opacity: 0; translate: 0 10px; } 28% { opacity: 1; translate: 0; } 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  .changelog-main[data-rich][data-phase=page] .changelog-nav { animation: changelog-nav-in .55s var(--ease-out) backwards; }
+  .changelog-entry[data-rich] > h3 > :not(.changelog-version) { animation: fade-in .4s ease-out .1s backwards; }
+  .changelog-tagline { animation: rise-in .4s var(--ease-out) .02s backwards; }
+  .changelog-main[data-rich][data-phase=page] .changelog-body::before { animation: fade-in 1.4s ease-out backwards; }
+}
+@keyframes changelog-nav-in { from { opacity: 0; translate: -14px 0; } }
+
+/* A demo inside a note (ChangelogDemo.tsx): the real component in its own surroundings. Nothing in it works, so the pointer stays an arrow and the text cannot be selected. */
+.changelog-demo { --agent: var(--brand-claude); --chat-font: 13px; --chat-width: 780px; margin-top: 12px; min-width: 0; cursor: default; user-select: none; }
+.changelog-demo.chat-row { display: block; }
+.changelog-demo.chat-row > div { padding-top: 0; }
+.changelog-demo[data-frame=status] .statusbar { border: 1px solid var(--border); border-radius: 8px; }
+.changelog-demo[data-frame=status] .chat-statusbar { justify-content: flex-start; }
+.changelog-git { position: relative; height: 360px; animation: none; box-shadow: none; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.changelog-feedback, .changelog-errors { display: grid; gap: 6px; }
+.changelog-theme { display: flex; flex-wrap: wrap; align-items: stretch; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.changelog-theme .theme-list { flex: 1 1 360px; min-width: 0; padding: 10px; }
+.changelog-theme .look-preview { flex: 1 1 268px; width: auto; max-width: none; overflow: visible; }
+.changelog-usage .usage-detail { display: flex; flex-direction: column; gap: 8px; width: auto; max-width: 340px; animation: none; }
+.changelog-popover { width: 260px; max-width: 100%; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); }
+.changelog-dot { display: flex; gap: 6px; padding: 8px; width: fit-content; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.changelog-tour { display: flex; align-items: flex-start; gap: 14px; }
+.changelog-tour .menu.changelog-ide { position: static; min-width: 200px; }
+.changelog-split { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px; }
+.changelog-demo .chat-update { border: 1px solid var(--border); border-radius: 8px; }
+.changelog-demo .chat-mode-tip.notice-card { position: static; width: auto; animation: none; }
+.changelog-conflict { max-width: 680px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay); }
 /* After the copy / branch / rewind / info icons: when the answer ended and how long it took, always shown, a little dimmer and smaller than the icons' muted text. The pieces are inline in one line box (separate flex items put
    Latin digits and Korean glyphs on different baselines), joined by a middle dot; the info icon's tooltip (tokens, in icons) opens above it, aligned to its left edge. */
 .chat-msg-actions { align-items: center; }
@@ -3067,7 +3192,7 @@ body.resizing-row .xterm-host { pointer-events: none; }
 .git-head > strong { font-weight: 600; }
 .git-head > .icon { color: var(--accent); }
 .git-tab { align-self: stretch; display: inline-flex; align-items: center; padding: 0 8px; margin-left: 4px; border-bottom: 2px solid var(--accent); color: var(--fg); }
-.git-head label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.git-head label { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; color: var(--muted); }
 .git-head .actions { display: inline-flex; align-items: center; gap: 6px; }
 .git-head .actions button { padding: 2px 8px; }
 .git-head-branch { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--muted); }
@@ -3260,7 +3385,15 @@ textarea.git-message { font: 12.5px var(--mono); resize: vertical; white-space: 
 .git-swatches i { width: 12px; height: 12px; border-radius: 3px; }
 /* the one-time card: the changes panel is now the Git graph */
 .chat-mode-tip.git-graph-tip { bottom: auto; top: 46px; right: 12px; z-index: 30; width: min(440px, calc(100% - 32px)); }
-.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(380px, calc(100vw - 32px)); }
+.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(520px, calc(100vw - 32px)); }
+.bg-anim-tip .chat-mode-tip-body strong { white-space: nowrap; }
+.bg-tip-art { position: relative; flex: none; align-self: center; width: 146px; height: 100px; display: flex; align-items: center; justify-content: center; gap: 14px; padding-top: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.bg-tip-art::before { content: ''; position: absolute; inset: 8px; border: 2px solid var(--border-strong); border-radius: 8px; border-top-width: 14px; }
+.bg-tip-art > i { position: absolute; top: 12px; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); left: 16px; }
+.bg-tip-art > i + i { left: 24px; }
+.bg-tip-art .chat-spin { --agent: var(--accent); position: relative; width: 40px; height: 40px; border-width: 6px; animation-play-state: running; }
+.bg-tip-art > b { position: relative; display: flex; gap: 6px; }
+.bg-tip-art > b u { width: 7px; height: 22px; border-radius: 2px; background: var(--muted); }
 /* The image lightbox close button sits on the picture, not on the empty dialog around it. */
 .image-modal-frame { position: relative; display: inline-block; line-height: 0; }
 dialog.image-modal { width: fit-content; height: fit-content; }
@@ -3273,18 +3406,28 @@ dialog.image-modal { width: fit-content; height: fit-content; }
 }
 body.pane-dragging, body.pane-dragging * { cursor: grabbing !important; }
 body.pane-dragging { user-select: none; }
-.git-tip-art { flex: none; align-self: flex-start; width: 112px; height: 84px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.git-tip-art { flex: none; align-self: flex-start; width: 146px; height: 90px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .git-graph-tip .diffstat { display: inline-flex; gap: 2px; }
 
 .ide-mark { display: inline-grid; place-items: center; flex: none; border-radius: 4px; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
-/* The strip below the workspaces where the app's own cards are drawn, one at a time (main.tsx, notices.ts): in the layout, so a card covers no button or tab. */
+/* JetBrains product icon: a gradient square with a black square in front, offset to the lower left; the letters sit in its top left corner and a short bar under them. */
+.ide-mark.jb { position: relative; overflow: hidden; border-radius: 24%; background: var(--jb); color: #fff; }
+.ide-mark.jb::before { content: ""; position: absolute; left: 10%; top: 22%; width: 72%; height: 68%; background: #000; }
+.ide-mark.jb::after { content: ""; position: absolute; left: 18%; top: 72%; width: 25%; height: 6.5%; background: #fff; }
+.ide-mark.jb > span { position: absolute; z-index: 1; left: 16%; top: 27%; }
+/* The app's own cards float over the window; a very light blur sits behind them (Spotlight.tsx) with a hole where the element they are about is. */
 .ws-stack { display: flex; flex-direction: column; }
 .ws-stack > .app { flex: 1; min-height: 0; height: auto; }
-.notice-dock { flex: none; }
-.notice-dock:empty { display: none; }
-.notice-dock > .chat-mode-tip.docked { position: static; z-index: auto; width: auto; margin: 0; padding: 8px 14px; align-items: center; border-width: 1px 0 0; border-radius: 0; box-shadow: none; }
-.notice-dock > .chat-mode-tip.docked > img, .notice-dock > .chat-mode-tip.docked > .git-tip-art { width: 84px; min-height: 0; height: 63px; align-self: center; }
-.notice-dock > .chat-mode-tip.docked .chat-mode-tip-body { max-width: 780px; }
+.notice-scrim { position: fixed; inset: 0; z-index: 900; pointer-events: none; backdrop-filter: blur(1.3px); background: rgb(0 0 0 / .07);
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0); mask-size: 100% 100%, var(--hw, 0) var(--hh, 0); mask-position: 0 0, var(--hx, 0) var(--hy, 0); mask-repeat: no-repeat; mask-composite: exclude; }
+.notice-ring { position: fixed; left: calc(var(--hx) + 2px); top: calc(var(--hy) + 2px); width: calc(var(--hw) - 4px); height: calc(var(--hh) - 4px); z-index: 900; pointer-events: none; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.chat-mode-tip.notice-card { position: fixed; z-index: 901; }
+@media (prefers-reduced-motion: no-preference) { .notice-scrim { animation: notice-scrim-in .25s ease-out; } @keyframes notice-scrim-in { from { opacity: 0; } } }
+/* Closing a tip: the card and the blur fade out together (EXIT_MS in use-notice.ts keeps them mounted that long). */
+.chat-mode-tip[data-closing], .hint-card[data-closing] { pointer-events: none; animation: tip-out .18s ease-in forwards; }
+.notice-scrim[data-closing], .notice-ring[data-closing] { animation: fade-out .18s ease-in forwards; }
+@keyframes tip-out { to { opacity: 0; translate: 0 4px; } }
+@media (prefers-reduced-motion: reduce) { .chat-mode-tip[data-closing], .hint-card[data-closing], .notice-scrim[data-closing], .notice-ring[data-closing] { animation: none; } }
 
 /* The tutorial's practice workspace puts a tab's only pane straight into .tab-page (the real one wraps it in a split slot); without this it kept its content width: the first
    practice terminal was a 200px strip and a practice Chat pane 2px wide. */

@@ -90,7 +90,7 @@ function Form({ chatId, spec }: { chatId: string; spec: Extract<Spec, { t: 'form
         : f.type === 'select' ? <div key={f.k} className="ui-field ui-select" role="group" aria-label={f.label}><span>{f.label}</span>{control}</div>
         : <label key={f.k} className={`ui-field ui-${f.type}`}><span>{f.label}</span>{control}</label>;
     })}
-    <div className="ui-form-actions"><button type="button" className="secondary" disabled={sendLocked} aria-live="polite" data-send={send && sendLocked ? send.stage : undefined} onClick={() => submit(false)}>{send && sendLocked ? SEND_LABEL[send.stage] : '바로 보내기'}</button>{/* 이 버튼은 늘 입력창에 채우기만 한다(Enter도 같다). AI가 붙인 라벨('선택 보내기' 등)은 보내기로 읽혀 "바로 보내기"와 헷갈리므로 동작 그대로 적고, AI의 라벨은 툴팁으로만 둔다. */}<button type="submit" className="primary" title={`${spec.submit} · 고른 답을 입력창에 채워 두고, 확인한 뒤 직접 보냅니다`}>{sent === 'fill' ? '✓ 입력창에 채웠어요' : '입력창에 채우기'}</button></div>
+    <div className="ui-form-actions"><button type="button" className="secondary" disabled={sendLocked} aria-live="polite" data-send={send && sendLocked ? send.stage : undefined} onClick={() => submit(false)}>{send && sendLocked ? SEND_LABEL[send.stage] : '바로 보내기'}</button>{/* 이 버튼은 늘 입력창에 채우기만 한다(Enter도 같다). AI가 붙인 라벨('선택 보내기' 등)은 보내기로 읽혀 "바로 보내기"와 헷갈리므로 동작 그대로 적고, AI의 라벨은 표시하지 않는다. */}<button type="submit" className="primary">{sent === 'fill' ? '✓ 입력창에 채웠어요' : '입력창에 채우기'}</button></div>
   </form>;
 }
 

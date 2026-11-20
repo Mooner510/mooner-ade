@@ -7,7 +7,7 @@ export interface FeedbackImage { name: string; w: number; h: number; annotated: 
 export interface Feedback {
   id: string; title: string; body: string; types: string[]; source: FeedbackSource; status: FeedbackStatus;
   reviewed: boolean; images: FeedbackImage[]; createdAt: number; updatedAt: number;
-  issueUrl?: string; issueNumber?: number;
+  issueNumber?: number;
   // While queued, `error` is the last refused attempt's message; after `failed`, why it ended.
   error?: string;
   // Server-side send queue: when it was queued, when it may be tried next (ms epoch), how many tries so far, and how it went out.

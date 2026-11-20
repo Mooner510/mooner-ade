@@ -16,8 +16,13 @@ export function CliUpdateNotice({ agent }: { agent: CliAgent }) {
     <span className="chat-update-text">업데이트하지 못했습니다{run.message && <small>{run.message}</small>}</span>
     <button type="button" onClick={() => void update()}>다시 시도</button><button type="button" onClick={dismiss}>닫기</button></div>;
   if (!status?.outdated || !status.latest || snoozed()) return null;
+  return <CliUpdateBar name={name} latest={status.latest} onUpdate={() => void update()} onSnooze={snooze} />;
+}
+
+/** The "update available" bar itself, without the update store behind it (the patch notes draw it for show). */
+export function CliUpdateBar({ name, latest, onUpdate, onSnooze }: { name: string; latest: string; onUpdate(): void; onSnooze(): void }) {
   return <div className="chat-update" role="status"><Icon name="download" size={13} />
-    <span className="chat-update-text"><span className="chat-update-title">{name} 업데이트 가능 (v{status.latest})</span><span className="chat-update-cur">다음 대화부터 적용됩니다</span></span>
-    <button type="button" className="primary" onClick={() => void update()}>업데이트</button>
-    <button type="button" onClick={() => snooze()}>나중에</button></div>;
+    <span className="chat-update-text"><span className="chat-update-title">{name} 업데이트 가능 (v{latest})</span><span className="chat-update-cur">다음 대화부터 적용됩니다</span></span>
+    <button type="button" className="primary" onClick={onUpdate}>업데이트</button>
+    <button type="button" onClick={onSnooze}>나중에</button></div>;
 }

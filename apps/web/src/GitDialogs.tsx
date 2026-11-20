@@ -105,12 +105,17 @@ export const sides = (op: RepoState['op']) => op === 'rebase'
   // no operation: the changes a smart checkout put aside came back on top of the new branch
   : !op ? { yours: 'theirs' as const, theirs: 'ours' as const, yoursText: '보관해 둔 내 변경', theirsText: '체크아웃한 브랜치' }
   : { yours: 'ours' as const, theirs: 'theirs' as const, yoursText: '현재 브랜치', theirsText: op === 'merge' ? '머지해 들어오는 브랜치' : op === 'cherry-pick' ? '체리픽하는 커밋' : '되돌리는 커밋' };
-export function ConflictsDialog({ state, onResolve, onContinue, onAbort, onClose }: { state: RepoState; onResolve(path: string, side: 'ours' | 'theirs' | 'mark'): Promise<void>; onContinue(): void; onAbort(): void; onClose(): void }) {
+type ConflictsProps = { state: RepoState; onResolve(path: string, side: 'ours' | 'theirs' | 'mark'): Promise<void>; onContinue(): void; onAbort(): void; onClose(): void };
+export function ConflictsDialog(props: ConflictsProps) {
+  const id = useId();
+  return <Modal className="git-dialog wide" labelledBy={id} onClose={props.onClose} region="충돌"><ConflictsBody {...props} titleId={id} /></Modal>;
+}
+// The dialog's content on its own (the patch notes draw it without a dialog around it).
+export function ConflictsBody({ state, onResolve, onContinue, onAbort, onClose, titleId: id }: ConflictsProps & { titleId: string }) {
   const [selected, setSelected] = useState<string>(state.conflicts[0] ?? ''), [busy, setBusy] = useState(false);
   const side = sides(state.op), file = state.conflicts.includes(selected) ? selected : state.conflicts[0] ?? '';
   const resolve = async (choice: 'ours' | 'theirs' | 'mark') => { if (!file) return; setBusy(true); try { await onResolve(file, choice); } finally { setBusy(false); } };
-  const id = useId();
-  return <Modal className="git-dialog wide" labelledBy={id} onClose={onClose} region="충돌">
+  return (
     <div className="git-conflicts">
       <h3 id={id}>충돌</h3>
       <p>{state.op ? `${opName(state.op)} 중 ` : ''}다음 파일{state.conflicts.length > 1 ? '들' : ''}에 충돌이 있습니다:</p>
@@ -126,7 +131,7 @@ export function ConflictsDialog({ state, onResolve, onContinue, onAbort, onClose
       <div className="actions">{state.op && <button className="danger" onClick={onAbort}>{opName(state.op)} 중단</button>}<span className="spacer" /><button onClick={onClose}>닫기</button>
         {state.op && <button className="primary" disabled={state.conflicts.length > 0} onClick={onContinue}>{state.op === 'merge' ? '머지 커밋' : `${opName(state.op)} 계속`}</button>}</div>
     </div>
-  </Modal>;
+  );
 }
 
 export function LocalChangesDialog({ action, files, onChoose, onClose }: { action: string; files: string[]; onChoose(mode: 'smart' | 'force'): void; onClose(): void }) {

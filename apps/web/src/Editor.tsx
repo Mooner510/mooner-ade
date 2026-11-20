@@ -54,6 +54,8 @@ export type Settings = {
   gitUpdateMethod: 'merge' | 'rebase'; gitFetchPrune: boolean; gitProtected: string;
   // The changes panel was replaced by the Git graph: people who used the app before see a one-time card saying so (like the Chat tip).
   gitTipPending: boolean;
+  // `tipsVersion`: the tip reset last applied; one below TIPS_VERSION brings every tip back once (migrateSettings; main.tsx also clears claimTip's history).
+  tipsVersion: number;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
 export const agentArgs = (settings: Settings, agent: string) => ({ claude: settings.claudeArgs, codex: settings.codexArgs, cursor: settings.cursorArgs } as Record<string, string>)[agent]?.trim() ?? '';
@@ -83,6 +85,8 @@ export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'ch
 export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, Math.min(100, percent)) / 100));
 // Raise when the tutorial changes enough that users who finished it should go through it again.
 export const TOUR_VERSION = 2;
+// Raise when every tip should show again (a release with new tips): the Chat and Git cards and the button pointers come back once; the `tips` switch stays as chosen.
+export const TIPS_VERSION = 1;
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
   if (typeof next.theme !== 'string' || !isThemeId(next.theme)) next.theme = 'dark';
@@ -91,6 +95,9 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   if (saved.chatPermissionAutoSet !== true) { next.chatPermissionAutoSet = true; if (saved.chatDefaultPermission === undefined || saved.chatDefaultPermission === 'cli') next.chatDefaultPermission = 'auto'; }
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
+  // Tips reset: an untouched `saved.tipsVersion` below TIPS_VERSION means this install has not had it yet (new users save the current one).
+  if ((saved.tipsVersion ?? 0) < TIPS_VERSION && Object.keys(saved).length > 0) { next.hintsSeen = []; next.gitTipPending = true; next.chatTipPending = next.onboarded; }
+  next.tipsVersion = Math.max(next.tipsVersion, TIPS_VERSION);
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
   // Someone who finished a tour before the version number existed counts as having finished version 1. The new tour clears `onboarded` below, and that gets saved: if the app is
   // closed before the tour ends, the next start must not read `onboarded: false` as a first run (the theme and font screen), so the tour version is the record of "was onboarded once".
@@ -144,7 +151,7 @@ export const defaultSettings: Settings = {
   gitCompactRefs: true, gitTagNames: false, gitLongEdges: false, gitCommitTime: false, gitRefsLeft: false, gitColumns: ['author', 'date'],
   gitMine: true, gitMerges: true, gitCurrent: true, gitPrettyDate: true, gitSaturation: 40, gitBrightness: 65,
   gitDetails: true, gitDiffPreview: false, gitFilesByDir: true, gitBranchesPane: true, gitBranchClick: 'none', gitBranchDirs: true, gitBranchTags: false, gitFavorites: ['main', 'master', 'origin/main', 'origin/master'],
-  gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false
+  gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false, tipsVersion: 1
 };
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
 // Terminal default = the OS's own monospace font (Mac: Menlo, Windows: Cascadia Mono); a chosen font goes first and falls back to it.

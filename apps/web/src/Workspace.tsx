@@ -5,7 +5,8 @@ import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLe
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
-import { useNotice, useNoticeDock } from './use-notice';
+import { useExit, useNotice } from './use-notice';
+import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
@@ -1026,10 +1027,10 @@ ${where}`, [
   // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
   const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   // The one-time cards wait their turn (notices.ts) and are drawn in the dock strip below the workspaces (main.tsx): none covers a button or another card.
-  const noticeDock = useNoticeDock();
   // One id per project (the id's part before ":" is its place in the order): every open project has its own Workspace, and a shared id would let an inactive one withdraw what the active one asked for.
   const gitCardOn = useNotice(`git:${root}`, Boolean(active && project && project.repositories.length > 0 && settings.gitTipPending && settings.onboarded));
   const chatCardOn = useNotice(`chat-mode:${root}`, Boolean(active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)));
+  const gitCard = useExit(gitCardOn), chatCard = useExit(chatCardOn);
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
@@ -1162,7 +1163,8 @@ ${where}`, [
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
-    {chatCardOn && noticeDock && createPortal(<aside className="chat-mode-tip docked" aria-label="Chat 모드 안내">
+    {chatCard.mounted && <Spotlight target=".terminal-pane.focused" closing={chatCard.closing} />}
+    {chatCard.mounted && createPortal(<aside className="chat-mode-tip notice-card" aria-label="Chat 모드 안내" data-closing={chatCard.closing || undefined}>
       <img src="/chat-mode-preview.png" alt="Chat 모드에서 도구 실행, 코드 변경 diff, 결과 요약이 대화로 정리된 화면" width="960" height="632" />
       <div className="chat-mode-tip-body">
         <strong>{{ claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }[agentOf(focus) ?? 'claude']}를 Chat으로 써 보세요</strong>
@@ -1172,14 +1174,22 @@ ${where}`, [
           <button onClick={() => setSettings(previous => ({ ...previous, chatTipPending: false }))}>괜찮아요</button>
         </div>
       </div>
-    </aside>, noticeDock)}
+    </aside>, document.body)}
     {/* Once, for people who knew the changes panel: it is now the Git graph. Opening the graph or "확인" ends it for good. */}
-    {gitCardOn && noticeDock && createPortal(<aside className="chat-mode-tip git-graph-tip docked" aria-label="Git 그래프 안내">
-      <svg className="git-tip-art" viewBox="0 0 112 84" aria-hidden="true">
-        <path d="M20 8V76" stroke="#3cb45c" strokeWidth="2.5" fill="none" /><path d="M20 22L44 34V54L20 66" stroke="#9f79b5" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
-        <path d="M44 34L68 44V50" stroke="#e1a431" strokeWidth="2.5" fill="none" strokeLinejoin="round" />
-        {[[20, 8], [20, 22], [44, 34], [68, 44], [44, 54], [20, 66], [20, 76]].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r="4.5" fill={x === 20 ? '#3cb45c' : x === 44 ? '#9f79b5' : '#e1a431'} />)}
-        <rect x="76" y="4" width="32" height="9" rx="3" fill="#3cb45c" opacity=".85" /><rect x="76" y="40" width="28" height="9" rx="3" fill="#9f79b5" opacity=".85" />
+    {gitCard.mounted && <Spotlight target='button[aria-label="Git 커밋 그래프"]' closing={gitCard.closing} />}
+    {gitCard.mounted && createPortal(<aside className="chat-mode-tip git-graph-tip notice-card" aria-label="Git 그래프 안내" data-closing={gitCard.closing || undefined}>
+      {/* Same metrics as the real graph (GitLog.tsx): a row is 22px, a lane 16px, a commit dot r4, the HEAD dot a ring r6, lines 1.5px. Chips sit centred on their row. */}
+      <svg className="git-tip-art" viewBox="0 0 144 88" aria-hidden="true">
+        <path d="M12 0V88" fill="none" strokeWidth="1.5" style={{ stroke: 'var(--git-ref-local)' }} />
+        <path d="M44 11L28 33" fill="none" strokeWidth="1.5" strokeLinecap="round" style={{ stroke: 'var(--git-ref-head)' }} />
+        <path d="M28 33V55L12 77" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--git-ref-remote)' }} />
+        <circle cx="44" cy="11" r="6" style={{ fill: 'var(--git-ref-head)' }} /><circle cx="44" cy="11" r="4" style={{ fill: 'var(--surface)' }} /><circle cx="44" cy="11" r="2" style={{ fill: 'var(--git-ref-head)' }} />
+        <circle cx="28" cy="33" r="4" style={{ fill: 'var(--git-ref-remote)' }} /><circle cx="28" cy="55" r="4" style={{ fill: 'var(--git-ref-remote)' }} /><circle cx="12" cy="77" r="4" style={{ fill: 'var(--git-ref-local)' }} />
+        {([[11, 'main', 49, 'var(--git-ref-head)'], [55, 'origin/dev', 78, 'var(--git-ref-remote)'], [77, 'dev', 43, 'var(--git-ref-local)']] as const).map(([y, name, width, color]) => <g key={name}>
+          <rect x="60" y={y - 8.5} width={width} height="17" rx="6" style={{ fill: 'var(--fg)' }} fillOpacity=".08" />
+          <circle cx="68" cy={y} r="3" style={{ fill: color }} />
+          <text x="76" y={y} dominantBaseline="central" fontSize="11.5" style={{ fill: 'var(--fg)' }}>{name}</text>
+        </g>)}
       </svg>
       <div className="chat-mode-tip-body">
         <strong>변경사항 패널이 Git 그래프로 바뀌었어요</strong>
@@ -1189,7 +1199,7 @@ ${where}`, [
           <button onClick={() => setSettings(previous => ({ ...previous, gitTipPending: false }))}>확인</button>
         </div>
       </div>
-    </aside>, noticeDock)}
+    </aside>, document.body)}
     {active && feedback.capture && <FeedbackCapture mode={feedback.capture} fallbackZoom={settings.uiZoom / 100} onCancel={endCapture} onError={cause => { endCapture(); report(cause); }}
       onCaptured={async bytes => {
         endCapture();

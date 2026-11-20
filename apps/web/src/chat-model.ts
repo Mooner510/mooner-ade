@@ -44,7 +44,7 @@ const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previe
 /** How a turn ended, kept on its last answer: when, how long it took and the tokens it used (no tokens for a CLI that does not report them). */
 export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd?: number };
 export type Item = ItemBase & (
-  | { kind: 'user'; text: string; images: number; previews?: string[] }
+  | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
@@ -53,8 +53,9 @@ export type Item = ItemBase & (
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
+  | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
-  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
+  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
 /** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
 export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
@@ -315,6 +316,7 @@ function reduceShell(view: ChatView, event: any, key: string, fresh: boolean): C
       return known ? patch(() => change) : append(view, { kind: 'shell', key: `shell:${id || key}`, id: id || key, command: '', cwd: '', startedAt: Number(event.at) || Date.now(), ...change, fresh });
     }
     case 'sent': { const ids = new Set(Array.isArray(event.ids) ? event.ids : []); return ids.size ? { ...view, items: view.items.map(item => item.kind === 'shell' && ids.has(item.id) ? { ...item, sent: true, fresh: false } : item) } : view; }
+    case 'skip': return { ...view, items: view.items.map(item => item.kind === 'shell' && item.id === event.id ? { ...item, skipped: event.on === true } : item) };
     default: return view;
   }
 }
@@ -325,7 +327,7 @@ export function reduce(view: ChatView, event: any): ChatView {
   if (typeof event.seq === 'number') { if (event.seq <= view.seq) return view; view = { ...view, seq: event.seq }; }
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
-    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), view.state.segmentTitles ?? {});
+    case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), view.state.segmentTitles ?? {});
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -457,7 +459,7 @@ export function reduce(view: ChatView, event: any): ChatView {
     case 'steer': {
       const rest = view.steers.filter(item => item.uuid !== event.uuid);
       if (event.phase === 'queued') return { ...view, steers: [...rest, { uuid: String(event.uuid), text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event) }] };
-      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), fresh }), steers: rest };
+      if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), steers: rest };
       return { ...view, steers: rest };
     }
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).
@@ -663,6 +665,8 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
+/** duration() for a card's elapsed time: under a second it is ms ("420ms"), so a quick agent does not read "0초". */
+export const briefDuration = (ms: number) => ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : duration(ms);
 const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', seven_day_overage_included: '주간', overage: '추가 사용량' };
 const dayClock = (at: Date) => `${at.toDateString() === new Date().toDateString() ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 // A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).

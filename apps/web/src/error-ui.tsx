@@ -72,9 +72,17 @@ export function ErrorTabButton({ scope, pressed, onClick, className = '' }: { sc
   </button>;
 }
 
+/** One entry of the error panel: the sentence, when it happened, and a button to clear it. */
+export function ErrorRow({ message, at, onDismiss }: { message: string; at: number; onDismiss(): void }) {
+  return <article className="error-row">
+    <Icon name="error" size={15} />
+    <div><p>{message}</p><time dateTime={new Date(at).toISOString()}>{new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time></div>
+    <IconButton icon="x" label="이 오류 지우기" onClick={onDismiss} />
+  </article>;
+}
+
 export function ErrorPanel({ scope, wide, toggleWide }: { scope: string; wide: boolean; toggleWide(): void }) {
   const { items } = useLog(scope);
-  const when = (item: AppError) => new Date(item.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return <div className="review-panel error-panel">
     <header className="panel-head">
       <Icon name="error" /><strong>오류</strong>
@@ -84,11 +92,7 @@ export function ErrorPanel({ scope, wide, toggleWide }: { scope: string; wide: b
     </header>
     <div className="review-list">
       {!items.length && <div className="review-empty"><Icon name="check" size={22} /><strong>오류 없음</strong><p>문제가 생기면 여기에 남습니다.</p></div>}
-      {items.map(item => <article key={item.id} className="error-row">
-        <Icon name="error" size={15} />
-        <div><p>{item.message}</p><time dateTime={new Date(item.at).toISOString()}>{when(item)}</time></div>
-        <IconButton icon="x" label="이 오류 지우기" onClick={() => dismissError(scope, item.id)} />
-      </article>)}
+      {items.map(item => <ErrorRow key={item.id} message={item.message} at={item.at} onDismiss={() => dismissError(scope, item.id)} />)}
     </div>
   </div>;
 }

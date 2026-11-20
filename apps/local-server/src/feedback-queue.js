@@ -85,7 +85,7 @@ export function createFeedbackQueue({ store, stateFile, availability, sendAccoun
     const result = await (anonymous ? sendAnonymous : sendAccount)(metaOf(current), store.imagesOf(current))
       .catch(error => ({ ok: false, error: { code: 'network_error', message: error.message } }));
     if (result.ok) {
-      await store.setStatus(item.id, 'submitted', { issueUrl: result.issueUrl, issueNumber: result.issueNumber, error: undefined, nextAttemptAt: undefined, pinnedVia: undefined, attempts, submittedAt: now(), via: anonymous ? 'anonymous' : 'account' });
+      await store.setStatus(item.id, 'submitted', { issueNumber: result.issueNumber, error: undefined, nextAttemptAt: undefined, pinnedVia: undefined, attempts, submittedAt: now(), via: anonymous ? 'anonymous' : 'account' });
       return;
     }
     const step = nextStep(result.error, attempts, now());

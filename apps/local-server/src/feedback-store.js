@@ -102,7 +102,9 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
     try { meta = JSON.parse(await fs.readFile(path.join(dir, 'feedback.json'), 'utf8')); }
     catch (error) { if (error.code === 'ENOENT') throw fault('NOT_FOUND', '피드백을 찾을 수 없습니다.', 404); throw error; }
     const body = await fs.readFile(path.join(dir, 'body.md'), 'utf8').catch(() => '');
-    return { ...meta, types: cleanTypes(meta.types), id, body };
+    // issueUrl: older versions kept the Hub's link here. Feedback only ever goes to the Hub, so the link is neither kept nor shown.
+    const { issueUrl: _legacyLink, ...rest } = meta;
+    return { ...rest, types: cleanTypes(meta.types), id, body };
   }
   async function write(item) {
     const dir = folder(item.id);

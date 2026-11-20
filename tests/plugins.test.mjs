@@ -552,8 +552,8 @@ test('feedback is an explicit permission; only a declaring, signed-in plugin sub
   const request = child.sent.find(message => message.type === 'feedback/submit');
   assert.deepEqual(request.images, [{ path: '/x/img-1.png', mime: 'image/png' }]);
   child.emit('message', { type: 'feedback/result', id: request.id, ok: true, issueUrl: 'https://github.com/o/r/issues/3', issueNumber: 3 });
-  assert.deepEqual(await submitted, { ok: true, issueUrl: 'https://github.com/o/r/issues/3', issueNumber: 3 });
-  // An odd URL is dropped; a host that dies answers what was in flight.
+  assert.deepEqual(await submitted, { ok: true, issueNumber: 3 }); // the link itself is never passed on
+  // An odd URL is dropped too; a host that dies answers what was in flight.
   const second = env.manager.submitFeedback({ meta: {}, images: [] });
   const request2 = child.sent.filter(message => message.type === 'feedback/submit').at(-1);
   child.emit('message', { type: 'feedback/result', id: request2.id, ok: true, issueUrl: 'javascript:alert(1)' });
