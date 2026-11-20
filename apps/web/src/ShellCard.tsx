@@ -18,7 +18,7 @@ function Stream({ label, text, error }: { label: string; text: string; error?: b
   const lines = clean.split('\n').length, long = clean.length > CLIP || lines > 24;
   const shown = full ? (clean.length > WHOLE ? `${clean.slice(0, WHOLE)}\n… (화면에는 앞의 ${WHOLE.toLocaleString()}자만 그립니다. 나머지 ${(clean.length - WHOLE).toLocaleString()}자는 기록에 있고 복사로 가져갈 수 있습니다)` : clean) : tail(clean, CLIP);
   return <div className={`chat-tool-result chat-shell-stream${error ? ' stderr' : ''}`}>
-    <div className="chat-tool-result-head"><small>{label}{lines > 1 && ` · ${lines.toLocaleString()}줄`}</small>
+    <div className="chat-tool-result-head"><small className="chat-shell-label">{label}{lines > 1 && <span>{lines.toLocaleString()}줄</span>}</small>
       <button type="button" className="chat-tool-copy" aria-label={`${label} 복사`} onClick={() => copyText(stripAnsi(text).replace(/\n+$/, ''))}><Icon name="copy" size={13} />복사</button></div>
     <pre className={full ? 'full' : undefined}>{shown}</pre>
     {long && <button type="button" className="chat-command-more" onClick={() => setFull(value => !value)}>{full ? '접기' : '전체 보기'}</button>}
@@ -39,8 +39,10 @@ export const ShellCard = memo(function ShellCard({ item, onStop, enter, note }: 
     <button type="button" className="chat-tool-head" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">terminal</span>
       <strong>!</strong><span className="chat-tool-summary" title={item.command}>{item.command.split('\n')[0]}</span>
-      <span className={`chat-shell-verdict ${verdict.tone}`}>{verdict.text}{ms != null && ` · ${shellDuration(ms)}`}</span>
-      <span className="chat-tool-state" aria-label={verdict.text}>
+      <span className={`chat-shell-verdict ${verdict.tone}`}>{verdict.text}</span>
+      {verdict.detail && <span className="chat-shell-meta">{verdict.detail}</span>}
+      {ms != null && <span className="chat-shell-meta">{shellDuration(ms)}</span>}
+      <span className="chat-tool-state" aria-label={[verdict.text, verdict.detail].filter(Boolean).join(' ')}>
         {running ? <><span className="stop-task" role="button" tabIndex={0} title="이 명령 중단" aria-label="이 명령 중단" onClick={event => { event.stopPropagation(); onStop(item.id); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onStop(item.id); } }} /><i className="chat-spin" /></>
           : state === 'done' ? <Icon name="check" size={13} /> : state === 'error' ? <Icon name="x" size={13} /> : <Icon name="block" size={13} />}
       </span>
@@ -48,7 +50,7 @@ export const ShellCard = memo(function ShellCard({ item, onStop, enter, note }: 
     </button>
     <Collapse open={open}><div className="chat-tool-body">
       <CodeBlock code={item.command} lang={SHELL_LANG(item.shell)} />
-      <p className="chat-shell-where"><span title={item.cwd}>{item.cwd}</span>{item.shell && <span> · {item.shell}</span>}</p>
+      <p className="chat-shell-where"><span title={item.cwd}>{item.cwd}</span>{item.shell && <span className="chat-shell-name">{item.shell}</span>}</p>
       <Stream label="출력" text={item.stdout} />
       <Stream label="오류 출력" text={item.stderr} error />
       {!running && empty && item.status !== 'error' && <p className="chat-tool-note">(출력 없음)</p>}

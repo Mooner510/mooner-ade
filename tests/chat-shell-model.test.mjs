@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyView, fromReplay, reduce } from '../apps/web/src/chat-model.ts';
-import { isShellDraft, parseShellInput, shellDuration, shellStalled, shellVerdict, stripAnsi, terminalAdvice } from '../apps/web/src/chat-shell.ts';
+import { briefDuration, emptyView, fromReplay, reduce } from '../apps/web/src/chat-model.ts';
+import { isShellDraft, parseShellInput, shellBang, shellDuration, shellStalled, shellVerdict, shownDraft, stripAnsi, terminalAdvice } from '../apps/web/src/chat-shell.ts';
 
 const start = (seq, id = 'r1', command = 'git status') => ({ kind: 'shell', phase: 'start', id, command, cwd: '/p', shell: 'bash', seq, at: 1000 });
 const end = (seq, extra = {}, id = 'r1') => ({ kind: 'shell', phase: 'end', id, status: 'done', exitCode: 0, ms: 420, stdout: 'ok\n', stderr: '', seq, ...extra });
@@ -17,6 +17,16 @@ test('parseShellInput: ! runs, \\! escapes, a bare ! explains, a Korean first wo
   assert.equal(parseShellInput('/btw !x'), null);
   assert.equal(parseShellInput('please run !ls'), null);
   assert.ok(isShellDraft('!l') && isShellDraft(' !') && !isShellDraft('\\!x') && !isShellDraft('hi !'));
+});
+
+test('shellBang/shownDraft: the ! that opens shell mode stays in the text but the textarea shows the text without it', () => {
+  assert.equal(shellBang('!ls'), '!');
+  assert.equal(shellBang(' !ls'), ' !');
+  assert.equal(shellBang('ls !'), '');
+  assert.equal(shownDraft('!ls'), 'ls');
+  assert.equal(shownDraft('!'), '');
+  assert.equal(shownDraft('hi !'), 'hi !');
+  assert.equal(shownDraft('\\!x'), '\\!x');
 });
 
 test('shell events: start opens a running card, live output grows it, end settles it with the whole stored output', () => {
@@ -60,12 +70,16 @@ test('shell events never become a user message, so the chat title and busy state
 });
 
 test('shellVerdict, shellDuration, stalled hint and terminal advice', () => {
-  assert.deepEqual(shellVerdict({ status: 'done' }), { text: '완료 · 종료 코드 0', tone: 'ok' });
-  assert.equal(shellVerdict({ status: 'failed', exitCode: 127 }).text, '실패 · 종료 코드 127');
+  assert.deepEqual(shellVerdict({ status: 'done' }), { text: '완료', detail: '종료 코드 0', tone: 'ok' });
+  assert.deepEqual(shellVerdict({ status: 'failed', exitCode: 127 }), { text: '실패', detail: '종료 코드 127', tone: 'bad' });
+  assert.deepEqual(shellVerdict({ status: 'failed', exitCode: null, signal: 'SIGTERM' }), { text: '실패', detail: 'SIGTERM', tone: 'bad' });
   assert.equal(shellVerdict({ status: 'timeout' }).tone, 'bad');
   assert.equal(shellVerdict({ status: 'stopped' }).tone, 'warn');
-  assert.match(shellVerdict({ status: 'error', error: 'spawn ENOENT' }).text, /ENOENT/);
-  assert.equal(shellDuration(420), '0.4초');
+  assert.match(shellVerdict({ status: 'error', error: 'spawn ENOENT' }).detail, /ENOENT/);
+  assert.equal(shellDuration(420), '420ms');
+  assert.equal(shellDuration(999.6), '1초');
+  assert.equal(briefDuration(100), '100ms');
+  assert.equal(briefDuration(4_200), '4초');
   assert.equal(shellDuration(12_400), '12초');
   assert.equal(shellDuration(125_000), '2분 5초');
   const running = { status: 'running', startedAt: 0 };

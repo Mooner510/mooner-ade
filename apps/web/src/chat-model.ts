@@ -663,6 +663,8 @@ export function duration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   return seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분 ${seconds % 60}초` : seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : `${seconds}초`;
 }
+/** duration() for a card's elapsed time: under a second it is ms ("420ms"), so a quick agent does not read "0초". */
+export const briefDuration = (ms: number) => ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : duration(ms);
 const limitNames: Record<string, string> = { five_hour: '5시간', seven_day: '주간', seven_day_opus: '주간 Opus', seven_day_sonnet: '주간 Sonnet', seven_day_overage_included: '주간', overage: '추가 사용량' };
 const dayClock = (at: Date) => `${at.toDateString() === new Date().toDateString() ? '' : `${at.getMonth() + 1}/${at.getDate()} `}${at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 // A plan limit the CLI warned about or hit: which one, how far, and when it starts over (a time of day, with the date when it is not today).

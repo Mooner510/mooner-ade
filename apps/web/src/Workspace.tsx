@@ -1184,7 +1184,7 @@ ${where}`, [
         <path d="M28 33V55L12 77" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--git-ref-remote)' }} />
         <circle cx="44" cy="11" r="6" style={{ fill: 'var(--git-ref-head)' }} /><circle cx="44" cy="11" r="4" style={{ fill: 'var(--surface)' }} /><circle cx="44" cy="11" r="2" style={{ fill: 'var(--git-ref-head)' }} />
         <circle cx="28" cy="33" r="4" style={{ fill: 'var(--git-ref-remote)' }} /><circle cx="28" cy="55" r="4" style={{ fill: 'var(--git-ref-remote)' }} /><circle cx="12" cy="77" r="4" style={{ fill: 'var(--git-ref-local)' }} />
-        {([[11, 'main', 49, 'var(--git-ref-head)'], [55, 'origin/dev', 75, 'var(--git-ref-remote)'], [77, 'dev', 41, 'var(--git-ref-local)']] as const).map(([y, name, width, color]) => <g key={name}>
+        {([[11, 'main', 49, 'var(--git-ref-head)'], [55, 'origin/dev', 78, 'var(--git-ref-remote)'], [77, 'dev', 43, 'var(--git-ref-local)']] as const).map(([y, name, width, color]) => <g key={name}>
           <rect x="60" y={y - 8.5} width={width} height="17" rx="6" style={{ fill: 'var(--fg)' }} fillOpacity=".08" />
           <circle cx="68" cy={y} r="3" style={{ fill: color }} />
           <text x="76" y={y} dominantBaseline="central" fontSize="11.5" style={{ fill: 'var(--fg)' }}>{name}</text>
