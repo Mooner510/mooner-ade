@@ -36,10 +36,11 @@ const summary: [string, string][] = [
   ['Pane 최대화', 'mod+shift+enter'], ['Git 커밋 그래프', 'mod+shift+g'], ['명령 팔레트', 'mod+shift+p'], ['프로젝트 번호로 이동', 'mod+alt+1']
 ];
 const features: [Parameters<typeof Icon>[0]['name'], string, string][] = [
-  ['chat', 'Chat과 CLI를 자유롭게', '같은 대화를 대화 화면과 터미널로 오가요'],
-  ['folder', '프로젝트별 작업 공간', '프로젝트마다 에이전트가 멈추지 않고 돌아가요'],
-  ['bell', '놓치지 않는 알림', '작업을 마치거나 승인을 기다리면 바로 알려 줘요'],
-  ['graph', 'Git 그래프 한눈에', '브랜치·체크아웃·머지·리베이스를 그래프에서 바로 해요']
+  ['bot', '대화로 일을 맡겨요', '요청하면 AI가 코드를 고치고 명령을 실행해요. 그 과정이 읽기 쉬운 카드로 보여요'],
+  ['layers', '여러 프로젝트를 한 창에서', '프로젝트마다 탭과 화면 배치가 유지되고, 다른 프로젝트를 봐도 AI는 계속 일해요'],
+  ['bell', '놓치지 않는 알림', '작업이 끝나거나 승인이 필요하면 바로 알려 줘요'],
+  ['graph', 'Git 커밋 그래프', '브랜치·머지·충돌 해결까지 그래프에서 바로 해요'],
+  ['terminal', '터미널 명령도 대화 안에서', '입력창에 !를 붙여 쓰면 명령이 실행되고, 결과를 AI에게 함께 보낼 수 있어요']
 ];
 // Coach text: **word** is emphasised and {token}s draw the app's own markers in their real colours, so a line reads at a glance.
 function Rich({ text }: { text: string }) {

@@ -62,7 +62,7 @@ export const initialTour = (): Tour => ({
 // `keys` formats a binding for the platform (showKeys); passed in so this file stays free of DOM code.
 // Copy introduces the app's features; `keys` on a step are shortcut chips (raw bindings, formatted by the coach), a task's `hint` says how.
 export const steps = (keys: (binding: string) => string): Step[] => [
-  { id: 'welcome', title: '무너에이드', body: ['**AI 에이전트**를 프로젝트마다 띄우고 한곳에서 지켜보는 작업 공간이에요.'], tasks: [] },
+  { id: 'welcome', title: '무너에이드', body: ['**AI 에이전트**에게 일을 맡기고, 결과를 한 화면에서 확인하는 작업 공간이에요.'], tasks: [] },
   { id: 'projects', title: '프로젝트를 한 화면에', target: '.tour .folders', keys: [['프로젝트 이동', 'mod+alt+1'], ['탭 이동', 'alt+1']],
     body: ['열어 둔 **프로젝트와 탭**이 왼쪽에 모여요.', '다른 프로젝트로 옮겨도 에이전트는 **멈추지 않아요**.'],
     tasks: [{ flag: 'projectVisit', label: 'api-server 프로젝트 열어 보기', hint: '사이드바에서 클릭', target: '.tour [data-project="api-server"] .folder-head' }, { flag: 'projectBack', label: 'my-app 으로 돌아오기', hint: `클릭 또는 ${keys('mod+alt+1')}`, target: '.tour [data-project="my-app"] .folder-head' }] },
