@@ -54,7 +54,7 @@ export type Item = ItemBase & (
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
-  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
+  | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; excluded?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
   | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
 /** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
 export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
@@ -314,7 +314,7 @@ function reduceShell(view: ChatView, event: any, key: string, fresh: boolean): C
       // An end whose start is gone (cut off the stored tail) still shows what it printed.
       return known ? patch(() => change) : append(view, { kind: 'shell', key: `shell:${id || key}`, id: id || key, command: '', cwd: '', startedAt: Number(event.at) || Date.now(), ...change, fresh });
     }
-    case 'sent': { const ids = new Set(Array.isArray(event.ids) ? event.ids : []); return ids.size ? { ...view, items: view.items.map(item => item.kind === 'shell' && ids.has(item.id) ? { ...item, sent: true, fresh: false } : item) } : view; }
+    case 'sent': { const ids = new Set(Array.isArray(event.ids) ? event.ids : []); return ids.size ? { ...view, items: view.items.map(item => item.kind === 'shell' && ids.has(item.id) ? { ...item, sent: true, excluded: event.excluded === true, fresh: false } : item) } : view; }
     default: return view;
   }
 }

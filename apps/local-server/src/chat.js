@@ -1245,6 +1245,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     },
     // `!command`: starts the run and returns at once with its id; the card is filled by `shell` events. `done` (tests, callers that wait) settles when it ends.
     shell(command, options) { return startShell(command, options); },
+    // "이 결과는 제외": the finished `!` runs still waiting count as sent (so they never ride along) but are marked excluded for the cards.
+    skipShell() { const runs = pendingShellRuns(retainedEvents()); if (runs.length) emit({ kind: 'shell', phase: 'sent', excluded: true, ids: runs.map(run => run.id) }); return runs.length; },
     stopShell(runId) { const run = shellRuns.get(String(runId ?? '')); run?.abort(); return run !== undefined; },
     cancelBtw(btwId) { const run = btwRuns.get(String(btwId ?? '')); run?.abort(); return run !== undefined; },
     // Where this conversation's transcript lives, for the statistics view.

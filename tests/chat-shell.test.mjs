@@ -128,6 +128,16 @@ test('chat session: ! runs without a turn, stores start and the whole end, and l
   assert.ok(session.replay().events.some(event => event.kind === 'shell' && event.phase === 'end'));
 });
 
+test('chat session: skipShell marks waiting runs as sent and excluded, so they no longer ride along', async t => {
+  const { session, events } = await open(t);
+  await session.shell(node('echo', 0)).done;
+  assert.equal(pendingShellRuns(events).length, 1);
+  assert.equal(session.skipShell(), 1);
+  assert.equal(pendingShellRuns(events).length, 0);
+  assert.equal(shellEvents(events, 'sent')[0].excluded, true);
+  assert.equal(session.skipShell(), 0);
+});
+
 test('chat session: stop ends a running command; an interactive command is refused; at most four run at once', async t => {
   const { session, events } = await open(t);
   const { id, done } = session.shell(node('sleep'));

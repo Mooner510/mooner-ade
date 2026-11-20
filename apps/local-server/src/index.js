@@ -1125,6 +1125,7 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       return { id: chat.shell(input.command).id };
     }
+    case 'chat/shell-skip': return { skipped: project.chats.get(input.id)?.skipShell() ?? 0 };
     case 'chat/shell-stop': return { stopped: project.chats.get(input.id)?.stopShell(input.runId) === true };
     case 'chat/btw-cancel': return { cancelled: project.chats.get(input.id)?.cancelBtw(input.btwId) === true };
     case 'chat/cancel-steer': return { cancelled: await project.chats.get(input.id)?.cancelSteer() === true };
