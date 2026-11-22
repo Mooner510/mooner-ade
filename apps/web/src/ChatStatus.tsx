@@ -58,7 +58,8 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   const def = chatStatusDefs[id]; if (!def) return null;
   const values = def.values(context); if (!values) return null;
   const { state } = context;
-  if (id === 'cost' && state.costUsd === null || id === 'tokens' && state.capabilities?.tokens === false) return null;
+  // On a Claude API key the same dollars sit in the API Usage item, so the cost item would show them twice.
+  if (id === 'cost' && (state.costUsd === null || state.apiKey === true && state.agent === 'claude') || id === 'tokens' && state.capabilities?.tokens === false) return null;
   if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon, tip: def.extra.tip } : undefined;
