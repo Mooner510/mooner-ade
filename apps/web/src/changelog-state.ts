@@ -21,6 +21,15 @@ export const markChangelogSeen = (version: string, store = browserStore()) => st
 
 // Versions are plain x.y.z (beta releases have no entry), so a numeric compare is enough for the sidebar's "새 소식" tag.
 export const changelogNewer = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }) > 0;
+// From this version on notes use the patch-note page with live UI demos; older notes keep the plain page.
+export const CHANGELOG_RICH_FROM = '0.6.0';
+export const changelogIsRich = (version: string) => !changelogNewer(CHANGELOG_RICH_FROM, version);
+// Rules for the full-screen version intro (연출):
+// 1. A patch version (x.y.Z, Z > 0) never plays an intro: it opens straight on the page, and an `intro` in its entry is ignored (write none).
+// 2. Every minor/major version (x.y.0) from CHANGELOG_RICH_FROM on always has one, designed from that version's own features, and it must not
+//    repeat any earlier version's intro (colour, line or concept). tests/changelog.test.mjs checks the entries for both.
+export const changelogIsPatch = (version: string) => (parseInt(version.split('-')[0].split('.')[2] ?? '0', 10) || 0) > 0;
+export const changelogPlaysIntro = (version: string) => changelogIsRich(version) && !changelogIsPatch(version);
 const parse = (version: string) => { const [core, pre] = version.split(/-(.*)/); return { nums: core.split('.').map(part => parseInt(part, 10) || 0), pre: Boolean(pre) }; };
 // A beta counts as just before its release (0.5.9-beta2 -> 0.5.9 is new).
 const compare = (a: string, b: string) => { const x = parse(a), y = parse(b); for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; } return Number(y.pre) - Number(x.pre); };

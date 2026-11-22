@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changelogDue, changelogIsFresh, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, setChangelogDue, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
+import { changelogDue, changelogIsFresh, changelogIsPatch, changelogIsRich, changelogPlaysIntro, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, setChangelogDue, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
 
 const store = () => {
   const data = new Map();
@@ -103,4 +103,17 @@ test('notes that were due but not shown (the app was closed during the tour) are
   setChangelogDue(false, saved); saved.setItem('ade-changelog-viewed', JSON.stringify(['0.6.0']));
   assert.equal(changelogDue(saved), false);
   assert.equal(hasUnreadChangelogVersions(['0.5.12', '0.6.0'], saved), false);
+});
+
+// A patch version never plays the full-screen intro, even with an `intro` in its entry; minor/major versions from 0.6.0 on do (0.6.0 unchanged).
+test('only a minor or major version from 0.6.0 on plays the version intro, never a patch', () => {
+  for (const version of ['0.6.0', '0.7.0', '1.0.0', '1.2.0', '0.10.0']) assert.equal(changelogPlaysIntro(version), true, version);
+  for (const version of ['0.6.1', '0.6.12', '0.7.3', '1.0.1']) {
+    assert.equal(changelogPlaysIntro(version), false, version);
+    assert.equal(changelogIsRich(version), true, `${version} still shows the patch-note page with demos`);
+  }
+  for (const version of ['0.5.12', '0.5.0', '0.4.0']) assert.equal(changelogPlaysIntro(version), false, `${version}: before 0.6.0, plain page`);
+  assert.equal(changelogIsPatch('0.6.1'), true);
+  assert.equal(changelogIsPatch('0.7.0'), false);
+  assert.equal(changelogIsPatch('0.7.0-beta2'), false);
 });

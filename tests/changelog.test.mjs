@@ -42,15 +42,25 @@ test('changelog entries are ready to publish: a real date and KST time, an icon 
   if (!version.includes('-')) assert.ok(notes(version, changelog), `package.json is ${version}: add it to apps/web/src/changelog.json`);
 });
 
-test('notes from 0.6.0 on carry their intro (a colour and a line) and every demo they name exists', () => {
+// Intro rules (changelog-state.ts): a patch version (x.y.Z, Z > 0) never has one; every minor/major from 0.6.0 on has its own, unlike any earlier one.
+test('minor/major notes from 0.6.0 on carry their own intro (a colour and a line), patch notes none, and every demo they name exists', () => {
   const demos = readFileSync(new URL('../apps/web/src/ChangelogDemo.tsx', import.meta.url), 'utf8');
   const known = new Set([...demos.matchAll(/^  '?([\w-]+)'?: \{ render:/gm)].map(match => match[1]));
   assert.ok(known.size >= 20, 'the demo registry is where the test looks for demo names');
   const rich = version => version.localeCompare('0.6.0', undefined, { numeric: true }) >= 0;
+  const patch = version => Number(version.split('.')[2]) > 0;
+  const intros = [];
   for (const entry of changelog) {
-    if (rich(entry.version)) {
+    if (rich(entry.version) && patch(entry.version)) {
+      assert.ok(!entry.intro, `${entry.version}: a patch version plays no intro, so its entry has no intro`);
+    } else if (rich(entry.version)) {
       assert.ok(Number.isInteger(entry.intro?.hue) && entry.intro.hue >= 0 && entry.intro.hue < 360, `${entry.version}: intro.hue is the version's colour (0-359), the intro and the page header use it`);
       assert.ok(entry.intro?.tagline?.trim(), `${entry.version}: intro.tagline is the line under the big version`);
+      for (const other of intros) {
+        assert.notEqual(entry.intro.tagline.trim(), other.intro.tagline.trim(), `${entry.version}: its intro line repeats ${other.version}'s; each minor/major gets its own intro`);
+        assert.notEqual(entry.intro.hue, other.intro.hue, `${entry.version}: its intro colour repeats ${other.version}'s; each minor/major gets its own intro`);
+      }
+      intros.push(entry);
     } else {
       assert.ok(!entry.intro && entry.items.every(item => !item.demo), `${entry.version}: notes before 0.6.0 keep the plain page`);
     }
