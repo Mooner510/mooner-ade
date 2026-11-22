@@ -3061,7 +3061,9 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 /* Two columns of notes (one when the page is narrow); a demo that needs the width takes a whole row. */
 .changelog-entry[data-rich] .changelog-group > ul { display: block; columns: 2 460px; column-gap: 14px; }
 .changelog-entry[data-rich] .changelog-group > ul > li { break-inside: avoid; margin: 0 0 8px; }
+/* Multi-column drops the margin above a spanning note, so it sat flush against the column above; give it the same 8px rhythm as the others (not on the first note of a group, under its heading). */
 .changelog-entry[data-rich] .changelog-group > ul > li[data-wide] { column-span: all; }
+.changelog-entry[data-rich] .changelog-group > ul > li[data-wide]:not(:first-child) { margin-top: 8px; }
 .changelog-entry[data-rich] .changelog-group > ul > li[data-demo] { padding: 14px; border: 1px solid var(--border); background: var(--surface); }
 .changelog-entry[data-rich] .changelog-group > ul > li[data-demo]:hover { background: color-mix(in srgb, var(--kind) 5%, var(--surface)); }
 
@@ -3111,7 +3113,8 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-popover { width: 260px; max-width: 100%; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); }
 .changelog-dot { display: flex; gap: 6px; padding: 8px; width: fit-content; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .changelog-tour { display: flex; align-items: flex-start; gap: 14px; }
-.changelog-tour .menu.changelog-ide { position: static; min-width: 200px; }
+/* A flex item gets z-index even when static: the menu's 41 would paint it over the sticky version header when the note scrolls under it. */
+.changelog-tour .menu.changelog-ide { position: static; min-width: 200px; z-index: auto; }
 .changelog-split { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px; }
 .changelog-demo .chat-update { border: 1px solid var(--border); border-radius: 8px; }
 .changelog-demo .chat-mode-tip.notice-card { position: static; width: auto; animation: none; }
