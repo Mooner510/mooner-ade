@@ -6,7 +6,7 @@ import { APP_THEMES, themeById, type ThemeId } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
-import { HubSignIn, PluginSettings, pluginsBridge, usePluginsState } from './PluginSettings';
+import { HubSignIn, PluginSettings, pluginsBridge, usePluginUpdateCount, usePluginsState } from './PluginSettings';
 import { useShells } from './shells';
 import { useMissingAgents } from './installed-agents';
 import { Dropdown, Modal } from './views';
@@ -553,6 +553,7 @@ export function ThemePicker({ value, onChange }: { value: ThemeId; onChange(id: 
 
 export function SettingsModal({ settings, onChange, onClose, initialSection = 'appearance', initialAiTab = 'common' }: { settings: Settings; onChange(settings: Settings): void; onClose(): void; initialSection?: Section; initialAiTab?: AiTab }) {
   const [section, setSection] = useState<Section>(initialSection), [aiTab, setAiTab] = useState<AiTab>(initialAiTab), [statusTab, setStatusTab] = useState<'bar' | 'chat'>('bar'), [query, setQuery] = useState(''), [look, setLook] = useState(''), [lookTheme, setLookTheme] = useState('');
+  const pluginUpdates = usePluginUpdateCount();
   const searching = query.trim() !== '';
   const missing = useMissingAgents();
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
@@ -632,7 +633,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     <div className={`settings${searching ? ' settings-searching' : ''}`} ref={root}>
       <nav className="settings-nav" aria-label="설정 분류">
         <h2 id="settings-title" className="settings-drag" onPointerDown={dragSettings}>설정</h2>
-        {sections.map(item => <button key={item.id} aria-pressed={!searching && section === item.id} onClick={() => { setQuery(''); setSection(item.id); }}><Icon name={item.icon} />{item.label}</button>)}
+        {sections.map(item => <button key={item.id} aria-pressed={!searching && section === item.id} onClick={() => { setQuery(''); setSection(item.id); }}><Icon name={item.icon} />{item.label}{item.id === 'plugins' && pluginUpdates > 0 && <i className="plugin-new-dot nav-dot" role="img" aria-label={`플러그인 업데이트 ${pluginUpdates}개`} />}</button>)}
         <span className="spacer" />
         <button onClick={() => onChange({ ...defaultSettings, theme: settings.theme, onboarded: settings.onboarded, chatTipPending: settings.chatTipPending })}><Icon name="refresh" />기본값으로</button>
       </nav>

@@ -103,3 +103,19 @@ test('the list is loading, empty or failed; a plugin\'s own words are shown as t
 test('a notice from a button is shown in the market', async t => {
   assert.match((await render(t, hub({ signedIn: true, account: 'A' }), { notice: { text: '설치했습니다', error: false, step: 'p1' } })).html, /설치했습니다/);
 });
+
+// The red dots (settings button, 플러그인 section, tabs, rows) count installed plugins with a newer version, from the plugin's own update or the Hub's list.
+test('the update count merges a plugin\'s own update with the Hub\'s list, once per plugin, and ignores built-in ones', async t => {
+  const { count } = await bundle(t, `
+    import { pluginUpdateCount } from './PluginSettings';
+    const plugin = (id, extra = {}) => ({ folder: id, id, name: id, ...extra });
+    const entry = (id, extra = {}) => ({ id, installed: { version: '1.0.0' }, updateAvailable: true, reserved: false, ...extra });
+    export const count = {
+      none: pluginUpdateCount(null),
+      own: pluginUpdateCount({ plugins: [plugin('a', { update: { available: true } }), plugin('b', { update: { available: false } })] }),
+      builtin: pluginUpdateCount({ plugins: [plugin('a', { builtin: true, update: { available: true } })] }),
+      merged: pluginUpdateCount({ plugins: [plugin('a', { update: { available: true } })], hub: { catalog: { plugins: [entry('a'), entry('c'), entry('d', { updateAvailable: false }), entry('e', { installed: null }), entry('f', { reserved: true })] } } })
+    };
+  `);
+  assert.deepEqual(count, { none: 0, own: 1, builtin: 0, merged: 2 });
+});

@@ -8,7 +8,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, UPDATE_MODES, credentialLabel, isNewer, sourceKey, sourceKind, sourceLabel, validSource, versionText } from './plugin-updates.js';
+import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, HUB_CHECK_EVERY_MS, UPDATE_MODES, credentialLabel, isNewer, sourceKey, sourceKind, sourceLabel, validSource, versionText } from './plugin-updates.js';
 
 export const PLUGIN_API = 1;
 // What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell. `hub`: plugin.json
@@ -279,9 +279,11 @@ const sourceLine = manifest => !manifest.source ? '' : sourceKind(manifest.sourc
 const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}${sourceLine(manifest)}\n${place}\nSHA-256: ${hash}`;
 // What an update asks for that the installed version did not: new grants, or updates from another place (another repository,
 // or the Hub instead of GitHub). An update that asks for more is never installed without the user seeing it, even in automatic mode.
-export function updateReview(before, after) {
+// `managed`: the update came from the Hub for a plugin the Hub serves to this signed-in account (it is the place updates come from now,
+// whatever the old manifest said), so moving to the Hub is not a change of source.
+export function updateReview(before, after, { managed = false } = {}) {
   const had = new Set(grantsFor(before)), review = grantsFor(after).filter(line => !had.has(line)).map(line => `새 권한: ${line}`);
-  if (sourceKey(before.source) !== sourceKey(after.source)) review.push(`업데이트 출처가 바뀝니다: ${sourceLabel(before.source)} → ${sourceLabel(after.source)}`);
+  if (!(managed && sourceKind(after.source) === 'hub') && sourceKey(before.source) !== sourceKey(after.source)) review.push(`업데이트 출처가 바뀝니다: ${sourceLabel(before.source)} → ${sourceLabel(after.source)}`);
   return review;
 }
 
@@ -577,7 +579,7 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
 // clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
 // openExternal(url) opens GitHub's sign-in page in the browser.
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, log = console }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -1089,7 +1091,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       if (list.some(entry => entry.builtin && entry.manifest?.id === manifest.id)) throw fail(`이 id(${manifest.id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
       const { current } = replaced(manifest.id);
       const installed = list.find(entry => !entry.builtin && !entry.error && entry.manifest?.id === manifest.id);
-      const review = installed ? updateReview(installed.manifest, manifest) : [];
+      const review = installed ? updateReview(installed.manifest, manifest, { managed: update?.managed === true }) : [];
       // Automatic: only an approved, running-eligible plugin whose update asks for nothing new goes in without a dialog.
       const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
       if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
@@ -1134,19 +1136,41 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // id -> { status: 'checking'|'latest'|'available'|'downloading'|'installing'|'error', found, kind, checkedAt, error, review }
   const updates = new Map(), checking = new Map();
   let updateTimers = [], round = null, machineVia = null, machineChecked = false, device = null, githubError = null, ghAvailable = false, machineAccounts = [];
-  // The client a source is served by (the Hub when plugin.json says `hub`, else GitHub), or null when this app has none.
+  // The client a source is served by (the Hub when the source is the Hub, else GitHub), or null when this app has none.
   const clientFor = source => sourceKind(source) === 'hub' ? hub : sourceKind(source) === 'github' ? github : null;
   const hubSignedIn = () => Boolean(hub && store.state.hub);
   const modeOf = id => store.state.updates?.[id]?.mode ?? DEFAULT_UPDATE_MODE;
+  // Where THIS plugin's updates come from right now. Signed in to the Hub, a plugin the Hub can serve (plugin.json says `source.hub`, or the
+  // Hub's list has its id: installed from the market) comes only from the Hub: no GitHub sign-in, no release is asked. Signed out, it is what
+  // the manifest names for GitHub (the Hub part is ignored), and a plugin that only names the Hub waits for the sign-in.
+  const hubListed = id => Boolean(hubCatalogRaw?.plugins.some(entry => entry.id === id));
+  function sourceOf(item) {
+    const declared = item.manifest.source ?? null, id = item.manifest.id;
+    if (hubSignedIn() && (declared?.hub || hubListed(id))) return { hub: true };
+    if (declared?.github && !(declared.hub && hubSignedIn())) return { github: declared.github, asset: declared.asset };
+    return declared?.hub ? { hub: true } : null;
+  }
+  // Signed in, a plugin that only names GitHub is only left on GitHub once the Hub's list says it does not serve it. Until the list is
+  // known (it is asked for here) nothing is checked, and a Hub that cannot be reached is not a reason to go to GitHub.
+  async function settledSource(item) {
+    if (hubSignedIn() && !hubCatalogRaw) await hubCatalog().catch(() => {});
+    if (hubSignedIn() && !hubCatalogRaw && !item.manifest.source?.hub) throw fail('MoonerADE Hub의 플러그인 목록을 받지 못해 이 플러그인이 Hub에서 오는지 알 수 없습니다. 잠시 뒤 다시 시도하세요.', 'HUB_BUSY');
+    return sourceOf(item);
+  }
   function updateView(item) {
-    const id = item.manifest.id, source = item.manifest.source ?? null;
+    const id = item.manifest.id, source = sourceOf(item);
     if (!source) return { source: null, mode: modeOf(id) };
-    const entry = updates.get(id), kind = sourceKind(source), latest = entry?.found?.version ?? null, available = Boolean(latest && isNewer(latest, item.manifest.version));
-    let status = !entry ? 'idle' : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
+    const kind = sourceKind(source), raw = updates.get(id), entry = raw?.kind === kind ? raw : null;
+    // The Hub's list already says what is newest, so an update shows (and flags) before the plugin itself was checked.
+    let latest = entry?.found?.version ?? null;
+    const listed = kind === 'hub' ? hubCatalogRaw?.plugins.find(item2 => item2.id === id)?.version ?? null : null;
+    if (listed && (!latest || isNewer(listed, latest))) latest = listed;
+    const available = Boolean(latest && isNewer(latest, item.manifest.version));
+    let status = !entry ? (available ? 'available' : 'idle') : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
     // A Hub plugin cannot be checked until the Hub sign-in is back: the page says so instead of showing an old answer.
     if (kind === 'hub' && !hubSignedIn() && !['checking', 'downloading', 'installing'].includes(status)) status = 'needs-login';
     return {
-      source: kind === 'hub' ? { kind, ...(source.github && { github: source.github, asset: source.asset }) } : { kind, github: source.github, asset: source.asset },
+      source: kind === 'hub' ? { kind } : { kind, github: source.github, asset: source.asset },
       mode: modeOf(id), status, current: item.manifest.version, latest, available,
       checkedAt: entry?.checkedAt ?? null, error: entry?.error ?? null, via: entry?.found?.via ?? null, viaLabel: credentialLabel(entry?.found?.via ?? null),
       review: available ? entry?.review ?? [] : []
@@ -1156,16 +1180,20 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!github && !hub) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
     const item = list.find(entry => !entry.builtin && entry.manifest?.id === id);
     if (!item?.manifest) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
-    if (!item.manifest.source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
-    if (!clientFor(item.manifest.source)) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
+    if (!sourceOf(item)) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
+    if (!clientFor(sourceOf(item))) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
     return item;
   }
   // One check at a time per plugin; a check started while one runs gets the running one's answer.
-  function checkUpdate(id) {
-    const item = sourceItem(id);
+  async function checkUpdate(id) {
     if (checking.has(id)) return checking.get(id);
-    const source = item.manifest.source, client = clientFor(source), kind = sourceKind(source);
-    if (kind === 'hub' && !hubSignedIn()) return Promise.reject(fail('MoonerADE Hub에 로그인해야 업데이트를 확인할 수 있습니다. 설정 → 플러그인 → 마켓에서 로그인하세요.', 'NOT_SIGNED_IN'));
+    const item = sourceItem(id), source = await settledSource(item);
+    if (!source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
+    // Another caller may have started the check while the Hub's list was being read.
+    if (checking.has(id)) return checking.get(id);
+    const client = clientFor(source), kind = sourceKind(source);
+    if (!client) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
+    if (kind === 'hub' && !hubSignedIn()) throw fail('MoonerADE Hub에 로그인해야 업데이트를 확인할 수 있습니다. 설정 → 플러그인 → 마켓에서 로그인하세요.', 'NOT_SIGNED_IN');
     const entry = updates.get(id) ?? {};
     updates.set(id, entry);
     // An answer from the other place (the plugin moved from GitHub to the Hub) is not an answer for this one.
@@ -1194,17 +1222,18 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // Downloads the newest release (or the Hub's newest), checks it against the checksum it was announced with and installs it the
   // way a zip is installed (the dialog, unless `auto` and the update asks for nothing new). A check within the last minute is reused.
   async function installUpdate(id, { auto = false } = {}) {
-    const item = sourceItem(id), entry = updates.get(id), kind = sourceKind(item.manifest.source);
+    const item = sourceItem(id), source = await settledSource(item), entry = updates.get(id), kind = sourceKind(source);
+    if (!source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
     const found = entry?.found && entry.kind === kind && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
     const now = updates.get(id);
     if (!isNewer(found.version, item.manifest.version)) return { ...snapshot(), message: `“${item.manifest.name}” 플러그인은 이미 최신(${item.manifest.version})입니다.` };
     let zip = null;
     try {
       now.status = 'downloading'; changed();
-      const { data } = await clientFor(item.manifest.source).download(found);
+      const { data } = await clientFor(source).download(found);
       zip = writeStagingZip(data);
       now.status = 'installing'; changed();
-      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto }, ...(kind === 'hub' && { origin: 'hub' }) });
+      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
       now.status = 'latest';
       return result;
     } catch (error) {
@@ -1224,13 +1253,31 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     notify({ id, title: '플러그인 업데이트', body });
   }
   // The background round: every plugin with a source and not on manual. Automatic ones are installed, the rest announced.
-  async function checkAll() {
+  // Signed in to the Hub, its list is read first (one request); a plugin it serves is only asked about when the list shows a newer version,
+  // and one that no list entry has a newer version of is just marked checked. `hubOnly` is the frequent round: GitHub plugins wait for the 6-hourly one.
+  async function checkAll({ hubOnly = false } = {}) {
+    if (hubSignedIn()) await hubCatalog({ force: true }).catch(() => {});
     for (const item of [...list]) {
       const id = item.manifest?.id;
       if (closing) return;
-      if (!id || item.builtin || item.error || !item.manifest.source || modeOf(id) === 'manual') continue;
+      if (!id || item.builtin || item.error || !item.manifest.source && !hubListed(id)) continue;
+      // Manual keeps to itself: the dots come from the Hub's list above, nothing else is asked.
+      if (modeOf(id) === 'manual') continue;
+      const source = sourceOf(item), kind = sourceKind(source);
       // Without the client (an app build without the Hub) or the Hub sign-in there is nothing to ask; the settings page says so.
-      if (!clientFor(item.manifest.source) || (sourceKind(item.manifest.source) === 'hub' && !hubSignedIn())) continue;
+      if (!source || !clientFor(source) || (kind === 'hub' && !hubSignedIn())) continue;
+      if (hubOnly && kind !== 'hub') continue;
+      // Signed in but the Hub's list could not be read: a plugin that only names GitHub may be one the Hub serves, so it is not asked of GitHub.
+      if (hubSignedIn() && !hubCatalogRaw && !item.manifest.source?.hub) continue;
+      if (kind === 'hub' && hubCatalogRaw) {
+        const listed = hubCatalogRaw.plugins.find(entry => entry.id === id);
+        if (!listed) continue;
+        if (!isNewer(listed.version, item.manifest.version)) {
+          const quiet = updates.get(id);
+          if (!quiet || !['checking', 'downloading', 'installing'].includes(quiet.status)) { updates.set(id, Object.assign(quiet ?? {}, { kind, status: 'latest', checkedAt: Date.now(), error: null })); changed(); }
+          continue;
+        }
+      }
       let found;
       try { found = await checkUpdate(id); } catch (error) { log.warn(`[plugin ${id}] 업데이트를 확인하지 못했습니다: ${error.message}`); continue; }
       const { name, version } = item.manifest;
@@ -1249,10 +1296,15 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       announce(id, found.version, `${name} ${found.version} 업데이트가 있습니다(지금 ${version}). 설정 → 플러그인 → ${name}에서 설치하세요.`);
     }
   }
-  const runRound = () => { round ??= checkAll().catch(error => log.warn(`플러그인 업데이트 확인 실패: ${error.message}`)).finally(() => { round = null; }); return round; };
+  const runRound = options => { round ??= checkAll(options).catch(error => log.warn(`플러그인 업데이트 확인 실패: ${error.message}`)).finally(() => { round = null; }); return round; };
   function startUpdates() {
     if ((!github && !hub) || updateTimers.length) return;
-    const first = setTimeout(() => { void runRound(); const every = setInterval(() => void runRound(), checkEveryMs); every.unref?.(); updateTimers.push(every); }, firstCheckMs);
+    const first = setTimeout(() => {
+      void runRound();
+      const every = setInterval(() => void runRound(), checkEveryMs); every.unref?.(); updateTimers.push(every);
+      // The Hub is looked at often (a new version should arrive like a new MoonerADE does); signed out there is nothing to ask it.
+      if (hub) { const often = setInterval(() => { if (hubSignedIn()) void runRound({ hubOnly: true }); }, hubEveryMs); often.unref?.(); updateTimers.push(often); }
+    }, firstCheckMs);
     first.unref?.();
     updateTimers.push(first);
   }
@@ -1262,10 +1314,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const item = sourceItem(id), found = await checkUpdate(id);
       return { ...snapshot(), message: isNewer(found.version, item.manifest.version) ? `${item.manifest.name} ${found.version} 업데이트가 있습니다.` : `${item.manifest.name} 플러그인은 최신(${item.manifest.version})입니다.` };
     }
-    const usable = item => clientFor(item.manifest.source) && (sourceKind(item.manifest.source) !== 'hub' || hubSignedIn());
-    const targets = list.filter(item => !item.builtin && !item.error && item.manifest?.source && usable(item));
+    if (hubSignedIn()) await hubCatalog({ force: true }).catch(() => {});
+    // A plugin that only names GitHub is left alone while the Hub, which may serve it, cannot be read.
+    const usable = item => { const source = sourceOf(item); return source && clientFor(source) && (sourceKind(source) !== 'hub' || hubSignedIn()) && (!hubSignedIn() || hubCatalogRaw || item.manifest.source?.hub); };
+    const targets = list.filter(item => !item.builtin && !item.error && item.manifest && usable(item));
     if (!targets.length) {
-      const waiting = list.some(item => !item.builtin && !item.error && sourceKind(item.manifest?.source) === 'hub' && !hubSignedIn());
+      const waiting = list.some(item => !item.builtin && !item.error && sourceKind(sourceOf(item)) === 'hub' && !hubSignedIn());
       return { ...snapshot(), message: waiting ? 'Hub에서 받은 플러그인을 확인하려면 설정 → 플러그인 → 마켓에서 MoonerADE Hub에 로그인하세요.' : '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
     }
     const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
@@ -1276,7 +1330,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // Automatic updates run new code without a dialog, so turning them on is confirmed natively; manual and notify only take away.
   async function setUpdateMode(id, mode) {
     if (!UPDATE_MODES.includes(mode)) throw fail('알 수 없는 업데이트 방식입니다.');
-    const item = sourceItem(id), { name, source } = item.manifest;
+    const item = sourceItem(id), { name } = item.manifest, source = sourceOf(item);
     if (mode === 'auto' && modeOf(id) !== 'auto') {
       const fromHub = sourceKind(source) === 'hub';
       const answer = await ask({

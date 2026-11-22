@@ -211,6 +211,16 @@ const stateLabel: Record<State, string> = {
 };
 const stateTone = (state: State): Tone => state === 'running' ? 'ok' : ['invalid', 'error', 'changed'].includes(state) ? 'error' : state === 'new' ? 'warn' : 'info';
 const toneIcon: Record<Tone, IconName> = { ok: 'check', warn: 'alert', error: 'alert', info: 'info' };
+// Installed plugins with a newer version waiting, by the plugin's own update or the Hub's list (flagged with a red dot in the settings button,
+// the settings 플러그인 section, the tabs and the row).
+const hasUpdate = (plugin: PluginInfo) => !plugin.builtin && Boolean(plugin.update?.available);
+export function pluginUpdateCount(state: PluginsState | null | undefined) {
+  if (!state) return 0;
+  const ids = new Set(state.plugins.filter(hasUpdate).map(plugin => plugin.id));
+  for (const entry of state.hub?.catalog?.plugins ?? []) if (entry.updateAvailable && entry.installed && !entry.reserved) ids.add(entry.id);
+  return ids.size;
+}
+export const usePluginUpdateCount = () => pluginUpdateCount(usePluginsState());
 // Plugins that need the user come first; the rest keep the folder order.
 const needsUser = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid'].includes(plugin.state) || Boolean(plugin.update?.available) || setupLeft(plugin) > 0;
 
@@ -386,6 +396,9 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const builtins = shown.filter(plugin => plugin.builtin), installed = shown.filter(plugin => !plugin.builtin);
   // The market tab is there when this app knows MoonerADE Hub; an update waiting in it is flagged like one needing attention.
   const hub = bridge.hubCatalog && state.hub?.available && state.hub.signedIn ? state.hub : null, marketUpdates = hub?.catalog?.plugins.filter(plugin => plugin.updateAvailable).length ?? 0;
+  // The GitHub account is only for plugins that are updated from GitHub: signed in to the Hub, the ones the Hub serves come from it alone,
+  // so the button stays out of the way unless an installed plugin still uses GitHub. Signed out it is there as before.
+  const showGithub = Boolean(state.github?.available) && (!state.hub?.signedIn || installed.some(plugin => plugin.update?.source?.kind === 'github'));
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
 
@@ -398,14 +411,14 @@ export function PluginSettings({ query = '' }: { query?: string }) {
       <div className="plugin-tabs" role="tablist" aria-label="플러그인 종류">
         {([['installed', '설치한 플러그인', installed], ['builtin', '내장 플러그인', builtins]] as const).map(([id, label, items]) =>
           <button key={id} type="button" role="tab" aria-selected={shownTab === id} onClick={() => setTab(id)}>
-            {label}<small>{items.length}</small>{shownTab !== id && items.some(needsUser) && <i className="plugin-tab-alert" title="플러그인 확인 필요" />}
+            {label}<small>{items.length}</small>{shownTab !== id && (items.some(hasUpdate) ? <i className="plugin-new-dot" title="업데이트 있음" /> : items.some(needsUser) && <i className="plugin-tab-alert" title="플러그인 확인 필요" />)}
           </button>)}
         {hub && <button type="button" role="tab" aria-selected={shownTab === 'market'} onClick={() => setTab('market')}>
-          마켓{hub.catalog && hub.catalog.plugins.length > 0 && <small>{hub.catalog.plugins.length}</small>}{shownTab !== 'market' && marketUpdates > 0 && <i className="plugin-tab-alert" title="플러그인 업데이트 있음" />}
+          마켓{hub.catalog && hub.catalog.plugins.length > 0 && <small>{hub.catalog.plugins.length}</small>}{shownTab !== 'market' && marketUpdates > 0 && <i className="plugin-new-dot" title="플러그인 업데이트 있음" />}
         </button>}
       </div>
       {shownTab === 'installed' && <div className="plugin-toolbar">
-        {state.github?.available && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
+        {showGithub && state.github && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
         {bridge.checkUpdates && installed.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
         <IconButton icon="refresh" label="플러그인 폴더 다시 읽기" disabled={working} onClick={() => run('global:rescan', bridge.rescan)} />
         <IconButton icon="folder" label="플러그인 폴더 열기" disabled={working} onClick={() => run('global:folder', bridge.openFolder)} />
@@ -438,7 +451,8 @@ export function PluginSettings({ query = '' }: { query?: string }) {
       <summary><Icon name="chevronRight" size={14} />설치 방법과 보안 안내</summary>
       <ul>
         <li>확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인은 업데이트되고 저장된 데이터는 남습니다.</li>
-        <li>업데이트 출처(GitHub 저장소)를 알려 주는 플러그인은 그 저장소의 릴리스에서 업데이트를 받습니다. 받은 파일은 릴리스의 체크섬과 맞춰 보고, 새 권한을 요청하는 업데이트는 자동 업데이트여도 물어봅니다.</li>
+        <li>Hub에 로그인하면 Hub가 제공하는 플러그인(마켓에서 설치했거나 Hub를 출처로 알려 주는 것)은 Hub에서만 업데이트를 받고, 새 버전이 올라오면 10분 안에 알려 드립니다. GitHub 로그인이나 릴리스는 쓰지 않습니다.</li>
+        <li>Hub에 로그인하지 않았다면 업데이트 출처(GitHub 저장소)를 알려 주는 플러그인은 그 저장소의 릴리스에서 업데이트를 받습니다. 받은 파일은 릴리스의 체크섬과 맞춰 보고, 새 권한을 요청하는 업데이트는 자동 업데이트여도 물어봅니다.</li>
         <li>압축을 푼 폴더(안에 <span className="mono">plugin.json</span>이 있는 폴더)를 직접 넣었다면 플러그인을 열어 승인하세요.</li>
         <li>승인은 그때의 파일 내용에 묶입니다. 파일이 바뀌면 다시 승인해야 실행됩니다.</li>
         <li>확인 창의 SHA-256을 배포처의 <span className="mono">SHA256SUMS</span>와 맞춰 보면 받은 파일이 그대로인지 알 수 있습니다.</li>
@@ -460,7 +474,8 @@ function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
     <span className="plugin-row-text">
       <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
         {left > 0 && <span className="plugin-tag" data-tone="warn">설정 {left}단계 남음</span>}
-        {plugin.update?.available && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update.latest}</span>}</span>
+        {hasUpdate(plugin) && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update!.latest}</span>}
+        {hasUpdate(plugin) && <i className="plugin-new-dot" title="업데이트 있음" aria-label="업데이트 있음" />}</span>
       {plugin.description && <span className="plugin-row-desc">{plugin.description}</span>}
     </span>
     <StatePill state={plugin.state} />
@@ -715,7 +730,7 @@ function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginIn
   // A Hub plugin's updates are not shown until signing in to the Hub (정보 page).
   if (update.status === 'needs-login') return null;
   if (!update.source || !bridge.checkUpdates) return <Section title="업데이트">
-    <p className="plugin-muted">이 플러그인은 업데이트 출처(GitHub 저장소 또는 MoonerADE Hub)를 알려 주지 않습니다. 새 버전의 zip을 설치하면 업데이트됩니다.</p>
+    <p className="plugin-muted">이 플러그인은 업데이트 출처(GitHub 저장소 또는 MoonerADE Hub)를 알려 주지 않습니다. 새 버전의 zip을 설치하면 업데이트됩니다. Hub에 로그인하면 Hub가 제공하는 플러그인은 자동으로 Hub에서 업데이트를 받습니다.</p>
   </Section>;
   const status = update.status ?? 'idle', working = Boolean(busy), fromHub = update.source.kind === 'hub';
   const spinning = ['checking', 'downloading', 'installing'].includes(status);
