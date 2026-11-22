@@ -34,11 +34,28 @@ export const untilReset = (at: number) => {
 export const usageHueStyle = (percent: number) => ({ '--usage-hue': usageHue(percent) } as CSSProperties);
 
 // Reads `usage/status` now and then. Hidden projects keep their last reading; showing them again refreshes it, since the agent may have changed accounts.
+// The last reading of each login is kept on this device, so the bar shows numbers at once (a phone reads them through its PC, which takes
+// a moment) and the next reading replaces them. A reading older than a day is not shown.
+const USAGE_CACHE = 'ade:usage-last', USAGE_CACHE_MS = 24 * 60 * 60_000;
+// Keyed by project too: a project's .envrc may sign its agent in to another account.
+function cachedUsage(key: string): Usage | null {
+  try {
+    const all = JSON.parse(localStorage.getItem(USAGE_CACHE) || '{}'), item = all[key];
+    return item && Date.now() - item.savedAt < USAGE_CACHE_MS ? item.usage : null;
+  } catch { return null; }
+}
+function cacheUsage(key: string, usage: Usage) {
+  try {
+    const all = JSON.parse(localStorage.getItem(USAGE_CACHE) || '{}');
+    all[key] = { usage, savedAt: Date.now() };
+    localStorage.setItem(USAGE_CACHE, JSON.stringify(all));
+  } catch { /* private mode or full storage: the bar just waits for the reading */ }
+}
 export function useUsage(provider: Usage['provider'], projectId: string, active: boolean, refresh: number) {
-  const [usage, setUsage] = useState<Usage | null>(null), [loading, setLoading] = useState(false);
+  const [usage, setUsage] = useState<Usage | null>(() => cachedUsage(`${provider}:${projectId}`)), [loading, setLoading] = useState(false);
   const load = useCallback((force = false) => {
     setLoading(force);
-    return api<Usage>('usage/status', { provider, force, projectId }).then(value => { setUsage(value); return value; }, () => undefined).finally(() => setLoading(false));
+    return api<Usage>('usage/status', { provider, force, projectId }).then(value => { setUsage(value); if (value?.windows?.length) cacheUsage(`${provider}:${projectId}`, value); return value; }, () => undefined).finally(() => setLoading(false));
   }, [provider, projectId]);
   useEffect(() => {
     if (!active) return;

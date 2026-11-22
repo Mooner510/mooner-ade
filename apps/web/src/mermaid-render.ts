@@ -12,7 +12,8 @@ async function loadMermaid(scheme: 'dark' | 'light') {
       startOnLoad: false,
       theme: scheme === 'light' ? 'default' : 'dark',
       securityLevel: 'strict',
-      fontFamily: 'Inter Variable, Noto Sans KR Variable, Inter, Noto Sans KR, system-ui, sans-serif',
+      // The phone app draws Korean with the system font rather than downloading the web one over its slow link (mobile.css).
+      fontFamily: document.documentElement.dataset.remote ? 'Inter Variable, Inter, Noto Sans CJK KR, system-ui, sans-serif' : 'Inter Variable, Noto Sans KR Variable, Inter, Noto Sans KR, system-ui, sans-serif',
     });
     configuredScheme = scheme;
   }

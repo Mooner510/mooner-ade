@@ -37,6 +37,7 @@ import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, 
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
+import { createRemoteUi, listFolders } from './remote-ui.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
 import { MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
 import { signatureGuard } from './agent-signature.js';
@@ -104,6 +105,7 @@ const installationUUID = await deviceUUID(dataRoot);
 const projects = new Map();
 // The feedback inbox (feedback-store.js). Every screen is told when an item changes and fetches the list again.
 const feedback = createFeedbackStore({ root: path.join(dataRoot, 'feedback'), onChange: id => { for (const socket of clients) send(socket, { type: 'feedback/changed', ...(id && { id }) }); } });
+const remoteUi = createRemoteUi({ webRoot, frame: { csp: UI_FRAME_CSP, html: UI_FRAME_HTML }, feedbackFile: (id, name) => feedback.filePath(id, name) });
 const feedbackIncoming = feedback.incomingDir;
 await fs.mkdir(feedbackIncoming, { recursive: true, mode: 0o700 });
 // Whether a plugin can submit for a signed-in account (pushed by the app as `feedback/status`). Without one, feedback goes to
@@ -850,6 +852,10 @@ async function route(action, input, project) {
   if (action === 'shell/list') { const shells = detectShells(); return { shells, default: resolveShell('', shells).id }; }
   if (action === 'home') return { path: os.homedir() };
   if (action === 'picker/parent') return defaultParent();
+  // The phone app (through the remote-access plugin) loads this UI from here and browses folders here: docs/REMOTE_UI.md.
+  if (action === 'ui/manifest') return remoteUi.manifest(input);
+  if (action === 'ui/file') return remoteUi.file(input);
+  if (action === 'fs/folders') return listFolders(input, (await defaultParent()).path);
   if (action === 'recent') return readJson(path.join(dataRoot, 'recent.json'), []);
   if (action === 'project/open') return snapshot(await openProject(input.path));
   if (action === 'app/state') {

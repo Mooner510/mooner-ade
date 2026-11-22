@@ -1,0 +1,141 @@
+/* The phone layout (mobile.ts, docs/REMOTE_UI.md): the desktop components, rearranged for a narrow touch screen. Keep the width
+   in step with MOBILE_QUERY. Nothing here changes a desktop-width window. */
+
+/* ---- type in the phone app ---- */
+/* The phone app gets every file over a slow link; the Korean web font alone is 124 pieces (3.5 MB) fetched as text needs them. The
+   phone already has the same Noto Sans CJK KR as its system font, so the app's stacks skip the web copy there. The Latin fonts stay
+   (small, and they keep the desktop's look); firstScreen in local-server/src/remote-ui.js sends them ahead. Keep in step with style.css. */
+:root[data-remote] {
+  --mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Noto Sans CJK KR', ui-monospace, monospace;
+  font-family: 'Inter Variable', Inter, 'Noto Sans CJK KR', system-ui, sans-serif;
+}
+
+/* ---- touch, everywhere it applies ---- */
+@media (pointer: coarse) {
+  html { -webkit-tap-highlight-color: transparent; }
+  /* Long-press opens the app's own context menus (rows, tabs); the OS text-selection callout would cover them. */
+  .folder-head, .folder-tab, .group-head, .group-pane, .rail-item, .project-tree-row, .tabbar, .pane-tools, .statusbar, .term-keys { -webkit-touch-callout: none; user-select: none; }
+}
+
+/* ---- terminal key row (rendered only in the phone layout) ---- */
+.term-keys { flex: none; display: flex; gap: 4px; padding: 5px 6px calc(5px + env(safe-area-inset-bottom, 0px)); overflow-x: auto; scrollbar-width: none; background: var(--surface); border-top: 1px solid var(--border); }
+.term-keys::-webkit-scrollbar { display: none; }
+.term-keys > button { flex: none; min-width: 40px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised, var(--bg)); color: var(--fg); font: 500 13px/1 var(--mono, 'JetBrains Mono Variable', monospace); touch-action: manipulation; }
+.term-keys > button:active { background: var(--hover); }
+.term-keys > button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+/* ---- phone folder chooser (remote-folder.tsx) ---- */
+.folder-picker { width: min(560px, 96vw); max-height: 86dvh; display: none; flex-direction: column; }
+.folder-picker[open] { display: flex; }
+.folder-picker-head { padding: 16px 18px 8px; }
+.folder-picker-head h2 { margin: 0 0 6px; font-size: 15px; }
+.folder-picker-path { margin: 0; color: var(--muted); font: 12px/1.4 var(--mono, monospace); overflow-wrap: anywhere; }
+.folder-picker-error { margin: 0 18px; color: var(--danger, #f87171); }
+.folder-picker-list { flex: 1; min-height: 120px; overflow: auto; margin: 0; padding: 4px 8px; list-style: none; border-block: 1px solid var(--border); }
+.folder-picker-list button { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); text-align: left; }
+.folder-picker-list button:hover { background: var(--hover); }
+.folder-picker-list button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-picker-empty { padding: 14px 10px; color: var(--muted); }
+.folder-picker-actions { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; }
+.folder-picker-hidden { margin-right: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.folder-picker-actions > button { min-height: 36px; padding: 0 14px; }
+
+@media (max-width: 760px) {
+  /* ---- shell: the project sidebar becomes a drawer ---- */
+  .shell.mobile { transition: none; }
+  .shell.mobile .projects-head .icon-btn[aria-label^="사이드바"] { display: none; }
+  .shell.mobile > .projects { position: fixed; z-index: 60; top: 0; bottom: 0; left: 0; width: var(--rail-w); box-shadow: var(--shadow); transform: translateX(-102%); transition: transform .22s var(--ease-out, ease-out); padding-top: env(safe-area-inset-top, 0px); }
+  .shell.mobile.drawer-open > .projects { transform: none; }
+  .shell.mobile > .projects::before { height: 8px; }
+  .shell.mobile .projects-resizer { display: none; }
+  .drawer-scrim { position: fixed; z-index: 59; inset: 0; border: 0; border-radius: 0; padding: 0; background: #0008; animation: drawer-scrim .2s ease-out; }
+  @keyframes drawer-scrim { from { opacity: 0; } }
+  /* Rows keep the desktop's density (a little taller for a finger), so a long list of tabs still fits on one screen. */
+  .shell.mobile .folders { gap: 2px; padding-inline: 6px; }
+  .shell.mobile .folder-head, .shell.mobile .folder-tab, .shell.mobile .group-head, .shell.mobile .group-pane { min-height: 32px; padding-block: 0; }
+  .shell.mobile .folder-tabs { gap: 1px; }
+  /* Row buttons that appear on hover on a desktop are always there on a phone, small and quiet. */
+  .shell.mobile .folder-actions, .shell.mobile .ptab-close { opacity: .7; visibility: visible; }
+  .shell.mobile .folder-actions button, .shell.mobile .ptab-close { min-width: 28px; min-height: 28px; }
+
+  /* ---- top bar: icons only, the palette button shrinks to the project name ---- */
+  .tabbar { height: 48px; gap: 4px; padding: env(safe-area-inset-top, 0px) 6px 0 !important; overflow-x: auto; scrollbar-width: none; }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tabbar .new-tab > span:not(.icon), .palette-button > kbd, .bar-note, .tabbar .drag-space { display: none; }
+  /* No search field on a phone: the project's name, branch and folder take its place (Workspace.tsx), and tapping them searches. */
+  .palette-button.m-title { flex: 1 1 auto; min-width: 0; height: 40px; padding: 0 6px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; border: 0; background: transparent; }
+  .palette-button.m-title:active { background: var(--hover); }
+  .palette-button.m-title > .m-title-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: 15px; font-weight: 600; line-height: 1.2; }
+  .palette-button.m-title > .m-title-sub { max-width: 100%; display: flex; align-items: center; gap: 3px; overflow: hidden; white-space: nowrap; color: var(--muted); font-size: 11.5px; line-height: 1.2; }
+  .m-title-sub > i { font-style: normal; opacity: .6; margin-inline: 2px; }
+  /* The rest of the bar: new tab, then the panels; everything else is in the drawer or the palette. */
+  .tabbar .split-button .caret { display: none; }
+  .tabbar .bar-button, .tabbar .bar-icon, .bar-tools { height: 34px; }
+  .tabbar .bar-button { min-width: 36px; justify-content: center; }
+  .bar-tools .diffstat { display: none; }
+
+  /* ---- workbench: one pane at a time, panels cover it ---- */
+  .workbench { padding: 0; }
+  .pane-tools .icon-btn[aria-label="최대화"], .pane-tools .icon-btn[aria-label="원래 크기로"], .group-actions .icon-btn[aria-label="최대화"], .group-actions .icon-btn[aria-label="원래 크기로"] { display: none; }
+  .pane-tools { height: 34px; }
+  /* The note that the PTY has another device's size sits above the key row, not over it. */
+  .terminal-pane:has(> .term-keys) > .pane-size-note { bottom: 56px; }
+  .pane-tools .icon-btn { min-width: 32px; min-height: 30px; }
+  .project-tree { inset: 0; width: auto; border-radius: 0; border-inline: 0; }
+  .project-tree-row { min-height: 36px; }
+  .project-tree-resize { display: none; }
+  .workbench > .right-panel, .workbench > .right-panel.wide { left: 0; right: 0; width: auto; border-radius: 0; border-inline: 0; }
+  .review-resizer { display: none; }
+  /* The Git graph is a sheet over the lower part of the screen, so the pane above stays in view; its handle sets the height (kept in settings like the desktop's). */
+  .git-drawer.floating, .git-drawer.docked { position: absolute; z-index: 22; left: 0; right: 0; bottom: 0; margin: 0; height: min(var(--git-h, 380px), calc(100% - 96px)); min-height: 220px; border-radius: 14px 14px 0 0; }
+  .git-resizer { top: 0; height: 22px; }
+  .git-resizer::after { left: 50%; width: 40px; margin-left: -20px; top: 7px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+  .git-drawer > :not(.git-resizer):first-of-type { padding-top: 10px; }
+  /* ---- the phone's status strip (MobileStatus in Workspace.tsx): branch and each agent's highest usage, large; a tap opens the details ---- */
+  .statusbar.m-status { height: auto; min-height: 40px; gap: 8px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px)); justify-content: flex-start; font-size: 13px; }
+  .m-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+  .m-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-usage { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+  .m-usage-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .m-usage-chip > b { font-weight: 600; font-size: 13px; }
+  .m-usage-chip[style] > b { color: hsl(var(--usage-hue) 70% 60%); }
+  .m-usage-chip.warn > b { color: var(--warn, #e5a50a); }
+  .m-usage-chip.full > b { color: var(--danger, #f87171); }
+  dialog.m-usage-sheet { margin: auto 0 0; width: 100vw; max-width: 100vw; max-height: 85dvh; border-radius: 16px 16px 0 0; border-inline: 0; border-bottom: 0; padding: 0; display: none; flex-direction: column; }
+  dialog.m-usage-sheet[open] { display: flex; }
+  .m-sheet-head { display: flex; align-items: center; padding: 14px 12px 6px 18px; }
+  .m-sheet-head h2 { flex: 1; margin: 0; font-size: 16px; }
+  .m-sheet-body { overflow: auto; padding: 0 18px calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 18px; }
+  .m-usage-section > header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+  .m-usage-section > header .plan { color: var(--muted); font-size: 12px; }
+  .m-usage-section > header .icon-btn { margin-left: auto; }
+  .m-usage-section .usage-row { margin-bottom: 10px; font-size: 13.5px; }
+  .m-usage-section .usage-row progress { width: 100%; height: 8px; }
+
+  /* ---- chat: full width, the composer stays above the keyboard (the page resizes with it) ---- */
+  .chat-pane { --chat-width: 100%; }
+  .chat-composer { padding: 10px 8px 6px 12px; border-radius: 16px; }
+  .chat-composer textarea { font-size: 16px; max-height: 40dvh; } /* 16px: a smaller font makes mobile browsers zoom the page on focus */
+  .chat-pane button { touch-action: manipulation; }
+
+  /* ---- settings: one line of section tabs ---- */
+  .settings-nav { flex: none; gap: 2px; padding: 6px; scrollbar-width: none; }
+  .settings-nav button { flex: none; white-space: nowrap; min-height: 38px; }
+  /* ---- git log: the filter row wraps instead of squeezing every control ---- */
+  .git-toolbar { flex-wrap: wrap; height: auto; row-gap: 4px; padding-block: 4px; }
+  .git-search { flex: 1 1 100%; }
+
+  /* ---- dialogs: full screen ---- */
+  .settings-modal, .project-modal { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+  .project-modal .welcome-card { padding: 18px 16px; }
+  .project-modal .actions { padding: 8px 16px 16px; }
+  .project-modal form { flex-wrap: wrap; }
+  input, select, textarea { font-size: max(16px, 1em); }
+  .folder-picker { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  .shell.mobile > .projects, .drawer-scrim { transition: none; animation: none; }
+}
+
+/* A phone paired for viewing (transport.ts readOnly): everything stays visible and live, the controls that change something are gone. */
+[data-remote="view"] :is(.chat-dock, .plan-actions, .chat-approval footer, .chat-q-options, .chat-q-input, .term-keys, .split-button, .pane-actions, .folder-actions, .ptab-close, .chat-msg-actions) { display: none !important; }

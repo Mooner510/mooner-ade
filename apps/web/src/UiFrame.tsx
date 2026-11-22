@@ -12,11 +12,12 @@ const themeNow = () => {
 
 // The app's own type (Inter + Noto Sans KR) for the frame: their @font-face rules, file URLs made absolute. The frame's CSP allows fonts from this
 // server only and the files are served with CORS (public assets), so the sandboxed page loads the same unicode-range subsets the app does.
-const APP_FONTS = /^(Inter Variable|Noto Sans KR Variable)$/;
+// The phone app leaves the Korean web font out (it uses the system one, mobile.css), so the frame does not download it either.
+const APP_FONTS = () => document.documentElement.dataset.remote ? /^Inter Variable$/ : /^(Inter Variable|Noto Sans KR Variable)$/;
 let fontCss = '';
 const fontsNow = () => fontCss ||= [...document.styleSheets].flatMap(sheet => {
   try {
-    return [...sheet.cssRules].filter((rule): rule is CSSFontFaceRule => rule instanceof CSSFontFaceRule && APP_FONTS.test(rule.style.getPropertyValue('font-family').replace(/["']/g, '').trim()))
+    return [...sheet.cssRules].filter((rule): rule is CSSFontFaceRule => rule instanceof CSSFontFaceRule && APP_FONTS().test(rule.style.getPropertyValue('font-family').replace(/["']/g, '').trim()))
       .map(rule => rule.cssText.replace(/url\((["']?)([^"')]+)\1\)/g, (_, _quote, src: string) => `url("${new URL(src, sheet.href ?? location.href).href}")`));
   } catch { return []; }
 }).join('');
