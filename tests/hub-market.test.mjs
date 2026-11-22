@@ -29,7 +29,7 @@ function fakeHost() {
 }
 
 // installed: [{ id, version, source? }] already in the plugin folder and approved. answers: the dialog buttons pressed, in order.
-async function setup(t, { installed = [], answers = [], signedIn = true, builtin = [] } = {}) {
+async function setup(t, { installed = [], answers = [], signedIn = true, builtin = [], github = null } = {}) {
   const root = temp(t), dir = path.join(root, 'plugins'), builtinDir = path.join(root, 'builtin'), asked = [], notices = [], opened = [], warnings = [];
   const fake = await startFakeHub();
   t.after(() => fake.close());
@@ -48,7 +48,7 @@ async function setup(t, { installed = [], answers = [], signedIn = true, builtin
   store.load();
   const hub = createHubClient({ store, baseUrl: fake.url, name: () => 'ADE · test-pc' });
   const manager = createPluginManager({
-    dir, builtinDir: builtin.length ? builtinDir : null, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, hub,
+    dir, builtinDir: builtin.length ? builtinDir : null, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, hub, github,
     log: { log() {}, warn: message => warnings.push(message), error() {} }, notify: notice => notices.push(notice), openExternal: url => opened.push(url),
     spawnHost: () => fakeHost(), ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; }
   });
@@ -187,6 +187,78 @@ test('signed out: a Hub plugin says it needs the sign-in, the background round s
   await assert.rejects(env.manager.checkUpdates('demo'), { code: 'NOT_SIGNED_IN' });
   await assert.rejects(env.manager.installFromHub('demo'), { code: 'NOT_SIGNED_IN' });
   assert.equal(env.manager.snapshot().hub.signedIn, false);
+});
+
+// A GitHub client that only counts what it is asked: a plugin the Hub serves must never reach it.
+const spyGithub = () => { const calls = []; return { calls, latest: async (source, id) => { calls.push({ source, id }); throw Object.assign(new Error('GitHub 시험: 연결하지 않습니다'), { code: 'NETWORK' }); }, download: async () => { throw new Error('unused'); } }; };
+const githubSource = { github: 'o/r', asset: 'demo.zip' };
+
+test('signed in: a plugin the Hub serves (listed in its catalog or naming it) is updated from the Hub only, never from GitHub', async t => {
+  const github = spyGithub();
+  const env = await setup(t, { github, answers: [0], installed: [{ id: 'listed', version: '1.0.0', source: githubSource }, { id: 'both', version: '1.0.0', source: { ...githubSource, hub: true } }, { id: 'ghonly', version: '1.0.0', source: githubSource }] });
+  env.fake.publish({ id: 'listed', version: '1.1.0', zip: zipOf('listed', '1.1.0') });
+  env.fake.publish({ id: 'both', version: '1.0.0', zip: zipOf('both', '1.0.0') });
+  // Before the Hub's list is known a plugin that only names GitHub shows what it names; the Hub-declared one is already the Hub's.
+  assert.equal(env.plugin('both').update.source.kind, 'hub');
+  await env.manager.runUpdateRound();
+  assert.deepEqual(env.plugin('listed').update.source, { kind: 'hub' }, 'no github field: the page has nothing GitHub to show');
+  assert.equal(env.plugin('listed').update.status, 'available');
+  assert.equal(env.plugin('both').update.status, 'latest');
+  assert.equal(env.plugin('ghonly').update.source.kind, 'github', 'the Hub does not serve it: GitHub as before');
+  assert.deepEqual(github.calls.map(call => call.id), ['ghonly'], 'only the plugin the Hub does not serve went to GitHub');
+  // Installing is the Hub's zip, and moving from a GitHub manifest to the Hub's is not "a change of source" for a plugin the Hub serves.
+  await env.manager.installUpdate('listed');
+  assert.match(env.asked[0].detail, /받은 곳: MoonerADE Hub/);
+  assert.doesNotMatch(env.asked[0].detail, /업데이트 출처가 바뀝니다/);
+  assert.equal(env.plugin('listed').version, '1.1.0');
+});
+
+test('signed in: automatic mode installs a Hub-served plugin that was installed from GitHub, without asking about the source', async t => {
+  const github = spyGithub();
+  const env = await setup(t, { github, answers: [0], installed: [{ id: 'listed', version: '1.0.0', source: githubSource }] });
+  env.fake.publish({ id: 'listed', version: '1.2.0', zip: zipOf('listed', '1.2.0') });
+  await env.manager.hubCatalog();
+  await env.manager.setUpdateMode('listed', 'auto');
+  assert.match(env.asked[0].detail, /MoonerADE Hub에 새 버전이 올라오면/);
+  await env.manager.runUpdateRound({ hubOnly: true });
+  assert.equal(env.asked.length, 1, 'no install dialog');
+  assert.equal(env.plugin('listed').version, '1.2.0');
+  assert.deepEqual(github.calls, []);
+});
+
+test('the Hub\'s list alone makes an update known (the dots), and the frequent round only asks about plugins the list shows as newer', async t => {
+  const env = await setup(t, { installed: [{ id: 'demo', version: '1.0.0' }, { id: 'same', version: '2.0.0' }] });
+  env.fake.publish({ id: 'demo', version: '1.1.0', zip: zipOf('demo', '1.1.0') });
+  env.fake.publish({ id: 'same', version: '2.0.0', zip: zipOf('same', '2.0.0') });
+  await env.manager.hubCatalog();
+  assert.equal(env.plugin('demo').update.available, true);
+  assert.equal(env.plugin('demo').update.latest, '1.1.0');
+  assert.equal(env.plugin('demo').update.status, 'available');
+  assert.equal(env.plugin('same').update.available, false);
+  env.fake.requests.length = 0;
+  await env.manager.runUpdateRound({ hubOnly: true });
+  assert.deepEqual(env.fake.requests.map(request => request.path).sort(), ['/v1/plugins', '/v1/plugins/demo'], 'the list, and only the plugin with a newer version');
+  assert.equal(env.plugin('same').update.status, 'latest');
+});
+
+test('signed out: a plugin that names both the Hub and GitHub goes back to GitHub; one that names only the Hub waits for the sign-in', async t => {
+  const github = spyGithub();
+  const env = await setup(t, { github, signedIn: false, installed: [{ id: 'both', version: '1.0.0', source: { ...githubSource, hub: true } }, { id: 'hubonly', version: '1.0.0' }] });
+  assert.deepEqual(env.plugin('both').update.source, { kind: 'github', github: 'o/r', asset: 'demo.zip' });
+  assert.equal(env.plugin('hubonly').update.status, 'needs-login');
+  await env.manager.runUpdateRound();
+  assert.deepEqual(github.calls.map(call => call.id), ['both']);
+  assert.equal(env.fake.requests.length, 0, 'the Hub was not asked');
+});
+
+test('signed in with a Hub that cannot be read: a plugin that only names GitHub is not sent to GitHub in its place', async t => {
+  const github = spyGithub();
+  const env = await setup(t, { github, installed: [{ id: 'ghonly', version: '1.0.0', source: githubSource }] });
+  env.fake.unavailable = true;
+  await env.manager.runUpdateRound();
+  assert.deepEqual(github.calls, []);
+  await assert.rejects(env.manager.checkUpdates('ghonly'), { code: 'HUB_BUSY' });
+  assert.deepEqual(github.calls, []);
 });
 
 test('signing in: the browser is sent to the Hub\'s page, the code is shown until it is approved, then the list and updates are fetched', async t => {

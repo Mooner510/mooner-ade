@@ -824,6 +824,10 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-tabs button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .plugin-tabs small { font-size: 11px; font-weight: 500; color: var(--faint); }
 .plugin-tab-alert { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+/* A plugin update waiting: the same red as the unread marks (.icon-dot). */
+.plugin-new-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--error); }
+.settings-nav .nav-dot { margin-left: auto; }
+.plugin-row-name .plugin-new-dot { margin-left: 6px; align-self: center; }
 .plugin-tabbar .plugin-toolbar { padding-bottom: 4px; }
 /* The built-in tab's note stays at the bottom of the settings screen: below a short list it sinks to the bottom, over a long one it sticks there while scrolling. -22px cancels .settings-body padding. */
 .settings-body:has(> .plugins .plugin-tab-note) { display: flex; flex-direction: column; }

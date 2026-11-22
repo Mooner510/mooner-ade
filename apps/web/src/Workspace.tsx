@@ -7,7 +7,7 @@ import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
 import { useExit, useNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
-import { PluginBadges, PluginIcon, PluginPanel, usePluginsState } from './PluginSettings';
+import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
@@ -216,7 +216,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   }, []);
   const feedback = useFeedback();
   // Plugins that declare `header` add one button to the top bar; it opens the plugin's panel in the right-panel slot.
-  const headerPlugins = (usePluginsState()?.plugins ?? []).filter(plugin => plugin.header && plugin.state === 'running');
+  const pluginsState = usePluginsState(), pluginUpdates = pluginUpdateCount(pluginsState);
+  const headerPlugins = (pluginsState?.plugins ?? []).filter(plugin => plugin.header && plugin.state === 'running');
   const pluginShown = headerPlugins.find(plugin => plugin.id === pluginOpen) ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
   const launcherButton = useRef<HTMLButtonElement>(null);
@@ -1215,7 +1216,7 @@ ${where}`, [
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ' · 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
-      <IconButton icon="settings" tip="header" label="설정" keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
+      <IconButton icon="settings" tip="header" label={pluginUpdates ? `설정 (플러그인 업데이트 ${pluginUpdates}개)` : '설정'} dot={pluginUpdates > 0} keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
       </div>
     </header>
     <ErrorToast scope={root} active={active} />

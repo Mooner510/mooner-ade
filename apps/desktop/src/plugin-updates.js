@@ -21,6 +21,9 @@ export const UPDATE_MODES = ['auto', 'notify', 'manual'];
 export const DEFAULT_UPDATE_MODE = 'notify';
 export const FIRST_CHECK_MS = 60_000;
 export const CHECK_EVERY_MS = 6 * 60 * 60_000;
+// Signed in to the Hub: its plugin list (one small request) is read this often, like MoonerADE's own update check, and a plugin whose
+// listed version is newer than the installed one is checked and (in automatic mode) installed right then.
+export const HUB_CHECK_EVERY_MS = 10 * 60_000;
 // A GitHub App or OAuth App (device flow enabled) that MoonerADE signs in with. Without one, a personal access token
 // connects the account instead. ADE_GITHUB_CLIENT_ID overrides it (a client id is public, not a secret).
 export const GITHUB_CLIENT_ID = '';
