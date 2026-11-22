@@ -1,3 +1,4 @@
+import { reportClientError } from './transport';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 // The boundary's own screen is plain markup. A component used here (an icon, a button helper) could throw again and leave the window empty.
@@ -10,7 +11,7 @@ function reportRenderError(error: unknown, info: ErrorInfo) {
     componentStack: (info.componentStack ?? '').slice(0, 2000)
   });
   try {
-    void fetch('/api/client/error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, credentials: 'same-origin' }).catch(() => {});
+    reportClientError(body);
   } catch { /* the screen still has to come up when the page is already failing */ }
 }
 

@@ -1,3 +1,4 @@
+import { remoteCopy } from './transport';
 import { tipDue, type TipHistory } from './tips';
 // Icon-only toast that rises a short way from the pointer (after a mouse action) or the focused terminal's cursor (after a key press) and fades.
 type Point = { x: number; y: number; selected?: boolean } | undefined;
@@ -39,6 +40,7 @@ export const toastAttached = (files: number) => toast('attach_file', `파일 ${f
 export function copyText(text: string, { count = true }: { count?: boolean } = {}) {
   const desktop = (window as unknown as { adeDesktop?: { writeClipboard?(text: string): void } }).adeDesktop;
   const done = () => toastCopied(count ? text : '');
+  if (remoteCopy(text)) { done(); return; }
   if (desktop?.writeClipboard) { try { desktop.writeClipboard(text); done(); } catch { toastFailed(); } return; }
   if (!navigator.clipboard) return toastFailed();
   navigator.clipboard.writeText(text).then(done, toastFailed);

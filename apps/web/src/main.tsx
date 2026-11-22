@@ -7,6 +7,8 @@ import { useExit, useNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { BgAnimTip } from './BgAnimTip';
 import { api, basename, chooseFolder } from './api';
+import { closeRemote, isRemote, onRemoteBack, openEvents, type Events } from './transport';
+import { setDrawer, useDrawer, useMobile } from './mobile';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TIPS_VERSION, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
@@ -40,6 +42,7 @@ import '@fontsource-variable/jetbrains-mono/wght.css';
 const syncFocus = () => document.documentElement.toggleAttribute('data-blurred', !document.hasFocus() && !document.documentElement.hasAttribute('data-keep-anim'));
 addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(syncFocus)); syncFocus();
 import './style.css';
+import './mobile.css';
 installThemes();
 
 type Entry = { root: string; id: string };
@@ -60,47 +63,43 @@ const sameStatus = (a: WorkspaceStatus, b: WorkspaceStatus) => (Object.keys(a) a
 const initials = (name: string) => (name.length > 1 ? name[0] + name[name.length - 1] : name).toUpperCase();
 const shortName = (root: string) => basename(root.replace(/\\/g, '/'));
 
-// One websocket serves every open project. Each project subscribes by id and only receives messages tagged with it.
+// One event stream serves every open project (the /ws socket, or a phone's link to its PC). Each project subscribes by id and only receives messages tagged with it.
 function useHub(enabled: boolean) {
   const [connection, setConnection] = useState('연결 대기');
-  const state = useRef({ ws: null as WebSocket | null, subs: new Map<string, (message: any) => void>() });
+  const state = useRef({ events: null as Events | null, open: false, subs: new Map<string, (message: any) => void>() });
   const hub = useMemo<Hub>(() => ({
     subscribe(projectId, handler) {
-      const { subs, ws } = state.current;
+      const { subs, events, open } = state.current;
       subs.set(projectId, handler);
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'subscribe', projectId }));
+      if (open) events?.send({ type: 'subscribe', projectId });
       return () => {
         if (subs.get(projectId) !== handler) return;
         subs.delete(projectId);
-        const socket = state.current.ws;
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'unsubscribe', projectId }));
+        if (state.current.open) state.current.events?.send({ type: 'unsubscribe', projectId });
       };
     },
-    send(message) { const socket = state.current.ws; if (socket?.readyState !== WebSocket.OPEN) return false; socket.send(JSON.stringify(message)); return true; }
+    send(message) { return state.current.open && Boolean(state.current.events?.send(message)); }
   }), []);
   useEffect(() => {
     if (!enabled) return;
-    let stopped = false, retry: ReturnType<typeof setTimeout>;
-    function connect() {
-      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`); state.current.ws = ws;
-      ws.onopen = () => {
-        setConnection('연결됨');
-        for (const projectId of state.current.subs.keys()) ws.send(JSON.stringify({ type: 'subscribe', projectId }));
-      };
-      ws.onmessage = event => {
-        if (stopped) return;
-        let message: any;
-        try { message = JSON.parse(event.data); } catch { return; }
-        // The feedback inbox is global: the screen with no project open (no subscribers) must hear it too; the store folds a burst into one reload.
-        if (message.type === 'feedback/changed') { void refreshFeedback(); return; }
-        // Errors that name no project are shown by every project; everything else goes to its owner.
-        if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.(message);
-        else for (const handler of state.current.subs.values()) handler(message);
-      };
-      ws.onclose = () => { setConnection('연결 끊김 · 재연결 중'); if (!stopped) retry = setTimeout(connect, 1500); };
-    }
-    connect();
-    return () => { stopped = true; clearTimeout(retry); state.current.ws?.close(); };
+    let stopped = false;
+    const events = openEvents(text => {
+      if (stopped) return;
+      let message: any;
+      try { message = JSON.parse(text); } catch { return; }
+      // The feedback inbox is global: the screen with no project open (no subscribers) must hear it too; the store folds a burst into one reload.
+      if (message.type === 'feedback/changed') { void refreshFeedback(); return; }
+      // Errors that name no project are shown by every project; everything else goes to its owner.
+      if (typeof message.projectId === 'string') state.current.subs.get(message.projectId)?.(message);
+      else for (const handler of state.current.subs.values()) handler(message);
+    }, open => {
+      state.current.open = open;
+      if (!open) { setConnection('연결 끊김 · 재연결 중'); return; }
+      setConnection('연결됨');
+      for (const projectId of state.current.subs.keys()) state.current.events?.send({ type: 'subscribe', projectId });
+    });
+    state.current.events = events;
+    return () => { stopped = true; state.current.open = false; state.current.events = null; events.close(); };
   }, [enabled]);
   return { hub, connection };
 }
@@ -323,12 +322,23 @@ function Shell() {
       const unread = hasUnreadChangelog();
       setChangelogUnread(unread);
       // `changelogDue`: this start is not the update itself, but an earlier start that did not get to show the notes (closed during the tour) left them due.
-      if (unread && (updated || changelogDue())) { setChangelogDue(true); setChangelogPending(true); }
+      // A phone keeps no record of what it has read, so it would open the notes on every visit; it shows them only when asked.
+      if (unread && (updated || changelogDue()) && !isRemote) { setChangelogDue(true); setChangelogPending(true); }
     });
   }, []);
   const shell = useRef<HTMLDivElement>(null);
   // Sidebar display: expanded folders with tabs, or a narrow strip of initials. Saved with the other settings.
-  const compact = settings.sidebarCompact, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
+  // On a phone the sidebar is a drawer over the workspace, always drawn full (the narrow strip of initials is a desktop choice).
+  const mobile = useMobile(), drawer = useDrawer();
+  const drawerRef = useRef(drawer); drawerRef.current = drawer;
+  // On a phone the back gesture closes the dialog on top, then the drawer; with nothing open the app goes back to its PC list.
+  useEffect(() => onRemoteBack(() => {
+    const dialogs = document.querySelectorAll('dialog[open]'), top = dialogs[dialogs.length - 1];
+    if (top) { top.dispatchEvent(new Event('cancel', { cancelable: true })); return true; }
+    if (drawerRef.current) { setDrawer(false); return true; }
+    return false;
+  }), []);
+  const compact = settings.sidebarCompact && !mobile, setCompact = (update: (value: boolean) => boolean) => setSettings(all => ({ ...all, sidebarCompact: update(all.sidebarCompact) }));
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [drag, setDrag] = useState<{ root: string; id: string; pane?: string } | null>(null), [dropAt, setDropAt] = useState<{ id: string; mode: 'before' | 'after' | 'merge' } | null>(null);
   const [menu, setMenu] = useState<TabMenuTarget | null>(null), [projectMenu, setProjectMenu] = useState<ProjectMenuTarget | null>(null);
@@ -361,8 +371,10 @@ function Shell() {
   // ---- boot: sign in, then reopen the projects that were open last time ----
   useEffect(() => {
     const token = new URLSearchParams(location.hash.slice(1)).get('token');
-    history.replaceState(null, '', location.pathname);
-    api('auth', { token }).then(async capabilities => {
+    // The token is cleared from the address; a phone's hello stays, so a reload of the page comes back as the same phone.
+    if (!isRemote) history.replaceState(null, '', location.pathname);
+    // A phone is already signed in to its PC by the app's paired, encrypted link; there is no session cookie to get.
+    (isRemote ? Promise.resolve({} as { verifyPlugins?: boolean }) : api('auth', { token })).then(async capabilities => {
       if (import.meta.env.DEV && capabilities.verifyPlugins) (await import('./verify-plugins')).installVerifyPlugins();
       const [saved, list] = await Promise.all([api<{ openProjects: Entry[]; activeProjectId: string; settings: Settings | null }>('app/state'), api<Recent[]>('recent')]);
       setRecent(list);
@@ -402,7 +414,8 @@ function Shell() {
 
   // The open list, the active project and shared settings survive restarts.
   useEffect(() => {
-    if (!booted) return;
+    // A phone shows the PC's projects and settings but does not rewrite them: the desktop window keeps its own open list and look.
+    if (!booted || isRemote) return;
     const timer = setTimeout(() => {
       const open = entries.filter((entry, index) => entry.id && entries.findIndex(other => other.id === entry.id) === index).map(({ root, id }) => ({ root, id }));
       const activeId = entries.find(entry => entry.root === current)?.id ?? '';
@@ -537,8 +550,11 @@ function Shell() {
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
-  return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''}`} style={{ '--rail-w': compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
-    <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바">
+  return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''} ${mobile ? 'mobile' : ''} ${mobile && drawer ? 'drawer-open' : ''}`} style={{ '--rail-w': mobile ? 'min(86vw, 340px)' : compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
+    {mobile && drawer && <button type="button" className="drawer-scrim" aria-label="프로젝트 목록 닫기" onClick={() => setDrawer(false)} />}
+    <nav className="projects" aria-label="프로젝트와 탭" data-feedback-region="사이드바" inert={mobile && !drawer}
+      // Picking a tab or pane in the drawer takes you there; the drawer gets out of the way (buttons on a row, like close or fold, keep it open).
+      onClickCapture={event => { if (mobile && (event.target as Element).closest('.folder-tab, .group-head, .group-pane') && !(event.target as Element).closest('button')) setTimeout(() => setDrawer(false)); }}>
       <div className="projects-head">
         {!compact && <strong>프로젝트</strong>}<span className="spacer" />
         {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
@@ -695,6 +711,7 @@ function Shell() {
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
+        {closeRemote && <IconButton icon="arrowLeft" label="PC 목록으로" onClick={closeRemote} />}
         <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="둘러보기 다시 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
         {tourHintShown && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
@@ -705,7 +722,7 @@ function Shell() {
     </nav>
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
-        root={entry.root} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
+        root={entry.root} projectId={entry.id} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
@@ -717,6 +734,7 @@ function Shell() {
   </div>{tutorial}</AppKeysContext.Provider>;
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
-const fontsReady = Promise.all([['Inter Variable', 'Aa'], ['Noto Sans KR Variable', '가'], ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
+// The phone app skips the Korean web font: it would come over the slow link, and the system font is the same Noto Sans (mobile.css).
+const fontsReady = Promise.all([['Inter Variable', 'Aa'], ...(isRemote ? [] : [['Noto Sans KR Variable', '가']]), ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
 installTooltips();
 void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<ErrorBoundary><Shell /></ErrorBoundary>));

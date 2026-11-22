@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { isRemote } from './transport';
 import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
@@ -323,7 +324,8 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     scroller?.scrollTo({ top: 0 });
   }, [selected]);
   if (!bridge) {
-    const text = '플러그인은 데스크톱 앱 또는 start-ui.mjs의 격리 브라우저 테스트 세션에서 쓸 수 있습니다.';
+    // A phone runs this page without the desktop shell that installs and switches plugins; that stays on the PC.
+    const text = isRemote ? '플러그인 설치와 설정은 PC의 무너에이드에서 합니다.' : '플러그인은 데스크톱 앱 또는 start-ui.mjs의 격리 브라우저 테스트 세션에서 쓸 수 있습니다.';
     return matches(text) ? <p className="setting-note setting-hit">{text}</p> : null;
   }
   if (!state) {

@@ -1,14 +1,7 @@
-export class ApiError extends Error {
-  code: string;
-  files?: string[];
-  constructor(code: string, message: string, files?: string[]) { super(message); this.code = code; this.files = files; }
-}
-export async function api<T = any>(action: string, input: object = {}): Promise<T> {
-  const response = await fetch(`/api/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
-  const value = await response.json();
-  if (!response.ok) throw new ApiError(value.error.code, value.error.message, value.error.files);
-  return value;
-}
+// With the extension: Node's tests load this module directly (tests/pane-move.test.mjs).
+import { ApiError, call, isRemote } from './transport.ts';
+export { ApiError };
+export const api = <T = any>(action: string, input: object = {}): Promise<T> => call<T>(action, input);
 // A leaf is a terminal, an editor group, a chat (a headless Claude Code drawn as a conversation; its id names the server-side transcript) or a launcher (a fresh pane still choosing what to run); legacy saved layouts have `{ id }` only and mean terminal.
 // A terminal leaf also remembers where it was opened and which agent CLI ran in it, so it can be reopened after the server restarts.
 export type Leaf = { id: string; kind?: 'terminal' | 'editor' | 'launcher' | 'chat'; tabs?: string[]; active?: string; preview?: string; cwd?: string; agent?: 'claude' | 'codex' | 'cursor' };
@@ -165,5 +158,7 @@ type DesktopBridge = { pickFolder(options?: { title?: string; defaultPath?: stri
 export async function chooseFolder(title: string, defaultPath: string) {
   const desktop = (window as unknown as { adeDesktop?: DesktopBridge }).adeDesktop;
   if (desktop) return desktop.pickFolder({ title, defaultPath: defaultPath || undefined });
+  // A phone cannot use a dialog that opens on the PC; it browses the PC's folders in the page instead.
+  if (isRemote) return (await import('./remote-folder')).pickRemoteFolder(title, defaultPath);
   return (await api<{ path: string | null }>('dialog/folder', { title, defaultPath })).path;
 }

@@ -26,7 +26,7 @@ import { GitLog } from './GitLog';
 import { ProjectTree } from './ProjectTree';
 import { FileBuffer } from './file-buffer';
 import { loadSpec } from './git-graph';
-import { Dropdown, type Ask, type GitState } from './views';
+import { Dropdown, Modal, type Ask, type GitState } from './views';
 import { copyText } from './toast';
 import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
 import { errorLog } from './errors';
@@ -35,6 +35,8 @@ import { FeedbackCapture } from './FeedbackCapture';
 import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
 import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
+import { isRemote, readOnly } from './transport';
+import { setDrawer, useMobile } from './mobile';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
@@ -48,7 +50,7 @@ export type WorkspaceHandle = { requestClose(): Promise<boolean>; pickFile(): vo
 export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
-  root: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
+  root: string; projectId?: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
   onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
@@ -139,14 +141,62 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
     </div>
   </>;
 });
+// ---- phone status strip (mobile.css): the desktop bar's small items are hard to read on a phone, so it shows each agent's highest
+// reading large and opens a sheet with every limit, its reset time and the account. ----
+type UsageProvider = Usage['provider'];
+function peakOf(usage: Usage | null, sessionOn: boolean) {
+  if (!usage) return null;
+  const values = [...usage.windows.filter(item => item.key !== 'session' || sessionOn).map(item => item.percent), usage.credit?.percent ?? -1, usage.codexCredits?.limit?.percent ?? -1].filter(value => value >= 0);
+  return values.length ? Math.max(...values) : null;
+}
+const MobileUsageChip = memo(function MobileUsageChip({ provider, projectId, active, refresh, sessionOn, colors }: { provider: UsageProvider; projectId: string; active: boolean; refresh: number; sessionOn: boolean; colors: boolean }) {
+  const { usage } = useUsage(provider, projectId, active, refresh), peak = peakOf(usage, sessionOn);
+  // Read but nothing to show (not installed, not signed in here): no chip, as on the desktop.
+  if (usage && peak === null) return null;
+  return <span className={`m-usage-chip ${peak !== null && peak >= 95 ? 'full' : peak !== null && peak >= 80 ? 'warn' : ''}`} style={colors && peak !== null ? usageHueStyle(peak) : undefined}>
+    <Icon name={provider} size={14} /><b>{peak === null ? '…' : `${peak}%`}</b>
+  </span>;
+});
+function MobileUsageSection({ provider, projectId, sessionOn, colors }: { provider: UsageProvider; projectId: string; sessionOn: boolean; colors: boolean }) {
+  const { usage, loading, load } = useUsage(provider, projectId, true, 60);
+  const windows = usage?.windows.filter(item => item.key !== 'session' || sessionOn) ?? [];
+  return <section className="m-usage-section" aria-label={`${usageNames[provider]} 사용량`}>
+    <header><Icon name={provider} size={16} /><strong>{usageNames[provider]}</strong>{usage?.plan && <span className="plan">{usage.plan}</span>}
+      <button className="icon-btn" aria-label={`${usageNames[provider]} 새로고침`} aria-busy={loading} onClick={() => void load(true)}><Icon name="refresh" size={15} /></button></header>
+    {!usage ? <p className="usage-note">불러오는 중…</p> : <>
+      <UsageRows windows={windows} colors={colors} />
+      {provider === 'claude' && usage.credit && <CreditRow credit={usage.credit} colors={colors} />}
+      {provider === 'codex' && usage.codexCredits && <CodexCreditRow value={usage.codexCredits} colors={colors} />}
+      {usage.error && <p className="usage-note warn">{usage.error}</p>}
+      <p className="usage-note">{usage.account?.dir || defaultAccountDir[provider]} · {usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : ''}</p>
+    </>}
+  </section>;
+}
+function MobileStatus({ settings, projectId, active, connection, branch, onBranch }: { settings: Settings; projectId: string; active: boolean; connection: string; branch: string; onBranch(): void }) {
+  const [open, setOpen] = useState(false);
+  const providers = (['claude', 'codex', 'cursor'] as const).filter(provider => settings.statusItems.includes(`${provider}usage`));
+  const sessionOn = (provider: UsageProvider) => provider === 'cursor' || provider === 'codex' || settings.claudeSession;
+  return <footer className="statusbar m-status" data-feedback-region="상태바">
+    {connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>}
+    <button className="m-branch" onClick={onBranch} aria-label={`브랜치 ${branch || '없음'} · 전환`}><Icon name="branch" size={14} /><span>{branch || '브랜치 없음'}</span></button>
+    {providers.length > 0 && <button className="m-usage" aria-label="사용량 자세히 보기" onClick={() => setOpen(true)}>
+      {providers.map(provider => <MobileUsageChip key={provider} provider={provider} projectId={projectId} active={active} refresh={settings.usageRefresh} sessionOn={sessionOn(provider)} colors={settings.usageColors} />)}
+    </button>}
+    {open && <Modal className="m-usage-sheet" labelledBy="m-usage-title" onClose={() => setOpen(false)}>
+      <header className="m-sheet-head"><h2 id="m-usage-title">사용량</h2><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></header>
+      <div className="m-sheet-body">{providers.map(provider => <MobileUsageSection key={provider} provider={provider} projectId={projectId} sessionOn={sessionOn(provider)} colors={settings.usageColors} />)}</div>
+    </Modal>}
+  </footer>;
+}
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
   const [gitOpen, setGitOpen] = useState(false), [errorsOpen, setErrorsOpen] = useState(false), [feedbackOpen, setFeedbackOpen] = useState(false), [pluginOpen, setPluginOpen] = useState(''), [reviewWide, setReviewWide] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
+  const mobile = useMobile();
   const [treeExpanded, setTreeExpanded] = useState(() => new Set(['.']));
   const fileBuffers = useRef(new Map<string, FileBuffer>());
   const fileListeners = useRef(new Set<(paths: string[]) => void>());
@@ -449,6 +499,8 @@ ${where}`, [
       if (!(await saveBeforeClose([...fileBuffers.current.keys()].map(path => `file:${path}`)))) return false;
       // Background subagents are asked about whatever the setting says; the terminals' own question below still follows the setting.
       const background = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id)).length;
+      // A phone only takes the project off its own list: the PC keeps it open, with its terminals and chats running.
+      if (isRemote) return true;
       if (background && !(await ask.confirm(`백그라운드 작업이 있는 채팅 ${background}개가 있습니다. 프로젝트를 닫으면 작업이 종료됩니다. 닫을까요?`))) return false;
       try { await api('project/close', { projectId }); }
       catch (cause) {
@@ -498,7 +550,8 @@ ${where}`, [
   }, [root, project?.id, project?.root, attentionCount, tabInfo, activeTab]);
 
   async function loadProject() {
-    const state = await api<Snapshot>('project/open', { path: root });
+    // A phone paired for viewing may not open projects; it reads the ones the PC already has open.
+    const state = readOnly && projectId ? await api<Snapshot>('snapshot', { projectId }) : await api<Snapshot>('project/open', { path: root });
     setRestoring(true);
     refs.project.current = state; setProject(state); bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({});
     const ui = state.ui || {};
@@ -636,7 +689,8 @@ ${where}`, [
     }
   }, [paneTabs]);
   useEffect(() => {
-    if (!project?.id || restoring) return;
+    // A phone works on its own copy of the layout; the PC's window keeps the one it saved.
+    if (!project?.id || restoring || isRemote) return;
     const timer = setTimeout(() => {
       const savedTabs = paneTabs.map(tab => ({ id: tab.id, pane: remember(tab.pane), ...(tab.title ? { title: tab.title } : {}), ...(refs.tabFocus.current[tab.id] ? { focus: refs.tabFocus.current[tab.id] } : {}) }));
       void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen, projectTreeExpanded: [...treeExpanded] } }).catch(report);
@@ -1124,12 +1178,19 @@ ${where}`, [
     call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
     subscribe: (id, handler) => { chatBus.current.set(id, handler); return () => { if (chatBus.current.get(id) === handler) chatBus.current.delete(id); }; }
   };
+  // A phone shows one pane of a tab at a time: the focused one, through the same zoom the desktop uses to maximize a pane.
+  const mobileZoom = (tab: PaneTab) => {
+    if (!mobile || !tab.pane) return tab.id === activeTab ? zoom : '';
+    const wanted = tab.id === activeTab ? focus : refs.tabFocus.current[tab.id];
+    return findLeaf(tab.pane, wanted || '') ? wanted : leaves(tab.pane)[0] ?? '';
+  };
   const center = <div className="tab-stack">{paneTabs.map(tab => <div key={tab.id} className="tab-page" hidden={tab.id !== activeTab} data-shown={shownTabs.current.has(tab.id) ? '' : undefined}>
-    {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} chat={chatCtx} zoom={tab.id === activeTab ? zoom : ''} />
+    {tab.pane ? <Panes pane={tab.pane} visible={active && tab.id === activeTab} onLayout={next => commitTab(tab.id, next)} {...paneProps} chat={chatCtx} zoom={mobileZoom(tab)} />
       : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} nudge={settings.chatTipPending} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
     <header className="tabbar" data-feedback-region="상단 바">
+      {mobile && <IconButton icon="panelLeft" className="bar-icon mobile-menu" label="프로젝트와 탭" tip="header" dot={false} onClick={() => setDrawer(open => !open)} />}
       <div className="split-button">
         <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
         <button ref={launcherButton} className="bar-button caret" data-tip={`새 탭 종류 선택 (${showAppKey(settings.appKeys, 'launcher')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
@@ -1140,7 +1201,13 @@ ${where}`, [
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19V6a1 1 0 0 1 1-1h4l3 3m0 3V4h5l3 3v4m-5-3h2M3 19l3-8h15l-3 8Z" /></svg>
       </button>
       <span className="drag-space" />
-      <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>
+      {mobile
+        // A phone has no room for a search field and no title bar: the project's name, branch and folder sit here, and tapping them searches.
+        ? <button className="palette-button m-title" onClick={() => run(openPalette)} aria-label={`${basename(project.root.replace(/\\/g, '/'))} · 명령 팔레트`}>
+          <span className="m-title-name">{basename(project.root.replace(/\\/g, '/'))}</span>
+          <span className="m-title-sub"><Icon name="branch" size={11} />{git.branch || '브랜치 없음'}<i aria-hidden="true">·</i>{shortPath(project.root)}</span>
+        </button>
+        : <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>}
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (noGit) setGitNote(true); else toggleGit(); }}>
@@ -1158,10 +1225,11 @@ ${where}`, [
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
     {settings.gitLogDock && gitDrawer}
-    <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
+{mobile ? <MobileStatus settings={settings} projectId={project.id} active={active} connection={connection} branch={git.branch} onBranch={() => run(switchBranch)} />
+      : <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
       <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
-    </footer>
+    </footer>}
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
     {chatCard.mounted && <Spotlight target=".terminal-pane.focused" closing={chatCard.closing} />}
     {chatCard.mounted && createPortal(<aside className="chat-mode-tip notice-card" aria-label="Chat 모드 안내" data-closing={chatCard.closing || undefined}>

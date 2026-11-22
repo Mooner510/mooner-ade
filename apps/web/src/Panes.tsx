@@ -1,3 +1,5 @@
+import { TERMINAL_KEYS, useMobile, withCtrl } from './mobile';
+import { remoteHaptic } from './transport';
 import { showAppKey } from './shortcuts';
 import { terminalEditKey } from './terminal-keys';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
@@ -173,6 +175,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const term = useRef<Terminal | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {}), layoutRef = useRef<() => void>(() => {});
   const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
   const settingsRef = useRef(settings); settingsRef.current = settings;
+  const mobile = useMobile(), ctrlArmed = useRef(false), [ctrl, setCtrl] = useState(false);
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
   const cachesRef = useRef(caches); cachesRef.current = caches;
   useEffect(() => {
@@ -449,7 +452,10 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (feed.exited) { followUp.current.reset(); refreshQueue(); terminal.write('\r\n\x1b[2m[프로세스 종료]\x1b[0m\r\n'); }
     };
     bus.listeners.set(id, receive);
-    terminal.onData(data => {
+    terminal.onData(typed => {
+      // The phone key row's sticky Ctrl applies to the next key, whether it comes from the row or the phone's keyboard.
+      const armed = ctrlArmed.current && !REPORT.test(typed), data = armed ? withCtrl(typed) : typed;
+      if (armed) { ctrlArmed.current = false; setCtrl(false); }
       if (replays && QUERY_REPLY.test(data)) return;
       // A send confirmation is open: keystrokes must not reach Claude, or land around the held Enter, until it is answered.
       if (sendGate && !REPORT.test(data)) return;
@@ -634,6 +640,15 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
+    {mobile && !exited && <div className="term-keys" role="toolbar" aria-label="터미널 보조 키" onPointerDown={event => event.preventDefault() /* keep the keyboard and focus on the terminal */}>
+      {TERMINAL_KEYS.map(key => <button key={key.id} type="button" aria-label={key.aria} aria-pressed={key.ctrl ? ctrl : undefined}
+        onClick={() => {
+          const terminal = term.current; if (!terminal) return;
+          remoteHaptic();
+          if (key.ctrl) { ctrlArmed.current = !ctrlArmed.current; setCtrl(ctrlArmed.current); terminal.focus(); return; }
+          terminal.input(key.data!, true); terminal.focus();
+        }}>{key.label}</button>)}
+    </div>}
     {hint && <Hint title="언제든 Chat으로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 Chat 화면에서 그대로 이어가요. 코드 변경과 도구 실행을 한눈에 볼 수 있어요." onDone={hintSeen} />}
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
     {otherSize && !exited && <div className="pane-size-note" role="status">
