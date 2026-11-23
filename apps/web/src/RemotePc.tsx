@@ -6,7 +6,7 @@ import { Modal } from './views';
 // "다른 PC에 접속": opens the ADE of another PC of the same account in a window of its own (docs/REMOTE_UI.md, PC ↔ PC). The desktop app
 // does the work (apps/desktop/src/remote.js); this dialog signs in, lists the account's PCs, pairs a new one from the link its owner made
 // there, and opens one.
-type Host = { hostId: string; name: string; platform: string; online: boolean; paired: boolean; scope: 'view' | 'control' | null; fingerprint: string | null; keyChanged: boolean; inAccount: boolean };
+type Host = { hostId: string; name: string; self: boolean; platform: string; online: boolean; paired: boolean; scope: 'view' | 'control' | null; fingerprint: string | null; keyChanged: boolean; inAccount: boolean };
 type Offer = { hostId: string; name: string; hostFingerprint: string; myFingerprint: string; alreadyPaired: boolean };
 type RemoteState = { available: boolean; hubHost: string | null; signedIn: boolean; account: string | null; fingerprint: string | null; open: string[] };
 export type RemoteBridge = {
@@ -63,6 +63,7 @@ export function RemotePcDialog({ onClose }: { onClose(): void }) {
           {hosts?.map(host => <li key={host.hostId}>
             <div><strong>{host.name}</strong> <small>{platformName(host.platform)}</small>
               <small className={host.online ? 'remote-pc-on' : ''}>{host.online ? '켜짐' : '꺼짐'}</small>
+              {host.self && <small title="접속할 PC와 이 PC의 이름이 같습니다">이 PC와 이름이 같음</small>}
               {host.paired && <small>{host.scope === 'control' ? '제어' : '보기만'}</small>}
               {host.keyChanged && <small role="alert" className="remote-pc-warn">키가 바뀌었습니다. 연결을 해제하고 다시 연결하세요.</small>}
               {!host.paired && <small>연결 필요</small>}</div>

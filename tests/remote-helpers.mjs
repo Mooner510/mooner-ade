@@ -12,9 +12,22 @@ const b64url = buffer => Buffer.from(buffer).toString('base64url');
 
 // `api(action, input, session)` answers an api call (return a value, or throw { code, message }); `onWs(message, session)` gets the `ws` messages
 // (answer with session.send({ t: 'ws', message })); `hello` is the lists the PC announces; `scope` is what it grants.
-export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', api = () => ({}), onWs = null, hello = { api: ['snapshot', 'ui/manifest', 'ui/file'], messages: ['subscribe'], features: [] }, scope = 'control', approve = true } = {}) {
-  const hostKey = keyPair(), secret = Buffer.alloc(32, 7);
-  const state = { enrolls: 0, polls: 0, refreshes: 0, signedOut: 0, enrollBody: null, refreshToken: 'ahr_1', online: true, denyUpgrade: 0, closeNext: null, sessions: [], pairings: [], connects: 0, accessGood: ACCESS };
+// One Hub can serve several PCs of the account: the first is the options of this call (its per-PC state is `hub.state`), more come from
+// `hub.addHost({ hostId, hostName, api, … })`, which returns the same helpers (pairLink, hostFingerprint, state) for that PC.
+export async function fakeHub(t, { approve = true, ...first } = {}) {
+  const state = { enrolls: 0, polls: 0, refreshes: 0, signedOut: 0, enrollBody: null, refreshToken: 'ahr_1', denyUpgrade: 0, accessGood: ACCESS };
+  const hosts = new Map();
+  const defaults = { hostId: 'host-1', hostName: '작업 PC', api: () => ({}), onWs: null, hello: { api: ['snapshot', 'ui/manifest', 'ui/file'], messages: ['subscribe'], features: [] }, scope: 'control' };
+  const makeHost = (spec, own) => {
+    const host = { ...defaults, ...spec, hostKey: keyPair(), secret: Buffer.alloc(32, hosts.size + 7) };
+    Object.assign(own, { online: true, closeNext: null, sessions: [], pairings: [], connects: 0, knownKeys: new Set() });
+    host.state = own;
+    host.pairLink = () => `moonerade://pair?v=1&k=${b64url(host.hostKey.publicKey)}&h=${host.hostId}&t=${b64url(host.secret)}&n=${encodeURIComponent(host.hostName)}`;
+    host.hostFingerprint = () => fingerprint(host.hostKey.publicKey);
+    hosts.set(host.hostId, host);
+    return host;
+  };
+  const primary = makeHost(first, state);
   const json = (response, status, value) => { response.statusCode = status; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
   const server = createServer(async (request, response) => {
     const chunks = [];
@@ -41,7 +54,7 @@ export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', ap
     if (url.pathname === '/v1/me' && request.method === 'DELETE') { state.signedOut++; return json(response, 204, {}); }
     if (url.pathname === '/v1/hosts') {
       if (!authed) return json(response, 401, { error: { code: 'token-expired', message: 'expired' } });
-      return json(response, 200, { hosts: [{ id: hostId, name: hostName, platform: 'darwin', version: '0.7.0', keyHash: keyHash(hostKey.publicKey), online: state.online, lastSeenAt: 1 }] });
+      return json(response, 200, { hosts: [...hosts.values()].map(host => ({ id: host.hostId, name: host.hostName, platform: 'darwin', version: '0.7.0', keyHash: keyHash(host.hostKey.publicKey), online: host.state.online, lastSeenAt: 1 })) });
     }
     json(response, 404, { error: { code: 'not-found', message: 'not found' } });
   });
@@ -49,14 +62,16 @@ export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', ap
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, 'http://hub');
     if (state.denyUpgrade > 0 || request.headers.authorization !== `Bearer ${state.accessGood}`) { if (state.denyUpgrade > 0) state.denyUpgrade--; socket.end('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
-    if (url.pathname !== `/v1/connect/${hostId}`) { socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); return; }
-    wss.handleUpgrade(request, socket, head, ws => answer(ws, url.searchParams.get('mode')));
+    const host = hosts.get(/^\/v1\/connect\/([\w-]+)$/.exec(url.pathname)?.[1] ?? '');
+    if (!host || !host.state.online) { socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+    wss.handleUpgrade(request, socket, head, ws => answer(ws, url.searchParams.get('mode'), host));
   });
   // The other PC, as the plugin's gateway answers: Noise IK (IKpsk2 for a pairing) as the responder, then the session's JSON frames.
-  function answer(ws, mode) {
-    state.connects++;
+  function answer(ws, mode, host) {
+    const { hostId, hostName, hostKey, secret, scope, hello, api, onWs, state: mine } = host;
+    mine.connects++;
     const sess = { ws, mode, messages: [], sent: [] };
-    state.sessions.push(sess);
+    mine.sessions.push(sess);
     let noise = null, channel = null, stage = 'handshake';
     const send = value => { for (const part of channel.seal(Buffer.from(JSON.stringify(value)))) ws.send(part); };
     sess.send = value => send(value);
@@ -66,11 +81,12 @@ export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', ap
         if (stage === 'handshake') {
           noise = createHandshake({ initiator: false, prologue: prologue({ pattern: mode, transport: 'relay', hostId }), s: hostKey, psk: mode === 'pair' ? pairingPsk(secret) : null });
           noise.readMessage(frame);
-          if (mode === 'session' && state.knownKey && !state.knownKey.equals(noise.remoteStatic)) return ws.close(4003, 'unknown key');
+          // A PC answers only the keys it paired (an empty set: nobody is restricted yet, as before any pairing).
+          if (mode === 'session' && mine.knownKeys.size && !mine.knownKeys.has(Buffer.from(noise.remoteStatic).toString('base64'))) return ws.close(4003, 'unknown key');
           ws.send(noise.writeMessage());
           channel = createChannel(noise.split()); stage = 'open';
           sess.clientKey = noise.remoteStatic;
-          if (state.closeNext) { const [code, reason] = state.closeNext; state.closeNext = null; ws.close(code, reason); }
+          if (mine.closeNext) { const [code, reason] = mine.closeNext; mine.closeNext = null; ws.close(code, reason); }
           return;
         }
         const data = channel.open(frame);
@@ -79,8 +95,8 @@ export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', ap
         sess.messages.push(message);
         if (message.t === 'start') send({ t: 'hello', host: { id: hostId, name: hostName, platform: 'darwin', version: '0.7.0' }, session: 's1', scope, ...hello });
         else if (message.t === 'pair') {
-          state.pairings.push(message);
-          if (state.denyPair) { send({ t: 'pair-denied' }); ws.close(4003, 'denied'); } else { state.knownKey = sess.clientKey; send({ t: 'paired', scope, host: { id: hostId, name: hostName } }); setTimeout(() => ws.close(1000), 50); }
+          mine.pairings.push(message);
+          if (mine.denyPair) { send({ t: 'pair-denied' }); ws.close(4003, 'denied'); } else { mine.knownKey = sess.clientKey; mine.knownKeys.add(Buffer.from(sess.clientKey).toString('base64')); send({ t: 'paired', scope, host: { id: hostId, name: hostName } }); setTimeout(() => ws.close(1000), 50); }
         } else if (message.t === 'ws') onWs?.(message.message, sess);
         else if (message.t === 'ping') send({ t: 'pong' });
         else if (message.t === 'api') {
@@ -92,10 +108,10 @@ export async function fakeHub(t, { hostId = 'host-1', hostName = '작업 PC', ap
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { for (const client of wss.clients) client.terminate(); server.closeAllConnections?.(); server.close(); });
   const hub = {
-    url: `http://127.0.0.1:${server.address().port}`, state, hostId, hostName, hostKey, secret,
+    url: `http://127.0.0.1:${server.address().port}`, state, hostId: primary.hostId, hostName: primary.hostName, hostKey: primary.hostKey, secret: primary.secret,
     // The link the other PC's settings show.
-    pairLink: () => `moonerade://pair?v=1&k=${b64url(hostKey.publicKey)}&h=${hostId}&t=${b64url(secret)}&n=${encodeURIComponent(hostName)}`,
-    hostFingerprint: () => fingerprint(hostKey.publicKey),
+    pairLink: primary.pairLink, hostFingerprint: primary.hostFingerprint,
+    addHost: spec => makeHost(spec, {}),
     // Waits for a condition (a session opened, a message seen).
     async until(check, what = 'condition', ms = 5000) { const end = Date.now() + ms; for (;;) { const value = check(); if (value) return value; if (Date.now() > end) throw new Error(`timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 10)); } }
   };

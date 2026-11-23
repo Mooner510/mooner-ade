@@ -151,7 +151,7 @@ test('a close the PC meant ends the link for good; a PC that does not know our k
   const link = client.link('host-1', { closed: info => closed.push(info) });
   t.after(() => link.close());
   await link.whenOpen();
-  hub.state.knownKey = Buffer.alloc(32, 5);   // the PC no longer knows our key: it hangs up with 4003 "unknown key"
+  hub.state.knownKeys = new Set([Buffer.alloc(32, 5).toString('base64')]);   // the PC no longer knows our key: it hangs up with 4003 "unknown key"
   hub.state.sessions.at(-1).ws.close(4001, 'restart');
   await hub.until(() => closed.length, 'the final close');
   assert.equal(closed[0].code, 'DENIED');

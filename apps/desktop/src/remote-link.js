@@ -202,7 +202,7 @@ const deviceName = () => `ADE · ${String(os.hostname() || 'PC').replace(/[^\p{L
 const emptyState = () => ({ account: null, deviceId: null, tokens: null, key: null, hosts: [] });
 
 // `store`: { read() → state | null, write(state) }. The state holds secrets (Hub tokens, this PC's Noise key): the caller seals it.
-export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL || DEFAULT_HUB_URL, fetchImpl = globalThis.fetch, dial = (url, options) => new globalThis.WebSocket(url, options), now = Date.now, name = deviceName, platform = process.platform, backoff, minPollMs = 2000 } = {}) {
+export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL || DEFAULT_HUB_URL, fetchImpl = globalThis.fetch, dial = (url, options) => new globalThis.WebSocket(url, options), now = Date.now, name = deviceName, platform = process.platform, hostname = os.hostname, backoff, minPollMs = 2000 } = {}) {
   let base = null;
   try { base = new URL(baseUrl); } catch { /* unusable below */ }
   if (base && base.protocol !== 'https:' && !isLocal(base.origin)) base = null;
@@ -322,12 +322,15 @@ export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL ||
       const response = await authed('/v1/hosts');
       if (!response.ok) throw await httpError(response, 'PC 목록을 받지');
       const body = await json(response), paired = state().hosts;
+      // This PC's own remote access (if it runs one) is in the list too. The Hub names a PC by its host name, so a PC of that name is
+      // flagged (`self`), not hidden: another PC may share the name.
+      const own = String(hostname() ?? '').slice(0, 80);
       const listed = (Array.isArray(body?.hosts) ? body.hosts : []).filter(item => typeof item?.id === 'string' && HOST_ID.test(item.id)).map(item => {
         const known = paired.find(host => host.hostId === item.id);
-        return { hostId: item.id, name: String(item.name ?? '').slice(0, 80) || 'PC', platform: String(item.platform ?? '').slice(0, 20), online: item.online === true, paired: Boolean(known), scope: known?.scope ?? null,
+        return { hostId: item.id, name: String(item.name ?? '').slice(0, 80) || 'PC', self: Boolean(own) && String(item.name ?? '').slice(0, 80) === own, platform: String(item.platform ?? '').slice(0, 20), online: item.online === true, paired: Boolean(known), scope: known?.scope ?? null,
           fingerprint: known?.fingerprint ?? null, keyChanged: Boolean(known && typeof item.keyHash === 'string' && item.keyHash !== keyHash(b64(known.key))), inAccount: true };
       });
-      const extra = paired.filter(host => !listed.some(item => item.hostId === host.hostId)).map(host => ({ hostId: host.hostId, name: host.name, platform: '', online: false, paired: true, scope: host.scope, fingerprint: host.fingerprint, keyChanged: false, inAccount: false }));
+      const extra = paired.filter(host => !listed.some(item => item.hostId === host.hostId)).map(host => ({ hostId: host.hostId, name: host.name, self: false, platform: '', online: false, paired: true, scope: host.scope, fingerprint: host.fingerprint, keyChanged: false, inAccount: false }));
       return [...listed, ...extra];
     },
 
