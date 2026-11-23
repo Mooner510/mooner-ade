@@ -46,7 +46,7 @@ export function renderMermaidSvg(code: string, scheme: 'dark' | 'light', id: str
     document.body.append(host);
     try {
       const { svg } = await mermaid.render(id, code, host);
-      return normalizeMermaidSvg(svg);
+      return normalizeMermaidSvg(toWellFormedSvg(svg));
     } finally {
       host.remove();
     }
@@ -60,6 +60,15 @@ export function renderMermaidSvg(code: string, scheme: 'dark' | 'light', id: str
   }).finally(() => jobs.delete(key));
   jobs.set(key, tracked);
   return tracked;
+}
+
+// mermaid returns the SVG as an HTML serialization: labels with <br/> come out as an unclosed <br>, which is invalid XML.
+// The preview shows the SVG through <img>, which only reads strict XML, so such a diagram was an empty box. Re-serialize it as XML.
+export function toWellFormedSvg(svg: string) {
+  const strict = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  if (!strict.querySelector('parsererror')) return svg;
+  const el = new DOMParser().parseFromString(svg, 'text/html').body.querySelector('svg');
+  return el ? new XMLSerializer().serializeToString(el) : svg;
 }
 
 // Mermaid often emits width/height 100%; inside our pan/zoom canvas the parent has no width yet, so the SVG paints at 0×0.
