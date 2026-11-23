@@ -1813,7 +1813,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-approval-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; } .chat-approval-agent b { font-weight: 600; color: var(--fg); }
 .chat-agents-done[data-outcome="approval"] { color: var(--warn); }
 .chat-agent-state[data-status="approval"] { gap: 3px; color: var(--warn); font-size: 11.5px; white-space: nowrap; }
-.chat-blocked-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; } /* auto mode's refusals: one row per blocked call */
+.chat-blocked-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; } /* auto mode's refusals: one row per blocked call; minmax(0, 1fr) so a long one-line command is cut by the code's ellipsis instead of widening the track and scrolling the card sideways */
 .chat-blocked-list label { flex-direction: row; align-items: center; gap: 8px; min-width: 0; cursor: pointer; } /* the app's base label is a column */
 .chat-blocked-list input { flex: none; width: auto; margin: 0; }
 .chat-blocked-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; } .chat-blocked-main code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
