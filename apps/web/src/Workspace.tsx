@@ -379,15 +379,23 @@ ${where}`, [
     if (!buffer) { buffer = new FileBuffer(path, call); fileBuffers.current.set(path, buffer); }
     return buffer;
   }
+  // Closing tabs with unsaved edits asks first, like VS Code: save, don't save (drop the edits), or cancel and keep the tab.
   async function saveBeforeClose(paths: string[]) {
-    const buffers = paths.filter(path => path.startsWith('file:')).map(path => fileBuffers.current.get(path.slice(5))).filter(buffer => buffer?.dirty);
-    await Promise.all(buffers.map(buffer => buffer!.save()));
-    const pending = buffers.find(buffer => buffer?.dirty);
+    const dirty = [...new Set(paths)].filter(path => path.startsWith('file:')).map(path => fileBuffers.current.get(path.slice(5))).filter((buffer): buffer is FileBuffer => Boolean(buffer?.dirty));
+    if (!dirty.length) return true;
+    const choice = await pick(`저장하지 않은 변경 사항이 있습니다. 저장할까요?\n${dirty.map(buffer => basename(buffer.path)).join(', ')}`,
+      [{ id: 'save', label: '저장' }, { id: 'discard', label: '저장 안 함' }, { id: 'cancel', label: '취소' }]);
+    if (choice === 'discard') { dirty.forEach(buffer => buffer.revert()); return true; }
+    if (choice !== 'save') return false;
+    await Promise.all(dirty.map(buffer => buffer.save()));
+    const pending = dirty.find(buffer => buffer.dirty);
     if (pending) { openProjectFile(pending.path); return false; }
     return true;
   }
   async function closeTab(groupId: string, path: string) {
-    if (!(await saveBeforeClose([path]))) return;
+    // The same file open in another group keeps its buffer (and edits), so only the last tab for it asks.
+    const elsewhere = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).some(other => other.id !== groupId && other.tabs?.includes(path));
+    if (!elsewhere && !(await saveBeforeClose([path]))) return;
     const leaf = findLeaf(treeOf(groupId), groupId); if (!leaf) return;
     const list = leaf.tabs || [], index = list.indexOf(path), rest = list.filter(item => item !== path);
     commitFor(groupId, compact(mapLeaf(treeOf(groupId)!, groupId, item => ({ ...item, tabs: rest, active: item.active === path ? rest[index] ?? rest[index - 1] ?? '' : item.active }))));

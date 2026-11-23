@@ -406,6 +406,11 @@ body.resizing .right-panel { transition: none; }
 .tab.preview span { font-style: italic; }
 .tab button { width: 18px; padding: 0; border-radius: 3px; opacity: 0; line-height: 1.4; }
 .tab.active button, .tab:hover button { opacity: 1; }
+/* Unsaved edits: a dot in place of the close button (VS Code); hover or keyboard focus brings the X back. */
+.tab button.unsaved { opacity: 1; position: relative; }
+.tab button.unsaved i { position: absolute; inset: 50% auto auto 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--fg); }
+.tab button.unsaved:is(:hover, :focus-visible) i { display: none; }
+.tab button.unsaved:not(:hover, :focus-visible) svg { visibility: hidden; }
 .group-actions { display: flex; padding: 0 4px; flex-shrink: 0; }
 .group-actions button { color: var(--muted); padding: 2px 6px; }
 .editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }

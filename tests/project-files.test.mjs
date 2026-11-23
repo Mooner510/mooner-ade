@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LocalWorkspace } from '../apps/local-server/src/runtime.js';
@@ -103,4 +103,42 @@ test('closing an editor waits for an undo made during an in-flight save', async 
   await Promise.all([saving, closing]);
   assert.deepEqual(writes, ['first edit', 'base']);
   assert.equal(buffer.dirty, false);
+});
+
+const local = workspace => (action, input) => action === 'files/read'
+  ? readProjectFile(workspace, input.path).then(file => ({ file }))
+  : writeProjectFile(workspace, input);
+
+test('a touch that leaves the text alone is not an external edit, and typing does not reach the disk until save', async t => {
+  const { dir, workspace } = await project(t);
+  const disk = path.join(dir, 'note.txt');
+  await writeFile(disk, 'one\n');
+  const calls = [];
+  const buffer = new FileBuffer('note.txt', (action, input) => { calls.push(action); return local(workspace)(action, input); });
+  await buffer.refresh();
+  buffer.edit('one\ntwo\n');
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.equal(calls.includes('files/write'), false, 'no autosave');
+  assert.equal(await readFile(disk, 'utf8'), 'one\n');
+  assert.equal(buffer.dirty, true);
+
+  // mtime/ctime move (a sync tool, a formatter that rewrites the same text), the content does not.
+  await utimes(disk, new Date(), new Date(Date.now() + 60_000));
+  await buffer.refresh();
+  assert.equal(buffer.get().conflict, undefined);
+  await buffer.save();
+  assert.equal(await readFile(disk, 'utf8'), 'one\ntwo\n');
+  assert.equal(buffer.dirty, false);
+
+  buffer.edit('discard me');
+  assert.equal(buffer.dirty, true);
+  buffer.revert();
+  assert.equal(buffer.dirty, false);
+  assert.equal(buffer.get().draft, 'one\ntwo\n');
+
+  // A real change of the text is still one.
+  buffer.edit('mine\n');
+  await writeFile(disk, 'theirs\n');
+  await buffer.refresh();
+  assert.ok(buffer.get().conflict);
 });
