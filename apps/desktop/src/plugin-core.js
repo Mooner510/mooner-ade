@@ -365,9 +365,10 @@ export function createPluginStore({ file, crypto }) {
     sealed = { approved: {}, data: {}, token: null, hub: null, all: emptyPluginState() };
     let blob;
     try { blob = fs.readFileSync(file); } catch (error) { if (error.code !== 'ENOENT') problem = 'unreadable'; return sealed; }
-    if (!probe()) { problem = 'unavailable'; return sealed; }
+    // No probe() first: on macOS each safeStorage call reads the Keychain on its own, so probing before decrypting asked for the password twice per start.
+    // Only a failed decrypt asks whether encryption works at all.
     try { const all = validPluginState(JSON.parse(crypto.decryptString(blob))); sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all }; }
-    catch { problem = 'unreadable'; }
+    catch { problem = probe() ? 'unreadable' : 'unavailable'; }
     return sealed;
   }
   // The state as callers see it. approved and data are not enumerable, so `{ ...state }` never opens the sealed file; reading them does.
@@ -402,13 +403,16 @@ export function createPluginStore({ file, crypto }) {
       const github = githubMeta(next.github);
       const touchesSealed = forceSealed || SEALED.some(key => Object.hasOwn(next, key)) || (next.github ?? null) !== current.github || (next.hub ?? null) !== current.hub;
       if (touchesSealed) {
-        if (!probe()) throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE');
         const old = openSealed();
         const token = next.github === current.github ? old.token : next.github?.token ?? null;
         // A new Hub sign-in arrives flat ({ account, at, deviceId, access, refresh, accessExpiresAt }); an unchanged one keeps what was sealed.
         const hub = (next.hub ?? null) === current.hub ? old.hub : next.hub ?? null;
         const all = validPluginState({ ...value, approved: Object.hasOwn(next, 'approved') ? next.approved : old.approved, data: Object.hasOwn(next, 'data') ? next.data : old.data, github: github && token ? { ...github, token } : null, hub });
-        writeAtomic(file, crypto.encryptString(JSON.stringify(all)));
+        // No probe() before sealing either (one more Keychain password prompt on macOS): encryptString itself throws when encryption does not work.
+        let blob;
+        try { blob = crypto.encryptString(JSON.stringify(all)); available = true; }
+        catch { available = false; throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE'); }
+        writeAtomic(file, blob);
         sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all };
       }
       plain = { ...value, github: touchesSealed && !sealed.token ? null : github, hub: touchesSealed && !sealed.hub ? null : hubMeta(next.hub) };

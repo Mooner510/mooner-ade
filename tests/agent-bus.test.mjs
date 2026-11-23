@@ -329,7 +329,7 @@ test('the plugin store touches safeStorage (the macOS Keychain) only when someth
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ade-store-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let calls = 0;
-  const base = sealer(), crypto = { ...base, isEncryptionAvailable: () => { calls++; return true; }, decryptString: buffer => { calls++; return base.decryptString(buffer); } };
+  const base = sealer(), crypto = { ...base, isEncryptionAvailable: () => { calls++; return true; }, encryptString: text => { calls++; return base.encryptString(text); }, decryptString: buffer => { calls++; return base.decryptString(buffer); } };
   const file = path.join(root, 'plugins.bin'), open = () => { const store = createPluginStore({ file, crypto }); store.load(); return store; };
   const approval = { hash: 'a'.repeat(64), folder: 'example', version: '1', approvedAt: 1 };
   const store = open();
@@ -357,6 +357,11 @@ test('the plugin store touches safeStorage (the macOS Keychain) only when someth
   assert.equal(again.state.github.token, 'ghp_' + 'x'.repeat(30));
   assert.equal(again.state.approved.example.hash, approval.hash);
   assert.ok(calls > 0);
+  // Opening the sealed file is one safeStorage call (macOS asks for the Keychain password per call), however much is read from it.
+  calls = 0;
+  const third = open();
+  void third.state.approved; void third.state.data; void third.state.github.token;
+  assert.equal(calls, 1);
   assert.equal(again.state.mcp.example.off, true);
   // Disconnecting GitHub keeps the approvals.
   again.update(state => ({ ...state, github: null }));
