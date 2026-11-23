@@ -37,11 +37,11 @@ export class FileBuffer {
     this.update({ file, draft: file?.content, conflict: undefined, error: undefined });
   }
 
-  private run(task: () => Promise<void>) {
+  private run(task: () => Promise<void>, retry = false) {
     if (this.operation) return this.operation;
     this.operation = task().catch(cause => {
       if (!(cause instanceof Error && 'code' in cause && cause.code === 'FILE_CHANGING')) this.update({ error: (cause as Error).message || String(cause) });
-      else if (this.dirty && !this.state.conflict) this.schedule();
+      else if (retry && this.dirty && !this.state.conflict) this.schedule();
     }).finally(() => {
       this.operation = null;
     });
@@ -63,10 +63,17 @@ export class FileBuffer {
     this.timer = setTimeout(() => { this.timer = undefined; void this.save(); }, 350);
   }
 
+  // Like VS Code, typing only marks the buffer dirty; it reaches the disk on an explicit save (Ctrl/Cmd+S) or when a closing tab is told to save.
   edit = (draft: string) => {
     if (draft === this.state.draft) return;
     this.update({ draft, error: undefined });
-    if (!this.state.conflict) this.schedule();
+  };
+
+  // Drop the unsaved edits ("저장 안 함"): the draft goes back to what was last read from or written to disk.
+  revert = () => {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.state.file !== undefined) this.accept(this.state.file);
   };
 
   save = (overwrite = false): Promise<void> => {
@@ -77,15 +84,18 @@ export class FileBuffer {
     this.update({ error: undefined, busy: overwrite });
     const write = () => this.run(async () => {
       this.writing = true;
+      type Written = { file: FileVersion | null; conflict: boolean };
+      let result: Written;
       try {
         const revision = (conflict ? conflict.file : file)?.revision ?? null;
-        const result = await this.call<{ file: FileVersion | null; conflict: boolean }>('files/write', { path: this.path, revision, content: draft });
-        const latestDraft = this.state.draft;
-        if (result.conflict && result.file?.content !== latestDraft) this.update({ conflict: { file: result.file } });
-        else if (result.file?.content === latestDraft) this.accept(result.file);
-        else this.update({ file: result.file, conflict: undefined });
+        result = await this.call<Written>('files/write', { path: this.path, revision, content: draft });
       } finally { this.writing = false; }
-    });
+      // `dirty` counts an in-flight write, so it must be over before the state change tells subscribers (a tab's unsaved dot) to read it.
+      const latestDraft = this.state.draft;
+      if (result.conflict && result.file?.content !== latestDraft) this.update({ conflict: { file: result.file } });
+      else if (result.file?.content === latestDraft) this.accept(result.file);
+      else this.update({ file: result.file, conflict: undefined });
+    }, true);
     const saved = this.operation ? this.operation.then(write) : write();
     return overwrite ? saved.finally(() => this.update({ busy: false })) : saved;
   };

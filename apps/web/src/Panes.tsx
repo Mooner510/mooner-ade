@@ -2,7 +2,7 @@ import { TERMINAL_KEYS, useMobile, withCtrl } from './mobile';
 import { remoteHaptic } from './transport';
 import { showAppKey } from './shortcuts';
 import { terminalEditKey } from './terminal-keys';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { usePaneDrag } from './pane-drag';
 import { Terminal, type ITheme } from '@xterm/xterm';
@@ -687,6 +687,15 @@ function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
   return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} onLayoutChange={ctx.onDiffLayoutChange} /> : <div className="empty">불러오는 중…</div>;
 }
 
+// A file tab shows a dot where the close button is while its buffer has edits that are not on disk (like VS Code); pointing at it brings the close button back.
+function EditorTab({ spec, file, name, active, buffer, onSelect, onClose }: { spec: string; file: string; name: string; active: boolean; buffer?: FileBuffer; onSelect(): void; onClose(): void }) {
+  const dirty = useSyncExternalStore(buffer?.subscribe ?? noSubscribe, () => Boolean(buffer?.dirty));
+  return <div role="tab" aria-selected={active} className={`tab ${active ? 'active' : ''} ${dirty ? 'dirty' : ''}`} onClick={onSelect} onAuxClick={event => { if (event.button === 1) onClose(); }}>
+    {file ? <FileIcon name={name} size={14} /> : <Icon name="diff" size={13} />}<span title={file || spec}>{name}</span>
+    <button className={dirty ? 'unsaved' : undefined} aria-label={`${file || spec} 닫기${dirty ? ' (저장하지 않은 변경 사항 있음)' : ''}`} onClick={event => { event.stopPropagation(); onClose(); }}>{dirty && <i aria-hidden="true" />}<Icon name="x" size={13} /></button></div>;
+}
+const noSubscribe = () => () => {};
+
 function EditorGroup({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom }: { leaf: Leaf; focused: boolean; zoomed: boolean; visible: boolean; ctx: EditorCtx; onFocus(id: string): void; onZoom(id: string): void }) {
   const tabs = leaf.tabs || [], active = leaf.active && tabs.includes(leaf.active) ? leaf.active : tabs[0] || '';
   const label = (spec: string) => { const { kind, path } = diffParts(spec); return `${basename(path)} (${revisionLabel(kind)})`; };
@@ -694,10 +703,8 @@ function EditorGroup({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom }: {
   return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)}>
     <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(spec => {
       const file = spec.startsWith('file:') ? spec.slice(5) : '';
-      const name = file ? basename(file) : label(spec);
-      return <div key={spec} role="tab" aria-selected={spec === active} className={`tab ${spec === active ? 'active' : ''}`}
-        onClick={() => ctx.onSelectTab(leaf.id, spec)} onAuxClick={event => { if (event.button === 1) ctx.onCloseTab(leaf.id, spec); }}>
-        {file ? <FileIcon name={name} size={14} /> : <Icon name="diff" size={13} />}<span title={file || spec}>{name}</span><button aria-label={`${file || spec} 닫기`} onClick={event => { event.stopPropagation(); ctx.onCloseTab(leaf.id, spec); }}><Icon name="x" size={13} /></button></div>;
+      return <EditorTab key={spec} spec={spec} file={file} name={file ? basename(file) : label(spec)} active={spec === active} buffer={file ? ctx.fileBuffer(file) : undefined}
+        onSelect={() => ctx.onSelectTab(leaf.id, spec)} onClose={() => ctx.onCloseTab(leaf.id, spec)} />;
     })}</div>
       <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="편집기 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
     {path ? <FileEditor key={path} buffer={ctx.fileBuffer(path)} settings={ctx.settings} visible={visible} watch={ctx.watchFiles} />

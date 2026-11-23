@@ -56,7 +56,8 @@ async function snapshot(target) {
     let value;
     try { value = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content); }
     catch { throw unsupported(); }
-    const revision = createHash('sha256').update(signature(stat)).update(':').update(content).digest('hex');
+    // The revision is the content alone: a touch, chmod, sync tool or xattr changes mtime/ctime without changing the text, and that must not look like someone else's edit.
+    const revision = createHash('sha256').update(content).digest('hex');
     return { file: { revision, content: value }, mode: Number(stat.mode & 0o777n) };
   } catch (error) {
     if (error.code === 'ENOENT') return { file: null, mode: 0 };
