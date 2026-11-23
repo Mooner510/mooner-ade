@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeF
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { brandBundle, icon } from './brand.mjs';
+import { brandBundle, icon, signBundle } from './brand.mjs';
 
 const require = createRequire(import.meta.url);
 let executable = require('electron');
@@ -18,15 +18,17 @@ if (process.platform === 'darwin') {
   const bundle = path.join(folder, `${productName}.app`);
   const plist = path.join(bundle, 'Contents/Info.plist');
   const ready = path.join(folder, '.ready');
-  const stamp = createHash('sha256').update(readFileSync(icon)).digest('hex');
+  // Not com.mooner.ade: the installed app's privacy grants belong to that id and to its signature, which this ad hoc copy would replace.
+  const bundleId = 'com.mooner.ade.dev';
+  const stamp = createHash('sha256').update(readFileSync(icon)).update(bundleId).digest('hex');
   executable = path.join(bundle, 'Contents/MacOS/Electron');
   if (!existsSync(ready) || readFileSync(ready, 'utf8') !== stamp) {
     mkdirSync(folder, { recursive: true });
     // cpSync can't overwrite the framework symlinks of a stale bundle, so rebuild it from scratch.
     rmSync(bundle, { recursive: true, force: true });
     cpSync(source, bundle, { recursive: true, verbatimSymlinks: true });
-    brandBundle(bundle, productName);
-    execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' });
+    brandBundle(bundle, productName, bundleId);
+    signBundle(bundle, '-');
     execFileSync('/usr/bin/codesign', ['--verify', '--deep', bundle], { stdio: 'inherit' });
     writeFileSync(ready, stamp);
   }

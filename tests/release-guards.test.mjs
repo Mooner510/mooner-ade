@@ -88,18 +88,23 @@ test('the release workflow keeps its own gate: the tagged commit must already be
   assert.match(workflow, /case "\$TAG" in \*-\*\) pre=--prerelease/, 'a beta is published as a prerelease, so it never becomes "latest"');
   assert.match(workflow, /os: \[macos-latest, windows-latest\]/);
   assert.match(workflow, /node scripts\/build-release\.mjs/);
+  assert.match(workflow, /secrets\.MACOS_SIGN_P12\b/, 'the macOS build imports the signing certificate');
+  assert.match(workflow, /ADE_SIGN_IDENTITY: /, 'and tells the builder its name');
 });
 
-test('the release builder publishes exactly the three assets per platform the updater looks for', () => {
+test('the release builder publishes the assets the updater looks for: three on Windows, the signed full zip on macOS', () => {
   const builder = fs.readFileSync(path.join(root, 'scripts/build-release.mjs'), 'utf8');
   assert.match(builder, /const name = `MoonerADE-\$\{process\.platform\}-\$\{process\.arch\}`/);
   assert.match(builder, /const zip = path\.join\(dist, `\$\{name\}\.zip`\)/);
   assert.match(builder, /const appZip = path\.join\(dist, `\$\{name\}-app\.zip`\)/);
   assert.match(builder, /const manifest = path\.join\(dist, `\$\{name\}\.json`\)/);
   assert.match(builder, /JSON\.stringify\(\{ version, shell \}\)/, 'the manifest the updater reads: version and shell key');
-  assert.match(builder, /const assets = \[zip, appZip, manifest\]/);
+  assert.match(builder, /const assets = mac \? \[zip\] : \[zip, appZip, manifest\]/, 'macOS ships no app-only zip: swapping files in the bundle would break the certificate signature');
+  assert.match(builder, /process\.platform !== 'darwin' \|\| process\.env\.ADE_SIGN_IDENTITY/, 'a macOS release is never ad hoc signed');
   const updater = fs.readFileSync(path.join(root, 'apps/desktop/src/updater.js'), 'utf8');
   assert.match(updater, /asset\.replace\(\/\\\.zip\$\/, '-app\.zip'\)/, 'the updater derives the app-only zip name the same way');
   assert.match(updater, /asset\.replace\(\/\\\.zip\$\/, '\.json'\)/, 'and the manifest name');
+  assert.match(updater, /shell && process\.platform !== 'darwin'/, 'the macOS updater always takes the full zip');
+  assert.doesNotMatch(updater, /'--sign'/, 'the updater never signs: only the release certificate does');
   assert.match(fs.readFileSync(path.join(root, 'apps/desktop/src/main.js'), 'utf8'), /asset: `MoonerADE-\$\{process\.platform\}-\$\{process\.arch\}\.zip`/);
 });
