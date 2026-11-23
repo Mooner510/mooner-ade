@@ -11,9 +11,10 @@ import { deniedMcpTools, setAgentMcpServers, terminalAgentCommand } from '../app
 
 const sealer = (available = true) => ({
   isEncryptionAvailable: () => available,
-  encryptString: text => Buffer.from(`sealed:${Buffer.from(text).toString('base64')}`),
+  encryptString: text => { if (!available) throw new Error('encryption unavailable'); return Buffer.from(`sealed:${Buffer.from(text).toString('base64')}`) },
   decryptString: buffer => {
     const text = buffer.toString();
+    if (!available) throw new Error('encryption unavailable'); // like Electron's
     if (!text.startsWith('sealed:')) throw new Error('bad');
     return Buffer.from(text.slice(7), 'base64').toString();
   }
