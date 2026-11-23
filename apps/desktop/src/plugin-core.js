@@ -343,7 +343,7 @@ function writeStorageFile(dir, text) {
 // GitHub account is connected) and is read at every start. `plugins.bin` is sealed with safeStorage and holds what must not be read or
 // swapped by anything else: the approvals, the plugins' own storage and the GitHub token. It is opened only when one of those is asked for.
 // On macOS every safeStorage call, even isEncryptionAvailable(), reads the key from the Keychain, which asks for the login password
-// whenever the app's ad-hoc signature is not on the item's list (every new version): so a start that needs nothing sealed never asks.
+// whenever the app's signature is not on the item's list (every new ad hoc build; a build signed with the release certificate keeps it): so a start that needs nothing sealed never asks.
 // Without working encryption nothing sealed is stored and plugins that need approval stay off.
 const SEALED = ['approved', 'data'];
 const githubMeta = github => github && /^[A-Za-z0-9-]{1,39}$/.test(github.login) ? { login: github.login, via: github.via === 'oauth' ? 'oauth' : 'pat', at: Number.isFinite(github.at) ? github.at : 0 } : null;

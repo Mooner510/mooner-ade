@@ -15,7 +15,9 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // from the newest release including prereleases such as 1.2.3-beta1).
 // The release carries per platform a full zip, an app-only zip (just resources/app) and a small manifest naming the
 // shell key (Electron, Node, branding; see package.mjs). When the installed shell key matches, only the app zip is
-// fetched and only resources/app is replaced; otherwise the full zip replaces everything. Full update, Windows: after the app exits, a PowerShell helper mirrors the new folder
+// fetched and only resources/app is replaced; otherwise the full zip replaces everything. macOS always takes the full zip: changing
+// anything inside the bundle breaks its signature, and the new one cannot be made here with the release certificate (docs/MAC_SIGNING.md).
+// Full update, Windows: after the app exits, a PowerShell helper mirrors the new folder
 // over the install folder and starts the app again, with no console window of its own and without letting the app join a console
 // (update-windows.js); user data lives in %APPDATA%, outside the install folder.
 // macOS: the zip holds MoonerADE.app (made with ditto so the framework symlinks and signature survive); after the app
@@ -208,7 +210,7 @@ async function pickPackage(release, asset, version) {
   const find = name => release.assets.find(item => item.name === name);
   const full = find(asset), appZip = find(asset.replace(/\.zip$/, '-app.zip')), manifest = find(asset.replace(/\.zip$/, '.json'));
   const shell = installedShell();
-  if (appZip && manifest && shell) {
+  if (appZip && manifest && shell && process.platform !== 'darwin') {
     try {
       const data = JSON.parse((await fetchAsset(manifest, { timeoutMs: REQUEST_TIMEOUT_MS })).toString('utf8'));
       if (data.version === version && data.shell === shell) return { file: appZip, kind: 'app' };
@@ -267,7 +269,7 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
       onProgress: (received, total) => progress.set(total ? `v${version} 다운로드 중… ${mb(received)} / ${mb(total)} MB` : `v${version} 다운로드 중… ${mb(received)} MB`, total ? Math.min(1, received / total) : null, false),
     });
     progress.set('압축 푸는 중…');
-    staged = process.platform === 'darwin' ? await stageMac({ zip, progress, kind }) : await stageWindows({ zip, work, kind });
+    staged = process.platform === 'darwin' ? await stageMac({ zip, progress }) : await stageWindows({ zip, work, kind });
     if (onQuit) {
       progress.close();
       holdForQuit({ version, work, staged });
@@ -344,7 +346,16 @@ async function stageWindows({ zip, work, kind }) {
   };
 }
 
-async function stageMac({ zip, progress, kind }) {
+// The signing requirement of a bundle ("identifier ... and certificate leaf = H..." for a certificate, "cdhash H..." for an ad hoc build).
+const requirement = bundle => new Promise((resolve, reject) => {
+  const child = spawn('/usr/bin/codesign', ['-d', '-r-', bundle], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  child.stdout.on('data', chunk => { out += chunk; });
+  child.once('error', reject);
+  child.once('exit', code => code === 0 ? resolve(/designated => (.+)/.exec(out)?.[1] ?? '') : reject(new Error(`codesign exit ${code}`)));
+});
+
+async function stageMac({ zip, progress }) {
   const target = real(bundlePath());
   const parent = path.dirname(target);
   // Stage next to the installed bundle: it proves the folder is writable now and keeps the later swap on one volume.
@@ -353,25 +364,15 @@ async function stageMac({ zip, progress, kind }) {
   catch { throw new Error(`${parent} 폴더에 쓸 수 없습니다. 앱을 쓰기 가능한 폴더(예: /Applications)로 옮긴 뒤 다시 시도하세요.`); }
   try {
     const next = path.join(stage, path.basename(target));
-    if (kind === 'app') {
-      // Copy the installed bundle, swap in the new Contents/Resources/app and re-sign it ad hoc as package.mjs does;
-      // the verify and swap below then run exactly as for a full update.
-      progress.set('앱 복사 중…');
-      await run('/usr/bin/ditto', [target, next]);
-      const resources = path.join(next, 'Contents', 'Resources');
-      fs.rmSync(path.join(resources, 'app'), { recursive: true, force: true });
-      await run('/usr/bin/ditto', ['-x', '-k', zip, resources]);
-      fs.rmSync(zip);
-      if (!appComplete(path.join(resources, 'app'))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
-      progress.set('서명 중…');
-      await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', next]);
-    } else {
-      await run('/usr/bin/ditto', ['-x', '-k', zip, stage]);
-      fs.rmSync(zip);
-    }
+    await run('/usr/bin/ditto', ['-x', '-k', zip, stage]);
+    fs.rmSync(zip);
     if (!fs.existsSync(path.join(next, 'Contents', 'MacOS', path.basename(process.execPath)))) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
     progress.set('서명 확인 중…');
     await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', next]);
+    // A certificate-signed install only takes an update signed by the same certificate: a different signer would reset the privacy grants and
+    // is not ours. An ad hoc install (before the certificate) takes any build; that is how it moves over.
+    const installed = await requirement(target).catch(() => '');
+    if (installed.includes('certificate leaf') && installed !== await requirement(next)) throw new Error('새 버전의 서명이 설치된 앱과 다릅니다.');
     return {
       discard() { fs.rmSync(stage, { recursive: true, force: true }); },
       async launch({ work }) {

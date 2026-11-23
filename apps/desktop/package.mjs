@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { flipFuses, FuseV1Options, FuseVersion } from '@electron/fuses';
-import { brandBundle, brandExe } from './brand.mjs';
+import { brandBundle, brandExe, signBundle } from './brand.mjs';
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
 assert.ok(nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 21), 'Node.js 24.21.0 or newer is required');
@@ -114,7 +114,7 @@ try {
   mkdirSync(runtime, { recursive: true });
   cpSync(process.execPath, path.join(runtime, process.platform === 'win32' ? 'node.exe' : 'node'));
   writeFileSync(path.join(runtime, 'runtime.json'), JSON.stringify({ shell: shellKey() }));
-  if (process.platform === 'darwin') execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', path.join(dist, `${productName}.app`)], { stdio: 'inherit' });
+  if (process.platform === 'darwin') signBundle(path.join(dist, `${productName}.app`));
   assert.ok(existsSync(path.join(resources, 'app/apps/local-server/src/index.js')));
   assert.ok(existsSync(path.join(runtime, process.platform === 'win32' ? 'node.exe' : 'node')));
   console.log(`Packaged app: ${process.platform === 'darwin' ? path.join(dist, `${productName}.app`) : path.join(dist, `${productName}-win32-${process.arch}`)}`);

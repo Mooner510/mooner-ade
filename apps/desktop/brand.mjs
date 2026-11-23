@@ -27,12 +27,21 @@ export function brandExe(exe, productName, version) {
   writeFileSync(exe, Buffer.from(binary.generate()));
 }
 
+// macOS keeps the privacy grants (Documents, Downloads, App Management, Full Disk Access) and the Keychain item's access list per
+// "bundle id + signature". An ad hoc signature ('-') is only the code hash, so every build resets them; a certificate gives one
+// stable identity. ADE_SIGN_IDENTITY names a code-signing certificate in the keychain (docs/MAC_SIGNING.md); without it the
+// bundle is signed ad hoc, which is fine for a local run but not for a release (scripts/build-release.mjs refuses it).
+export function signBundle(bundle, identity = process.env.ADE_SIGN_IDENTITY || '-') {
+  execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', identity, bundle], { stdio: 'inherit' });
+}
+
 // macOS takes the notification icon and identity from the bundle, not from app.dock.setIcon().
 // A distinct bundle id keeps Notification Center from reusing the cached Electron icon.
-export function brandBundle(bundle, productName) {
+// `pnpm dev` passes its own id so its ad hoc builds never overwrite the privacy grants of the installed app.
+export function brandBundle(bundle, productName, bundleId = 'com.mooner.ade') {
   const plist = path.join(bundle, 'Contents/Info.plist');
   for (const key of ['CFBundleName', 'CFBundleDisplayName']) execFileSync('/usr/bin/plutil', ['-replace', key, '-string', productName, plist]);
-  execFileSync('/usr/bin/plutil', ['-replace', 'CFBundleIdentifier', '-string', 'com.mooner.ade', plist]);
+  execFileSync('/usr/bin/plutil', ['-replace', 'CFBundleIdentifier', '-string', bundleId, plist]);
   const icns = execFileSync('/usr/bin/plutil', ['-extract', 'CFBundleIconFile', 'raw', plist], { encoding: 'utf8' }).trim();
   const temp = mkdtempSync(path.join(os.tmpdir(), 'mooner-ade-icon-'));
   try {

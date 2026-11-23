@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs or reinstalls MoonerADE from the latest GitHub release:
 #   curl -fsSL https://raw.githubusercontent.com/Mooner510/mooner-ade/master/scripts/install-mac.sh | sh
-# curl adds no quarantine flag, so Gatekeeper never blocks the ad-hoc signed app. After this the in-app updater takes over.
+# curl adds no quarantine flag, so Gatekeeper never blocks the app (signed with our own certificate, not notarized). After this the in-app updater takes over.
 set -eu
 [ "$(uname -s)" = Darwin ] || { echo "macOS 전용 설치 스크립트입니다." >&2; exit 1; }
 # A Rosetta shell reports x86_64 on Apple Silicon, so ask the hardware instead of uname -m.

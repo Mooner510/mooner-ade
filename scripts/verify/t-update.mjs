@@ -157,7 +157,8 @@ try {
 } catch (error) { record('진행', false, error.message); }
 
 while (!exit && Date.now() - started < 200_000) await sleep(200);
-record('업데이트 문의에 응답하고 받음', served.some(url => url.endsWith('-app.zip')), served.join(', '));
+// The release also lists the app-only zip and manifest (Windows uses them); the macOS updater must still take the full zip.
+record('업데이트 문의에 응답하고 전체 zip을 받음', served.includes(`/assets/${asset}.zip`) && !served.some(url => url.endsWith('-app.zip')), served.join(', '));
 record(oldWindow ? '별도 진행률 창이 뜸(수정 전 재현)' : '별도 진행률 창 없음', separate === oldWindow);
 if (!oldWindow) record('진행률이 메인 창 안 카드로 표시', shots.length > 0, shots.map(shot => `${shot.text} → ${shot.file}`).join(' | '));
 record('이전 앱이 정상 종료(시그널 없음)', exit?.signal == null && exit?.code === 0, JSON.stringify(exit));

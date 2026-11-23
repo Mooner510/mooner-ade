@@ -55,7 +55,7 @@ irm https://raw.githubusercontent.com/Mooner510/mooner-ade/master/scripts/instal
 <details>
 <summary>설치 참고 · Windows 화면 끊김 · 삭제</summary>
 
-- **macOS 서명:** 배포 앱은 Apple 공증 없이 ad-hoc 서명됩니다. 설치 스크립트는 앱의 격리 속성을 제거합니다.
+- **macOS 서명:** 배포 앱은 Apple 공증 없이 자체 인증서로 서명됩니다(`docs/MAC_SIGNING.md`). 업데이트해도 문서·다운로드 폴더 같은 권한 승인이 유지됩니다. 설치 스크립트는 앱의 격리 속성을 제거합니다.
 - **Windows ARM:** 제공하는 x64 앱은 Windows의 x64 에뮬레이션을 사용합니다.
 - **NVIDIA RTX HDR:** NVIDIA App의 RTX HDR이 앱에 적용되면 화면이 끊길 수 있습니다. 앱이 감지해 제안하는 **해결**을 누르면 관리자 권한 확인 후 MoonerADE에만 RTX HDR을 끄는 프로필을 추가합니다. 직접 설정하려면 NVIDIA App → 그래픽 → 프로그램 설정에서 MoonerADE의 RTX HDR을 끄세요.
 
