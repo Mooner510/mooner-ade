@@ -118,6 +118,12 @@ export function writeProjectFile(workspace, { path: file, revision, content }) {
 const taken = name => fault('EXISTS', `같은 이름이 이미 있습니다: ${name}`, 409);
 const missing = name => fault('NOT_FOUND', `찾을 수 없습니다: ${name}`, 404);
 const lstat = target => fs.lstat(target).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+// "./", ".//" and "./." name the project folder like "." does; targetOf allows them (a listing needs the root) but nothing here may move, copy or delete it.
+const inner = async (workspace, file) => {
+  const target = await targetOf(workspace, file);
+  if (target === await fs.realpath(workspace.root)) throw fault('INVALID_INPUT', '프로젝트 폴더 자체는 대상이 될 수 없습니다.');
+  return target;
+};
 const names = list => { if (!Array.isArray(list) || !list.length || list.length > 500 || list.some(item => typeof item !== 'string' || !item || item === '.')) throw fault('INVALID_INPUT', '대상이 올바르지 않습니다.'); return list; };
 
 export async function createProjectEntry(workspace, { path: file, folder }) {
@@ -131,13 +137,16 @@ export async function createProjectEntry(workspace, { path: file, folder }) {
 }
 
 // All-or-nothing preflight: every source exists, no destination exists (a case-only rename on a case-insensitive disk is the same entry), none moves into itself.
-export async function moveProjectEntries(workspace, { moves }) {
+export const moveProjectEntries = (workspace, input) => save(() => moveEntries(workspace, input));
+async function moveEntries(workspace, { moves }) {
   if (!Array.isArray(moves)) throw fault('INVALID_INPUT', '대상이 올바르지 않습니다.');
   names(moves.map(move => move?.from)); names(moves.map(move => move?.to));
   const steps = [], seen = new Set();
   for (const { from, to } of moves) {
-    const source = await targetOf(workspace, from), dest = await targetOf(workspace, to), entry = await lstat(source);
+    const source = await inner(workspace, from), dest = await inner(workspace, to), entry = await lstat(source);
     if (!entry) throw missing(from);
+    // A source named twice, or inside another source that moves too, would be gone (or moved) by the time its turn comes.
+    if (steps.some(step => (source + path.sep).startsWith(step.source + path.sep) || (step.source + path.sep).startsWith(source + path.sep))) throw fault('INVALID_INPUT', '같은 항목이 중복되었거나 다른 항목 안에 들어 있습니다.');
     if (source === dest) continue;
     if (dest.startsWith(source + path.sep)) throw fault('INVALID_INPUT', '폴더를 자기 자신 안으로 옮길 수 없습니다.');
     const there = await lstat(dest);
@@ -148,13 +157,14 @@ export async function moveProjectEntries(workspace, { moves }) {
 }
 
 // Copies into `dir`; a name already taken there gets " copy", " copy 2"… (like a Finder duplicate). Returns the new paths.
-export async function copyProjectEntries(workspace, { paths, dir }) {
+export const copyProjectEntries = (workspace, input) => save(() => copyEntries(workspace, input));
+async function copyEntries(workspace, { paths, dir }) {
   const folder = await targetOf(workspace, typeof dir === 'string' && dir ? dir : '.');
   if (!(await lstat(folder))?.isDirectory()) throw fault('INVALID_INPUT', '폴더 경로를 지정하세요.');
   // targetOf answers in real (symlink-resolved) paths, so the new path is cut against the real root too.
   const created = [], root = await fs.realpath(workspace.root);
   for (const from of names(paths)) {
-    const source = await targetOf(workspace, from), entry = await lstat(source);
+    const source = await inner(workspace, from), entry = await lstat(source);
     if (!entry) throw missing(from);
     if (folder === source || folder.startsWith(source + path.sep)) throw fault('INVALID_INPUT', '폴더를 자기 자신 안에 복사할 수 없습니다.');
     const base = path.basename(source), dot = entry.isDirectory() ? 0 : base.lastIndexOf('.'), stem = dot > 0 ? base.slice(0, dot) : base, ext = dot > 0 ? base.slice(dot) : '';
@@ -166,8 +176,9 @@ export async function copyProjectEntries(workspace, { paths, dir }) {
   return { created };
 }
 
-export async function deleteProjectEntries(workspace, { paths }) {
+export const deleteProjectEntries = (workspace, input) => save(() => deleteEntries(workspace, input));
+async function deleteEntries(workspace, { paths }) {
   const targets = [];
-  for (const file of names(paths)) targets.push(await targetOf(workspace, file));
+  for (const file of names(paths)) targets.push(await inner(workspace, file));
   for (const target of targets) await fs.rm(target, { recursive: true, force: true });
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LocalWorkspace } from '../apps/local-server/src/runtime.js';
@@ -179,4 +179,77 @@ test('the project tree creates, moves, copies and deletes inside the project onl
   await assert.rejects(deleteProjectEntries(workspace, { paths: ['../x'] }), { code: 'INVALID_INPUT' });
   await deleteProjectEntries(workspace, { paths: ['src', 'renamed copy.txt'] });
   assert.deepEqual(await list('.'), ['dest', 'renamed copy 2.txt', 'renamed.txt']);
+});
+
+test('tree operations cannot reach the project folder itself, a link out of it, or .git', async t => {
+  const { dir, workspace } = await project(t);
+  const outside = await mkdtemp(path.join(tmpdir(), 'ade-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(path.join(outside, 'secret.txt'), 'S');
+  await mkdir(path.join(dir, '.git')); await writeFile(path.join(dir, '.git', 'HEAD'), 'ref');
+  await writeFile(path.join(dir, 'keep.txt'), 'K');
+  await mkdir(path.join(dir, 'sub')); await mkdir(path.join(dir, 'real')); await writeFile(path.join(dir, 'real', 'f.txt'), 'F');
+  await symlink(outside, path.join(dir, 'link'));
+  await symlink(path.join(outside, 'secret.txt'), path.join(dir, 'flink'));
+  const list = async at => (await readdir(at)).sort();
+  const before = await list(dir);
+
+  // "./" and friends are the project folder under another spelling.
+  for (const alias of ['./', './/', './.', 'sub/..']) {
+    await assert.rejects(deleteProjectEntries(workspace, { paths: [alias] }), { code: 'INVALID_INPUT' }, alias);
+    await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: alias, to: 'x' }] }), { code: 'INVALID_INPUT' }, alias);
+    await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'keep.txt', to: alias }] }), { code: 'INVALID_INPUT' }, alias);
+    await assert.rejects(copyProjectEntries(workspace, { paths: [alias], dir: '.' }), { code: 'INVALID_INPUT' }, alias);
+  }
+  assert.deepEqual(await list(dir), before);
+
+  // A path through a link is refused (the link itself too: the tree never lists links, and what they point to stays out of reach).
+  for (const via of ['link/secret.txt', 'link/new.txt', 'flink/x']) {
+    await assert.rejects(deleteProjectEntries(workspace, { paths: [via] }), /./, via);
+    await assert.rejects(createProjectEntry(workspace, { path: via, folder: false }), /./, via);
+    await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'keep.txt', to: via }] }), /./, via);
+    await assert.rejects(copyProjectEntries(workspace, { paths: ['keep.txt'], dir: via }), /./, via);
+  }
+  await assert.rejects(copyProjectEntries(workspace, { paths: ['keep.txt'], dir: 'link' }), /./);
+  assert.deepEqual(await list(outside), ['secret.txt']);
+  // A copied folder keeps its links as links, so nothing from outside is pulled in.
+  await symlink(outside, path.join(dir, 'real', 'out'));
+  await copyProjectEntries(workspace, { paths: ['real'], dir: 'sub' });
+  assert.equal((await lstat(path.join(dir, 'sub', 'real', 'out'))).isSymbolicLink(), true);
+  await assert.rejects(deleteProjectEntries(workspace, { paths: ['link'] }), /./);
+  await deleteProjectEntries(workspace, { paths: ['sub'] });
+  assert.deepEqual(await list(outside), ['secret.txt'], 'deleting never follows a link');
+  assert.equal(await readFile(path.join(outside, 'secret.txt'), 'utf8'), 'S');
+
+  for (const name of ['.git', '.GIT', 'real/.git', 'real/.Git/HEAD']) {
+    await assert.rejects(deleteProjectEntries(workspace, { paths: [name] }), { code: 'INVALID_INPUT' }, name);
+    await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'keep.txt', to: name }] }), { code: 'INVALID_INPUT' }, name);
+    await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: name, to: 'x' }] }), { code: 'INVALID_INPUT' }, name);
+    await assert.rejects(copyProjectEntries(workspace, { paths: [name], dir: '.' }), { code: 'INVALID_INPUT' }, name);
+  }
+  assert.equal(await readFile(path.join(dir, '.git', 'HEAD'), 'utf8'), 'ref');
+
+  // Malformed input.
+  await assert.rejects(deleteProjectEntries(workspace, { paths: 'keep.txt' }), { code: 'INVALID_INPUT' });
+  await assert.rejects(deleteProjectEntries(workspace, { paths: [{}] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(deleteProjectEntries(workspace, { paths: Array(501).fill('x') }), { code: 'INVALID_INPUT' });
+  await assert.rejects(moveProjectEntries(workspace, { moves: [null] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(copyProjectEntries(workspace, { paths: [] , dir: '.' }), { code: 'INVALID_INPUT' });
+  assert.ok((await list(dir)).includes('keep.txt'));
+});
+
+test('a move that names an item twice, or an item and one inside it, changes nothing; a case-only rename works', async t => {
+  const { dir, workspace } = await project(t);
+  await mkdir(path.join(dir, 'a')); await writeFile(path.join(dir, 'a', 'f.txt'), 'F'); await writeFile(path.join(dir, 'Foo.txt'), 'foo');
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'a', to: 'x' }, { from: 'a', to: 'y' }] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'a', to: 'x' }, { from: 'a/f.txt', to: 'y' }] }), { code: 'INVALID_INPUT' });
+  assert.deepEqual((await readdir(dir)).sort(), ['Foo.txt', 'a']);
+  // On a case-insensitive disk "foo.txt" is the same entry as "Foo.txt"; on a case-sensitive one it is free. Either way the rename goes through.
+  await moveProjectEntries(workspace, { moves: [{ from: 'Foo.txt', to: 'foo.txt' }] });
+  assert.deepEqual((await readdir(dir)).sort(), ['a', 'foo.txt']);
+  assert.equal(await readFile(path.join(dir, 'foo.txt'), 'utf8'), 'foo');
+  // A different file already there is never replaced.
+  await writeFile(path.join(dir, 'bar.txt'), 'bar');
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'bar.txt', to: 'foo.txt' }] }), { code: 'EXISTS' });
+  assert.equal(await readFile(path.join(dir, 'foo.txt'), 'utf8'), 'foo');
 });
