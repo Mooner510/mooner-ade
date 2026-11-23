@@ -383,8 +383,8 @@ function GitSettings({ settings, set }: { settings: Settings; set<K extends keyo
       <Row title="첫 부모만" hint="머지 커밋에서 첫 번째 부모만 따라갑니다.">{flag('gitFirstParent', '첫 부모만')}</Row>
       <Row title="머지 커밋 숨기기">{flag('gitNoMerges', '머지 커밋 숨기기')}</Row>
       <Row title="긴 선" hint="끄면 30행 이상 이어지는 선을 양 끝의 화살표로 줄입니다. 화살표를 누르면 반대쪽 끝으로 이동합니다.">{flag('gitLongEdges', '긴 선')}</Row>
-      <Row title="선 색 채도" hint={`브랜치 색은 브랜치 이름으로 정해집니다. 채도 (0–100, 기본 40)`}>{num('gitSaturation', 0, 100)}<span className="git-swatches">{sample.map((color, index) => <i key={index} style={{ background: color }} />)}</span></Row>
-      <Row title="선 색 밝기" hint="밝기 (20–100, 기본 65)">{num('gitBrightness', 20, 100)}</Row>
+      <Row title="선 색 채도" hint={`브랜치 색은 브랜치 이름으로 정해집니다. 채도 (0–100, 기본 60)`}>{num('gitSaturation', 0, 100)}<span className="git-swatches">{sample.map((color, index) => <i key={index} style={{ background: color }} />)}</span></Row>
+      <Row title="선 색 밝기" hint="밝기 (20–100, 기본 85)">{num('gitBrightness', 20, 100)}</Row>
     </Group>
     <Group title="표시">
       <Row title="참조 간결하게 보기" hint="로컬 브랜치와 추적하는 원격 브랜치를 한 라벨로 묶어 첫 이름만 보여 줍니다.">{flag('gitCompactRefs', '참조 간결하게 보기')}</Row>

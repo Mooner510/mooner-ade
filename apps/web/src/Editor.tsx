@@ -105,6 +105,8 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   if (next.tourVersion < TOUR_VERSION) next.onboarded = false;
   // Saved settings from before the Git graph belong to someone who knew the changes panel: they get the card once. New users meet it in the tutorial.
   if (saved.gitTipPending === undefined && Object.keys(saved).length > 0) next.gitTipPending = true;
+  // The old graph colours (40 / 65, muddy on a dark background) were the default, not a choice: they move to the new default.
+  if (saved.gitSaturation === 40 && saved.gitBrightness === 65) { next.gitSaturation = 60; next.gitBrightness = 85; }
   // The changes panel became the Git tool window: a shortcut chosen for it moves along.
   if (saved.appKeys?.review && !saved.appKeys.gitLog) { const { review, ...rest } = saved.appKeys; next.appKeys = { ...rest, gitLog: review }; }
   if (saved.statusItems && !saved.statusLeft) next.statusItems = [...saved.statusItems.filter(id => !addedWithLayout.includes(id)), ...addedWithLayout];
@@ -149,7 +151,7 @@ export const defaultSettings: Settings = {
   gitLogHeight: 380, gitLogDock: false, gitLogLimit: 5000, gitBranchesWidth: 230, gitDetailsWidth: 400,
   gitSort: 'date', gitLinear: false, gitFirstParent: false, gitNoMerges: false,
   gitCompactRefs: true, gitTagNames: false, gitLongEdges: false, gitCommitTime: false, gitRefsLeft: false, gitColumns: ['author', 'date'],
-  gitMine: true, gitMerges: true, gitCurrent: true, gitPrettyDate: true, gitSaturation: 40, gitBrightness: 65,
+  gitMine: true, gitMerges: true, gitCurrent: true, gitPrettyDate: true, gitSaturation: 60, gitBrightness: 85,
   gitDetails: true, gitDiffPreview: false, gitFilesByDir: true, gitBranchesPane: true, gitBranchClick: 'none', gitBranchDirs: true, gitBranchTags: false, gitFavorites: ['main', 'master', 'origin/main', 'origin/master'],
   gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false, tipsVersion: 1
 };
