@@ -55,7 +55,7 @@ export function MermaidBlock({ code }: { code: string }) {
         </div>
       </header>
       {preview ? <button type="button" className="md-mermaid-preview" tabIndex={-1} aria-label="다이어그램 크게 보기" aria-haspopup="dialog" onClick={() => setOpen(true)}>
-        <img src={preview} alt="" draggable={false} />
+        <img src={preview} alt="" draggable={false} onError={() => { setSvg(null); setFailed(true); }} />
       </button> : <div className="md-mermaid-status" role="status">
         {failed ? '다이어그램을 표시할 수 없습니다.' : '다이어그램 그리는 중…'}
       </div>}
