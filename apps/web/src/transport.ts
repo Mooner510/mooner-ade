@@ -16,7 +16,8 @@ export type RemoteHello = { scope: 'view' | 'control'; api: string[]; messages: 
 // a chat's sandboxed UI frame never gets it) and passes what the PC said in the URL: `#remote=<base64url JSON of the hello>`.
 // Page → app: {k:'call', id, action, input} · {k:'connect'} · {k:'send', message} · {k:'copy', text} · {k:'haptic'} · {k:'close'} · {k:'back', handled}
 // App → page: {k:'result', id, ok, value | error} · {k:'message', text} · {k:'state', open} · {k:'back'}
-type Native = { postMessage(text: string): void; addEventListener(type: 'message', listener: (event: { data: string }) => void): void };
+// `client` is set by a desktop window's preload (another PC's ADE shown in a window of this PC); the phone app does not set it.
+type Native = { client?: string; postMessage(text: string): void; addEventListener(type: 'message', listener: (event: { data: string }) => void): void };
 const native = (globalThis as unknown as { AdeRemoteNative?: Native }).AdeRemoteNative;
 
 function readHello(): RemoteHello | null {
@@ -29,6 +30,8 @@ function readHello(): RemoteHello | null {
 }
 export const hello = readHello();
 export const isRemote = Boolean(native && hello);
+// What shows this page: the phone app, or a window of another PC's MoonerADE. Fonts and the green frame differ (mobile.css, style.css).
+export const remoteClient: 'phone' | 'desktop' | null = isRemote ? (native?.client === 'desktop' ? 'desktop' : 'phone') : null;
 const allowedApi = new Set(hello?.api ?? []), allowedMessages = new Set(hello?.messages ?? []);
 // The desktop window may do everything; a phone only what its PC allows, so the UI can hide what would only be refused.
 export const can = (action: string) => !hello || allowedApi.has(action);
@@ -36,7 +39,7 @@ export const canSend = (type: string) => !hello || allowedMessages.has(type);
 // A phone paired for viewing: it sees everything live but changes nothing.
 export const readOnly = Boolean(hello && hello.scope !== 'control');
 // The stylesheet hides what such a phone could only be refused (mobile.css, [data-remote]).
-if (hello && typeof document !== 'undefined') document.documentElement.dataset.remote = hello.scope;
+if (hello && typeof document !== 'undefined') { document.documentElement.dataset.remote = hello.scope; if (remoteClient) document.documentElement.dataset.remoteClient = remoteClient; }
 
 const post = (value: object) => native!.postMessage(JSON.stringify(value));
 const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
