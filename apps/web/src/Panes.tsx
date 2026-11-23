@@ -355,6 +355,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (bottom > box.scrollTop + box.clientHeight || bottom - cellHeight * 2 < box.scrollTop) box.scrollTop = Math.max(0, bottom - box.clientHeight);
       if (right > box.scrollLeft + box.clientWidth || right - cellWidth * 2 < box.scrollLeft) box.scrollLeft = Math.max(0, right - box.clientWidth);
     };
+    let resizeAnchor: { atBottom: boolean; fromBottom: number } | null = null, anchorTimer = 0;
     const layout = () => {
       const box = host.current;
       if (box?.clientWidth && box.clientHeight) {
@@ -362,7 +363,16 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) wanted = { cols: proposed.cols, rows: proposed.rows };
       }
       const target = serverSize ?? wanted;
-      if (target && (terminal.cols !== target.cols || terminal.rows !== target.rows)) terminal.resize(target.cols, target.rows);
+      if (target && (terminal.cols !== target.cols || terminal.rows !== target.rows)) {
+        // A split resizes the pane through every size of its spring: reflow at a tiny width loses the place, so the position
+        // from before the burst (at the bottom, or this many lines above it) is put back after each step.
+        const buffer = terminal.buffer.active;
+        resizeAnchor ??= { atBottom: buffer.viewportY >= buffer.baseY, fromBottom: buffer.baseY - buffer.viewportY };
+        terminal.resize(target.cols, target.rows);
+        const after = terminal.buffer.active, anchor = resizeAnchor;
+        if (anchor.atBottom) terminal.scrollToBottom(); else terminal.scrollToLine(Math.max(0, after.baseY - anchor.fromBottom));
+        clearTimeout(anchorTimer); anchorTimer = window.setTimeout(() => { resizeAnchor = null; }, 300);
+      }
       const differs = Boolean(serverSize && wanted && (serverSize.cols !== wanted.cols || serverSize.rows !== wanted.rows));
       const show = () => {
         otherTimer = 0;
@@ -570,7 +580,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     // A size that arrived before this pane mounted (a hidden pane is never measured, so `resize` above did not draw it).
     if (serverSize) layout();
     const initial = bus.buffers.get(id); if (initial) receive({ ...initial, data: initial.data.slice(-262144), reset: true });
-    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); terminal.textarea?.removeEventListener('focus', anchorToast); terminal.textarea?.removeEventListener('blur', releaseToast); releaseToast(); clearTimeout(retryTimer); clearTimeout(watchTimer); clearTimeout(composedEnter); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('contextmenu', rightClick); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); bus.sizeListeners.delete(id); clearTimeout(otherTimer); claimSize.current = () => {}; layoutRef.current = () => {}; webglRef.current = null; terminal.dispose(); term.current = null; };
+    return () => { tmuxGuide.cancel(); terminal.textarea?.removeEventListener('blur', tmuxGuide.cancel); terminal.textarea?.removeEventListener('focus', anchorToast); terminal.textarea?.removeEventListener('blur', releaseToast); releaseToast(); clearTimeout(retryTimer); clearTimeout(watchTimer); clearTimeout(composedEnter); clearTimeout(anchorTimer); checkAgent.current = () => {}; flushQueue.current = () => {}; scrollAfterReplay.current = () => {}; cancelAnimationFrame(scrollFrame); progress.dispose(); osc52.dispose(); pasteHost.removeEventListener('paste', pasteImage, true); pasteHost.removeEventListener('contextmenu', rightClick); pasteHost.removeEventListener('dragover', dragFiles); pasteHost.removeEventListener('drop', dropFiles); observer.disconnect(); bus.listeners.delete(id); bus.sizeListeners.delete(id); clearTimeout(otherTimer); claimSize.current = () => {}; layoutRef.current = () => {}; webglRef.current = null; terminal.dispose(); term.current = null; };
   }, [id, bus]);
   useEffect(() => { if (visible && replayScroll.current) { layoutRef.current(); scrollAfterReplay.current(); } }, [visible]);
   // WebGL contexts are reserved for visible panes, but a pane that is hidden keeps its context until a visible pane needs the slot:
