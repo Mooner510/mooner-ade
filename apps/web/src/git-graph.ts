@@ -257,12 +257,13 @@ export function layoutGraph(graph: Graph, view: View, order: number[], options: 
   let maxWidth = 1;
   for (let row = 0; row < rows; row++) {
     const node = order[row], key = layoutIndex[node];
-    // elements: the node (-1) and the passing edges, by layout index; a node before edges of the same index; edges by their ends
+    // elements: the node (-1) and the passing edges, by layout index; edges before a node of the same index (a long edge to an already
+    // walked parent keeps its column straight, the merged branch's commits go beside it); edges by their ends
     const elements = [-1, ...passing[row]];
     elements.sort((a, b) => {
       const ka = a < 0 ? key : edges[a].key, kb = b < 0 ? key : edges[b].key;
       if (ka !== kb) return ka - kb;
-      if (a < 0) return -1; if (b < 0) return 1;
+      if (a < 0) return 1; if (b < 0) return -1;
       return edges[a].up - edges[b].up || (edges[a].down < 0 ? Infinity : edges[a].down) - (edges[b].down < 0 ? Infinity : edges[b].down);
     });
     elements.forEach((element, x) => {
@@ -315,16 +316,11 @@ export function javaHash(name: string) {
   for (let i = 0; i < name.length; i++) value = (Math.imul(value, 31) + name.charCodeAt(i)) | 0;
   return value;
 }
-// DefaultColorGenerator: an RGB seed from the id, of which only the hue is kept; saturation and brightness come from the theme
-// (0.4 / 0.65 by default, adjustable in the settings). Id 0 has no colour of its own (null: the UI uses the muted text colour).
-export function graphColor(id: number, saturation = 0.4, brightness = 0.65): string | null {
+// A colour per id: the hue steps by the golden angle, so consecutive ids (neighbouring lanes) and unrelated ids (branch names hashed by
+// javaHash) land far apart on the wheel; saturation and brightness are the settings. Id 0 has no colour of its own (null: the UI uses the muted text colour).
+export function graphColor(id: number, saturation = 0.6, brightness = 0.85): string | null {
   if (id === 0) return null;
-  const channel = (factor: number, add: number) => Math.abs(((Math.imul(id, factor) + add) | 0) % 100) + 70;
-  const r = channel(200, 30) / 255, g = channel(130, 50) / 255, b = channel(90, 100) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
-  let hue = 0;
-  if (d) hue = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  hue = (hue * 60 + 360) % 360;
+  const hue = (((id * 137.508) % 360) + 360) % 360;
   const c = brightness * saturation, x = c * (1 - Math.abs(((hue / 60) % 2) - 1)), m = brightness - c;
   const [rr, gg, bb] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
   const hex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');

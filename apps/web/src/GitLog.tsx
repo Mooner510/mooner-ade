@@ -710,20 +710,26 @@ type GraphCellProps = { layout: Layout; row: number; color(id: number): string; 
   onHoverEdge(edge: number | null): void; onClickEdge(edge: number): void; onArrow(edge: number, down: boolean): void; describe(row: number): string };
 const GraphCell = memo(function GraphCell({ layout, row, color, hover, fullIndex, isHead, onHoverEdge, onClickEdge, onArrow, describe }: GraphCellProps) {
   const { segments, arrows } = rowDrawing(layout, row);
+  // an edge's upper and lower halves in this row are one line: two round-capped halves would overlap into a bead at the row's middle
+  const paths: { edge: number; color: number; dotted: boolean; points: [number, number][] }[] = [];
+  for (const g of segments) {
+    const last = paths[paths.length - 1], end = last?.points[last.points.length - 1];
+    if (last && last.edge === g.edge && end[0] === g.x1 && end[1] === g.y1) last.points.push([g.x2, g.y2]);
+    else paths.push({ edge: g.edge, color: g.color, dotted: g.dotted, points: [[g.x1, g.y1], [g.x2, g.y2]] });
+  }
   const width = Math.max(1, layout.width[row]) * LANE, mid = ROW / 2, cx = (x: number) => x * LANE + LANE / 2;
   const lit = (edge: number) => { if (!hover) return false; const e = layout.edges[edge]; return hover.has(fullIndex(e.up)) && (e.down < 0 || hover.has(fullIndex(e.down))); };
   const nodeLit = hover?.has(fullIndex(row));
   const dash = (ROW / 2 - 2);
   const head = 0.3 * ROW, ax = head * Math.sqrt(1 - 0.7), ay = head * Math.sqrt(0.7);
   return <svg className="git-graph" width={width} height={ROW} viewBox={`0 0 ${width} ${ROW}`} aria-hidden="true">
-    {segments.map((s, i) => {
-      const strong = lit(s.edge);
-      const props = { x1: cx(s.x1), y1: s.y1 * ROW, x2: cx(s.x2), y2: s.y2 * ROW };
+    {paths.map((s, i) => {
+      const strong = lit(s.edge), points = s.points.map(([x, y]) => `${cx(x)},${y * ROW}`).join(' ');
       return <g key={i}>
-        {strong && <line {...props} className="git-halo" strokeWidth={4} />}
-        <line {...props} stroke={color(s.color)} strokeWidth={strong ? 2.5 : 1.5} strokeLinecap="round" strokeDasharray={s.dotted ? `2 ${dash}` : undefined} />
-        <line {...props} className="git-hit" strokeWidth={7} onPointerEnter={() => onHoverEdge(s.edge)} onPointerLeave={() => onHoverEdge(null)} onMouseDown={event => event.stopPropagation()} onClick={() => onClickEdge(s.edge)}>
-          <title>{s.dotted ? '접힌 커밋 펼치기' : '이 선형 브랜치 접기'}</title></line>
+        {strong && <polyline points={points} className="git-halo" strokeWidth={4} fill="none" />}
+        <polyline points={points} fill="none" stroke={color(s.color)} strokeWidth={strong ? 2.5 : 1.5} strokeLinejoin="round" strokeDasharray={s.dotted ? `2 ${dash}` : undefined} />
+        <polyline points={points} fill="none" className="git-hit" strokeWidth={7} onPointerEnter={() => onHoverEdge(s.edge)} onPointerLeave={() => onHoverEdge(null)} onMouseDown={event => event.stopPropagation()} onClick={() => onClickEdge(s.edge)}>
+          <title>{s.dotted ? '접힌 커밋 펼치기' : '이 선형 브랜치 접기'}</title></polyline>
       </g>;
     })}
     {arrows.map((a, i) => {

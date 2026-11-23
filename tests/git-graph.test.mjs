@@ -20,6 +20,14 @@ test('a merged branch: main line stays in the first column, the branch beside it
   assert.equal(result.maxWidth, 2);
 });
 
+test('a merged branch\'s commit sits right of a long edge that shares its index, so that edge stays straight', () => {
+  // V merges D into a line (S1) that main (A) already walked: V's edge to S1 and the D chain share one index
+  const commits = make([['A', ['S1'], 100], ['V', ['S1', 'D'], 90], ['D', ['B'], 80], ['S1', ['B'], 70], ['B', [], 10]]);
+  const { result, order } = layout(commits, [ref('main', 'A'), ref('feat', 'V')]);
+  assert.deepEqual(order, ['A', 'V', 'D', 'S1', 'B']);
+  assert.deepEqual(Array.from(result.nodeX), [0, 1, 2, 0, 0]);
+});
+
 test('topological sort puts the merged branch right below the merge; linearize keeps it above the main-line commits', () => {
   const commits = make([['M', ['A', 'F2'], 50], ['A', ['B'], 45], ['F2', ['F1'], 40], ['F1', ['B'], 30], ['B', [], 10]]);
   assert.deepEqual(layout(commits, [], 'date').order, ['M', 'A', 'F2', 'F1', 'B']);
