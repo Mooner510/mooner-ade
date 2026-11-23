@@ -89,12 +89,8 @@ export function validateAppState(state) {
   return { version: 1, openProjects: state.openProjects.map(({ id, root }) => ({ id, root })), activeProjectId: state.activeProjectId, settings: state.settings ?? null };
 }
 
-// The project layout the UI saves; only these fields are kept, so nothing unvalidated reaches state.json.
-export function validateUi(ui) {
-  const invalid = () => { throw fault('INVALID_INPUT', '잘못된 화면 상태입니다.'); };
-  if (!ui || typeof ui !== 'object' || Array.isArray(ui)) invalid();
-  if (typeof ui.gitRepositoryId !== 'string' || ui.gitRepositoryId.length > 128) invalid();
-  if (typeof ui.focus !== 'string' || ui.focus.length > 8192) invalid();
+// The tab/pane layout every device shares: a tab created on the phone shows on the PC and the other way round (docs/REMOTE_UI.md).
+export function validateLayout(paneTabs, invalid = () => { throw fault('INVALID_INPUT', '잘못된 화면 상태입니다.'); }) {
   function sizes(values, count) {
     if (!Array.isArray(values) || values.length !== count || values.some(n => typeof n !== 'number' || !Number.isFinite(n) || n <= 0)) invalid();
   }
@@ -116,15 +112,25 @@ export function validateUi(ui) {
     }
   }
   // Warp-style tabs: each tab owns a pane tree.
-  if (!Array.isArray(ui.paneTabs) || ui.paneTabs.length > 16) invalid();
+  if (!Array.isArray(paneTabs) || paneTabs.length > 16) invalid();
   const tabIds = new Set();
-  for (const tab of ui.paneTabs) {
+  for (const tab of paneTabs) {
     if (!tab || typeof tab !== 'object' || typeof tab.id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(tab.id) || tabIds.has(tab.id)) invalid();
     tabIds.add(tab.id);
     if (tab.title !== undefined && (typeof tab.title !== 'string' || tab.title.length > 200)) invalid();
     if (tab.focus !== undefined && (typeof tab.focus !== 'string' || tab.focus.length > 128)) invalid();
     if (tab.pane !== null) pane(tab.pane, new Set());
   }
+  return paneTabs.map(({ id, title, focus, pane }) => ({ id, ...(title !== undefined && { title }), ...(focus !== undefined && { focus }), pane }));
+}
+
+// The project layout the UI saves; only these fields are kept, so nothing unvalidated reaches state.json.
+export function validateUi(ui) {
+  const invalid = () => { throw fault('INVALID_INPUT', '잘못된 화면 상태입니다.'); };
+  if (!ui || typeof ui !== 'object' || Array.isArray(ui)) invalid();
+  if (typeof ui.gitRepositoryId !== 'string' || ui.gitRepositoryId.length > 128) invalid();
+  if (typeof ui.focus !== 'string' || ui.focus.length > 8192) invalid();
+  const paneTabs = validateLayout(ui.paneTabs, invalid);
   if (typeof ui.activeTab !== 'string' || ui.activeTab.length > 128) invalid();
   if (typeof ui.rightVisible !== 'boolean') invalid();
   const expanded = ui.projectTreeExpanded;
@@ -132,6 +138,6 @@ export function validateUi(ui) {
   return {
     gitRepositoryId: ui.gitRepositoryId, focus: ui.focus, activeTab: ui.activeTab, rightVisible: ui.rightVisible,
     ...(expanded !== undefined && { projectTreeExpanded: [...new Set(expanded)] }),
-    paneTabs: ui.paneTabs.map(({ id, title, focus, pane }) => ({ id, ...(title !== undefined && { title }), ...(focus !== undefined && { focus }), pane }))
+    paneTabs
   };
 }
