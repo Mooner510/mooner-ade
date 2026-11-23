@@ -151,14 +151,14 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return <span className="icon material-symbols-outlined" style={{ fontSize: size + 2 }} aria-hidden="true">{glyphs[name as keyof typeof glyphs]}</span>;
 }
 
-type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none'; dot?: boolean; action?: string };
+type IconButtonProps = { icon: IconName; label: string; keys?: string; onClick?(event: MouseEvent<HTMLButtonElement>): void; className?: string; pressed?: boolean; disabled?: boolean; size?: number; tip?: 'header' | 'none'; dot?: boolean; action?: string; busy?: boolean };
 // Close buttons keep their accessible name without adding a tooltip to the familiar X.
 
-export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot, action }: IconButtonProps) {
+export function IconButton({ icon, label, keys, onClick, className = '', pressed, disabled, size, tip, dot, action, busy }: IconButtonProps) {
   const actionKeys = useActionKeys(action), shown = keys ?? actionKeys;
   const text = shown ? `${label} (${shown})` : label, styled = icon !== 'x' && tip !== 'none';
   // dot: a small red mark for something unread behind the button (the label should say so too).
-  return <button type="button" className={`icon-btn ${className}`} data-tip={styled ? text : undefined} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}><Icon name={icon} size={size} />{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
+  return <button type="button" className={`icon-btn ${className}`} data-tip={styled ? text : undefined} aria-label={label} aria-pressed={pressed} aria-busy={busy || undefined} disabled={disabled || busy} onClick={onClick}>{busy ? <span className="icon-spin" aria-hidden="true" /> : <Icon name={icon} size={size} />}{dot && <span className="icon-dot" aria-hidden="true" />}</button>;
 }
 
 // One split button for every pane header: it opens a small popover with the two directions. Native popover (top layer), so the pane edges never clip it.
