@@ -400,7 +400,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   // so the button stays out of the way unless an installed plugin still uses GitHub. Signed out it is there as before.
   const showGithub = Boolean(state.github?.available) && (!state.hub?.signedIn || installed.some(plugin => plugin.update?.source?.kind === 'github'));
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
-  const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} onOpen={() => setSelected(plugin.folder)} /></li>)}</ul>;
+  const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!))} /></li>)}</ul>;
 
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
@@ -467,20 +467,25 @@ function StatePill({ state }: { state: State }) {
 }
 
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
-function PluginRow({ plugin, onOpen }: { plugin: PluginInfo; onOpen(): void }) {
-  const left = setupLeft(plugin);
-  return <button type="button" className="plugin-row setting-hit" data-tone={stateTone(plugin.state)} onClick={onOpen} aria-label={`${plugin.name} 열기`}>
+function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; onOpen(): void; onUpdate(): void }) {
+  const left = setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
+  // A div, not a button: the update button inside it must not be a button within a button.
+  return <div role="button" tabIndex={0} className="plugin-row setting-hit" data-tone={stateTone(plugin.state)} onClick={onOpen} aria-label={`${plugin.name} 열기`}
+    onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onOpen(); } }}>
     <PluginMark plugin={plugin} />
     <span className="plugin-row-text">
       <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
         {left > 0 && <span className="plugin-tag" data-tone="warn">설정 {left}단계 남음</span>}
-        {hasUpdate(plugin) && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update!.latest}</span>}
-        {hasUpdate(plugin) && <i className="plugin-new-dot" title="업데이트 있음" aria-label="업데이트 있음" />}</span>
+        {hasUpdate(plugin) && !canUpdate && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update!.latest}</span>}
+        {hasUpdate(plugin) && !canUpdate && <i className="plugin-new-dot" title="업데이트 있음" aria-label="업데이트 있음" />}</span>
       {plugin.description && <span className="plugin-row-desc">{plugin.description}</span>}
     </span>
+    {canUpdate && <span className="plugin-row-update" onClick={event => event.stopPropagation()}>
+      <BusyButton className="primary" busy={Boolean(busy)} running={busy === `${plugin.folder}:update`} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
+    </span>}
     <StatePill state={plugin.state} />
     <Icon name="chevronRight" size={16} />
-  </button>;
+  </div>;
 }
 
 function Section({ title, hint, action, children }: { title: string; hint?: ReactNode; action?: ReactNode; children: ReactNode }) {
