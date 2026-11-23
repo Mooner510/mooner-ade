@@ -1889,7 +1889,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-input-field { position: relative; flex: 1; min-width: 0; display: flex; }
 .chat-input-field.has-command > textarea { color: transparent; caret-color: var(--fg); scrollbar-gutter: stable; }
 .chat-input-mirror { position: absolute; inset: 0; overflow: hidden; pointer-events: none; scrollbar-gutter: stable; color: var(--fg); font: inherit; font-size: var(--chat-font); line-height: 1.5; padding: 3px 0 1px; white-space: pre-wrap; overflow-wrap: break-word; }
-.chat-input-command { color: var(--agent); font-weight: 600; }
+.chat-input-command { color: var(--agent); } /* no font-weight: the textarea above is transparent with regular glyphs; a bolder (wider) command here would push the text away from the real caret */
 .chat-input-row textarea { flex: 1; min-width: 0; padding: 3px 0 1px; font-size: var(--chat-font); } /* 3px/1px, not 2px/2px: the ink of Hangul sits about a pixel above the middle of its line, so the text moves down to the controls' centre line */
 .chat-attach { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; padding: 0; color: var(--muted); cursor: pointer; }
 .chat-attach:hover { background: var(--hover); color: var(--fg); }
@@ -1928,6 +1928,8 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .chat-command-args { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 5px 10px 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
 .chat-command-args code { font-family: var(--mono); font-size: 12px; color: var(--faint); }
 .chat-command-args span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-command-args.stacked { flex-direction: column; align-items: stretch; gap: 1px; } /* hint on one line, description under it */
+.chat-command-args.stacked code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-statusbar { flex: none; width: 100%; max-width: var(--chat-width); margin: 0 auto; padding: 8px 20px 0; border: 0; background: transparent; min-height: 16px; line-height: 1.2; height: auto; font-size: 11.5px; color: var(--muted); }
 .chat-statusbar:empty, .chat-statusbar:has(.status-left:empty):has(.status-right:empty) { display: none; }
 .chat-usage .chat-usage-title { padding-top: 6px; border-top: 1px solid var(--border); }
