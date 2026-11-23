@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LocalWorkspace } from '../apps/local-server/src/runtime.js';
-import { projectDirectory, readProjectFile, writeProjectFile } from '../apps/local-server/src/project-files.js';
+import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from '../apps/local-server/src/project-files.js';
 import { FileBuffer } from '../apps/web/src/file-buffer.ts';
 
 async function project(t) {
@@ -141,4 +141,42 @@ test('a touch that leaves the text alone is not an external edit, and typing doe
   await writeFile(disk, 'theirs\n');
   await buffer.refresh();
   assert.ok(buffer.get().conflict);
+});
+
+test('the project tree creates, moves, copies and deletes inside the project only', async t => {
+  const { dir, workspace } = await project(t);
+  const list = async at => (await readdir(path.join(dir, at))).sort();
+  await createProjectEntry(workspace, { path: 'src', folder: true });
+  await createProjectEntry(workspace, { path: 'src/deep/er/a.txt', folder: false });
+  assert.deepEqual(await list('src/deep/er'), ['a.txt']);
+  await assert.rejects(createProjectEntry(workspace, { path: 'src', folder: true }), { code: 'EXISTS' });
+  await assert.rejects(createProjectEntry(workspace, { path: '../out.txt', folder: false }), { code: 'INVALID_INPUT' });
+  await assert.rejects(createProjectEntry(workspace, { path: '.git/x', folder: false }), { code: 'INVALID_INPUT' });
+  await assert.rejects(createProjectEntry(workspace, { path: 'a//b', folder: false }), { code: 'INVALID_INPUT' });
+
+  await writeFile(path.join(dir, 'b.txt'), 'B');
+  await mkdir(path.join(dir, 'dest'));
+  await writeFile(path.join(dir, 'dest', 'b.txt'), 'taken');
+  // All or nothing: one collision keeps every other item where it was.
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'src/deep/er/a.txt', to: 'dest/a.txt' }, { from: 'b.txt', to: 'dest/b.txt' }] }), { code: 'EXISTS' });
+  assert.deepEqual(await list('src/deep/er'), ['a.txt']);
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'src', to: 'src/deep/src' }] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'nope.txt', to: 'x.txt' }] }), { code: 'NOT_FOUND' });
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: '.', to: 'root' }] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'b.txt', to: '../b.txt' }] }), { code: 'INVALID_INPUT' });
+  await moveProjectEntries(workspace, { moves: [{ from: 'src/deep/er/a.txt', to: 'dest/a.txt' }, { from: 'b.txt', to: 'renamed.txt' }] });
+  assert.deepEqual(await list('.'), ['dest', 'renamed.txt', 'src']);
+  assert.equal(await readFile(path.join(dir, 'dest', 'a.txt'), 'utf8'), '');
+
+  // A name taken in the target folder gets " copy", " copy 2"; folders copy with their contents.
+  assert.deepEqual((await copyProjectEntries(workspace, { paths: ['renamed.txt'], dir: '.' })).created, ['renamed copy.txt']);
+  assert.deepEqual((await copyProjectEntries(workspace, { paths: ['renamed.txt'], dir: '.' })).created, ['renamed copy 2.txt']);
+  assert.deepEqual((await copyProjectEntries(workspace, { paths: ['dest'], dir: 'src' })).created, ['src/dest']);
+  assert.deepEqual(await list('src/dest'), ['a.txt', 'b.txt']);
+  await assert.rejects(copyProjectEntries(workspace, { paths: ['src'], dir: 'src/dest' }), { code: 'INVALID_INPUT' });
+
+  await assert.rejects(deleteProjectEntries(workspace, { paths: ['.'] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(deleteProjectEntries(workspace, { paths: ['../x'] }), { code: 'INVALID_INPUT' });
+  await deleteProjectEntries(workspace, { paths: ['src', 'renamed copy.txt'] });
+  assert.deepEqual(await list('.'), ['dest', 'renamed copy 2.txt', 'renamed.txt']);
 });

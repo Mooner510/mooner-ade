@@ -113,3 +113,61 @@ export function writeProjectFile(workspace, { path: file, revision, content }) {
     } finally { await fs.unlink(temp).catch(() => {}); }
   });
 }
+
+// ---- Creating, moving, copying and deleting from the project tree. Every path goes through targetOf, so nothing leaves the project or touches .git. ----
+const taken = name => fault('EXISTS', `같은 이름이 이미 있습니다: ${name}`, 409);
+const missing = name => fault('NOT_FOUND', `찾을 수 없습니다: ${name}`, 404);
+const lstat = target => fs.lstat(target).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+const names = list => { if (!Array.isArray(list) || !list.length || list.length > 500 || list.some(item => typeof item !== 'string' || !item || item === '.')) throw fault('INVALID_INPUT', '대상이 올바르지 않습니다.'); return list; };
+
+export async function createProjectEntry(workspace, { path: file, folder }) {
+  const parts = typeof file === 'string' ? file.split('/') : [];
+  if (!parts.length || parts.some(part => !part || part === '.')) throw fault('INVALID_INPUT', '이름이 올바르지 않습니다.');
+  // "a/b/c.txt" makes the missing folders on the way, each checked like any other project path.
+  for (let at = 1; at < parts.length; at++) await fs.mkdir(await targetOf(workspace, parts.slice(0, at).join('/'))).catch(error => { if (error.code !== 'EEXIST') throw error; });
+  const target = await targetOf(workspace, file);
+  try { if (folder) await fs.mkdir(target); else await (await fs.open(target, 'wx')).close(); }
+  catch (error) { throw error.code === 'EEXIST' ? taken(file) : error; }
+}
+
+// All-or-nothing preflight: every source exists, no destination exists (a case-only rename on a case-insensitive disk is the same entry), none moves into itself.
+export async function moveProjectEntries(workspace, { moves }) {
+  if (!Array.isArray(moves)) throw fault('INVALID_INPUT', '대상이 올바르지 않습니다.');
+  names(moves.map(move => move?.from)); names(moves.map(move => move?.to));
+  const steps = [], seen = new Set();
+  for (const { from, to } of moves) {
+    const source = await targetOf(workspace, from), dest = await targetOf(workspace, to), entry = await lstat(source);
+    if (!entry) throw missing(from);
+    if (source === dest) continue;
+    if (dest.startsWith(source + path.sep)) throw fault('INVALID_INPUT', '폴더를 자기 자신 안으로 옮길 수 없습니다.');
+    const there = await lstat(dest);
+    if ((there && (there.ino !== entry.ino || there.dev !== entry.dev)) || seen.has(dest)) throw taken(to);
+    seen.add(dest); steps.push({ source, dest });
+  }
+  for (const { source, dest } of steps) await fs.rename(source, dest);
+}
+
+// Copies into `dir`; a name already taken there gets " copy", " copy 2"… (like a Finder duplicate). Returns the new paths.
+export async function copyProjectEntries(workspace, { paths, dir }) {
+  const folder = await targetOf(workspace, typeof dir === 'string' && dir ? dir : '.');
+  if (!(await lstat(folder))?.isDirectory()) throw fault('INVALID_INPUT', '폴더 경로를 지정하세요.');
+  // targetOf answers in real (symlink-resolved) paths, so the new path is cut against the real root too.
+  const created = [], root = await fs.realpath(workspace.root);
+  for (const from of names(paths)) {
+    const source = await targetOf(workspace, from), entry = await lstat(source);
+    if (!entry) throw missing(from);
+    if (folder === source || folder.startsWith(source + path.sep)) throw fault('INVALID_INPUT', '폴더를 자기 자신 안에 복사할 수 없습니다.');
+    const base = path.basename(source), dot = entry.isDirectory() ? 0 : base.lastIndexOf('.'), stem = dot > 0 ? base.slice(0, dot) : base, ext = dot > 0 ? base.slice(dot) : '';
+    let name = base;
+    for (let n = 1; await lstat(path.join(folder, name)); n++) name = `${stem} copy${n > 1 ? ` ${n}` : ''}${ext}`;
+    await fs.cp(source, path.join(folder, name), { recursive: true, errorOnExist: true, force: false, filter: entry => !metadata(path.basename(entry)) });
+    created.push(path.relative(root, path.join(folder, name)).split(path.sep).join('/'));
+  }
+  return { created };
+}
+
+export async function deleteProjectEntries(workspace, { paths }) {
+  const targets = [];
+  for (const file of names(paths)) targets.push(await targetOf(workspace, file));
+  for (const target of targets) await fs.rm(target, { recursive: true, force: true });
+}
