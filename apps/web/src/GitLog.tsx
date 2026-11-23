@@ -612,9 +612,9 @@ export function GitLog(props: GitLogProps) {
   </div>;
   const branchTools = <>
     <IconButton icon="plus" label="새 브랜치" onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); newBranch(ref?.ref ?? data?.head.sha ?? '', ref?.name ?? currentName); }} />
-    <IconButton icon="sync" label="선택 항목 업데이트" disabled={!allRefs.find(item => item.ref === branchSel && item.kind === 'local' && item.upstream)} onClick={() => update(allRefs.find(item => item.ref === branchSel) ?? null)} />
+    <IconButton icon="sync" label="선택 항목 업데이트" busy={busy === '업데이트'} disabled={!allRefs.find(item => item.ref === branchSel && item.kind === 'local' && item.upstream)} onClick={() => update(allRefs.find(item => item.ref === branchSel) ?? null)} />
     <IconButton icon="trash" label="브랜치 삭제" disabled={!allRefs.find(item => item.ref === branchSel && !item.current)} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) void deleteBranch(ref); }} />
-    <IconButton icon="fetch" label="모든 원격 Fetch" disabled={!data?.remotes.length} onClick={fetchAll} />
+    <IconButton icon="fetch" label="모든 원격 Fetch" busy={busy === 'Fetch'} disabled={!data?.remotes.length} onClick={fetchAll} />
     <IconButton icon="star" label="즐겨찾기 고정/해제" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) toggleFavorite(ref); }} />
     <IconButton icon="target" label="브랜치 최신 커밋으로 이동" disabled={!branchSel} onClick={() => { const ref = allRefs.find(item => item.ref === branchSel); if (ref) jump(ref.sha); }} />
     <span className="spacer" />
@@ -690,9 +690,9 @@ export function GitLog(props: GitLogProps) {
       <span className="spacer" />
       {data && current && <span className="git-head-branch"><Icon name="branch" size={13} />{current.name}{current.ahead ? <small className="out">↑{current.ahead}</small> : null}{current.behind ? <small className="in">↓{current.behind}</small> : null}</span>}
       {data && !current && data.head.sha && <span className="git-head-branch warn"><Icon name="alert" size={13} />Detached HEAD</span>}
-      {data && data.remotes.length > 0 && <IconButton icon="fetch" label="원격 변경 가져오기 (Fetch)" onClick={fetchAll} />}
-      {data && current?.upstream && <IconButton icon="sync" label={`업데이트 (${settings.gitUpdateMethod === 'rebase' ? '리베이스' : '머지'})`} onClick={() => update(null)} />}
-      {data && current && <IconButton icon="push" label="커밋 올리기 (Push)" onClick={() => push(null)} />}
+      {data && data.remotes.length > 0 && <IconButton icon="fetch" label="원격 변경 가져오기 (Fetch)" busy={busy === 'Fetch'} onClick={fetchAll} />}
+      {data && current?.upstream && <IconButton icon="sync" label={`업데이트 (${settings.gitUpdateMethod === 'rebase' ? '리베이스' : '머지'})`} busy={busy === '업데이트'} onClick={() => update(null)} />}
+      {data && current && <IconButton icon="push" label="커밋 올리기 (Push)" busy={busy === 'Push'} onClick={() => push(null)} />}
       <IconButton icon="x" tip="none" label="닫기 (Shift+Esc)" onClick={props.onClose} />
     </header>
     {opBar}

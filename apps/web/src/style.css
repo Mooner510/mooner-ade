@@ -519,6 +519,8 @@ body.resizing .shell { transition: none; }
 .shell.compact .projects-head { justify-content: center; padding: 0 0 6px; flex-direction: column; gap: 6px; }
 .icon-btn { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; flex: none; color: var(--muted); background: transparent; border-color: transparent; border-radius: 6px; }
 .icon-btn:hover { color: var(--fg); background: var(--raised); }
+.icon-btn[aria-busy=true]:disabled { opacity: 1; color: var(--accent); }
+.icon-spin { width: 12px; height: 12px; border: 2px solid var(--border-strong); border-top-color: currentColor; border-radius: 50%; animation: spin .8s linear infinite; }
 .icon-btn[aria-pressed=true] { color: var(--accent); }
 .icon-btn:has(> .icon-dot) { position: relative; }
 .icon-dot { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--error); pointer-events: none; }
