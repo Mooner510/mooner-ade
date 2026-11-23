@@ -236,6 +236,9 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .project-tree-chevron { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; height: 24px; color: var(--muted); }
 .project-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .project-tree-message { padding: 4px 12px; color: var(--muted); }
+.project-tree-notice { color: var(--del); cursor: pointer; white-space: pre-line; }
+.project-tree-row.cut { opacity: .5; }
+.project-tree-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .project-tree-resize { position: absolute; inset: 0 -6px 0 auto; width: 6px; cursor: col-resize; touch-action: none; }
 .project-tree-resize:is(:hover, :focus-visible, :active) { background: var(--accent-soft); }
 .file-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-bottom: 1px solid var(--border); }

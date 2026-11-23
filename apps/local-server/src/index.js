@@ -13,7 +13,7 @@ import { listIdes, openPath, outsideTarget } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
-import { projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
+import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
 import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
@@ -1293,6 +1293,10 @@ async function route(action, input, project) {
     case 'files/directory': return { entries: await projectDirectory(workspace, input.path) };
     case 'files/read': return { file: await readProjectFile(workspace, input.path) };
     case 'files/write': return writeProjectFile(workspace, input);
+    case 'files/create': await createProjectEntry(workspace, input); return {};
+    case 'files/move': await moveProjectEntries(workspace, input); return {};
+    case 'files/copy': return copyProjectEntries(workspace, input);
+    case 'files/delete': await deleteProjectEntries(workspace, input); return {};
     case 'files/list': {
       // For @-mentions in the chat composer: tracked plus untracked-but-not-ignored files, with their folders.
       const cwd = input.path ? await workspace.resolve(text(input.path, '경로')) : workspace.root;

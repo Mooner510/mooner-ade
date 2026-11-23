@@ -1,7 +1,7 @@
 import { appKey, appKeyInTerminal, matches, showAppKey } from './shortcuts';
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
+import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isLeaf, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
@@ -23,7 +23,7 @@ import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { GIT_STATUS_RETRY_MS, errorText, gitStatusPause, notAGitRepository, pushError } from './errors';
 import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { GitLog } from './GitLog';
-import { ProjectTree } from './ProjectTree';
+import { ProjectTree, type TreeHost } from './ProjectTree';
 import { FileBuffer } from './file-buffer';
 import { loadSpec } from './git-graph';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
@@ -392,6 +392,21 @@ ${where}`, [
     if (pending) { openProjectFile(pending.path); return false; }
     return true;
   }
+  // What the project tree needs from the editors: which open files have unsaved edits, tabs that follow a moved file, and a nudge for every tree listing to reload.
+  const treeHost: TreeHost = {
+    confirm: ask.confirm, input: ask.input,
+    dirty: paths => [...fileBuffers.current.values()].filter(buffer => buffer.dirty && paths.some(path => buffer.path === path || buffer.path.startsWith(`${path}/`))).map(buffer => buffer.path),
+    moved(moves) {
+      const remap = (spec: string) => {
+        const path = spec.startsWith('file:') ? spec.slice(5) : '', hit = moves.find(({ from }) => path === from || path.startsWith(`${from}/`));
+        return hit ? `file:${hit.to}${path.slice(hit.from.length)}` : spec;
+      };
+      const retarget = (pane: Pane): Pane => isLeaf(pane) ? (pane.kind === 'editor' ? { ...pane, tabs: pane.tabs?.map(remap), active: pane.active && remap(pane.active) } : pane) : { ...pane, children: pane.children.map(retarget) };
+      commitTabs(refs.paneTabs.current.map(tab => ({ ...tab, pane: tab.pane && retarget(tab.pane) })));
+    },
+    changed: paths => { for (const listener of fileListeners.current) listener(paths); },
+    openWith: (path, folder) => { void askOpen({ path, folder }).catch(report); }
+  };
   async function closeTab(groupId: string, path: string) {
     // The same file open in another group keeps its buffer (and edits), so only the last tab for it asks.
     const elsewhere = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).some(other => other.id !== groupId && other.tabs?.includes(path));
@@ -1230,7 +1245,7 @@ ${where}`, [
     <ErrorToast scope={root} active={active} />
     <div className="workbench">
       <ProjectTree key={project.root} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
-        onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} />
+        onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} host={treeHost} />
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
     {settings.gitLogDock && gitDrawer}
