@@ -1854,10 +1854,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
               if (plain && (event.key === 'Tab' || event.key === 'Enter')) { event.preventDefault(); pickMention(mentions[Math.min(menuAt, mentions.length - 1)]); return; }
             }
             if (event.key === 'Tab' && plain && busy && ctx.settings.followUpQueue && (text.trim() || images.length)) { event.preventDefault(); void submit('queue'); return; }
-            // `/…` lines are one-line commands: typed line breaks and Tab's focus move are blocked (pasted newlines still go in).
-            if (event.key === 'Tab' && plain && text.startsWith('/')) { event.preventDefault(); return; }
+            // A line led by a command this chat knows (`commandHead`; `/file/name` is a path, not a command) is one line: typed line breaks and Tab's focus move are blocked (pasted newlines still go in).
+            if (event.key === 'Tab' && plain && commandHead) { event.preventDefault(); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.altKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
-            else if (event.key === 'Enter' && text.startsWith('/')) event.preventDefault();
+            else if (event.key === 'Enter' && commandHead) event.preventDefault();
             // ↑ with nothing typed takes the last steering message back; otherwise ↑/↓ walk the sent messages (the draft is kept aside and ↓ past the newest brings it back).
             else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && plain) {
               const field = event.currentTarget, up = event.key === 'ArrowUp';

@@ -35,7 +35,7 @@ import { FeedbackCapture } from './FeedbackCapture';
 import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
 import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
-import { isRemote, readOnly } from './transport';
+import { can, isRemote, readOnly } from './transport';
 import { setDrawer, useMobile } from './mobile';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
@@ -58,6 +58,10 @@ type Repository = { id: string; name: string; path: string; worktreeEnabled: boo
 type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Repository[]; terminals: { id: string; exited: boolean; cwd?: string }[]; ui: any };
 // A Warp-style tab: one pane tree of terminals (and editor panes opened next to them).
 type PaneTab = { id: string; title?: string; pane: Pane | null; focus?: string };
+// This window's name on the server's layout broadcasts, so it skips its own echo (`ui/changed.from`).
+const CLIENT = newId();
+// Key order does not matter when two devices' versions of a pane tree are compared.
+const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : 1)) : item);
 const emptyGit: GitState = { branch: '', changes: [], additions: 0, deletions: 0 };
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const formatBytes = (bytes: number) => bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)}GB` : `${Math.round(bytes / 2 ** 20)}MB`;
@@ -257,7 +261,10 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     tabFocus: useRef<Record<string, string>>({}), pending: useRef(new Map<string, string>()), active: useRef(active), started: useRef(false), onMessage: useRef<(message: any) => void>(() => {}),
     gitRefresh: useRef<{ running: Promise<void> | null; again: Promise<void> | null }>({ running: null, again: null }), fsRefresh: useRef(0),
     // A "not a repository" answer pauses polling for this repo list and selection. A different selection, a count change, or the retry delay starts it again.
-    gitQuietUntil: useRef(0), gitQuietKey: useRef('')
+    gitQuietUntil: useRef(0), gitQuietKey: useRef(''),
+    // Layout shared with the other devices: set while a layout that came from one of them is being shown (it is not saved back),
+    // the terminals known to have ended (a late layout must not bring them back) and whether this project's first snapshot is past.
+    fromRemote: useRef(false), gone: useRef(new Set<string>()), snapshotSeen: useRef(false)
   };
   refs.active.current = active;
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
@@ -576,7 +583,7 @@ ${where}`, [
   async function loadProject() {
     // A phone paired for viewing may not open projects; it reads the ones the PC already has open.
     const state = readOnly && projectId ? await api<Snapshot>('snapshot', { projectId }) : await api<Snapshot>('project/open', { path: root });
-    setRestoring(true);
+    setRestoring(true); refs.snapshotSeen.current = false;
     refs.project.current = state; setProject(state); bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({});
     const ui = state.ui || {};
     const nextRepoId = state.repositories.some(repo => repo.id === ui.gitRepositoryId) ? ui.gitRepositoryId : state.repositories[0]?.id || '';
@@ -635,7 +642,11 @@ ${where}`, [
 
   refs.onMessage.current = message => {
     try {
-          if (message.type === 'snapshot') { setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); for (const listener of fileListeners.current) listener([]); }
+          if (message.type === 'ui/changed') { if (message.from !== CLIENT && !restoring && Array.isArray(message.paneTabs)) applyLayout(message.paneTabs); }
+          else if (message.type === 'snapshot') {
+            // After a dropped link the layout may have changed meanwhile; the first snapshot of a project is the one loadProject already used.
+            if (refs.snapshotSeen.current && !restoring && Array.isArray(message.snapshot?.ui?.paneTabs)) applyLayout(message.snapshot.ui.paneTabs); else refs.snapshotSeen.current = true;
+            setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); for (const listener of fileListeners.current) listener([]); }
           else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
           // A plugin started a chat in this project (a header plugin's work): it shows up as a tab.
           else if (message.type === 'plugin/chat') { if (!tabOf(message.id)) void takeOver(undefined, { ...chatLeaf(message.cwd, message.agent), id: message.id }); }
@@ -684,6 +695,7 @@ ${where}`, [
             if (message.cache) setCaches(previous => ({ ...previous, [message.id]: message.cache })); else dropCache(message.id);
           } else if (message.type === 'terminal/exit') {
             dropCache(message.id);
+            if (!message.lost) refs.gone.current.add(message.id);
             // `lost`: the pty-host connection dropped, not the shell. Keep the pane so the saved layout survives and can be revived.
             if (!message.lost) removeTerminalPane(message.id);
             void refresh().catch(report);
@@ -713,11 +725,15 @@ ${where}`, [
     }
   }, [paneTabs]);
   useEffect(() => {
-    // A phone works on its own copy of the layout; the PC's window keeps the one it saved.
-    if (!project?.id || restoring || isRemote) return;
+    // The tabs are one layout for every device: what this device changes is saved (the server tells the others), and what the
+    // others changed is shown here without being sent back (`fromRemote`). A phone saves only the tabs; a view-only phone, or one
+    // whose PC plugin predates `ui/layout`, saves nothing and just follows.
+    if (refs.fromRemote.current) { refs.fromRemote.current = false; return; }
+    if (!project?.id || restoring || (isRemote && !can('ui/layout'))) return;
     const timer = setTimeout(() => {
       const savedTabs = paneTabs.map(tab => ({ id: tab.id, pane: remember(tab.pane), ...(tab.title ? { title: tab.title } : {}), ...(refs.tabFocus.current[tab.id] ? { focus: refs.tabFocus.current[tab.id] } : {}) }));
-      void call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen, projectTreeExpanded: [...treeExpanded] } }).catch(report);
+      void (isRemote ? call('ui/layout', { paneTabs: savedTabs, clientId: CLIENT })
+        : call('ui', { ui: { gitRepositoryId, paneTabs: savedTabs, activeTab, focus, rightVisible: gitOpen, projectTreeExpanded: [...treeExpanded] }, clientId: CLIENT })).catch(report);
     }, 400);
     return () => clearTimeout(timer);
   }, [project?.id, gitRepositoryId, restoring, paneTabs, activeTab, focus, gitOpen, treeExpanded, agentKey, call, report]);
@@ -730,6 +746,29 @@ ${where}`, [
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   }, [project?.id, gitRepositoryId, active, settings.diffRefresh]);
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
+
+  // ---- layout from the other devices ----
+  // Another device changed the tabs: show the same ones. A tab that already matches stays as it is (a launcher not yet chosen,
+  // a pane being dragged); this device's own selected tab and focused pane stay unless they are gone.
+  function applyLayout(incoming: PaneTab[]) {
+    const mine = refs.paneTabs.current, have = new Map(mine.map(tab => [tab.id, tab]));
+    let next: PaneTab[] = incoming.map(tab => {
+      const pane = leafList(tab.pane).filter(leaf => isTerminal(leaf) && refs.gone.current.has(leaf.id)).reduce<Pane | null>((tree, leaf) => tree && remove(tree, leaf.id), tab.pane);
+      const kept = have.get(tab.id);
+      return kept && kept.title === tab.title && canonical(remember(kept.pane)) === canonical(pane) ? kept : { id: tab.id, title: tab.title, focus: tab.focus, pane };
+    });
+    if (!next.length) next = [{ id: newId(), title: undefined, focus: undefined, pane: null }];
+    if (next.length === mine.length && next.every((tab, index) => tab === mine[index])) return;
+    refs.fromRemote.current = true;
+    const focuses: Record<string, string> = {};
+    for (const tab of next) { const at = [refs.tabFocus.current[tab.id], tab.focus].find(id => id && findLeaf(tab.pane, id)); if (at) focuses[tab.id] = at; }
+    refs.tabFocus.current = focuses;
+    const was = refs.activeTab.current, wanted = next.some(tab => tab.id === was) ? was : next[Math.min(Math.max(mine.findIndex(tab => tab.id === was), 0), next.length - 1)].id;
+    commitTabs(next);
+    if (wanted !== was) selectTab(wanted);
+    else if (!findLeaf(next.find(tab => tab.id === wanted)?.pane ?? null, refs.focus.current)) setFocusLeaf(focuses[wanted] || leaves(next.find(tab => tab.id === wanted)?.pane ?? null)[0] || '');
+    void refresh().catch(report);
+  }
 
   // ---- terminals ----
   // A chat leaf has no server-side process of its own: the pane asks the server to open its session (chat/open) when it mounts.
@@ -1108,7 +1147,7 @@ ${where}`, [
   // One id per project (the id's part before ":" is its place in the order): every open project has its own Workspace, and a shared id would let an inactive one withdraw what the active one asked for.
   const gitCardOn = useNotice(`git:${root}`, Boolean(active && project && project.repositories.length > 0 && settings.gitTipPending && settings.onboarded));
   const chatCardOn = useNotice(`chat-mode:${root}`, Boolean(active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)));
-  const gitCard = useExit(gitCardOn), chatCard = useExit(chatCardOn);
+  const gitCard = useExit(gitCardOn), chatCard = useExit(chatCardOn), gitSheet = useExit(gitOpen);
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
@@ -1171,7 +1210,7 @@ ${where}`, [
       : pluginShown ? <PluginPanel key={pluginShown.id} plugin={pluginShown} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onSettings={onOpenPlugins} onClose={() => setPluginOpen('')} />
       : <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />}
   </aside>;
-  const gitDrawer = gitOpen && <div className={`git-drawer ${settings.gitLogDock ? 'docked' : 'floating'}`} style={{ '--git-h': `${settings.gitLogHeight}px` } as CSSProperties}>
+  const gitDrawer = gitSheet.mounted && <div className={`git-drawer ${settings.gitLogDock ? 'docked' : 'floating'}`} data-closing={gitSheet.closing || undefined} inert={gitSheet.closing || undefined} style={{ '--git-h': `${settings.gitLogHeight}px` } as CSSProperties}>
     <div className="git-resizer" role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Git 패널 높이 조절 (더블클릭: 절반/기본)" onPointerDown={startGitResize}
       onDoubleClick={() => setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 }))}
       onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); } }} />

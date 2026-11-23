@@ -95,3 +95,15 @@ test('밝은 테마의 서브에이전트 이름표는 파스텔 글자색에 �
   // 한 가지 밝은 색(hsl 62%)을 어두운 바탕 기준으로 정해 두었기 때문에, 밝은 테마에서는 대비가 1.4:1까지 떨어졌다(최종 e2e에서 발견).
   assert.match(css, /:root\[data-scheme=light\] \.chat-agent-type, :root\[data-scheme=light\] \.chat-approval header \.chat-approval-agent \.chat-agent-type \{ color: color-mix\(in srgb, var\(--agent-color, var\(--agent\)\) \d+%, var\(--fg\)\); \}/);
 });
+
+test('여러 기기가 나눠 쓰는 탭 배치는 형식이 맞아야 저장되고, 저장하면 다른 기기에 알린다', async () => {
+  const { validateLayout, validateUi } = await import('../apps/local-server/src/ui-state.js');
+  const tabs = [{ id: 'a', pane: { id: 't1', kind: 'terminal' } }, { id: 'b', title: '빈 탭', pane: null }];
+  assert.deepEqual(validateLayout(tabs), tabs);
+  assert.deepEqual(validateUi({ gitRepositoryId: '', focus: '', activeTab: 'a', rightVisible: false, paneTabs: tabs }).paneTabs, tabs);
+  assert.throws(() => validateLayout([{ id: 'a', pane: { id: 'x y' } }]), /화면 상태/);
+  assert.throws(() => validateLayout([{ id: 'a', pane: null }, { id: 'a', pane: null }]), /화면 상태/);
+  const server = await readFile(new URL('../apps/local-server/src/index.js', import.meta.url), 'utf8');
+  assert.match(server, /case 'ui': case 'ui\/layout':/);
+  assert.match(server, /broadcast\(project, \{ type: 'ui\/changed', paneTabs: next\.paneTabs/);
+});

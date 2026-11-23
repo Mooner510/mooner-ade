@@ -30,8 +30,15 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
   - `chat/open`은 PC에 이미 열린 채팅에만 허용한다(검사 이름 `existing-chat`).
   - UI는 `html[data-remote="view"]`일 때 쓰기 컨트롤을 숨긴다(`mobile.css`). 프로젝트는 `project/open` 대신 `snapshot`으로 읽는다.
 - **PC 창 자체를 바꾸는 action은 폰에 열지 않는다.**
-  - 대상: `project/close`, `app/state` 쓰기, `ui`(레이아웃 저장), `dialog/folder`, 플러그인 관리(Electron IPC).
-  - 폰에서 프로젝트를 닫으면 폰 목록에서만 빠진다. 레이아웃과 설정은 폰 안에서만 바뀐다.
+  - 대상: `project/close`, `app/state` 쓰기, `ui`(PC 창의 서랍·포커스까지 담은 전체 저장), `dialog/folder`, 플러그인 관리(Electron IPC).
+  - 폰에서 프로젝트를 닫으면 폰 목록에서만 빠진다. 열린 프로젝트 목록과 설정은 기기마다 따로 바뀐다.
+- **탭 배치는 모든 기기가 하나를 공유한다.**
+  - 탭, 분할 pane, 터미널·채팅·편집기 leaf, 탭 이름, 분할 크기가 대상이다.
+  - 폰은 탭만 `ui/layout`(control 전용)으로 저장한다. 서버가 `project.state.ui.paneTabs`에 쓰고 구독 중인 모든 기기에 `ui/changed`를 보낸다. 보낸 기기는 `from`(clientId)으로 자기 에코를 건너뛴다.
+  - 받은 기기는 `Workspace.tsx`의 `applyLayout`으로 같은 탭을 보여 준다. 이미 같은 탭은 그대로 두고, 자기가 보던 탭과 포커스는 사라지지 않는 한 유지한다. 받은 배치는 서버로 되돌려 보내지 않는다(`fromRemote`).
+  - 종료가 확인된 터미널은 늦게 도착한 배치에도 되살리지 않는다(`gone`). 연결이 끊겼다 돌아오면 구독 직후의 `snapshot`에 든 배치로 따라잡는다.
+  - 보기 전용 폰은 저장하지 않고 따라가기만 한다. 옛 PC 플러그인(`ui/layout` 없음)에 붙은 폰도 같다.
+  - 동시에 두 기기가 0.4초 안에 탭을 바꾸면 나중에 저장한 쪽이 이긴다.
 
 ## 화면 배치 (`mobile.ts`, `mobile.css`)
 

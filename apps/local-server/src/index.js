@@ -14,7 +14,7 @@ import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
 import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
-import { validateUi, validateAppState, validAgentArgs } from './ui-state.js';
+import { validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
 import { connectPtyHost } from './pty-client.js';
@@ -885,8 +885,15 @@ async function route(action, input, project) {
   const workspace = runtime.workspace;
   switch (action) {
     case 'snapshot': return snapshot(project);
-    case 'ui': {
-      project.state.ui = validateUi(input.ui); await project.save(); return {};
+    // The PC window saves the whole layout (`ui`); a phone saves only the tabs (`ui/layout`: its drawers and focus are its own).
+    // Whoever changes the tabs, every other device subscribed to the project hears it at once (`ui/changed`), so a tab or terminal
+    // made on one side is on the other without a reload. `from` lets the sender skip its own echo.
+    case 'ui': case 'ui/layout': {
+      const next = action === 'ui' ? validateUi(input.ui) : { ...project.state.ui, paneTabs: validateLayout(input.paneTabs) };
+      const changed = JSON.stringify(next.paneTabs) !== JSON.stringify(project.state.ui.paneTabs);
+      project.state.ui = next; await project.save();
+      if (changed) broadcast(project, { type: 'ui/changed', paneTabs: next.paneTabs, ...(typeof input.clientId === 'string' && input.clientId.length <= 64 && { from: input.clientId }) });
+      return {};
     }
     case 'git/status': {
       // This runs on every refresh, so the branch comes from the status header instead of separate git calls.
