@@ -53,3 +53,32 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
 - **폰 없이 브라우저로 확인**: 공유 테스트 세션에서 `VERIFY_TAB=<이름> node scripts/verify/t-remote-ui.mjs [control|view] --plugins <mooner-ade-plugins>`를 실행한다.
   - 앱과 플러그인 역할을 대신하며, 실제 허용 목록을 거쳐 이 세션의 서버에 닿는다.
   - 모바일 크기 에뮬레이션은 CDP로 따로 건다.
+
+## PC에서 PC로 (다른 PC에 접속)
+
+같은 계정의 다른 PC에 있는 ADE를 이 PC의 창으로 띄운다. 폰 앱이 하던 클라이언트 역할을 데스크톱 앱(main 프로세스)이 한다. 호스트 쪽(플러그인)은 폰과 같고, Hub만 새 기기 종류 `desktop`을 받는다.
+
+### 쓰는 법
+
+1. 사이드바 아래쪽(또는 프로젝트가 없는 첫 화면)의 **다른 PC에 접속**을 누르고 **로그인**한다. 브라우저에서 코드가 같은지 확인하고 승인한다(Hub 기기 종류 `desktop`, 이 PC만의 새 키).
+2. 접속할 PC의 설정 → 플러그인 → 원격 접속에서 **기기 추가**(보기만 또는 제어)를 눌러 나온 `moonerade://pair?…` 링크를 복사해, 이 대화상자에 붙여넣고 **확인** → 두 PC에 보이는 지문이 같은지 비교하고 **연결 요청**을 누른다. 그 PC의 확인 창에서 승인하면 끝난다.
+3. 목록에서 **접속**을 누르면 그 PC의 ADE가 새 창에 뜬다. 창 제목은 `<PC 이름> — Remote`이고, **앱 전체에 초록 테두리**가 있어 이 PC의 ADE와 구분된다(모달 뒤 배경에도 같은 테두리가 그려진다). 창은 PC마다 하나이고, 닫아도 이 ADE는 계속 켜져 있다.
+
+### 구조 (`apps/desktop/src`)
+
+- `remote-link.js`: Hub 세션(device code 로그인, 토큰 갱신), 페어링 링크 해석(`PairLink.kt`와 같은 규칙), Noise 링크(`start → hello`, `api`/`ws`, ping 30초, 끊기면 1→30초 백오프로 다시 연결, PC가 의도한 끊김은 최종). `vendor/noise.js`는 플러그인의 `shared/noise.js` 복사본이며 같은 cacophony 벡터를 `tests/noise.test.mjs`가 돌린다.
+- `remote-ui-proxy.js`: 폰 앱의 `RemoteUiActivity`와 같다. `ui/manifest`로 목록을 받고 `ui/file`을 해시별로 받아 SHA-256을 확인한 뒤 `userData/remote-ui/<해시>`에 둔다(동시 3개). 해시가 다르면 버린다.
+- `remote.js`: 봉인 저장소(`remote.bin`, safeStorage — 대화상자를 처음 쓸 때 한 번 읽는다), `ade-remote://<호스트 해시>/` 프로토콜, PC마다 별도 세션(partition)의 창, 메인 창의 대화상자용 IPC(`ade:remote:*`). 창의 페이지는 인터넷으로 나갈 수 없고(요청은 모두 링크를 거친다) 권한 요청은 모두 거부된다.
+- `remote-preload.cjs`: 창에는 `AdeRemoteNative`(`client: 'desktop'`)만 준다. `adeDesktop`을 주지 않는 이유: 폴더 선택·업데이트·플러그인 설정이 이 PC에 작용하기 때문이다. 메인 프레임만 브리지를 쓴다(채팅의 샌드박스 iframe은 못 쓴다).
+- `remote-bridge.js`: 페이지 ↔ 앱 메시지(`transport.ts`의 계약).
+
+### 웹 UI
+
+- `transport.ts`가 `AdeRemoteNative.client`로 `html[data-remote-client="phone"|"desktop"]`를 설정한다. 폰 전용(한글 웹폰트 생략)은 `phone`일 때만 적용하고, 데스크톱 창은 PC와 같은 폰트를 쓴다.
+- 초록 테두리는 `style.css`(`:root[data-remote-client="desktop"]`)의 고정색 `--remote-green`이다. 테마나 강조색이 바꾸지 못한다. 폰에는 그리지 않는다.
+- 호스트 쪽 `remoteApi` 허용 목록이 창 단위 작업(`project/close`, `app/state` 쓰기, `ui`, `dialog/folder`)을 막는 것은 폰과 같다. 폴더 선택은 `remote-folder.tsx`.
+
+### 검증
+
+- 단위: `tests/remote-link.test.mjs`(가짜 Hub와 가짜 상대 PC), `tests/remote-ui-proxy.test.mjs`(실제 `remote-ui.js`가 호스트), `tests/remote-bridge.test.mjs`, `tests/noise.test.mjs`.
+- 실제 앱: `node scripts/verify/t-remote-pc.mjs --plugins <mooner-ade-plugins>`. 격리된 Electron(별도 `ADE_USER_DATA_DIR`·`ADE_DATA_DIR`·`HOME`, Chromium mock keychain, 브라우저 없음)이 이 PC, 일회용 ADE 서버와 가짜 Hub가 다른 PC 역할이다. 로그인, 페어링, 창, 초록 테두리(모달 포함), 네트워크 차단, 프로젝트·터미널 열기, 닫기, 연결 해제를 확인한다. `apps/web/dist`가 필요하다(`pnpm --filter @mooner/ade-web build`).

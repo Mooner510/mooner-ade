@@ -7,7 +7,8 @@ import { useExit, useNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { BgAnimTip } from './BgAnimTip';
 import { api, basename, chooseFolder } from './api';
-import { closeRemote, isRemote, onRemoteBack, openEvents, type Events } from './transport';
+import { RemotePcDialog, remoteBridge } from './RemotePc';
+import { closeRemote, isRemote, onRemoteBack, openEvents, remoteClient, type Events } from './transport';
 import { setDrawer, useDrawer, useMobile } from './mobile';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TIPS_VERSION, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
@@ -297,7 +298,7 @@ function Shell() {
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [remotePcOpen, setRemotePcOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
   const settingsRef = useRef(settings); settingsRef.current = settings;
   const touringRef = useRef(false);
   const [changelogPending, setChangelogPending] = useState(false);
@@ -533,6 +534,9 @@ function Shell() {
   const animCard = <BgAnimTip closing={animCardLife.closing} onOpenSettings={() => { setAnimTip(false); setSettingsOpen('default'); }} onDone={() => setAnimTip(false)} />;
   const animTipCard = animCardLife.mounted && <>{<Spotlight target='button[aria-label="설정"]' closing={animCardLife.closing} />}{createPortal(animCard, document.body)}</>;
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
+  // "다른 PC에 접속" is the desktop app's: a phone's window and a plain browser have no `adeDesktop.remote`.
+  const canRemotePc = !isRemote && Boolean(remoteBridge());
+  const remotePcModal = remotePcOpen && canRemotePc && <RemotePcDialog onClose={() => setRemotePcOpen(false)} />;
   const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
@@ -548,7 +552,7 @@ function Shell() {
   // Seeing the tour to its end means seeing its Git graph step, which is what the one-time Git card says; skipping it does not (the card stays for that person).
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION, ...(skipped ? {} : { gitTipPending: false }) })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}</main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''} ${mobile ? 'mobile' : ''} ${mobile && drawer ? 'drawer-open' : ''}`} style={{ '--rail-w': mobile ? 'min(86vw, 340px)' : compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     {mobile && drawer && <button type="button" className="drawer-scrim" aria-label="프로젝트 목록 닫기" onClick={() => setDrawer(false)} />}
@@ -711,7 +715,8 @@ function Shell() {
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
-        {closeRemote && <IconButton icon="arrowLeft" label="PC 목록으로" onClick={closeRemote} />}
+        {canRemotePc && <IconButton icon="laptop" label="다른 PC에 접속" onClick={() => setRemotePcOpen(true)} />}
+        {closeRemote && <IconButton icon="arrowLeft" label={remoteClient === 'desktop' ? '창 닫기' : 'PC 목록으로'} onClick={closeRemote} />}
         <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="둘러보기 다시 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
         {tourHintShown && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
@@ -730,11 +735,12 @@ function Shell() {
     {settingsModal}
     {animTipCard}
     {changelogModal}
+    {remotePcModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</AppKeysContext.Provider>;
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 // The phone app skips the Korean web font: it would come over the slow link, and the system font is the same Noto Sans (mobile.css).
-const fontsReady = Promise.all([['Inter Variable', 'Aa'], ...(isRemote ? [] : [['Noto Sans KR Variable', '가']]), ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
+const fontsReady = Promise.all([['Inter Variable', 'Aa'], ...(remoteClient === 'phone' ? [] : [['Noto Sans KR Variable', '가']]), ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
 installTooltips();
 void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<ErrorBoundary><Shell /></ErrorBoundary>));

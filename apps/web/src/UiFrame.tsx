@@ -13,7 +13,7 @@ const themeNow = () => {
 // The app's own type (Inter + Noto Sans KR) for the frame: their @font-face rules, file URLs made absolute. The frame's CSP allows fonts from this
 // server only and the files are served with CORS (public assets), so the sandboxed page loads the same unicode-range subsets the app does.
 // The phone app leaves the Korean web font out (it uses the system one, mobile.css), so the frame does not download it either.
-const APP_FONTS = () => document.documentElement.dataset.remote ? /^Inter Variable$/ : /^(Inter Variable|Noto Sans KR Variable)$/;
+const APP_FONTS = () => document.documentElement.dataset.remoteClient === 'phone' ? /^Inter Variable$/ : /^(Inter Variable|Noto Sans KR Variable)$/;
 let fontCss = '';
 const fontsNow = () => fontCss ||= [...document.styleSheets].flatMap(sheet => {
   try {

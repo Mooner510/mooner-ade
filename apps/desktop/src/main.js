@@ -9,6 +9,7 @@ import { PTY_PROTOCOL } from '../../local-server/src/pty-protocol.js';
 import { NO_ATTACH_CONSOLE, shouldLeaveConsole, startOffConsole } from './console-detach.js';
 import { watchRtxHdr } from './nvidia-rtx-hdr.js';
 import { setupPlugins } from './plugins.js';
+import { registerRemoteScheme, setupRemote } from './remote.js';
 import { localServerEnv } from './server-env.js';
 import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
@@ -17,6 +18,8 @@ import { applyStagedUpdate, checkForUpdate, stagedUpdateVersion, sweepStaleUpdat
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
 // (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
+// The page protocol of the windows that show another PC's ADE (remote.js) must be registered before the app is ready.
+registerRemoteScheme();
 app.setPath('userData', process.env.ADE_USER_DATA_DIR || path.join(app.getPath('appData'), '@mooner/ade-desktop'));
 // Chromium ends the whole app ("GPU process isn't usable. Goodbye.") once the GPU process has crashed a few times, which many busy
 // terminal panes can cause. Without the limit it just starts the GPU process again and the window recovers.
@@ -32,7 +35,7 @@ const dev = process.argv.includes('--dev');
 if (dev) process.env.ADE_DEV = '1'; else delete process.env.ADE_DEV;
 // A dev app started from a terminal of an older dev app inherits the NODE_ENV=development its Vite leaked; the server would pass it on.
 if (dev) delete process.env.NODE_ENV;
-let server = null, origin = '', quitting = false, restarting = false, mainWindow = null, plugins = null;
+let server = null, origin = '', quitting = false, restarting = false, mainWindow = null, plugins = null, remote = null;
 // Settings > 정보. Read again on each spawn (a dev reload included); the running server keeps the env it started with.
 let systemCaEnabled = () => false;
 // `app.isPackaged` is false whenever the executable is named electron/Electron, which is what the macOS bundle's is, so it cannot tell
@@ -398,7 +401,7 @@ if (leavingConsole) {
   console.error('무너에이드가 이미 실행 중입니다. 실행 중인 창을 앞으로 가져오고 종료합니다. (완전히 끄려면 앱을 종료한 뒤 다시 실행하세요)');
   app.quit();
 } else {
-  app.on('second-instance', () => { const [window] = BrowserWindow.getAllWindows(); if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
+  app.on('second-instance', () => { const window = mainWindow ?? BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
@@ -411,6 +414,9 @@ if (leavingConsole) {
       systemCaEnabled = systemCa.enabled;
       try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
+      // "다른 PC에 접속": nothing starts until the user opens it (the sealed store is read then, not at startup).
+      try { remote = setupRemote({ userData: app.getPath('userData'), getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? ''), iconPath, background }); }
+      catch (error) { console.warn(`원격 접속 클라이언트를 준비하지 못했습니다: ${error.message}`); }
       createWindow(await startServer());
       if (ptyNotice) void dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['확인'], title: '무너에이드', message: ptyNotice });
       // Windows + NVIDIA: RTX HDR holds every frame ~49 ms unless the driver has a profile for this executable (nvidia-rtx-hdr.js).
@@ -427,7 +433,7 @@ if (leavingConsole) {
   });
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
-  app.on('quit', () => { plugins?.close(); });
+  app.on('quit', () => { plugins?.close(); remote?.close(); });
   let asking = false;
   const quitNow = () => {
     quitting = true;

@@ -1,11 +1,11 @@
 /* The phone layout (mobile.ts, docs/REMOTE_UI.md): the desktop components, rearranged for a narrow touch screen. Keep the width
    in step with MOBILE_QUERY. Nothing here changes a desktop-width window. */
 
-/* ---- type in the phone app ---- */
+/* ---- type in the phone app (not in a desktop window of another PC's ADE: that has the Korean web font like the PC itself) ---- */
 /* The phone app gets every file over a slow link; the Korean web font alone is 124 pieces (3.5 MB) fetched as text needs them. The
    phone already has the same Noto Sans CJK KR as its system font, so the app's stacks skip the web copy there. The Latin fonts stay
    (small, and they keep the desktop's look); firstScreen in local-server/src/remote-ui.js sends them ahead. Keep in step with style.css. */
-:root[data-remote] {
+:root[data-remote-client="phone"] {
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Noto Sans CJK KR', ui-monospace, monospace;
   font-family: 'Inter Variable', Inter, 'Noto Sans CJK KR', system-ui, sans-serif;
 }
