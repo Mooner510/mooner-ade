@@ -13,6 +13,7 @@ import { alwaysSuggestions, ARTIFACT_FLAG_SETTINGS, sessionRuleStrings, toolAllo
 import { cursorAutoCompact, cursorStorePath, readCursorStoreUsage } from './cursor-context.js';
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
+import { claudeMcp, isTrusted } from './mcp-trust.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
 import { cursorSurface } from './cursor-model-cache.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
@@ -64,7 +65,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, chatText = createChatTextStore(directory) }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, trusted = () => [], chatText = createChatTextStore(directory) }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -529,7 +530,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'approval') {
         // A tool the user allowed for this chat is answered here, without a card. The CLI's own allow rule cannot do this alone: an `ask` rule in the user's settings
         // (or a hook) beats every allow rule, and the CLI then offers no suggestion at all, so the request would come back each time.
-        if (event.phase === 'request' && agent === 'claude' && !protocol && !event.questions && toolAllowedForChat(event.tool)) {
+        // An MCP tool says which server it belongs to: the card offers to trust it, and a tool the user trusted in the settings is answered here the same way.
+        if (event.phase === 'request' && agent === 'claude' && !event.questions && claudeMcp(event.tool)) event.mcp = claudeMcp(event.tool);
+        if (event.phase === 'request' && agent === 'claude' && !protocol && !event.questions && (toolAllowedForChat(event.tool) || isTrusted(trusted(), event.mcp))) {
           void write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
           return;
         }
@@ -716,7 +719,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent === 'claude') { let pinned = false; if (!meta.model && state.model) { meta.model = state.model; pinned = true; } if (meta.effort === undefined && state.effort && state.capabilities.efforts.includes(state.effort)) { meta.effort = state.effort; pinned = true; } if (pinned) await saveMeta(); }
     const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true, fileLinks: meta.fileLinks === true, mediaBlocks: meta.mediaBlocks === true }) : {};
     const args = [...argsOf(executableArgs, meta.auth), ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
-    if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
+    if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent, trusted });
     if (agent === 'claude') {
       // Resolved right now (the catalog and the model may have arrived after the chat was opened), so the gauge matches what the CLI starts with.
       const model = meta.model ?? state.model, compactNow = await readAutoCompact(configDirOf(), cwd, concreteModel(model), maxContextForModel(model));
@@ -846,7 +849,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (saved.turnOpen || saved.approvals?.length) { state.error = '이전 서버에서 응답을 이어받지 못했습니다. 세션 복구를 시도하거나 다시 보내세요.'; emit({ kind: 'error', message: state.error, recoverable: canRetryTurn() }); publish(); }
       return;
     }
-    if (agent !== 'claude') { protocol = createChatProtocol(agent, { write, emit: handleEvent }); protocol.restore(saved.protocol ?? {}); }
+    if (agent !== 'claude') { protocol = createChatProtocol(agent, { write, emit: handleEvent, trusted }); protocol.restore(saved.protocol ?? {}); }
     attach(proc);
     turnOpen = saved.turnOpen === true; reopened = saved.reopened === true; turnSeq = saved.turnSeq ?? 0; inflight = saved.inflight ?? null;
     restartAfterTurn = state.restartPending = saved.restartAfterTurn === true; lastCommandOutput = saved.lastCommandOutput ?? null;

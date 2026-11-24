@@ -19,6 +19,7 @@ import { AI_EFFORTS, AI_MODELS } from './FeedbackPanel';
 import { graphColor, javaHash } from './git-graph';
 import { usageMeterCatalog, type UsageProvider } from './usage-meters';
 import { accentChoices } from './Setup';
+import { trustLabel } from './mcp-trust';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -344,6 +345,14 @@ function Group({ title, children }: { title?: string; children: ReactNode }) {
   return <div className="setting-block">{title && <h4 className="setting-group">{title}</h4>}{children}</div>;
 }
 
+// What the approval card's "이 도구 신뢰" / "이 MCP 신뢰" added: allowed without asking until removed here. (Codex asks MCP tools through its own question, which names no server, so it has none.)
+function McpTrustList({ provider, settings, onChange }: { provider: 'claude' | 'cursor'; settings: Settings; onChange(settings: Settings): void }) {
+  const list = settings.mcpTrust[provider];
+  if (!list.length) return <p className="setting-note">신뢰한 MCP가 없습니다. 승인 카드에서 허용 옆 ▾ 메뉴의 "이 도구 신뢰"나 "이 MCP 신뢰"를 고르면 여기에 추가됩니다.</p>;
+  return <>{list.map(entry => <Row key={`${entry.server}\0${entry.tool ?? ''}`} title={entry.server} hint={entry.tool ?? '모든 도구'}>
+    <button type="button" onClick={() => onChange({ ...settings, mcpTrust: { ...settings.mcpTrust, [provider]: list.filter(item => item !== entry) } })} aria-label={`${trustLabel(entry)} 신뢰 해제`}>해제</button>
+  </Row>)}</>;
+}
 function UsageMeterChips({ provider, settings, onChange }: { provider: UsageProvider; settings: Settings; onChange(settings: Settings): void }) {
   const catalog = usageMeterCatalog[provider], selected = settings.usageShown[provider];
   const setMeter = (id: string, on: boolean) => onChange({ ...settings, usageShown: { ...settings.usageShown, [provider]: catalog.map(item => item.id).filter(item => item === id ? on : selected.includes(item)) } });
@@ -598,6 +607,10 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     <ChatAuthSettings agent={tab} />
     <h4 className="setting-group">알림</h4>
     <Row title="이 에이전트의 알림" hint="끄면 이 에이전트의 알림과 소리를 모두 끕니다. 알림 종류와 소리는 ‘공용’에서 정합니다.">{inList('agentsMuted', tab, `${agentNames[tab]} 알림`)}</Row>
+    {tab !== 'codex' && <>
+      <h4 className="setting-group">신뢰한 MCP</h4>
+      <McpTrustList provider={tab} settings={settings} onChange={onChange} />
+    </>}
     {tab !== 'cursor' && <>
       <h4 className="setting-group">사용량 (상태바)</h4>
       {tab === 'claude' && <>

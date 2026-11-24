@@ -873,10 +873,10 @@ test('Claude /compact ignores a startup result and drops the context gauge when 
   assert.deepEqual(events.filter(event => event.kind === 'command_output').map(event => event.text), ['Compacted'], "the CLI's own output is shown once");
 });
 
-async function controlSession(t) {
+async function controlSession(t, extra = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-control-'));
   const events = [], session = await openChatSession({ directory, id: 'control', cwd: directory, executable: process.execPath,
-    executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: event => events.push(event) });
+    executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], onEvent: event => events.push(event), ...extra });
   t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { session, events };
 }
@@ -1211,6 +1211,22 @@ test('Claude: allowing without a retry keeps the refusal open, and a command tha
   await session.send('blockedcompound'); await until(() => session.state().status === 'idle');
   assert.equal(events.filter(event => event.kind === 'auto_denied').at(-1).rule, null, 'a compound command has no exact rule');
   await assert.rejects(session.allowBlocked(['toolu_blk'], { retry: false }), /다시 시도"로만/);
+});
+
+test('Claude: an MCP tool trusted in the settings is allowed without a card (the tool, or its whole server), any other still asks and names its server', async t => {
+  let list = [{ server: 'srv', tool: 'other' }];
+  const { session, events } = await controlSession(t, { trusted: () => list }), said = () => events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1);
+  await session.send('askmcp'); await until(() => session.state().status === 'attention');
+  const [first] = session.replay().approvals;
+  assert.deepEqual(first.mcp, { server: 'srv', tool: 'run' });
+  await session.approve(first.requestId, { allow: true });
+  await until(() => session.state().status === 'idle');
+  for (const trust of [[{ server: 'srv', tool: 'run' }], [{ server: 'srv' }]]) {
+    list = trust; const before = events.filter(event => event.kind === 'message').length;
+    await session.send('askmcp'); await until(() => events.filter(event => event.kind === 'message').length > before && session.state().status === 'idle');
+    assert.equal(said(), 'grants=[]'); assert.equal(session.replay().approvals.length, 0, `no card for ${JSON.stringify(trust)}`);
+  }
+  list = []; await session.send('askmcp'); await until(() => session.state().status === 'attention'); // removed from the settings: asks again
 });
 
 test('Claude: "allow this tool always" is a rule for the whole tool that the chat keeps for every later child', async t => {

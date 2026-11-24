@@ -27,7 +27,7 @@ export type AsyncQuestion = { title: string; options?: string[] | null };
 export type Block = BlockBase & ({ type: 'text'; text: string; questions?: AsyncQuestion[] } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
 /** A tool call the auto-mode classifier refused, as the server recorded it. `rule` is the exact session allow rule it can offer (null: only "allow and retry" by message). `allowed`: the user allowed it without a retry. */
 export type BlockedAction = { toolUseId: string; tool: string; input: Record<string, unknown>; reason: string; rule: string | null; allowed?: boolean };
-export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[]; exists?: boolean };
+export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[]; exists?: boolean; mcp?: { server: string; tool: string } };
 export type ChatQuestion = { id: string; prompt: string; header?: string; secret?: boolean; allowMultiple?: boolean; allowOther?: boolean; options?: { id: string; label: string; description?: string }[] };
 // `fresh`: created by a live event (not a replay), so it plays its entrance animation once.
 type ItemBase = { key: string; fresh?: boolean };
@@ -405,7 +405,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       return { ...view, blocked };
     }
     case 'approval': {
-      if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [], ...(typeof event.exists === 'boolean' && { exists: event.exists }) }] };
+      if (event.phase === 'request') return { ...view, approvals: [...view.approvals.filter(item => item.requestId !== event.requestId), { requestId: event.requestId, tool: event.tool, input: event.input, toolUseId: event.toolUseId, questions: event.questions, suggestions: event.suggestions ?? [], ...(typeof event.exists === 'boolean' && { exists: event.exists }), ...(typeof event.mcp?.server === 'string' && typeof event.mcp?.tool === 'string' && { mcp: { server: event.mcp.server, tool: event.mcp.tool } }) }] };
       const answered = view.approvals.find(item => item.requestId === event.requestId);
       const denied = event.allow === false && answered?.toolUseId && !answered.questions?.length ? { denied: { ...view.denied, [answered.toolUseId]: true as const } } : {};
       return { ...view, ...denied, approvals: view.approvals.filter(item => item.requestId !== event.requestId) };

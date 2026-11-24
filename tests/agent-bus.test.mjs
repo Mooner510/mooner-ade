@@ -493,9 +493,9 @@ test('chats get the bus with their own id; terminals never get it', async t => {
 
 // ---- the agents' protocols ------------------------------------------------------------------------------------------------------
 import { createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
-function driven(agent, answers) {
+function driven(agent, answers, options = {}) {
   const written = [], emitted = [];
-  const protocol = createChatProtocol(agent, {
+  const protocol = createChatProtocol(agent, { ...options,
     emit: event => emitted.push(event),
     write: async line => { const message = JSON.parse(line); written.push(message); if (message.id !== undefined && message.method) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] ?? {} })); }
   });
@@ -525,6 +525,21 @@ test('Cursor gets the bus with its chat identity, and approves only the bus tool
   ask(103, { title: 'plain_tools: run', kind: 'other', rawInput: {} });
   assert.equal(written.some(message => message.id === 102 || message.id === 103), false, 'shell commands and other servers still ask the user');
   assert.deepEqual(emitted.filter(event => event.kind === 'approval').map(event => event.requestId), ['102', '103']);
+});
+
+test('Cursor: an MCP tool trusted in the settings is allowed once without a card, any other request waits and an MCP card names its server', async () => {
+  let list = [{ server: 'plain_tools', tool: 'run' }];
+  const { protocol, written, emitted } = driven('cursor', { initialize: { agentCapabilities: { promptCapabilities: { image: true }, loadSession: true } }, 'session/new': { sessionId: 's1' } }, { trusted: () => list });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [], configValues: {} }, 'C:\w', []);
+  const ask = (id, toolCall) => protocol.handle({ id, method: 'session/request_permission', params: { sessionId: 's1', toolCall, options: [{ kind: 'allow_once', optionId: 'yes' }, { kind: 'allow_always', optionId: 'always' }, { kind: 'reject_once', optionId: 'no' }] } });
+  ask(201, { title: 'plain_tools: run', kind: 'other', rawInput: {} });
+  assert.deepEqual(written.find(message => message.id === 201)?.result, { outcome: { outcome: 'selected', optionId: 'yes' } }, 'once, never "always"');
+  ask(202, { title: 'plain_tools: other', kind: 'other', rawInput: {} });
+  ask(203, { title: 'plain_tools: run', kind: 'execute', rawInput: {} });
+  assert.equal(written.some(message => message.id === 202 || message.id === 203), false);
+  assert.deepEqual(emitted.filter(event => event.kind === 'approval').map(event => [event.requestId, event.mcp]), [['202', { server: 'plain_tools', tool: 'other' }], ['203', undefined]]);
+  list = [{ server: 'plain_tools' }]; ask(204, { title: 'plain_tools: other', kind: 'other', rawInput: {} });
+  assert.deepEqual(written.find(message => message.id === 204)?.result, { outcome: { outcome: 'selected', optionId: 'yes' } }, 'the whole server');
 });
 
 // ---- how a chat shows a message from the bus -------------------------------------------------------------------------------------

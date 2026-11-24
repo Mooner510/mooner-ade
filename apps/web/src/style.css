@@ -1832,9 +1832,11 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-approval-body { padding: 0 12px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .chat-approval footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
-/* The decision (거부·항상 허용·허용) sits at the right, the main one last; "다르게 하기…" (refuse and say what to do instead) sits apart at the
-   left end; once open, 취소 takes the same spot and look, so the same click goes back. */
-.chat-approval footer .approval-explain, .chat-approval .plan-revise .approval-explain { margin-right: auto; }
+/* The decision sits at the right: 거부, then 허용 as a split button whose caret opens the "allow and remember" choices (placed on screen by the card, which clips). */
+.approve-split { display: inline-flex; align-items: stretch; }
+.approve-split > .primary:first-child { border-radius: 6px 0 0 6px; }
+.approve-split .approve-caret { padding: 0 6px; border-radius: 0 6px 6px 0; border-left-color: color-mix(in srgb, var(--accent-fg) 35%, transparent); }
+.menu.approve-menu { position: fixed; z-index: 1000; top: auto; left: auto; min-width: 190px; }
 /* The agent's question: one card for every question it asked. Options are cards with a description; the last row is the person's own answer. */
 .chat-question { border: 1px solid var(--agent); border-radius: 12px; background: color-mix(in srgb, var(--agent) 6%, var(--raised)); overflow: hidden; }
 .chat-question header { display: flex; align-items: center; gap: 8px; padding: 9px 14px; color: var(--agent); }
@@ -2013,6 +2015,8 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md-media > button > img, .md-media > video { display: block; max-width: 100%; max-height: min(440px, 60vh); border-radius: 8px; object-fit: contain; }
 .md-media > video { background: black; }
 .md-media > figcaption { color: var(--muted); font-size: .9em; }
+.md-media:has(> button) { width: fit-content; justify-items: center; }
+.md-media:has(> button) > figcaption { text-align: center; overflow-wrap: anywhere; }
 .md-media > figcaption a { margin-inline-start: 4px; }
 .md-table { position: relative; min-width: 0; max-width: 100%; overflow: clip; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }
 .md-table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }

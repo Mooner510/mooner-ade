@@ -1,4 +1,5 @@
 import { fault } from './files.js';
+import { validMcpTrust } from './mcp-trust.js';
 
 // Typed into the agent's launch line, so a newline or other control character would run a second command.
 export const validAgentArgs = value => typeof value === 'string' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
@@ -21,6 +22,7 @@ function validateSettings(settings, invalid) {
       if (!allowed || !Array.isArray(list) || list.length > allowed.length || list.some(id => typeof id !== 'string' || !allowed.includes(id) || list.indexOf(id) !== list.lastIndexOf(id))) invalid();
     }
   }
+  if (settings.mcpTrust !== undefined && !validMcpTrust(settings.mcpTrust)) invalid();
   if (settings.defaultMode !== undefined && !['chat', 'cli'].includes(settings.defaultMode)) invalid();
   if (settings.cursorStyle !== undefined && !['bar', 'block', 'underline'].includes(settings.cursorStyle)) invalid();
   if (settings.sidebarWidth !== undefined && !(Number.isInteger(settings.sidebarWidth) && settings.sidebarWidth >= 160 && settings.sidebarWidth <= 480)) invalid();
