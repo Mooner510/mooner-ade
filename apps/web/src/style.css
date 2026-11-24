@@ -784,6 +784,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .setting-control .theme-list button.on { background: var(--selected); border-color: var(--accent); font-weight: 600; }
 .setting-control .theme-list button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .setting-control .theme-list button .icon { flex: none; color: var(--accent); }
+.theme-chat-dark { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--fg) 3%, transparent); cursor: pointer; }
+.theme-chat-dark > span { display: grid; gap: 2px; min-width: 0; color: var(--fg); font-size: 13px; text-align: left; }
+.theme-chat-dark small { color: var(--muted); font-size: 11.5px; font-weight: 400; line-height: 1.4; }
 .accent-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .setting-control .accent-choices button { width: 26px; height: 26px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--swatch); box-shadow: inset 0 0 0 1px #00000026; }
 .setting-control .accent-choices button:hover:not(:disabled) { background: var(--swatch); }
@@ -2965,6 +2968,8 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 }
 /* Monaco draws a 1px outline (its default focus blue, #007fd4) just inside every editor. Inside a rounded, clipped box (the chat diff, a review file, an editor group) the straight outline cannot follow the curve, so its ends show as blue flecks behind the corners. The editors here have their own cursor and selection, so the outline goes. */
 :root :is(.monaco-editor, .monaco-diff-editor) { outline: none; }
+/* Chat-only darkening overrides the pane's surfaces. Monaco paints its own hex, so the editor canvas follows the pane. */
+.chat-pane[data-chat-dark] :is(.monaco-editor, .monaco-editor .margin, .monaco-editor-background, .monaco-editor .monaco-editor-background) { background-color: var(--surface) !important; }
 /* Side-by-side diffs: Monaco casts a scrollbar shadow from each side onto the middle, which reads as a smudge between them; one thin rule in
    the app's border colour instead (:root outranks Monaco's own rule, which loads later). */
 :root .monaco-diff-editor.side-by-side .editor.modified, :root .monaco-diff-editor.side-by-side .editor.original { box-shadow: none; }

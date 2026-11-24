@@ -6,7 +6,7 @@ import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-mete
 import type { FileBuffer } from './file-buffer';
 
 export type Settings = {
-  theme: ThemeId; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
+  theme: ThemeId; chatDarker: boolean; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
   terminalFont: string; lineHeight: number; scrollback: number; cursorStyle: 'bar' | 'block' | 'underline'; cursorBlink: boolean; copyOnSelect: boolean;
   sidebarWidth: number; statusItems: string[]; statusLeft: string[]; statusRight: string[]; usageColors: boolean; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; soundVolumeExtended: boolean; diffRefresh: number; wakatime: boolean; wakatimeBackground: boolean;
   terminalShell: string; claudeSession: boolean; usageStyle: UsageStyle; usageShown: Record<'claude' | 'codex' | 'cursor', string[]>;
@@ -132,7 +132,7 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
 // xterm's own default, so an empty-looking field means "unchanged".
 const defaultWordSeparator = ' ()[]{}\',"`─‘’“”|';
 export const defaultSettings: Settings = {
-  theme: 'dark', fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
+  theme: 'dark', chatDarker: false, fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
   agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
