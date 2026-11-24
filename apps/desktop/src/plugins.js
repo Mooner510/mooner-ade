@@ -177,7 +177,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     fromServer: message => manager.fromServer(message),
     // A feedback submission from the server: { meta, images:[{path, mime}] } -> { ok, issueNumber?, error? }.
     submitFeedback: ({ meta, images }) => manager.submitFeedback({ meta, images }),
-    queryFeedbackStatus: ({ keys }) => manager.queryFeedbackStatus({ keys }),
+    queryFeedbackStatus: ({ keys, have }) => manager.queryFeedbackStatus({ keys, have }),
     close: () => manager.close()
   };
 }

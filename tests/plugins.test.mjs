@@ -583,12 +583,12 @@ test('feedback status lookups go only to a signed-in plugin that said it can, an
   assert.ok(!child.sent.some(message => message.type === 'feedback/status'));
   child.emit('message', { type: 'feedback', available: true, account: 'tester', statusQuery: true });
   assert.equal(env.manager.feedbackStatus().statusQuery, true);
-  const asked = env.manager.queryFeedbackStatus({ keys: ['abcdefgh', 'ijklmnop'] });
+  const asked = env.manager.queryFeedbackStatus({ keys: ['abcdefgh', 'ijklmnop'], have: { abcdefgh: 2, 'bad key': 1, ijklmnop: -1, qrstuvwx: 1.5 } });
   const request = child.sent.find(message => message.type === 'feedback/status');
-  assert.deepEqual(request.keys, ['abcdefgh', 'ijklmnop']);
+  assert.deepEqual(request.keys, ['abcdefgh', 'ijklmnop']); assert.deepEqual(request.have, { abcdefgh: 2 });
   child.emit('message', { type: 'feedback/status-result', id: request.id, ok: true, latestStable: '0.6.0', items: {
-    abcdefgh: { state: 'beta', version: '0.6.0-beta5', body: 'never passed on' }, ijklmnop: { state: 'shipped' }, 'bad key': { state: 'pending' }, qrstuvwx: { state: 'released', version: 'javascript:alert(1)' } } });
-  assert.deepEqual(await asked, { ok: true, latestStable: '0.6.0', items: { abcdefgh: { state: 'beta', version: '0.6.0-beta5' }, qrstuvwx: { state: 'released' } } });
+    abcdefgh: { state: 'beta', version: '0.6.0-beta5', body: 'never passed on', commentCount: 2, comments: [{ at: '2026-11-24T01:00:00Z', body: '반영했어요', author: 'x' }, { at: 5, body: 'bad' }] }, ijklmnop: { state: 'shipped' }, 'bad key': { state: 'pending' }, qrstuvwx: { state: 'released', version: 'javascript:alert(1)' } } });
+  assert.deepEqual(await asked, { ok: true, latestStable: '0.6.0', items: { abcdefgh: { state: 'beta', version: '0.6.0-beta5', commentCount: 2, comments: [{ at: '2026-11-24T01:00:00Z', body: '반영했어요' }] }, qrstuvwx: { state: 'released' } } });
   const failed = env.manager.queryFeedbackStatus({ keys: ['abcdefgh'] });
   const second = child.sent.filter(message => message.type === 'feedback/status').at(-1);
   child.emit('message', { type: 'feedback/status-result', id: second.id, ok: false, error: { code: 'rate_limited', retryAfter: 999999 } });

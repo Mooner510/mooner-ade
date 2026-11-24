@@ -252,8 +252,9 @@ export function createFeedbackStore({ root, now = Date.now, onChange = () => {} 
   // The person looked at the news: what is shown now stops counting as news.
   const markSeen = id => locked(id, async () => {
     const item = await read(id);
-    if (!item.track || item.track.seenSig === item.track.sig) return item;
-    return changed(id, await write({ ...item, track: { ...item.track, seenSig: item.track.sig } }));
+    const { track } = item, comments = track?.comments?.length ?? 0;
+    if (!track || (track.seenSig === track.sig && (track.seenComments ?? 0) >= comments)) return item;
+    return changed(id, await write({ ...item, track: { ...track, seenSig: track.sig, ...(comments && { seenComments: comments }) } }));
   });
   const filePath = (id, name) => {
     const base = String(name);

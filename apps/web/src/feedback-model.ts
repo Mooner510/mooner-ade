@@ -17,7 +17,9 @@ export interface Feedback {
 }
 export type ProgressState = 'pending' | 'beta' | 'released' | 'closed' | 'declined';
 // `inApp`: this app's own version already has the fix (undefined when not known). `news`: changed since the person last looked.
-export interface FeedbackProgress { state: ProgressState; version?: string; inApp?: boolean; news: boolean; checkedAt?: number; changedAt?: number }
+// `comments`: what the maintainers answered on this feedback, oldest first (no author is known: only when and what). `stateNews` / `commentNews`: which of the two changed (`news` is either).
+export interface FeedbackComment { at: string; body: string }
+export interface FeedbackProgress { state: ProgressState; version?: string; inApp?: boolean; news: boolean; stateNews?: boolean; commentNews?: boolean; comments?: FeedbackComment[]; checkedAt?: number; changedAt?: number }
 // mode: 'account' = sent with the signed-in remote-access login; 'anonymous' = no login, at most one per 5 minutes from this install.
 export interface FeedbackAvailability { ok: boolean; mode?: 'account' | 'anonymous'; account?: string; reason?: string }
 export interface FeedbackQueue { size: number; nextAt?: number }
@@ -85,16 +87,18 @@ export const progressNews = <T extends Pick<Feedback, 'status' | 'progress'>>(it
 /** The one-line toast for news ('' when there is none): one item says what happened, several say how many. */
 export function progressNewsText(items: Pick<Feedback, 'issueNumber' | 'progress'>[]): string {
   if (!items.length) return '';
-  if (items.length > 1) return `제출한 피드백 ${items.length}건의 처리 상태가 바뀌었어요`;
+  if (items.length > 1) return `제출한 피드백 ${items.length}건의 처리 상태나 답변이 바뀌었어요`;
   const [item] = items, badge = progressBadge(item.progress), name = item.issueNumber ? `피드백 #${item.issueNumber}` : '제출한 피드백';
-  return badge ? `${name}: ${badge.text}` : `${name}의 처리 상태가 바뀌었어요`;
+  if (item.progress?.commentNews && !item.progress.stateNews) return `${name}에 답변이 달렸어요`;
+  const state = badge ? `${name}: ${badge.text}` : `${name}의 처리 상태가 바뀌었어요`;
+  return item.progress?.commentNews ? `${state} · 답변도 달렸어요` : state;
 }
 /**
  * News is told once per change: a function that is given the list each time it loads and returns the toast text for what it has not told yet ('' if nothing).
  * Items the person already opened carry `news: false`, so they never come back; a later change (beta → released) is a new announcement.
  */
 export function progressAnnouncer() {
-  const told = new Set<string>(), key = (item: Pick<Feedback, 'id' | 'progress'>) => `${item.id}:${item.progress?.state}:${item.progress?.version ?? ''}`;
+  const told = new Set<string>(), key = (item: Pick<Feedback, 'id' | 'progress'>) => `${item.id}:${item.progress?.state}:${item.progress?.version ?? ''}:${item.progress?.comments?.length ?? 0}`;
   return (items: Pick<Feedback, 'id' | 'status' | 'issueNumber' | 'progress'>[]): string => {
     const fresh = progressNews(items).filter(item => !told.has(key(item)));
     for (const item of fresh) told.add(key(item));

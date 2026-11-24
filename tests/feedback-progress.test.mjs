@@ -33,7 +33,7 @@ test('settle: a beta fix becomes "released" once a stable release (the Hub\'s or
 
 test('viewOf: news until the stored change is seen, and whether this app already has the fix', () => {
   const track = { state: 'beta', version: '0.6.0-beta5', sig: 'beta:0.6.0-beta5', checkedAt: 5, changedAt: 4 };
-  assert.deepEqual(viewOf(track, '0.6.0-beta5'), { state: 'beta', version: '0.6.0-beta5', inApp: true, news: true, checkedAt: 5, changedAt: 4 });
+  assert.deepEqual(viewOf(track, '0.6.0-beta5'), { state: 'beta', version: '0.6.0-beta5', inApp: true, news: true, stateNews: true, commentNews: false, checkedAt: 5, changedAt: 4 });
   assert.equal(viewOf(track, '0.5.7').inApp, false);
   assert.equal(viewOf(track, '0.6.0').inApp, true);
   assert.equal(viewOf({ ...track, seenSig: track.sig }, '0.5.7').news, false);
@@ -88,14 +88,50 @@ test('the poller stores what the Hub says, only writes on a change, and reads a 
   await store.markSeen(ids[0]);
   assert.equal(viewOf((await store.get(ids[0])).track, '0.5.7').news, false);
 
-  // beta → released is a new change: news again; and a released item is not asked about any more
+  // beta → released is a new change: news again; and a released item is asked about for two more weeks (a late answer), then not any more
   clock += 1;
   answers.push({ ok: true, items: { [ids[0]]: { state: 'released', version: '0.6.0-beta5' } }, latestStable: '0.6.0' });
   await progress.poll();
   assert.equal(viewOf((await store.get(ids[0])).track, '0.5.7').news, true);
   calls = []; answers.push({ ok: true, items: {} });
   await progress.poll();
+  assert.deepEqual(calls[0].sort(), [...ids].sort());
+  clock += 15 * 86_400_000; calls = []; answers.push({ ok: true, items: {} });
+  await progress.poll();
   assert.deepEqual(calls[0], [ids[1]]);
+});
+
+test('comments: asked for only when the count differs (`have`), stored without an author, news until looked at, and a failed read keeps the old count', async t => {
+  const { store, ids } = await submitted(t, 1);
+  let clock = 1000; const seen = [], answers = [];
+  const progress = createFeedbackProgress({ store, appVersion: '0.5.7', now: () => clock, setTimer: () => null, clearTimer() {}, log: quiet,
+    fetchers: { anonymous: async (keys, have) => { seen.push(have); return answers.shift(); } } });
+  const at = '2026-11-24T01:00:00Z', one = { commentCount: 1, comments: [{ at, body: ' 다음 베타에 넣었어요 ', author: 'x' }, { at: 'nope', body: 'bad date' }, { at, body: '  ' }] };
+  answers.push({ ok: true, items: { [ids[0]]: { state: 'pending', ...one } } });
+  await progress.poll();
+  assert.deepEqual(seen[0], {}); // nothing held yet
+  let view = viewOf((await store.get(ids[0])).track, '0.5.7');
+  assert.deepEqual(view.comments, [{ at: '2026-11-24T01:00:00.000Z', body: '다음 베타에 넣었어요' }]);
+  assert.equal(view.commentNews, true); assert.equal(view.stateNews, false); assert.equal(view.news, true);
+  await store.markSeen(ids[0]);
+  view = viewOf((await store.get(ids[0])).track, '0.5.7'); assert.equal(view.news, false);
+
+  clock += 1; answers.push({ ok: true, items: { [ids[0]]: { state: 'pending', commentCount: 1 } } }); // same count: the Hub left the comments out
+  const written = (await store.get(ids[0])).updatedAt;
+  await progress.poll();
+  assert.deepEqual(seen[1], { [ids[0]]: 1 }); assert.equal((await store.get(ids[0])).updatedAt, written);
+
+  clock += 1; answers.push({ ok: true, items: { [ids[0]]: { state: 'pending', commentCount: 2 } } }); // count changed but the Hub could not read them
+  await progress.poll();
+  assert.equal((await store.get(ids[0])).track.commentCount, 1); // asked again next round
+  clock += 1; answers.push({ ok: true, items: { [ids[0]]: { state: 'pending', commentCount: 2, comments: [...one.comments.slice(0, 1), { at: '2026-11-24T02:00:00Z', body: '확인해 주세요' }] } } });
+  await progress.poll();
+  view = viewOf((await store.get(ids[0])).track, '0.5.7');
+  assert.equal(view.comments.length, 2); assert.equal(view.commentNews, true);
+  assert.equal(progressNewsText([{ progress: view }]), '제출한 피드백에 답변이 달렸어요');
+  clock += 1; answers.push({ ok: true, items: { [ids[0]]: { state: 'pending', commentCount: 0 } } }); // comments deleted
+  await progress.poll();
+  assert.equal(viewOf((await store.get(ids[0])).track, '0.5.7').comments, undefined);
 });
 
 test('the poller stays quiet on trouble: backoff on errors, a day\'s pause when the Hub has no endpoint, account items wait for a plugin that can answer', async t => {
@@ -147,6 +183,8 @@ test('fetchAnonymousStatus sends the install id and only keys, and maps a missin
   const ok = await fetchAnonymousStatus({ hubUrl, deviceId: 'D'.repeat(32), keys: ['abcdefgh', 'k2k2k2k2'] });
   assert.deepEqual(ok, { ok: true, items: { abcdefgh: { state: 'beta', version: '0.6.0-beta5' } }, latestStable: '0.5.7' });
   assert.equal(seen[0].method, 'GET'); assert.equal(seen[0].url, '/v1/feedback/status?keys=abcdefgh%2Ck2k2k2k2'); assert.equal(seen[0].device, 'D'.repeat(32));
+  await fetchAnonymousStatus({ hubUrl, deviceId: 'D'.repeat(32), keys: ['abcdefgh', 'k2k2k2k2'], have: { abcdefgh: 3, other: 1, k2k2k2k2: -1 } });
+  assert.equal(seen.at(-1).url, '/v1/feedback/status?keys=abcdefgh%2Ck2k2k2k2&have=abcdefgh%3A3'); // only held counts of asked keys go out
   answers.push({ status: 404, body: { error: { code: 'not_found' } } });
   assert.equal((await fetchAnonymousStatus({ hubUrl, deviceId: 'D'.repeat(32), keys: ['abcdefgh'] })).error.code, 'unsupported');
   answers.push({ status: 429, headers: { 'retry-after': '90' }, body: { error: { code: 'rate_limited' } } });
@@ -175,7 +213,7 @@ test('badges, the in-this-version sentence and the news toast read as the issue 
   const b = { id: 'b', status: 'submitted', issueNumber: 22, progress: { state: 'pending', news: false } };
   assert.deepEqual(progressNews([a, b]), [a]);
   assert.equal(progressNewsText([a]), '피드백 #18: beta 반영 v0.6.0-beta5');
-  assert.equal(progressNewsText([a, { ...a, id: 'c' }]), '제출한 피드백 2건의 처리 상태가 바뀌었어요');
+  assert.equal(progressNewsText([a, { ...a, id: 'c' }]), '제출한 피드백 2건의 처리 상태나 답변이 바뀌었어요');
   assert.equal(progressNewsText([]), '');
 });
 

@@ -55,12 +55,14 @@ export async function postAnonymousFeedback({ hubUrl = DEFAULT_HUB_URL, deviceId
 }
 
 // How far the feedback this install sent anonymously has come (`GET /v1/feedback/status`, docs/FEEDBACK_STATUS.md): only keys go out and only
-// {state, version} per key comes back. Resolves { ok, items, latestStable? } or { ok:false, error:{ code, message, retryAfter? } }; never rejects.
+// {state, version} per key comes back (plus the comment count, and the comments themselves when that count differs from the one in `have`). Resolves { ok, items, latestStable? } or { ok:false, error:{ code, message, retryAfter? } }; never rejects.
 // 404/405/501 mean this Hub has no such endpoint yet: code `unsupported`, which the caller treats as "stay quiet for a day".
-export async function fetchAnonymousStatus({ hubUrl = DEFAULT_HUB_URL, deviceId, keys, fetchImpl = fetch, timeoutMs = 20_000 }) {
+export async function fetchAnonymousStatus({ hubUrl = DEFAULT_HUB_URL, deviceId, keys, have = {}, fetchImpl = fetch, timeoutMs = 20_000 }) {
   try {
     const url = new URL('/v1/feedback/status', hubUrl);
     url.searchParams.set('keys', keys.join(','));
+    const held = keys.filter(key => Number.isSafeInteger(have[key]) && have[key] >= 0).map(key => `${key}:${have[key]}`);
+    if (held.length) url.searchParams.set('have', held.join(','));
     const response = await fetchImpl(url, { headers: { 'X-ADE-Device': deviceId, Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
     const body = await response.json().catch(() => null);
     if (response.ok && body && typeof body === 'object' && body.items && typeof body.items === 'object') return { ok: true, items: body.items, ...(typeof body.latestStable === 'string' && { latestStable: body.latestStable }) };

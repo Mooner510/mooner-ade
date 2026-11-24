@@ -408,8 +408,8 @@ MoonerADE → 플러그인
 | 방향 | 메시지 | 뜻 |
 |---|---|---|
 | 플러그인 → MoonerADE | `{type:'feedback', available, ..., statusQuery:true}` | 조회를 할 수 있다는 선언. 없으면 MoonerADE는 묻지 않습니다 |
-| MoonerADE → 플러그인 | `{type:'feedback/status', id, keys}` | 이 `clientKey`들의 처리 상태를 알려 주세요(50개 이하) |
-| 플러그인 → MoonerADE | `{type:'feedback/status-result', id, ok, items?, latestStable?, error?}` | `items`: `{[clientKey]:{state:'pending'|'beta'|'released'|'closed'|'declined', version?}}`. 모양이 다른 항목은 버려지고, 40초 안에 답이 없으면 실패로 칩니다. `error`는 `{code, retryAfter?}` |
+| MoonerADE → 플러그인 | `{type:'feedback/status', id, keys, have}` | 이 `clientKey`들의 처리 상태를 알려 주세요(50개 이하). `have`: `{[clientKey]: 이미 받아 둔 댓글 수}`이며 Hub 쿼리 `have=key:n,…`로 그대로 전달합니다 |
+| 플러그인 → MoonerADE | `{type:'feedback/status-result', id, ok, items?, latestStable?, error?}` | `items`: `{[clientKey]:{state:'pending'|'beta'|'released'|'closed'|'declined', version?, commentCount?, comments?:[{at, body}]}}`(댓글은 Hub가 준 그대로 전달하며 작성자 정보는 없습니다). 모양이 다른 항목은 버려지고, 40초 안에 답이 없으면 실패로 칩니다. `error`는 `{code, retryAfter?}` |
 
 ## 터미널과 에이전트
 

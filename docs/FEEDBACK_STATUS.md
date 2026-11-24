@@ -31,7 +31,7 @@
 ### 3.1 엔드포인트
 
 ```
-GET /v1/feedback/status?keys=<clientKey>,<clientKey>,...
+GET /v1/feedback/status?keys=<clientKey>,<clientKey>,...&have=<clientKey>:<n>,...
 ```
 
 - `keys`: 1~50개, 각 `[A-Za-z0-9_-]{8,64}`. 앱이 제출 때 보낸 `clientKey`(= 앱의 피드백 id)입니다.
@@ -56,7 +56,8 @@ GET /v1/feedback/status?keys=<clientKey>,<clientKey>,...
 - `state`: `pending | beta | released | closed | declined` (모르는 값은 앱이 무시합니다).
 - `version`: 반영 버전(`0.6.0-beta5`, 앞의 `v`는 있어도 됨). 없으면 생략.
 - `latestStable`(선택): 가장 최근 정식 릴리스 버전. 있으면 beta 반영 건을 자동으로 "릴리스 반영"으로 올립니다.
-- 본문·제목·댓글 내용은 **절대 넣지 않습니다.**
+- 제출한 본문·제목·이미지는 **절대 넣지 않습니다.**
+- **댓글(답변)**: 항목마다 `commentCount`(이슈의 댓글 수, 이슈를 이미 읽으므로 GitHub 호출이 늘지 않음)가 오고, 쿼리의 `have`(앱이 이미 받아 둔 수)와 **다를 때만** `comments: [{"at":"RFC3339","body":"…"}]`가 함께 옵니다. 같으면 댓글은 GitHub에서 읽지도 않습니다. 저장소 OWNER·MEMBER·COLLABORATOR의 댓글만 담고, **작성자·id·링크는 넣지 않습니다**(앱은 "답변이 달렸다"만 압니다). 오래된 것부터 최근 50개, 댓글당 4000자까지. 댓글이 0개로 줄면 `commentCount: 0`만 오고 앱은 목록을 비웁니다. 댓글을 읽다 실패하면 그 항목만 `comments`가 빠지고(수는 그대로), 앱은 다음 주기에 다시 묻습니다. 앱은 이 답변을 상세 화면에 보여 주고, 새 답변이 있으면 토스트·점으로 알립니다. 처리가 끝난(`released`·`declined`) 건도 14일 동안은 계속 묻습니다(뒤늦은 답변).
 
 오류: `400 bad_request`(키 형식·50개 초과), `401 unauthorized`(로그인 토큰), `429 rate_limited`(+`Retry-After`), `502 upstream_failed`(GitHub), `503 feedback_disabled`. 앱은 모두 조용히 넘기고 다음 주기에 다시 묻습니다. 이 엔드포인트가 없는 Hub(404/405/501)는 "아직 지원 안 함"으로 보고 하루 쉽니다.
 
@@ -83,7 +84,7 @@ GET /v1/feedback/status?keys=<clientKey>,<clientKey>,...
 계정 제출은 앱이 직접 Hub에 인증할 수 없어 원격 접속 플러그인이 대신 보냅니다. 조회도 같은 길입니다([PLUGINS.md](PLUGINS.md)의 피드백 절).
 
 - 플러그인이 `feedback` 메시지에 `statusQuery: true`를 보내면 "조회할 수 있다"는 뜻입니다. 그렇지 않은 플러그인에는 묻지 않고, 그 계정 건은 "제출됨"으로 남습니다.
-- 앱 → 플러그인: `{type:'feedback/status', id, keys:[…]}`. 플러그인은 위 엔드포인트를 계정 토큰으로 호출해 `{type:'feedback/status-result', id, ok:true, items, latestStable?}` 또는 `{ok:false, error:{code, retryAfter?}}`로 답합니다. 앱은 `items`의 모양(키 형식, `state` 값, 버전 형식)을 다시 검사하고 나머지는 버립니다. 40초 안에 답이 없으면 실패로 칩니다.
+- 앱 → 플러그인: `{type:'feedback/status', id, keys:[…], have:{[clientKey]:n}}`. 플러그인은 위 엔드포인트를 계정 토큰으로 호출해 `{type:'feedback/status-result', id, ok:true, items, latestStable?}` 또는 `{ok:false, error:{code, retryAfter?}}`로 답합니다. 앱은 `items`의 모양(키 형식, `state` 값, 버전 형식)을 다시 검사하고 나머지는 버립니다. 40초 안에 답이 없으면 실패로 칩니다.
 
 ## 4. 앱 쪽 저장
 
