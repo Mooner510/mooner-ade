@@ -78,7 +78,7 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           security find-identity -v -p codesigning | grep -F "$ADE_SIGN_IDENTITY"
           rm -f "$RUNNER_TEMP/sign.p12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
       - run: corepack enable
