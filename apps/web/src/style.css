@@ -3084,6 +3084,20 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog-tagline { margin: 26px 0 0; text-align: center; font-size: 16px; color: var(--muted); }
 .changelog-entry[data-rich] .changelog-summary { justify-content: center; }
 @media (max-width: 760px) { .changelog-entry[data-rich] > h3 { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 6px 12px; padding-inline: 16px; } .changelog-entry[data-rich] > h3 > .changelog-new { margin-left: 0; } .changelog-entry[data-rich] > h3 > time { margin-left: 0; } }
+/* A beta note (Changelog.tsx `data-beta`): one fixed colour of its own, --beta (a stable note takes its version's colour, so no version ever looks like a beta), a BETA badge, and everything left-aligned (a stable note is centred). */
+.changelog { --beta: hsl(24 95% 60%); }
+.changelog-nav-group { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 7px 10px 3px; color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.changelog-nav-tag, .changelog-beta { padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--beta); background: color-mix(in srgb, var(--beta) 14%, transparent); border: 1px solid color-mix(in srgb, var(--beta) 40%, transparent); }
+.changelog-beta { align-self: center; padding: 2px 7px; font-weight: 700; letter-spacing: .08em; }
+.changelog-nav button[data-beta] { margin-left: 14px; padding-left: 12px; border-radius: 0 6px 6px 0; border-left: 2px solid color-mix(in srgb, var(--beta) 35%, transparent); }
+.changelog-nav button[data-beta][aria-pressed=true] { border-left-color: var(--beta); }
+.changelog-nav button[data-beta] .changelog-nav-version { color: var(--beta); }
+.changelog-entry[data-beta] > h3 { display: flex; justify-content: flex-start; padding-inline: 40px calc(var(--edge) + 56px); }
+.changelog-entry[data-beta] > h3 > time { margin-left: auto; }
+.changelog-entry[data-beta] .changelog-version { font-size: 34px; color: var(--beta); }
+.changelog-entry[data-beta] .changelog-summary { justify-content: flex-start; }
+.changelog-main[data-rich]:has(.changelog-entry[data-beta]) .changelog-body::before { background: radial-gradient(ellipse 58% 100% at 50% 0, color-mix(in srgb, var(--beta) 13%, transparent), transparent 72%); }
+.changelog-main:has(.changelog-entry[data-beta]) { background: linear-gradient(color-mix(in srgb, var(--beta) 4%, transparent), transparent 60%); }
 /* Two columns of notes (one when the page is narrow); a demo that needs the width takes a whole row. */
 .changelog-entry[data-rich] .changelog-group > ul { display: block; columns: 2 460px; column-gap: 14px; }
 .changelog-entry[data-rich] .changelog-group > ul > li { break-inside: avoid; margin: 0 0 8px; }

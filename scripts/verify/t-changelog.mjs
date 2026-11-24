@@ -1,4 +1,4 @@
-// Full-screen changelog: version sidebar, the 0.6.0+ intro (centre -> header slot), live demos that only hover, and the plain page of older versions.
+// Full-screen changelog: a beta note (its own colour, BETA badge, left-aligned, no intro), version sidebar, the 0.6.0+ intro (centre -> header slot), live demos that only hover, and the plain page of older versions.
 // Usage: VERIFY_TAB=<name> node scripts/verify/t-changelog.mjs   (needs a running session with a project open; shots go to <session>/shots)
 // A tab that is not on screen gets no real mouse input and no animation clock, so this drives the page with DOM clicks, seeks the intro's animations by hand and forces frames with a screenshot.
 import { connect } from './cdp.mjs'; import { eq, ok } from './lib.mjs';
@@ -17,6 +17,15 @@ await c.waitFor(`!!document.querySelector('button[aria-label^="변경 내역"]')
 
 // 1. full screen + intro
 await open();
+// 0. a beta note (the newest entry while package.json is a beta): no intro, a BETA badge, left-aligned page in the one beta colour, unlike a stable note
+{ const first = await c.ev(`const e = document.querySelector('.changelog-entry'); return { beta: e.hasAttribute('data-beta'), badge: document.querySelector('.changelog-beta')?.textContent ?? null, colour: getComputedStyle(e.querySelector('.changelog-version')).color === getComputedStyle(document.querySelector('.changelog-beta')).color, tagline: !!document.querySelector('.changelog-tagline'), flex: getComputedStyle(e.querySelector('h3')).display, version: e.querySelector('.changelog-version').textContent }`);
+  if (first.beta) {
+    eq([first.badge, first.colour, first.tagline, first.flex], ['BETA', true, false, 'flex'], 'a beta note: BETA badge, the version in the beta colour, no tagline, left-aligned header');
+    eq(await c.ev(`return [!!document.querySelector('.changelog-intro'), document.querySelector('.changelog-main').dataset.phase]`), [false, 'page'], 'a beta plays no intro'); await frame('beta');
+    ok(await c.ev(`return !!document.querySelector('.changelog-nav button[data-beta]')`), 'the sidebar marks the beta version');
+  }
+  await click('.changelog-nav button', 'v0.6.0'); await sleep(200); // the first version with an intro
+}
 const view = await c.ev(`return [innerWidth, innerHeight]`);
 const box = await c.ev(`const r = document.querySelector('dialog.changelog').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]`);
 eq(box, [0, 0, view[0], view[1]], 'the changelog fills the window');
@@ -53,7 +62,7 @@ await c.ev(`document.querySelector('.changelog-body').scrollTop = 0; return 1`);
 // 2. the sidebar keeps the red dots and lists every version; one version at a time
 const state = () => c.ev(`const n=[...document.querySelectorAll('.changelog-nav button')]; return { versions: n.map(b=>b.querySelector('.changelog-nav-version').textContent), pressed: n.find(b=>b.getAttribute('aria-pressed')==='true')?.querySelector('.changelog-nav-version').textContent, shown: [...document.querySelectorAll('.changelog-entry')].map(e=>e.getAttribute('aria-label')), dots: document.querySelectorAll('.changelog-new-dot').length }`);
 let s = await state(); console.log(JSON.stringify(s));
-ok(s.versions.length >= 2, 'sidebar lists versions'); eq(s.shown.length, 1); eq(s.shown[0], s.versions[0]);
+ok(s.versions.length >= 2, 'sidebar lists versions'); eq(s.shown.length, 1); eq(s.shown[0], 'v0.6.0');
 ok(s.dots >= 1, 'red dots for versions newer than seen');
 
 // 3. demos: all mount, none of them works (state that would flip on a click stays), and the page's own styles do not leak into them
@@ -94,7 +103,7 @@ await frame('old');
 await click('.changelog-nav button', 'v0.6.0'); await c.waitFor(`!!document.querySelector('.changelog-intro')`, 3000); eq(await phase(), 'intro');
 eq(await c.ev(`const i = document.querySelector('.changelog-intro'); return [i.hasAttribute('data-locked'), getComputedStyle(i).cursor]`), [false, 'pointer'], 'a version already opened can be skipped by a click');
 await click('.changelog-intro'); await c.waitFor(`document.querySelector('.changelog-main')?.dataset.phase === 'page'`, 3000);
-await closeAll(); await open(); await c.waitFor(`!!document.querySelector('.changelog-intro')`, 3000);
+await closeAll(); await open(); await click('.changelog-nav button', 'v0.6.0'); await c.waitFor(`!!document.querySelector('.changelog-intro')`, 3000);
 await c.ev(`document.querySelector('.changelog').dispatchEvent(new Event('cancel', { cancelable: true })); return 1`); await sleep(200);
 eq([await phase(), await c.ev(`return !!document.querySelector('.changelog[open]:not(.closing)')`)], ['page', true], 'the first Esc skips the intro');
 await c.ev(`document.querySelector('.changelog').dispatchEvent(new Event('cancel', { cancelable: true })); return 1`);
@@ -102,7 +111,7 @@ await c.waitFor(`!document.querySelector('.changelog[open]:not(.closing)')`, 300
 
 // 6. reduced motion: no intro
 await c.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
-await open(); await sleep(300);
+await open(); await click('.changelog-nav button', 'v0.6.0'); await sleep(300);
 eq([await phase(), await c.ev(`return !!document.querySelector('.changelog-intro')`)], ['page', false], 'reduced motion goes straight to the page');
 await c.send('Emulation.setEmulatedMedia', { features: [] });
 

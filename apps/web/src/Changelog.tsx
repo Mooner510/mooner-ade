@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChangelogDemo, demoWide } from './ChangelogDemo';
 import { Icon } from './Icon';
 import { Modal } from './views';
 import changelog from './changelog.json';
 import kinds from './changelog-kinds.json';
-import { changelogIsFresh, changelogIsRich, changelogNewer, changelogPlaysIntro, changelogSeen, hasUnreadChangelogVersions, markChangelogSeen, readChangelogViewed, syncChangelogVersion, writeChangelogViewed } from './changelog-state';
+import { changelogIsBeta, changelogIsFresh, changelogIsRich, changelogNewer, changelogPlaysIntro, changelogSeen, hasUnreadChangelogVersions, markChangelogSeen, readChangelogViewed, syncChangelogVersion, writeChangelogViewed } from './changelog-state';
 
 type Entry = { version: string; date: string; time?: string; intro?: { hue: number; tagline: string }; items: { kind: string; title: string; text: string; icon?: string; image?: string; demo?: string }[] };
 // Items are listed by kind, in the order of changelog-kinds.json (the release notes use the same order).
@@ -28,6 +28,7 @@ const ago = (date: string, time: string, now = Date.now()) => {
   return `${Math.floor(days / 365)}년 전`;
 };
 const newer = changelogNewer;
+const isBeta = changelogIsBeta;
 const isFresh = changelogIsFresh;
 // From 0.6.0 on a note shows live UI demos (older notes keep the plain page). Only a minor/major version also opens with the full-screen
 // version intro: a patch version never plays one, and every minor/major gets its own new one (rules in changelog-state.ts, next to changelogPlaysIntro).
@@ -85,13 +86,21 @@ export function Changelog({ onClose }: { onClose(): void }) {
     <h2 id="changelog-title" className="changelog-title">변경 내역</h2><button className="icon-btn changelog-close" aria-label="닫기" onClick={leave}><Icon name="x" size={16} /></button>
     <div className="changelog-main" data-rich={rich ? '' : undefined} data-phase={phase} style={{ '--intro-hue': intro?.hue ?? 268 } as CSSProperties}>
       <nav className="changelog-nav" aria-label="버전">
-        {entries.map(item => <button key={item.version} aria-pressed={item.version === entry?.version} data-read={!isNew(item.version)} onClick={() => view(item.version)}>
-          <span className="changelog-nav-version">v{item.version}</span><time className="changelog-nav-date" dateTime={item.date} title={item.time ? `${item.date} ${item.time}` : undefined}>{item.time ? ago(item.date, item.time) : item.date}</time>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
-        </button>)}
+        {entries.map((item, index) => {
+          const beta = isBeta(item.version), base = item.version.split('-')[0];
+          // The betas of one version hang under one "v0.6.3 beta" row as v3, v2, v1 (newest first); the full version still heads the page.
+          const first = beta && !(index && isBeta(entries[index - 1].version) && entries[index - 1].version.split('-')[0] === base);
+          return <Fragment key={item.version}>
+            {first && <div className="changelog-nav-group"><span className="changelog-nav-version">v{base}</span><span className="changelog-nav-tag">beta</span></div>}
+            <button aria-pressed={item.version === entry?.version} data-read={!isNew(item.version)} data-beta={beta || undefined} onClick={() => view(item.version)}>
+              <span className="changelog-nav-version">{beta ? `v${/\d+$/.exec(item.version)?.[0]}` : `v${item.version}`}</span><time className="changelog-nav-date" dateTime={item.date} title={item.time ? `${item.date} ${item.time}` : undefined}>{item.time ? ago(item.date, item.time) : item.date}</time>{isNew(item.version) && <span className="changelog-new-dot" role="img" aria-label="한 번도 보지 않은 버전" />}
+            </button>
+          </Fragment>;
+        })}
       </nav>
       <div className="changelog-body">
-        {entry && <section key={entry.version} className="changelog-entry" data-rich={rich ? '' : undefined} aria-label={`v${entry.version}`}>
-          <h3><span className="changelog-version" ref={slot}>{rich ? <Letters text={`v${entry.version}`} /> : `v${entry.version}`}</span>{seen && newer(entry.version, seen) && <span className="changelog-new">새 소식</span>}<time>{entry.time ? `${entry.date} ${entry.time}` : entry.date}</time></h3>
+        {entry && <section key={entry.version} className="changelog-entry" data-rich={rich ? '' : undefined} data-beta={isBeta(entry.version) ? '' : undefined} aria-label={`v${entry.version}`}>
+          <h3><span className="changelog-version" ref={slot}>{rich ? <Letters text={`v${entry.version}`} /> : `v${entry.version}`}</span>{isBeta(entry.version) && <span className="changelog-beta">BETA</span>}{seen && newer(entry.version, seen) && <span className="changelog-new">새 소식</span>}<time>{entry.time ? `${entry.date} ${entry.time}` : entry.date}</time></h3>
           {phase === 'page' && <>
             {intro?.tagline && <p className="changelog-tagline">{intro.tagline}</p>}
             <p className="changelog-summary">{groups(entry).map(group => <span key={group.kind} data-kind={group.kind}>{group.kind} <b>{group.items.length}</b></span>)}</p>

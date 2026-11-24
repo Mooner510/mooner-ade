@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changelogDue, changelogIsFresh, changelogIsPatch, changelogIsRich, changelogPlaysIntro, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, setChangelogDue, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
+import { changelogDue, changelogIsBeta, changelogIsFresh, changelogNewer, changelogIsPatch, changelogIsRich, changelogPlaysIntro, hasUnreadChangelogVersions, LEGACY_CHANGELOG_VERSION, setChangelogDue, syncChangelogVersion } from '../apps/web/src/changelog-state.ts';
 
 const store = () => {
   const data = new Map();
@@ -116,4 +116,22 @@ test('only a minor or major version from 0.6.0 on plays the version intro, never
   assert.equal(changelogIsPatch('0.6.1'), true);
   assert.equal(changelogIsPatch('0.7.0'), false);
   assert.equal(changelogIsPatch('0.7.0-beta2'), false);
+});
+
+test('a beta never plays the intro (its stable x.y.0 does), and beta numbers order as numbers before the release', () => {
+  for (const version of ['0.7.0-beta1', '0.6.3-beta1']) { assert.equal(changelogPlaysIntro(version), false, version); assert.equal(changelogIsBeta(version), true); }
+  assert.equal(changelogIsBeta('0.7.0'), false);
+  assert.equal(changelogNewer('0.6.3-beta2', '0.6.3-beta1'), true);
+  assert.equal(changelogNewer('0.6.3-beta10', '0.6.3-beta2'), true);
+  assert.equal(changelogNewer('0.6.3', '0.6.3-beta9'), true);
+  assert.equal(changelogNewer('0.6.3-beta1', '0.6.2'), true);
+  assert.equal(changelogNewer('0.6.3-beta1', '0.6.3'), false);
+});
+
+test('a beta to the next beta counts as an update that opens the notes', () => {
+  const saved = store();
+  assert.equal(syncChangelogVersion('0.6.3-beta1', saved), false);
+  assert.equal(syncChangelogVersion('0.6.3-beta2', saved), true);
+  assert.deepEqual(['0.6.3-beta2', '0.6.3-beta1', '0.6.2'].filter(version => changelogIsFresh(version, saved)), ['0.6.3-beta2']);
+  assert.equal(syncChangelogVersion('0.6.3', saved), true, 'and its release after the betas');
 });
