@@ -16,7 +16,7 @@ test('Codex status bar and details show remaining credits, including credit-only
   await build({ stdin: { contents: `
     import { memo, useId } from 'react';
     import { renderToStaticMarkup } from 'react-dom/server';
-    import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort } from './Usage';
+    import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort } from './Usage';
     const Icon = () => null;
     let reading;
     const useUsage = () => ({ usage: reading, loading: false, load: async () => reading });
@@ -38,5 +38,6 @@ test('Codex status bar and details show remaining credits, including credit-only
   assert.equal(render(null), '');
   const windows = [{key:'session', label:'5시간', percent:12, resetsAt:null}];
   assert.match(render(credits, windows), /12%/);
+  assert.match(render(credits, windows), /주간 한도는 이 계정에 없어 표시하지 않습니다/);
   assert.doesNotMatch(render(null, windows), /크레딧/);
 });

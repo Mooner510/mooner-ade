@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { barWindows, defaultUsageMeters, usageMetersOf } from '../apps/web/src/usage-meters.ts';
+import { barWindows, defaultUsageMeters, missingMeters, usageMetersOf } from '../apps/web/src/usage-meters.ts';
 
 test('status-bar meters keep only the windows the user left on', () => {
   const windows = [
@@ -11,4 +11,10 @@ test('status-bar meters keep only the windows the user left on', () => {
   assert.deepEqual(usageMetersOf('cursor', { cursor: ['total', 'nope', 'grok'] }), ['total', 'grok']);
   assert.deepEqual(usageMetersOf('claude', { claude: ['weekly', 'weekly-opus', 'weekly-sonnet', 'fable'] }), ['weekly', 'fable']);
   assert.deepEqual(barWindows(windows, [], true), []);
+});
+
+test('a meter left on but absent from the reading is named, so its missing chip is explained', () => {
+  assert.deepEqual(missingMeters('claude', [{ key: 'session' }, { key: 'weekly' }], defaultUsageMeters.claude), ['Fable']);
+  assert.deepEqual(missingMeters('claude', [{ key: 'weekly' }, { key: 'fable' }], ['weekly', 'fable', 'credit']), []);
+  assert.deepEqual(missingMeters('claude', [{ key: 'weekly' }], ['weekly']), []);
 });
