@@ -8,7 +8,8 @@ import { fault } from './files.js';
 
 // Plan limits move slowly and both endpoints are rate limited, so a reading is reused for a few minutes.
 export const TTL = 3 * 60_000;
-const FORCE_GAP = 30_000, BACKOFF = 10 * 60_000;
+export const FORCE_GAP = 30_000; // a forced read is served from the cache while the last one is younger than this (a chat's limit check polls at this rate)
+const BACKOFF = 10 * 60_000;
 export const providers = ['claude', 'codex', 'cursor'];
 
 // Claude Code keeps its OAuth login in the macOS keychain; a custom CLAUDE_CONFIG_DIR gets its own entry suffixed with a hash of that path.

@@ -11,6 +11,7 @@ import { ChatStatusLine } from './ChatStatus';
 import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { McpCard } from './McpCard';
+import { LimitCard } from './LimitCard';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
 import { CliUpdateNotice } from './ClaudeUpdateNotice';
@@ -211,7 +212,7 @@ const LOCAL: CommandInfo[] = [
   { name: 'effort', description: 'Effort(추론 노력 수준)를 바꿉니다', hint: '[low|medium|high|max]' },
   { name: 'permissions', description: '권한 모드를 바꿉니다', hint: '[default|acceptEdits|plan|auto]' },
   { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
-  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
+  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'limit', description: '이 채팅의 비용·사용량 제한을 정합니다 (도달하면 중지)' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
   { name: 'cost', description: '이 채팅의 비용·토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰·비용·도구·컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
   { name: 'config', description: 'ADE 설정을 엽니다' }, { name: 'exit', description: '이 채팅을 닫습니다' }
 ];
@@ -382,8 +383,8 @@ type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>;
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
-type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; mcpCall(input: Record<string, unknown>): Promise<any>; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
-const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, mcpCall: async () => ({}), stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; mcpCall(input: Record<string, unknown>): Promise<any>; limitCall(input: Record<string, unknown>): Promise<any>; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, mcpCall: async () => ({}), limitCall: async () => ({}), stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -607,7 +608,7 @@ const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type =
 const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw' || entry?.kind === 'mcp') && entry.local === true;
+  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw' || entry?.kind === 'mcp' || entry?.kind === 'limit') && entry.local === true;
   // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
   // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
   const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
@@ -785,11 +786,16 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'agent_end') return <AgentEnd id={item.toolUseId} enter={enter} />;
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
   if (item.kind === 'mcp') return <McpCardRow enter={enter} />;
+  if (item.kind === 'limit') return <LimitCardRow enter={enter} />;
   if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
   if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
   if (item.kind === 'shell') return <ShellCardRow item={item} enter={enter} />;
   return null;
 });
+function LimitCardRow({ enter }: { enter?: true }) {
+  const { limitCall } = useContext(LocalCardsContext);
+  return <div data-enter={enter}><LimitCard call={limitCall} /></div>;
+}
 function McpCardRow({ enter }: { enter?: true }) {
   const { mcpCall } = useContext(LocalCardsContext);
   return <div data-enter={enter}><McpCard call={mcpCall} /></div>;
@@ -1497,7 +1503,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
   // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
   const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
-  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), limitCall: input => ctxRef.current.call('chat/limit', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
   // The model and Effort pickers (menus, models window) and the /model, /effort commands all end here, so each leaves the same 변경 line in the chat.
   async function chooseModel(value: string) {
     if (await setChat({ id, model: value }) === false) return false;
@@ -1561,6 +1567,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         else info(`### MCP 서버\n\n| 서버 | 도구 |\n|---|---|\n${[...servers].map(([server, count]) => `| ${server} | ${count}개 |`).join('\n')}`);
         return true;
       }
+      case 'limit': apply(view => ({ ...view, items: [...view.items, { kind: 'limit', key: `l${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true;
       case 'tasks': {
         const labels: Record<string, string> = { running: '실행 중', done: '완료', error: '오류', stopped: '중단' };
         if (!agentList.length) note('이 채팅에서 실행한 서브에이전트가 없습니다.');

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type 
 import { api } from './api';
 import { placeAbove } from './Usage';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, dollars, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, dollars, limitChip, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
 export type ChatStatusContext = { state: ChatState; share?: string | null };
@@ -164,8 +164,10 @@ export function ChatStatusLine({ settings, context, only, onSettings, onAuth }: 
   // Each item's view is computed once (it was computed again inside the item).
   const nodes = (ids: string[], align: 'left' | 'right') => ids.filter(id => shown.has(id)).flatMap(id => { const view = chatItemView(id, context); return view ? [{ id, node: <ChatItem id={id} view={view} align={align} state={context.state} share={context.share} onSettings={onSettings} onAuth={onAuth} /> }] : []; });
   const render = (list: { id: string; node: ReactNode }[]) => list.map((item, index) => <Fragment key={item.id}>{index > 0 && separator && <span className="chat-sep" aria-hidden="true">{separator}</span>}{item.node}</Fragment>);
+  // This chat's own limit (/limit): shown whenever one is set, whatever the status line settings say.
+  const chip = only ? null : limitChip(context.state.limit);
   return <footer className="statusbar chat-statusbar" aria-label="채팅 상태 표시줄">
-    <div className="status-left">{render(nodes(layout.left, 'left'))}</div>
+    <div className="status-left">{render(nodes(layout.left, 'left'))}{chip && <StatBox cls={`chat-stat-limit${chip.stopped ? ' stopped' : ''}`} icon={chip.stopped ? 'block' : 'rule'} text={chip.text} tip={chip.tip} align="left" />}</div>
     <div className="status-right">{render(nodes(layout.right, 'right'))}</div>
   </footer>;
 }
