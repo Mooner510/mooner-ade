@@ -46,7 +46,8 @@ export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' 
 export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
-export type WorkspaceHandle = { requestClose(): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
+// `forceAsk`: the sidebar X always confirms. Shortcuts and the pane's own close button still follow the confirm settings.
+export type WorkspaceHandle = { requestClose(forceAsk?: boolean): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string, forceAsk?: boolean): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string, forceAsk?: boolean): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown> } &
   ({ hidden?: false; icon: IconName } | { hidden: true; icon?: never });
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
@@ -287,6 +288,9 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     input: (title, initial) => new Promise<string | null>(resolve => openQuick({ kind: 'input', title, initial, resolve })),
     confirm: async message => (await new Promise<string | null>(resolve => openQuick({ kind: 'pick', title: message, items: [{ id: 'yes', label: '확인' }, { id: 'no', label: '취소' }], resolve }))) === 'yes'
   }), []);
+  // The question is drawn on document.body, so a project that is not on screen can still ask. Name that project when it is not the one being viewed.
+  const projectLabel = () => basename((refs.project.current?.root ?? root).replace(/\\/g, '/'));
+  const askClose = (message: string) => ask.confirm(refs.active.current ? message : `‘${projectLabel()}’ — ${message}`);
   const pick = (title: string, items: QuickItem[]) => new Promise<string | null>(resolve => openQuick({ kind: 'pick', title, items, resolve }));
   // A link clicked in a terminal: warn, then open in the default browser, copy the address, or cancel. Only the visible project answers.
   useEffect(() => {
@@ -511,7 +515,7 @@ ${where}`, [
       const chosen = await pick('열 파일을 고르세요', files.map(file => ({ id: file, label: file, icon: 'file' })));
       if (chosen) await askOpen({ path: chosen });
     }),
-    selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
+    selectTab: id => selectTab(id), closePane: (id, forceAsk) => run(() => closeTerminal(id, forceAsk)),
     // Reordering only changes the list order; the saved layout follows it.
     // Dropping a tab onto another folds its panes into it, side by side.
     mergeTabs: (id, targetId) => {
@@ -530,22 +534,33 @@ ${where}`, [
       if (next.every((tab, index) => tab === list[index])) return;
       commitTabs(next);
     },
-    selectPane: (tabId, paneId) => { selectTab(tabId); setFocusLeaf(paneId); }, closeTab: id => run(() => closePaneTab(id)), newTab: () => run(() => newTab()), renameTab: id => run(() => renamePaneTab(id)), launcher: () => run(() => pickLauncher('tab')),
-    async requestClose() {
-      const projectId = refs.project.current?.id; if (!projectId) return true;
-      if (!(await saveBeforeClose([...fileBuffers.current.keys()].map(path => `file:${path}`)))) return false;
+    selectPane: (tabId, paneId) => { selectTab(tabId); setFocusLeaf(paneId); }, closeTab: (id, forceAsk) => run(() => closePaneTab(id, forceAsk)), newTab: () => run(() => newTab()), renameTab: id => run(() => renamePaneTab(id)), launcher: () => run(() => pickLauncher('tab')),
+    async requestClose(forceAsk = false) {
+      const projectId = refs.project.current?.id; if (!projectId) return true; // not loaded yet: nothing runs, and this branch never draws the confirm dialog
+      const paneLeaves = refs.paneTabs.current.flatMap(tab => leafList(tab.pane));
       // Background subagents are asked about whatever the setting says; the terminals' own question below still follows the setting.
-      const background = refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id)).length;
+      const background = paneLeaves.filter(leaf => leaf.kind === 'chat' && bgChats.current.has(leaf.id)).length;
+      // The sidebar X asks once, whatever is running, and that one question covers the ones below. A phone only takes the project off its own list, so it is not asked.
+      if (forceAsk && !isRemote) {
+        const liveCount = refs.project.current?.terminals.filter(terminal => !terminal.exited).length ?? 0;
+        const chatCount = paneLeaves.filter(leaf => leaf.kind === 'chat').length;
+        const busy = paneLeaves.filter(leaf => leaf.kind === 'chat' && (working.has(leaf.id) || bgChats.current.has(leaf.id))).length;
+        const parts = [busy && `응답 중이거나 백그라운드 작업이 있는 채팅 ${busy}개`, liveCount && `실행 중인 터미널 ${liveCount}개`].filter(Boolean);
+        const resume = chatCount ? ' 닫은 채팅은 /resume으로 다시 열 수 있습니다.' : '';
+        const message = parts.length ? `${parts.join('와 ')}가 있습니다. 모두 종료하고 프로젝트를 닫을까요?${resume}` : chatCount ? `이 프로젝트를 닫을까요? 채팅 ${chatCount}개가 닫힙니다.${resume}` : '이 프로젝트를 닫을까요?';
+        if (!(await askClose(message))) return false;
+      }
+      if (!(await saveBeforeClose([...fileBuffers.current.keys()].map(path => `file:${path}`)))) return false;
       // A phone only takes the project off its own list: the PC keeps it open, with its terminals and chats running.
       if (isRemote) return true;
-      if (background && !(await ask.confirm(`백그라운드 작업이 있는 채팅 ${background}개가 있습니다. 프로젝트를 닫으면 작업이 종료됩니다. 닫을까요?`))) return false;
+      if (background && !forceAsk && !(await askClose(`백그라운드 작업이 있는 채팅 ${background}개가 있습니다. 프로젝트를 닫으면 작업이 종료됩니다. 닫을까요?`))) return false;
       try { await api('project/close', { projectId }); }
       catch (cause) {
         if (!(cause instanceof ApiError)) throw cause;
         if (cause.code === 'PROJECT_BUSY') {
           // Skipped only when the background question covered every reason: no live terminal, no chat answering right now.
           const asked = background > 0 && !working.size && !refs.project.current?.terminals.some(terminal => !terminal.exited);
-          if (!asked && settingsRef.current.confirmCloseProject && !(await ask.confirm(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
+          if (!asked && !forceAsk && settingsRef.current.confirmCloseProject && !(await askClose(`${cause.message} 모두 종료하고 프로젝트를 닫을까요?`))) return false;
           await api('project/close', { projectId, force: true });
         } else if (cause.code !== 'NOT_FOUND') throw cause;
       }
@@ -946,10 +961,10 @@ ${where}`, [
     } finally { switchingChats.current.delete(id); }
   }
   // Closing a chat ends its child process and keeps the transcript for /resume.
-  async function closeChat(id: string) {
-    // A background subagent is asked about whatever the setting says: closing ends it silently otherwise.
-    const question = bgChats.current.has(id) ? '백그라운드 작업이 실행 중인 채팅을 닫을까요? 작업이 종료됩니다.' : working.has(id) && settingsRef.current.confirmCloseChat ? '응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.' : '';
-    if (question && !(await ask.confirm(question))) return;
+  async function closeChat(id: string, forceAsk = false) {
+    // A background subagent is always asked about: closing ends it silently otherwise. Sidebar X also asks before an idle chat disappears.
+    const question = bgChats.current.has(id) ? '백그라운드 작업이 실행 중인 채팅을 닫을까요? 작업이 종료됩니다.' : working.has(id) && (forceAsk || settingsRef.current.confirmCloseChat) ? '응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.' : forceAsk ? '이 채팅을 닫을까요?' : '';
+    if (question && !(await askClose(question))) return;
     await call('chat/close', { id }).catch(report);
     chatBus.current.delete(id); chatPrev.current.delete(id);
     removeTerminalPane(id);
@@ -967,26 +982,34 @@ ${where}`, [
     else if (before === 'attention' && state.status !== 'attention') clearAttention(id);
     if (state.status === 'idle' && before === 'working') paneProps.onAgentEvent(id, 'done');
   }
-  async function closeTerminal(id: string) {
-    if (findLeaf(treeOf(id), id)?.kind === 'chat') return closeChat(id);
-    if (findLeaf(treeOf(id), id)?.kind === 'editor') return closeGroup(id);
+  async function closeTerminal(id: string, forceAsk = false) {
+    const leaf = findLeaf(treeOf(id), id);
+    if (leaf?.kind === 'chat') return closeChat(id, forceAsk);
+    if (leaf?.kind === 'editor') {
+      if (forceAsk && !(await askClose('이 편집기를 닫을까요?'))) return;
+      return closeGroup(id);
+    }
     const info = refs.project.current?.terminals.find(terminal => terminal.id === id);
-    if (info && !info.exited && settingsRef.current.confirmClose && !(await ask.confirm('터미널 프로세스를 종료할까요?'))) return;
+    const running = Boolean(info && !info.exited);
+    if (running && (forceAsk || settingsRef.current.confirmClose)) {
+      if (!(await askClose('터미널 프로세스를 종료할까요?'))) return;
+    } else if (forceAsk && !(await askClose(leaf?.kind === 'launcher' ? '이 창을 닫을까요?' : '이 터미널을 닫을까요?'))) return;
     if (info) await call('terminal/close', { id });
     removeTerminalPane(id);
     await refresh();
   }
-  async function closePaneTab(tabId: string) {
+  async function closePaneTab(tabId: string, forceAsk = false) {
     const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
     if (!(await saveBeforeClose(leafList(tab.pane).flatMap(leaf => leaf.tabs ?? [])))) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     const chats = leafList(tab.pane).filter(leaf => leaf.kind === 'chat');
     // Busy: answering, waiting for an approval, or running a background subagent. Background work is asked about whatever the setting says.
     const busy = chats.filter(leaf => working.has(leaf.id) || bgChats.current.has(leaf.id)).length, background = chats.some(leaf => bgChats.current.has(leaf.id));
-    if ((running.length && settingsRef.current.confirmClose) || (chats.length && settingsRef.current.confirmCloseChat) || background) {
+    if (forceAsk || (running.length && settingsRef.current.confirmClose) || (chats.length && settingsRef.current.confirmCloseChat) || background) {
       const closing = [running.length && `실행 중인 터미널 ${running.length}개`, chats.length && `채팅 ${chats.length}개`].filter(Boolean).join('와 ');
       const detail = [busy && `응답 중이거나 백그라운드 작업이 있는 채팅 ${busy}개는 작업이 중단됩니다.`, chats.length && '닫은 채팅은 /resume으로 다시 열 수 있습니다.'].filter(Boolean).join(' ');
-      if (!(await ask.confirm(`이 탭을 닫을까요? ${closing}가 닫힙니다.${detail ? ` ${detail}` : ''}`))) return;
+      const head = `‘${tabLabel(tab)}’ 탭을 닫을까요?`;
+      if (!(await askClose(closing ? `${head} ${closing}가 닫힙니다.${detail ? ` ${detail}` : ''}` : head))) return;
     }
     for (const leaf of leafList(tab.pane)) if (leaf.kind === 'chat') { await call('chat/close', { id: leaf.id }).catch(report); chatBus.current.delete(leaf.id); chatPrev.current.delete(leaf.id); }
     for (const leaf of leafList(tab.pane)) if (leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id)) await call('terminal/close', { id: leaf.id });
@@ -1133,7 +1156,7 @@ ${where}`, [
       const command = refs.commands.current.find(item => item.keys && matches(item.keys, event));
       if (!command) return;
       // A dialog keeps the keys to itself, except the feedback capture, which is how a dialog gets into a screenshot.
-      if (document.querySelector('dialog[open]') && command.id !== 'feedbackCapture') return;
+      if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
       // In a terminal, plain Ctrl+key stays with the shell unless the key is meant to work there or the user said so (settings.termKeys, per key).
       if (inTerminal && !appKeyInTerminal(settingsRef.current, command.id, event)) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
@@ -1143,7 +1166,8 @@ ${where}`, [
   }, []);
 
   // ---- render ----
-  const quickDialog = quick && <QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />;
+  // Portaled out of the project: an inactive project stays `hidden`, and a dialog inside it does not appear until that project is shown.
+  const quickDialog = quick && createPortal(<QuickInput key={quick.key} request={quick.request} onClose={() => setQuick(current => current?.key === quick.key ? null : current)} />, document.body);
   // Git 저장소가 없는 프로젝트에서 흐린 Git 버튼을 누르면 이유를 잠깐 보여 준다(툴팁은 올려 둬야만 보인다).
   const [gitNote, setGitNote] = useState(false);
   useEffect(() => { if (!gitNote) return; const timer = setTimeout(() => setGitNote(false), 4000); return () => clearTimeout(timer); }, [gitNote]);
