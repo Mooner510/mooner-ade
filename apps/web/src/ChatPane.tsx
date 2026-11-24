@@ -2029,7 +2029,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
     : waiting ? '컨텍스트 집계 대기'
     : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`}`;
   return <>
-    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} onClick={() => void load(true)}>
+    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         <circle cx="14" cy="14" r={radius} className="track" />
         {shown && compacting && gauge.used > 0 && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}
