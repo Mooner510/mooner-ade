@@ -239,11 +239,12 @@ const apiSpend = createApiSpend({ file: path.join(dataRoot, 'api-key-spend.json'
 await apiSpend.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
-let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true;
+let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true, mcpTrust = {};
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
   if (feedbackAgentTool !== (state?.settings?.feedbackAgentTool !== false)) { feedbackAgentTool = !feedbackAgentTool; applyMcpServers(); }
   terminalShell = typeof state?.settings?.terminalShell === 'string' ? state.settings.terminalShell : '';
+  mcpTrust = state?.settings?.mcpTrust ?? {};
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
 }
@@ -420,7 +421,7 @@ const chatProcHost = ptyHost?.procs ? {
 } : null;
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
-    keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend, cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
+    keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], spend: apiSpend, cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults, chatText,
     // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.

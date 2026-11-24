@@ -1,6 +1,8 @@
+import { createPortal } from 'react-dom';
 import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { basename, type Leaf } from './api';
-import { DiffView, usageHue, type DiffLayoutChoice, type Settings } from './Editor';
+import { DiffView, usageHue, type DiffLayoutChoice, type McpTrust, type Settings } from './Editor';
+import { addTrust } from './mcp-trust';
 import { chatDarkVars, themeById } from './themes';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
@@ -807,7 +809,7 @@ function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; ent
 
 // ExitPlanMode: the plan is the thing being decided, so it gets room to read (tall body, larger type) and a full-size dialog
 // that carries the same decision buttons. The footer stays outside the scroll area, so the answer is never scrolled away.
-type PlanAnswer = { mode?: string; message?: string; allowTool?: boolean };
+type PlanAnswer = { mode?: string; message?: string; allowTool?: boolean; permanent?: boolean };
 function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: string[]; choices?: boolean; onAnswer(allow: boolean, answer?: PlanAnswer): void; onBack?(): void }) {
   const [revising, setRevising] = useState(false), [note, setNote] = useState(''), feedback = note.trim();
   if (revising) return <footer className="plan-revise">
@@ -911,42 +913,43 @@ export function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllo
     </footer>
   </div>;
 }
-export function ApprovalCard({ approval, modes, settings, explain, asker, askerColor, onAnswer, onInterrupt }: { approval: Approval; modes: string[]; settings: Settings; explain?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void }) {
+export function ApprovalCard({ approval, modes, settings, claude, asker, askerColor, onAnswer, onInterrupt, trust }: { approval: Approval; modes: string[]; settings: Settings; claude?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void; trust?(entry: McpTrust): void }) {
   const played = usePlayedEntrance();
-  const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
-  const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
+  const [menu, setMenu] = useState<{ right: number; bottom: number } | null>(null), caret = useRef<HTMLButtonElement>(null), list = useRef<HTMLDivElement>(null), menuOpen = menu !== null;
+  useEffect(() => { if (menuOpen) list.current?.querySelector('button')?.focus(); }, [menuOpen]);
+  // The card clips what overflows it (and is a size container, which moves `fixed` boxes with it), so the menu goes to the body, placed on screen above the caret.
+  const toggleMenu = () => setMenu(open => { const box = caret.current?.getBoundingClientRect(); return open || !box ? null : { right: window.innerWidth - box.right, bottom: window.innerHeight - box.top + 6 }; });
+  // The menu next to 허용 (which allows this request only): this chat keeps allowing the tool (Claude; the other agents' own session allow), or an MCP tool / server is trusted for good in the settings.
+  const trustAnd = (entry: McpTrust) => { setMenu(null); trust?.(entry); onAnswer(true, false); };
   if (approval.questions?.length) return <QuestionCard questions={approval.questions} title={approval.tool === 'AskUserQuestion' ? '질문' : approval.tool} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
   // Claude's ExitPlanMode and Cursor's create_plan ('계획 승인') read the same; only Claude picks the mode it continues in.
   if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} />;
-  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
+  const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, hasMenu = claude || canAlways || (!!approval.mcp && !!trust), summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
   const written = approval.tool === 'Write' && typeof input.content === 'string' ? input.content : null;
   // The same diff view as the Edit tool card (only what changes, coloured), not the whole old text as removed and the new as added.
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
-  return <div ref={card} className="chat-approval" {...played} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
+  return <div className="chat-approval" {...played} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
     <header><Icon name="alert" size={15} /><strong>{approval.tool}</strong><span>실행하려면 허용이 필요합니다</span>
       {asker && <span className="chat-approval-agent" style={dotStyle(askerColor)}><i className="chat-agent-dot" /><span className="chat-agent-type">{asker.type}</span><span className="chat-approval-agent-name"><b>{asker.description || '서브에이전트'}</b>의 요청</span></span>}</header>
     <div className="chat-approval-body">{SHELLS[approval.tool] ? <>{typeof input.description === 'string' && input.description && <p className="chat-approval-desc">{input.description}</p>}<CodeBlock code={String(input.command ?? '')} lang={SHELLS[approval.tool]} /></> : written === null && changed === null && <p className="chat-approval-line">{summary}</p>}
       {approval.tool === 'NotebookEdit' && notebookCell(input) && <div className="chat-approval-preview"><CodeBlock code={clip(notebookCell(input)!.code)} lang={notebookCell(input)!.label} syntax={notebookCell(input)!.syntax} /></div>}
       {written !== null && <div className="chat-approval-preview"><CodeBlock code={clip(written)} lang={writeLabel(summary, written, approval.exists)} syntax={filePath} /></div>}
       {changed !== null && <div className="chat-approval-diff"><ChatDiff named from={changed.from} to={changed.to} path={filePath || 'edit'} settings={settings} /></div>}</div>
-    {explaining ? <footer className="plan-revise">
-      <label htmlFor={`deny-${approval.requestId}`}>실행하지 않고, 대신 어떻게 할지 알려 주세요</label>
-      <textarea id={`deny-${approval.requestId}`} autoFocus rows={2} maxLength={4000} value={note} placeholder="예: 이 명령 대신 npm test만 실행해 주세요."
-        onChange={event => setNote(event.target.value)} onKeyDown={event => {
-          if (event.key === 'Escape') { event.preventDefault(); explainOpen(false); }
-          else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && instead) { event.preventDefault(); onAnswer(false, false, undefined, { message: instead }); }
-        }} />
-      <div className="plan-actions">
-        <button type="button" className="secondary approval-explain" onClick={() => explainOpen(false)}>취소</button>
-        <button type="button" className="primary" disabled={!instead} onClick={() => onAnswer(false, false, undefined, { message: instead })} title="Ctrl+Enter">거부하고 지시 보내기</button>
+    <footer>
+      <button type="button" onClick={() => { onAnswer(false, false); onInterrupt(); }} title="거부하고 응답을 중단합니다">거부</button>
+      <div className="approve-split">
+        <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
+        {hasMenu && <button type="button" ref={caret} className="primary approve-caret" aria-label="허용 방식 선택" aria-haspopup="menu" aria-expanded={menuOpen} onClick={toggleMenu}><Icon name="chevronDown" size={14} /></button>}
+        {menu && createPortal(<><button type="button" className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={() => setMenu(null)} />
+          <div ref={list} className="menu approve-menu" role="menu" style={menu} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null); } }}>
+            {(claude || canAlways) && <button type="button" role="menuitem" onClick={() => { setMenu(null); claude ? onAnswer(true, false, undefined, { allowTool: true }) : onAnswer(true, true); }}>이 세션에서 허용</button>}
+            {approval.mcp && trust && <>
+              <button type="button" role="menuitem" onClick={() => trustAnd({ server: approval.mcp!.server, tool: approval.mcp!.tool })}>이 도구 신뢰</button>
+              <button type="button" role="menuitem" onClick={() => trustAnd({ server: approval.mcp!.server })}>이 MCP 신뢰</button>
+            </>}
+          </div></>, document.body)}
       </div>
-    </footer> : <footer>
-      {explain && <button type="button" className="secondary approval-explain" onClick={() => explainOpen(true)}>다르게 하기…</button>}
-      <button type="button" onClick={() => onAnswer(false, false)}>거부</button>
-      {canAlways && <button type="button" onClick={() => onAnswer(true, true)} title="이 세션의 유사 요청 허용">항상 허용</button>}
-      {explain && <button type="button" onClick={() => onAnswer(true, false, undefined, { allowTool: true })} title={`이 채팅에서 ${approval.tool}은(는) 입력과 상관없이 묻지 않고 허용합니다`}>이 도구 항상 허용</button>}
-      <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
-    </footer>}
+    </footer>
   </div>;
 }
 
@@ -1834,7 +1837,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-dock">
       {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
-      {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
+      {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} claude={agent === 'claude'} trust={agent === 'codex' ? undefined : entry => ctx.onSettingsChange({ ...ctx.settings, mcpTrust: { ...ctx.settings.mcpTrust, [agent]: addTrust(ctx.settings.mcpTrust[agent], entry) } })} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {!view.approvals.length && asyncQuestions.length > 0 && <QuestionCard key={asyncQuestions[0].id} questions={asyncQuestions} submitting={sendingQuestion} onAnswer={answerAsyncQuestion} />}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
       {queue.length > 0 && <div className="chat-queue"><div role="status">{sendQueueLabel(queue)}</div>

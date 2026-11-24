@@ -120,11 +120,11 @@ export const SCENARIOS: Scenario[] = [
 ];
 
 // The showcase chat runs as one fixed setup: Opus 5.5 · High in "편집 허용" (acceptEdits) mode, so what asks and what does not is what that mode
-// does. File edits and read-only commands go ahead; any other command waits on the approval card (until "항상 허용" adds its rule for the session).
+// does. File edits and read-only commands go ahead; any other command waits on the approval card (until "이 세션에서 허용" adds its rule for the session).
 export const demoChatState = (): ChatState => ({ ...emptyState(), model: 'claude-opus-5-5', effort: 'high', permissionMode: 'acceptEdits' });
 export const demoModels = { models: { '': 'claude-opus-5-5', opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' }, catalog: [] };
 const READ_ONLY = /^(git (log|status|diff|show)|du|ls|cat|head|tail|wc|npm (outdated|ls))\b/;
-// The session rule "항상 허용" adds: the command and its subcommand (`npm run build`, `npm test`).
+// The session rule "이 세션에서 허용" adds: the command and its subcommand (`npm run build`, `npm test`).
 export const commandRule = (command: string) => { const words = command.trim().split(/\s+/); return words.slice(0, words[1] === 'run' ? 3 : 2).join(' '); };
 export const needsApproval = (part: Part, allowed: Set<string>) => 'tool' in part && part.tool === 'Bash' && !READ_ONLY.test(String(part.input.command ?? '')) && !allowed.has(commandRule(String(part.input.command ?? '')));
 
@@ -247,12 +247,15 @@ export function chatDemo(emit: Emit, pane: () => HTMLElement | null, cursor: HTM
       event({ kind: 'approval', phase: 'request', requestId: id, tool: part.tool, input, toolUseId: toolId,
         suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: `${rule}:*` }], behavior: 'allow', destination: 'session' }] });
       await wait(1200);
-      // Now and then "항상 허용", so the same command later runs without asking.
-      const buttons = [...(find('.chat-approval footer')?.querySelectorAll('button') ?? [])];
-      await click(Math.random() < .35 ? buttons.find(button => button.textContent === '항상 허용') : buttons.find(button => button.classList.contains('primary')));
+      // Now and then "이 세션에서 허용" (in the 허용 menu), so the same command later runs without asking.
+      if (Math.random() < .35) {
+        await click(find('.chat-approval .approve-caret'));
+        await wait(300);
+        await click([...document.querySelectorAll('.approve-menu button')].find(button => button.textContent === '이 세션에서 허용'));
+      } else await click(find('.chat-approval .approve-split > .primary'));
       const params = await answered();
       if (params?.allow === false) { event({ kind: 'tool_result', toolUseId: toolId, content: '사용자가 실행을 거부했습니다.', isError: true }); throw SKIP; }
-      if (params?.always) allowed.add(rule);
+      if (params?.always || params?.allowTool) allowed.add(rule);
     }
     await wait(between(500, 1400));
     event({ kind: 'tool_result', toolUseId: toolId, content: fill(part.result ?? '', choice), isError: part.error === true });

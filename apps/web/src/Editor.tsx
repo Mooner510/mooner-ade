@@ -5,7 +5,10 @@ import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
 import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-meters';
 import type { FileBuffer } from './file-buffer';
 
+// An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
+export type McpTrust = { server: string; tool?: string };
 export type Settings = {
+  mcpTrust: Record<'claude' | 'codex' | 'cursor', McpTrust[]>;
   theme: ThemeId; chatDarker: boolean; fontSize: number; terminalFontSize: number; wordWrap: boolean; dimInactivePanes: boolean;
   terminalFont: string; lineHeight: number; scrollback: number; cursorStyle: 'bar' | 'block' | 'underline'; cursorBlink: boolean; copyOnSelect: boolean;
   sidebarWidth: number; statusItems: string[]; statusLeft: string[]; statusRight: string[]; usageColors: boolean; notifyDone: boolean; notifyApproval: boolean; notifySound: boolean; soundDone: string; soundAttention: string; soundVolume: number; soundVolumeExtended: boolean; diffRefresh: number; wakatime: boolean; wakatimeBackground: boolean;
@@ -127,11 +130,14 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
     codex: Array.isArray(saved.usageShown?.codex) ? saved.usageShown.codex : [...defaultUsageMeters.codex],
     cursor: Array.isArray(saved.usageShown?.cursor) ? saved.usageShown.cursor : [...defaultUsageMeters.cursor]
   };
+  const trusted = (list: unknown): McpTrust[] => Array.isArray(list) ? list.filter(item => typeof item?.server === 'string' && item.server && (item.tool === undefined || typeof item.tool === 'string')).map(item => ({ server: item.server, ...(item.tool !== undefined && { tool: item.tool }) })) : [];
+  next.mcpTrust = { claude: trusted(saved.mcpTrust?.claude), codex: trusted(saved.mcpTrust?.codex), cursor: trusted(saved.mcpTrust?.cursor) };
   return next;
 }
 // xterm's own default, so an empty-looking field means "unchanged".
 const defaultWordSeparator = ' ()[]{}\',"`─‘’“”|';
 export const defaultSettings: Settings = {
+  mcpTrust: { claude: [], codex: [], cursor: [] },
   theme: 'dark', chatDarker: false, fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,

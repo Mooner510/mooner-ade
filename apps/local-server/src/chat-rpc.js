@@ -1,4 +1,5 @@
 import { fault } from './files.js';
+import { cursorMcp, isTrusted } from './mcp-trust.js';
 import { randomUUID } from 'node:crypto';
 import { cleanChatTitle } from './chat-title.js';
 import { mergeCursorCommands } from './slash-commands.js';
@@ -61,7 +62,7 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
 };
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
-export function createChatProtocol(agent, { write, emit, fail, transportResumeDelay = defaultTransportResumeDelay } = {}) {
+export function createChatProtocol(agent, { write, emit, fail, transportResumeDelay = defaultTransportResumeDelay, trusted = () => [] } = {}) {
   let cursorTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
@@ -368,7 +369,9 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     } else if (p.sessionId && p.sessionId !== sessionId && !cursorChildren.has(p.sessionId)) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
     else if (raw.method === 'session/request_permission' && runEverything && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission' && autoApprovedTool(p.toolCall) && autoAllowCursor(raw)) return;
-    else if (raw.method === 'session/request_permission') approval(raw, p.toolCall?.title ?? '도구 실행', p.toolCall?.rawInput ?? {}, { suggestions: p.options?.some(o => o.kind === 'allow_always') ? ['session'] : [] });
+    // An MCP tool the user trusted in the settings is allowed once per request; every other request waits on the card, which offers to trust an MCP tool.
+    else if (raw.method === 'session/request_permission' && isTrusted(trusted(), cursorMcp(p.toolCall)) && autoAllowCursor(raw)) return;
+    else if (raw.method === 'session/request_permission') approval(raw, p.toolCall?.title ?? '도구 실행', p.toolCall?.rawInput ?? {}, { suggestions: p.options?.some(o => o.kind === 'allow_always') ? ['session'] : [], ...(cursorMcp(p.toolCall) && { mcp: cursorMcp(p.toolCall) }) });
     else if (raw.method === 'cursor/ask_question') approval(raw, p.title ?? '질문', {}, { questions: p.questions });
     else if (raw.method === 'cursor/create_plan') approval(raw, '계획 승인', { description: p.overview, plan: p.plan });
     else if (raw.method === 'cursor/task' || raw.method === 'cursor/update_todos' || raw.method === 'cursor/generate_image') void send({ id: raw.id, result: {} });

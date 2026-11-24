@@ -110,7 +110,7 @@ const demos: Record<string, Demo> = {
   'git-graph': { render: () => <GitGraph />, wide: true, min: 360 },
   shell: { render: () => <Shell />, frame: 'chat', min: 150 },
   'feedback-status': { render: () => <FeedbackStatus />, min: 200 },
-  'always-allow': { render: () => <ApprovalCard approval={{ requestId: 'demo', tool: 'Bash', input: { command: 'npm test', description: '테스트를 실행합니다' }, suggestions: [{}] }} modes={[]} settings={defaultSettings} explain onAnswer={noop} onInterrupt={noop} />, frame: 'chat', min: 170 },
+  'always-allow': { render: () => <ApprovalCard approval={{ requestId: 'demo', tool: 'Bash', input: { command: 'npm test', description: '테스트를 실행합니다' }, suggestions: [{}] }} modes={[]} settings={defaultSettings} claude onAnswer={noop} onInterrupt={noop} />, frame: 'chat', min: 170 },
   'auto-allow': { render: () => <BlockedCard items={[{ toolUseId: 'a', tool: 'Bash', input: { command: 'git push origin main' }, reason: '원격 저장소에 직접 푸시합니다', rule: 'Bash(git push:*)' }, { toolUseId: 'b', tool: 'Bash', input: { command: 'rm -rf dist' }, reason: '폴더를 통째로 지웁니다', rule: 'Bash(rm:*)' }]} onAllow={async () => {}} />, frame: 'chat', min: 230 },
   'cli-update': { render: () => <CliUpdateBar name="Claude Code" latest="2.1.150" onUpdate={noop} onSnooze={noop} />, min: 34 },
   'cache-ttl': { render: () => <div className="usage-panel changelog-popover"><CacheTtlPicker value={'1h' satisfies CacheTtl} onChange={noop} /></div>, min: 130 },
