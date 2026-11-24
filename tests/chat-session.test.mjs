@@ -12,7 +12,7 @@ import { createCursorModelCache, cursorSurface } from '../apps/local-server/src/
 import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
-import { fromReplay, pendingAsyncQuestions } from '../apps/web/src/chat-model.ts';
+import { contextGauge, contextReported, fromReplay, pendingAsyncQuestions } from '../apps/web/src/chat-model.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/fake-chat-rpc.mjs', import.meta.url));
 const until = async predicate => { for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('chat did not settle'); };
@@ -408,6 +408,41 @@ test('Claude: a setting change that replaces the child does not count the sessio
   await until(() => session.state().turns === 2 && session.state().status === 'idle');
   assert.ok(Math.abs(session.state().costUsd - 0.06) < 1e-9, String(session.state().costUsd));
 });
+
+for (const [label, usage, expected] of [
+  ['with usage', { input: 1_000, cacheRead: 35_000, cacheCreate: 5_000, output: 1_000 }, 42_000],
+  ['without usage', null, null],
+]) {
+  test(`Claude Rewind restores context ${label} immediately and after reopening`, async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-rewind-'));
+    const uuid = '5d92c231-1326-4fcd-8927-09a07cd18c78';
+    const events = [
+      { kind: 'message', usage: { input: 90_000, cacheRead: 0, cacheCreate: 0, output: 0 } },
+      { kind: 'divider' },
+      { kind: 'message', parentToolUseId: 'subagent', usage: { input: 80_000, cacheRead: 0, cacheCreate: 0, output: 0 } },
+      { kind: 'message', role: 'assistant', uuid, usage },
+      { kind: 'message', usage: { input: 100_000, cacheRead: 0, cacheCreate: 0, output: 0 } },
+      { kind: 'result', status: 'success', contextWindow: 1_000_000 },
+    ].map((event, index) => ({ ...event, seq: index + 1 }));
+    const states = [], options = { directory, id: 'rewind', cwd: directory, onState: state => states.push(state),
+      executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-usage-stream.mjs', import.meta.url))] };
+    await seedChat({ ...options, events, meta: { sessionId: 'usage-session', configDir: directory } });
+    let session = await openChatSession(options);
+    t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+    assert.equal(session.state().contextTokens, 100_000);
+    await session.rewind(uuid);
+    assert.equal(states.at(-1).contextTokens, expected);
+    assert.equal(contextReported(states.at(-1)), expected !== null);
+    const gauge = contextGauge(states.at(-1));
+    await session.close();
+    session = await openChatSession(options);
+    assert.equal(session.replay().state.contextTokens, expected);
+    assert.deepEqual(contextGauge(session.replay().state), gauge);
+    await session.send('continue');
+    await until(() => session.state().status === 'idle');
+    assert.equal(session.state().contextTokens, 155);
+  });
+}
 
 test('Claude: ADE never hands an Auto Compact window to the CLI; "auto" shows no window and a window the user set is shown as is', async t => {
   // A test run from inside an ADE chat inherits the window ADE handed to that chat's CLI, which would read as one the user set.

@@ -27,7 +27,7 @@ import { Collapse, useHeightMorph } from './Collapse';
 import { ShellCard } from './ShellCard';
 import { isShellDraft, parseShellInput, shellBang, shownDraft } from './chat-shell';
 import { FileIcon } from './FileIcon';
-import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, briefDuration,toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
+import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPendingText, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, briefDuration,toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
 import { prepareChatImage } from './image-fit';
@@ -1590,7 +1590,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         const contextRow: [string, string] | null = name === 'status' && contextReported(state)
           ? ['컨텍스트', `${compact(gauge.used)} / ${compact(gauge.basis)} (${gauge.percent}%)`]
           : name === 'status' && state.capabilities?.context !== false
-            ? ['컨텍스트', '첫 응답 후 CLI가 보고하면 표시됩니다']
+            ? ['컨텍스트', state.contextTokens === null ? contextPendingText : '첫 응답 후 CLI가 보고하면 표시됩니다']
             : null;
         const rows: [string, string][] = name === 'cost'
           ? [['모델', model], ['비용', `${cost} · ${state.turns}턴`],
@@ -2033,7 +2033,7 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
     <div id={panel} popover="auto" className="usage-detail chat-usage" role="dialog" aria-label="컨텍스트와 사용 한도" onToggle={event => placeAbove(event, 'right')}>
       <header><strong>컨텍스트</strong>{compacting && <span className="auto-compact-badge">Auto Compact</span>}</header>
       <div className="usage-row">
-        <div><span>{waiting ? '아직 보고된 사용량이 없습니다' : `${compact(gauge.used)} / ${compact(gauge.basis)} 토큰`}</span><b className={settings.usageColors ? 'graded' : ''} style={settings.usageColors ? usageHueStyle(percent) : undefined}>{waiting ? '—' : `${percent}%`}</b></div>
+        <div><span>{state.contextTokens === null ? contextPendingText : waiting ? '아직 보고된 사용량이 없습니다' : `${compact(gauge.used)} / ${compact(gauge.basis)} 토큰`}</span><b className={settings.usageColors ? 'graded' : ''} style={settings.usageColors ? usageHueStyle(percent) : undefined}>{waiting ? '—' : `${percent}%`}</b></div>
         {shown && <progress className={settings.usageColors ? 'graded' : ''} style={settings.usageColors ? usageHueStyle(percent) : undefined} value={Math.min(100, percent)} max={100} aria-label={compacting ? 'Auto Compact 창 사용률' : '컨텍스트 사용률'} />}
       </div>
       {compacting && <p className="usage-note auto-compact-detail">
