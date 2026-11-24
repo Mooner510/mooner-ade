@@ -234,7 +234,9 @@ test('contextReported waits for usage on Cursor and Codex', () => {
 test('status numbers and templates', () => {
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x' }), 50);
   assert.equal(contextPercent({ contextTokens: 100_000, model: 'claude-x[1m]' }), 10);
-  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 132, 'past the window the percent keeps counting instead of sticking at 100');
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-4-5' }), 132, 'past the window the percent keeps counting instead of sticking at 100');
+  assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5' }), 26, 'a line that defaults to 1M needs no catalog row');
+  assert.equal(contextPercent({ contextTokens: 357_000, model: 'sonnet', capabilities: { catalog: [{ id: 'claude-sonnet-5-5', family: 'sonnet', window: 1_000_000 }, { id: 'claude-sonnet-4-6', family: 'sonnet', window: 200_000 }] } }), 36, 'an alias takes its family newest row, not 200k');
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 1_000_000 }] } }), 26);
   assert.equal(contextPercent({ contextTokens: 263_980, model: 'claude-sonnet-5-5', contextWindow: 1_000_000, capabilities: { catalog: [{ id: 'claude-sonnet-5-5', window: 200_000 }] } }), 26);
   // An alias has no catalog row of its own: the family's row sizes it.
