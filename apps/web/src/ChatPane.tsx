@@ -37,7 +37,7 @@ import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
 import type { QuickItem } from './QuickInput';
 import { busAgentName, parseBusMessages } from './bus-message';
-import { pendingAsyncQuestions } from './chat-model';
+import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
 // `reconnect` after the socket came back, which makes the pane ask the server for what it missed.
@@ -211,7 +211,7 @@ const LOCAL: CommandInfo[] = [
   { name: 'model', description: '모델을 바꿉니다', hint: '[모델]' },
   { name: 'effort', description: 'Effort(추론 노력 수준)를 바꿉니다', hint: '[low|medium|high|max]' },
   { name: 'permissions', description: '권한 모드를 바꿉니다', hint: '[default|acceptEdits|plan|auto]' },
-  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
+  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'idlecompact', description: '캐시가 식기 전에 자동으로 Compact할지 이 채팅만 정합니다 (1시간 캐시)', hint: '[on|off|auto]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
   { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'limit', description: '이 채팅의 비용·사용량 제한을 정합니다 (도달하면 중지)' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
   { name: 'cost', description: '이 채팅의 비용·토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰·비용·도구·컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
   { name: 'config', description: 'ADE 설정을 엽니다' }, { name: 'exit', description: '이 채팅을 닫습니다' }
@@ -779,7 +779,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
     return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}>{item.shells ? <small className="chat-shell-included"><Icon name="terminal" size={12} />콘솔 실행 결과 {item.shells}건을 이 메시지와 함께 에이전트에게 보냈어요</small> : null}<UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
-  if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{item.trigger === 'auto' ? '자동 압축' : '컨텍스트 압축'}{item.preTokens != null && item.postTokens != null ? ` · ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
+  if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{compactLabel(item.trigger)}{item.preTokens != null && item.postTokens != null ? ` · ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
   if (item.kind === 'error') return <ChatErrorAlert message={item.message} recoverable={item.recoverable} recovering={recovering} onRecover={onRecover} enter={enter} />;
   if (item.kind === 'command') return <CommandOutput text={item.text} isError={item.isError} enter={enter} />;
   if (item.kind === 'note') return <SystemLine text={item.text} tones={item.tones} rev={item.rev} enter={enter} />;
@@ -1551,6 +1551,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         const result = await ctx.call<{ autoCompact: { window: number; auto: boolean } | null }>('chat/autocompact', { id, value: argument });
         if (result?.autoCompact) changed({ compact: { value: `${compact(result.autoCompact.window)} 토큰${result.autoCompact.auto ? ' (auto)' : ''}`, color: 'var(--term-magenta)', icon: 'compress' } });
         else note(/^auto$/i.test(argument.trim()) ? 'auto로 저장했습니다. 창 크기는 Claude Code가 모델에 맞게 정하며, 게이지는 모델의 전체 컨텍스트 기준으로 표시합니다.' : '저장했습니다. 최대 컨텍스트와 같아 별도 창은 쓰지 않습니다.');
+        return true;
+      }
+      case 'idlecompact': {
+        if (agent !== 'claude') { note('캐시 만료 전 압축은 Claude 채팅에서만 쓸 수 있습니다.'); return true; }
+        const value = ({ on: true, off: false, auto: null } as Record<string, boolean | null>)[argument.trim().toLowerCase()];
+        if (argument && value === undefined) { note('on, off 또는 auto(앱 설정을 따름)로 입력하세요.'); return true; }
+        const result = argument ? await ctx.call<IdleCompactInfo>('chat/idlecompact', { id, value }) : state.idleCompact;
+        note(idleCompactNote(result, ctx.settings.idleCompactMinK));
         return true;
       }
       case 'rename': {

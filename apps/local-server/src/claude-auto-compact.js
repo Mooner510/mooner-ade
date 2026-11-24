@@ -25,13 +25,15 @@ export function modelSettingsFor(model, settings) {
   return hit ? map[hit] : null;
 }
 
+// The two switches that turn the CLI's auto compact off (settings.autoCompactEnabled, or DISABLE_AUTO_COMPACT in the env / settings env).
+export const autoCompactDisabled = (settings = {}, env = {}) => settings.autoCompactEnabled === false || ['1', 'true'].includes(String(env.DISABLE_AUTO_COMPACT ?? process.env.DISABLE_AUTO_COMPACT).toLowerCase());
+
 // Returns null when auto compact is off, set to "auto", or the effective window matches the max (gauge would duplicate the full window).
 // "auto" is Claude Code's own call (it tunes the window per model, account and experiment, ~90% of a 1M model), so ADE neither guesses a window
 // nor hands one to the CLI: the gauge stays on the model's full window, like a session that never set a window.
 export function resolveAutoCompact({ settings = {}, env = {}, model, maxWindow = 200_000 }) {
   const get = key => env[key] ?? process.env[key];
-  if (settings.autoCompactEnabled === false) return null;
-  if (['1', 'true'].includes(String(get('DISABLE_AUTO_COMPACT')).toLowerCase())) return null;
+  if (autoCompactDisabled(settings, env)) return null;
   const max = Number.isFinite(maxWindow) && maxWindow > 0 ? maxWindow : 200_000;
   let raw = get('CLAUDE_CODE_AUTO_COMPACT_WINDOW') ?? settings.autoCompactWindow;
   const perModel = modelSettingsFor(model, settings);

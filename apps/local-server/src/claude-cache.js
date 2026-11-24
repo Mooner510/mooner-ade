@@ -24,7 +24,7 @@ export async function transcriptOf(configDir, live) {
 // It needs auto-compact on and a context of at least CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (default 200K, floor 100K); `idleCompaction: false` or DISABLE_AUTO_COMPACT turn it off.
 // ponytail: the docs only say "about an hour"; 0.9 × TTL (54 min) comes from a third-party reading of the binary. Calibrate IDLE_LEAD if Claude's notice shows another time.
 // Settings are read when new transcript lines arrive, not on every tick; managed settings are not read.
-const IDLE_LEAD = 0.9;
+export const IDLE_LEAD = 0.9;
 async function idleCompactAt(configDir, cwd, value) {
   if (value.ttl !== 3600) return undefined;
   const settings = {}, env = {};

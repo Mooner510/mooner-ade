@@ -307,6 +307,13 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - Codex: `thread/compact/start`를 씁니다.
 - Cursor: `cursor-agent -p /summarize`를 세션에 `--resume`으로 붙여 실행합니다(`cursor-summarize.js`, 최대 10분). `/compress`, `/summarize`도 같은 동작입니다. 결과 요약은 명령 결과 말풍선으로 나옵니다.
 
+### 캐시 만료 전 자동 Compact `/idlecompact` (Claude, 선택)
+- 1시간 캐시의 긴 채팅이 쉬는 동안, **캐시가 식기 직전**(마지막 요청 + 54분)에 ADE가 `/compact`를 한 번 보냅니다. 돌아온 뒤 첫 메시지가 대화 전체가 아니라 요약만 새로 기록하게 하려는 것입니다. 채팅의 Claude 프로세스는 약 10분 쉬면 꺼져 CLI의 자체 유휴 압축이 돌 수 없어서, 서버가 대신 합니다(탭을 보고 있지 않아도 동작). 터미널 탭은 CLI가 직접 하므로 달라지는 것이 없습니다.
+- **기본은 꺼짐.** 설정 › AI 툴 › Claude Code의 "캐시 만료 전 자동 Compact (채팅)"와 기준 "k 토큰"(기본 200k, 최소 100k)을 따르고, 채팅마다 `/idlecompact on|off|auto`로 바꿉니다(`auto`는 설정을 따름, 값은 그 채팅의 `meta.json`의 `idleCompact`). 인자 없이 쓰면 지금 상태만 보여 줍니다.
+- **비용을 알고 켜세요.** 압축은 세부 내용을 잃고, 요약 요청도 사용량을 씁니다. 돌아오지 않으면 쓰기만 한 셈입니다. 5분 캐시는 쉴 때마다 압축하게 되어 품질만 떨어지므로 제외합니다.
+- **건너뛰는 경우**(시각이 되었을 때 다시 판단하고, 그 캐시 구간에서는 다시 시도하지 않음): 응답 중, 승인·질문 대기, 후속·steer 대기, 이미 압축됨, 이미 만료됨, 컨텍스트가 기준 미만, 캐시가 1시간이 아님, CLI Auto Compact가 꺼짐(`autoCompactEnabled: false`, `DISABLE_AUTO_COMPACT`), 채팅이 닫힘, 채팅별 제한(`/limit`)에 걸려 멈춘 상태. 새 응답이 시작되면 타이머를 취소하고 새 요청 기준으로 다시 겁니다.
+- 캐시 칩에 "자동 Compact 예정 HH:MM:SS"로 보이고, 압축되면 스레드 구분선이 **"캐시 만료 전 자동 압축 · 231k → 14.6k 토큰"**으로 남습니다(이벤트 `compact`의 `trigger: 'idle'`, 다시 열어도 같음). 칩의 기록은 "자동 Compact"입니다.
+
 ### 프롬프트 캐시 타이머 (Claude)
 - 채팅 헤더에 프롬프트 캐시가 식기까지 남은 시간을 보여 줍니다. 설정의 "프롬프트 캐시 타이머"를 따르며, 터미널 헤더와 같은 값입니다.
 - 값은 화면이 계산하지 않고, 턴이 끝날 때와 압축 뒤에 세션 transcript를 읽어 갱신합니다. 남은 시간의 카운트다운은 화면에서 돌아갑니다.
@@ -385,6 +392,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 | `/model [모델]` | 모델 변경. 인자가 없으면 선택창. Cursor는 모달 |
 | `/effort [단계]` | Effort 변경. 지원하지 않는 CLI면 안내만 |
 | `/permissions [모드]` | 권한 모드 변경 |
+| `/idlecompact [on\|off\|auto]` | 이 채팅의 캐시 만료 전 자동 Compact 켜기·끄기·설정 따르기 (Claude) |
 | `/limit` | 이 채팅의 비용·사용량 제한 카드 (§11 채팅별 제한) |
 | `/cost` | 이 채팅의 비용·토큰을 로컬 메모로 표시 |
 | `/stats` | 세션 통계 모달 열기 (Claude, 첫 메시지 뒤) — §11 |
@@ -628,6 +636,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 | 캐시 타이머 판독 | `apps/local-server/src/claude-cache.js` |
 | 명령 목록 수집 | `apps/local-server/src/slash-commands.js` |
 | 모델 Auto Compact 판정 | `apps/local-server/src/claude-auto-compact.js` |
+| 캐시 만료 전 자동 Compact(판단) | `apps/local-server/src/chat-idle-compact.js` (연결은 `chat.js`의 idle compact 블록) |
 | 채팅별 제한(규칙·판정·추정) | `apps/local-server/src/chat-limit.js` (연결은 `chat.js`의 limit 블록) |
 | Cursor 압축·컨텍스트·사용량·제목 | `cursor-summarize.js`, `cursor-context.js`, `cursor-usage.js`, `chat-title.js` |
 | 에이전트 실행 파일 해석(Windows) | `apps/local-server/src/agent-spawn.js` |

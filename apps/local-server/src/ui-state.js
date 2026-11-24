@@ -1,5 +1,6 @@
 import { fault } from './files.js';
 import { validMcpTrust } from './mcp-trust.js';
+import { validMinK } from './chat-idle-compact.js';
 
 // Typed into the agent's launch line, so a newline or other control character would run a second command.
 export const validAgentArgs = value => typeof value === 'string' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
@@ -8,7 +9,7 @@ function validateSettings(settings, invalid) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings) || JSON.stringify(settings).length > 32768) invalid();
   if (settings.theme !== undefined && (typeof settings.theme !== 'string' || !/^[a-z][a-z0-9-]{0,23}$/.test(settings.theme))) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
-  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'interactiveUi', 'artifactAlways', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'animateInBackground', 'confirmCloseChat', 'confirmCloseProject', 'chatPermissionAutoSet', 'feedbackAgentTool', 'feedbackAiContext', 'chatDarker']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'interactiveUi', 'artifactAlways', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'animateInBackground', 'confirmCloseChat', 'confirmCloseProject', 'chatPermissionAutoSet', 'feedbackAgentTool', 'feedbackAiContext', 'chatDarker', 'idleCompact']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
   if (settings.feedbackAiModel !== undefined && !['', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'sonnet', 'opus'].includes(settings.feedbackAiModel)) invalid();
   if (settings.feedbackAiEffort !== undefined && !['', 'low', 'medium', 'high'].includes(settings.feedbackAiEffort)) invalid();
   if (settings.usageStyle !== undefined && !['bar', 'text'].includes(settings.usageStyle)) invalid();
@@ -34,6 +35,7 @@ function validateSettings(settings, invalid) {
   if (settings.terminalFont !== undefined && !(typeof settings.terminalFont === 'string' && settings.terminalFont.length <= 200)) invalid();
   if (settings.terminalShell !== undefined && !(typeof settings.terminalShell === 'string' && settings.terminalShell.length <= 512)) invalid();
   for (const name of ['claudeArgs', 'codexArgs', 'cursorArgs']) if (settings[name] !== undefined && !validAgentArgs(settings[name])) invalid();
+  if (settings.idleCompactMinK !== undefined && !validMinK(settings.idleCompactMinK)) invalid();
   if (settings.cacheWarn !== undefined && !(Number.isInteger(settings.cacheWarn) && settings.cacheWarn >= 5 && settings.cacheWarn <= 50)) invalid();
   if (settings.cacheSendWarnMinutes !== undefined && !(Number.isInteger(settings.cacheSendWarnMinutes) && settings.cacheSendWarnMinutes >= 1 && settings.cacheSendWarnMinutes <= 60)) invalid();
   if (settings.usageRefresh !== undefined && !(Number.isInteger(settings.usageRefresh) && settings.usageRefresh >= 60 && settings.usageRefresh <= 600)) invalid();

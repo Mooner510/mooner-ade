@@ -4,6 +4,7 @@
 export type Tokens = { input: number; output: number; cacheRead: number; cacheCreate: number };
 export type ModelConfigOption = { id: string; name: string; description?: string; category?: string; type: 'select'; currentValue: string; options: { value: string; name: string; description?: string }[] };
 export type ChatCapabilities = { configOptions?: ModelConfigOption[]; images: boolean; steer: boolean; cancelSteer: boolean; branch: boolean; rewind: boolean; worktree: boolean; addDirs: boolean; terminal: boolean; terminalToChat: boolean; cost: boolean; tokens: boolean; context: boolean; permissionModes: string[]; sandboxes?: string[]; runEverything?: boolean; efforts: string[]; catalog: CatalogModel[]; limitations: Record<string, string> };
+export type IdleCompactInfo = { chat: boolean | null; on: boolean };
 export type AutoCompact = { window: number; maxWindow: number; auto: boolean; source?: string };
 export type ChatSegmentTitles = { custom?: string; ai?: string; agent?: string };
 /** This chat's limit (/limit, server chat-limit.js): the rules, the rule that stopped the chat (null: not stopped) and the last numbers. */
@@ -17,6 +18,7 @@ export type ChatState = {
   liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
   cwd?: string; // the folder the CLI runs in (file paths under it are shown relative)
   limit?: ChatLimit | null; limitOptions?: { cost: boolean; windows: LimitWindow[] }; // what this chat can be limited by: cost where dollars are reported, plan windows on a plan login
+  idleCompact?: IdleCompactInfo; // Claude: whether ADE compacts this chat before its 1h prompt cache goes cold (chat: this chat's own choice, null = follows the setting)
   apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
   auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button (Claude)
   lastAuth?: 'login' | 'key' | null; // the login its last turn ran on: a message that would change it asks first
@@ -52,7 +54,7 @@ export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
-  | { kind: 'compact'; trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null }
+  | { kind: 'compact'; trigger: 'auto' | 'manual' | 'idle'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
   | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
@@ -461,7 +463,7 @@ export function reduce(view: ChatView, event: any): ChatView {
     }
     // A limit stopped the chat: a line in the style of the compact divider, the rule named in it.
     case 'limit_stop': { const rule = String(event.rule ?? ''); return append(view, { kind: 'note', key, text: `제한 규칙(${rule})에 따라 중지되었습니다`, tones: [{ value: rule, color: 'var(--warn)' }], fresh }); }
-    case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
+    case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' || event.trigger === 'idle' ? event.trigger : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), blocked: {}, live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
     case 'steer': {
@@ -1304,3 +1306,9 @@ export function pickGreeting(user = '', now = new Date(), random = Math.random):
   const pool = [...greetings.any, ...greetings[part]], text = pool[Math.floor(random() * pool.length)];
   return user ? `${user}님, ${text}` : text;
 }
+
+/** The thread's divider for a finished compaction: `idle` is ADE's own compact before the prompt cache expires (idle auto-compact, /idlecompact). */
+export const compactLabel = (trigger: 'auto' | 'manual' | 'idle') => trigger === 'idle' ? '캐시 만료 전 자동 압축' : trigger === 'auto' ? '자동 압축' : '컨텍스트 압축';
+/** What /idlecompact prints without an argument. */
+export const idleCompactNote = (info: IdleCompactInfo | undefined, minK: number) =>
+  `캐시 만료 전 자동 Compact: ${info?.on ? '켜짐' : '꺼짐'} (${info && info.chat !== null ? '이 채팅 설정' : '앱 설정을 따름'}) · 1시간 캐시, 컨텍스트 ${minK}K 이상일 때만. 변경: /idlecompact on|off|auto`;
