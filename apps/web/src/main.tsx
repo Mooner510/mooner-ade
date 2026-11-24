@@ -3,14 +3,14 @@ import { installTooltips } from './tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { useExit, useNotice } from './use-notice';
+import { useExit, useNotice, useTipNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { BgAnimTip } from './BgAnimTip';
 import { api, basename, chooseFolder } from './api';
 import { RemotePcDialog, remoteBridge } from './RemotePc';
 import { closeRemote, isRemote, onRemoteBack, openEvents, remoteClient, type Events } from './transport';
 import { setDrawer, useDrawer, useMobile } from './mobile';
-import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TIPS_VERSION, TOUR_VERSION, type Settings } from './Editor';
+import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -28,7 +28,7 @@ import { ErrorBoundary } from './error-boundary';
 import { errorText, pushError } from './errors';
 import { byLastUsed, ideList, rememberIde, type IdeList } from './ide-open';
 import { IdeIcon } from './IdeIcon';
-import { claimTip, copyText, resetTips } from './toast';
+import { copyText } from './toast';
 import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
@@ -308,7 +308,6 @@ function Shell() {
       if (document.hasFocus() || touringRef.current) return;
       const current = settingsRef.current;
       if (!current.tips || !current.onboarded || current.animateInBackground) return;
-      if (!claimTip('bg-anim', { max: 1 })) return;
       setAnimTip(true);
     }, 80);
     addEventListener('blur', onBlur);
@@ -381,7 +380,6 @@ function Shell() {
       setRecent(list);
       globalSettings.current = Boolean(saved.settings);
       const loaded = saved.settings ? migrateSettings(saved.settings) : null;
-      if (saved.settings && (saved.settings.tipsVersion ?? 0) < TIPS_VERSION) resetTips();
       // Someone who finished an older tutorial gets the new one again (migrateSettings clears `onboarded`), but not the theme and font screen.
       // (`onboarded: false` with a tour version above 0 is a tour that is due again or was replayed and left unfinished, not a first run.)
       if (saved.settings && (saved.settings.onboarded !== false || (saved.settings.tourVersion ?? 0) > 0)) onboardedOnce.current = true;
@@ -530,7 +528,7 @@ function Shell() {
   // window with a very light blur behind it (Spotlight) that leaves the element it is about sharp.
   useNotice('tour', touring || splash);
   useNotice('changelog', changelogPending || changelogOpen);
-  const animCardLife = useExit(useNotice('bg-anim', animTip));
+  const animCardLife = useExit(Boolean(useTipNotice('bg-anim', [['bganim', animTip && settings.tips && !settings.animateInBackground]])));
   const animCard = <BgAnimTip closing={animCardLife.closing} onOpenSettings={() => { setAnimTip(false); setSettingsOpen('default'); }} onDone={() => setAnimTip(false)} />;
   const animTipCard = animCardLife.mounted && <>{<Spotlight target='button[aria-label="설정"]' closing={animCardLife.closing} />}{createPortal(animCard, document.body)}</>;
   const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
@@ -541,8 +539,8 @@ function Shell() {
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
-  const [skippedTour, setSkippedTour] = useState(false); // a skipped tour counts as done; the book button then gets a one-time pointer
-  const tourHintShown = useNotice('tour-hint', skippedTour && !touring && !splash);
+  const [skippedTour, setSkippedTour] = useState(false);
+  const tourHintShown = useTipNotice('tour-hint', [['tourhint', skippedTour && settings.tips && entries.length > 0 && !touring && !splash]]);
   // After an update, open the notes once the tour and the launch splash are out of the way. Opening marks that version viewed, so the next launch stays quiet.
   useEffect(() => {
     if (!changelogPending || !booted || touring || splash) return;
@@ -718,7 +716,7 @@ function Shell() {
         {canRemotePc && <IconButton icon="laptop" label="다른 PC에 접속" onClick={() => setRemotePcOpen(true)} />}
         {closeRemote && <IconButton icon="arrowLeft" label={remoteClient === 'desktop' ? '창 닫기' : 'PC 목록으로'} onClick={closeRemote} />}
         <span className="spacer" /><AppVersion /><span className="spacer" />
-        <IconButton icon="book" label="둘러보기 다시 보기" className={skippedTour ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
+        <IconButton icon="book" label="둘러보기 다시 보기" className={tourHintShown ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
         {tourHintShown && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}

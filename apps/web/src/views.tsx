@@ -48,7 +48,7 @@ export function Modal({ children, onClose, className = '', labelledBy, region = 
 export const ModelLabel = ({ text }: { text: string }) => { const match = /^(.*?)( \(1M\))$/.exec(text); return match ? <>{match[1]}<span className="model-1m">{match[2]}</span></> : <>{text}</>; };
 // 16, not 15: an odd box in a 20px label lands on a half pixel, and the glyph then paints a whole pixel off the button's centre.
 const DdIcon = ({ icon, bars }: { icon?: string; bars?: number }) => <SettingGlyph icon={icon} bars={bars} size={16} />;
-export function Dropdown({ value, options, onChange, label, className = '', placeholder, locked }: { value: string; options: { value: string; label: string; color?: string; icon?: string; bars?: number; hint?: string; divider?: boolean }[]; onChange(value: string): void; label: string; className?: string; placeholder?: string; locked?: string }) {
+export function Dropdown({ value, options, onChange, label, className = '', placeholder, locked, labelOnlyTip }: { value: string; options: { value: string; label: string; color?: string; icon?: string; bars?: number; hint?: string; divider?: boolean }[]; onChange(value: string): void; label: string; className?: string; placeholder?: string; locked?: string; labelOnlyTip?: boolean }) {
   const root = useRef<HTMLDetailsElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const close = () => { root.current!.open = false; root.current!.querySelector('summary')!.focus(); };
@@ -85,7 +85,8 @@ export function Dropdown({ value, options, onChange, label, className = '', plac
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('scroll', scroll, true); removeEventListener('resize', resize); observer.disconnect(); };
   }, []);
   const selected = options.find(option => option.value === value);
-  const summaryTip = locked || (selected && (selected.icon || selected.bars !== undefined) ? `${label}\n${selected.label}` : undefined);
+  const selectedTip = selected && (selected.icon || selected.bars !== undefined) ? `${label}\n${selected.label}` : undefined;
+  const summaryTip = locked || (labelOnlyTip ? label : selectedTip);
   return <details className={`dropdown ${className}`} ref={root} data-locked={locked ? '' : undefined}
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.open = false; }}
     onKeyDown={event => {
@@ -99,6 +100,6 @@ export function Dropdown({ value, options, onChange, label, className = '', plac
       root.current!.open = true;
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? selected : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
       buttons[next].focus();
-    }}><summary data-tip={summaryTip} aria-label={locked ? `${label} · ${locked}` : label} aria-haspopup="listbox" aria-disabled={locked ? true : undefined} onClick={locked ? event => event.preventDefault() : undefined}><span className="dd-label" data-tip-overflow={locked ? undefined : ''} style={{ color: selected?.color }}><DdIcon icon={selected?.icon} bars={selected?.bars} /><span className="dd-text">{selected?.label ? <ModelLabel text={selected.label} /> : placeholder}</span></span><Icon name="chevronDown" size={14} /></summary>
+    }}><summary data-tip={summaryTip} aria-label={locked ? `${label} · ${locked}` : label} aria-haspopup="listbox" aria-disabled={locked ? true : undefined} onClick={locked ? event => event.preventDefault() : undefined}><span className="dd-label" data-tip-overflow={locked || labelOnlyTip ? undefined : ''} style={{ color: selected?.color }}><DdIcon icon={selected?.icon} bars={selected?.bars} /><span className="dd-text">{selected?.label ? <ModelLabel text={selected.label} /> : placeholder}</span></span><Icon name="chevronDown" size={14} /></summary>
     <div role="listbox" popover="manual" aria-label={label} ref={list}>{options.map(option => <button type="button" role="option" tabIndex={-1} aria-selected={option.value === value} data-divider={option.divider || undefined} key={option.value} onClick={() => { onChange(option.value); close(); }}><span className="dd-label" style={{ color: option.color }}><DdIcon icon={option.icon} bars={option.bars} /><ModelLabel text={option.label} />{option.hint && <small className="dd-hint">{option.hint}</small>}</span>{option.value === value && <Icon name="check" size={14} />}</button>)}</div></details>;
 }

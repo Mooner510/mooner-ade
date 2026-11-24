@@ -1,7 +1,7 @@
 import { appKey, appKeyDefs, appKeyInTerminalByDefault, combosOverlap, showAppKey } from './shortcuts';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { api } from './api';
-import { agentNames, chatStatusLayout, defaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
+import { agentNames, chatStatusLayout, defaultSettings, restoreDefaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { APP_THEMES, themeById, type ThemeId } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
@@ -11,7 +11,6 @@ import { useShells } from './shells';
 import { useMissingAgents } from './installed-agents';
 import { Dropdown, Modal } from './views';
 import { playSound, soundIds, sounds } from './sound';
-import { resetTips } from './toast';
 import { installedTerminalFonts, monoFontDropdownOptions } from './terminal-fonts';
 import { useFeedback } from './feedback-store';
 import { feedbackEffort, feedbackModelId, submitModeNote, submitModeText } from './feedback-model';
@@ -566,7 +565,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const searching = query.trim() !== '';
   const missing = useMissingAgents();
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
-  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'idleCompactMinK' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
+  const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'idleCompactMinK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
   const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'idleCompact' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
@@ -635,8 +634,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       {settings.cacheSendWarn && <Row title="경고 기준 남은 시간(분)" hint="1시간 캐시의 남은 시간이 이 값 이하이면 경고합니다. 5분 캐시는 식은 뒤에만 경고합니다. (1–60분)">{number('cacheSendWarnMinutes', 1, 60)}</Row>}
       <Row title="캐시 만료 전 자동 Compact (채팅)" hint="1시간 캐시의 채팅이 쉬는 동안 캐시가 식기 직전에 /compact를 한 번 실행해, 돌아왔을 때 요약만 새로 기록되게 합니다. 요약은 세부 내용을 잃고, 돌아오지 않아도 사용량을 씁니다. 5분 캐시는 제외, 채팅마다 /idlecompact로 바꿀 수 있습니다. 터미널은 Claude Code가 직접 합니다.">{toggle('idleCompact')}</Row>
       {settings.idleCompact && <Row title="자동 Compact 기준(k 토큰)" hint="컨텍스트가 이 크기 이상일 때만 합니다. 기본 200k, 최소 100k. (100–1000)">{number('idleCompactMinK', 100, 1000)}</Row>}
-      <Row title="팁 표시" hint="컨텍스트가 길어졌을 때의 /clear·/compact 안내, 단축키 도움말을 pane 모서리에 잠깐 띄웁니다.">{toggle('tips')}<button type="button" onClick={() => { resetTips(); }}>팁 기록 초기화</button></Row>
-      {settings.tips && <Row title="컨텍스트 팁 기준(k 토큰)" hint="Claude 컨텍스트가 이 크기 이상일 때 메시지를 보내면 /clear 팁을 보여 줍니다. 기본 400k, 같은 팁은 10분에 한 번. (50–1000)">{number('contextTipK', 50, 1000)}</Row>}
+      <Row title="팁 표시" hint="기능과 단축키를 소개하는 팁을 한 번씩 표시합니다.">{toggle('tips')}</Row>
       <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
       <Row title="인터랙티브 UI" hint="계산기·폼·미리보기처럼 UI가 더 나은 답변을 채팅 안에서 직접 조작할 수 있게 보여 줍니다. 격리된 샌드박스에서 실행되며, 끄면 코드 블록으로 표시됩니다. 새 채팅부터 적용됩니다.">{toggle('interactiveUi')}</Row>
       <Row title="Artifact 항상 켜기" hint="기본은 메시지에 ‘artifact’·‘아티팩트’가 들어갈 때만 그 채팅에서 Artifact 도구를 켭니다. 이 옵션을 켜면 모든 채팅이 처음부터 켜지지만 요청마다 컨텍스트가 약 1.3만 토큰 늘어납니다.">{toggle('artifactAlways')}</Row>
@@ -650,7 +648,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         <h2 id="settings-title" className="settings-drag" onPointerDown={dragSettings}>설정</h2>
         {sections.map(item => <button key={item.id} aria-pressed={!searching && section === item.id} onClick={() => { setQuery(''); setSection(item.id); }}><Icon name={item.icon} />{item.label}{item.id === 'plugins' && pluginUpdates > 0 && <i className="plugin-new-dot nav-dot" role="img" aria-label={`플러그인 업데이트 ${pluginUpdates}개`} />}</button>)}
         <span className="spacer" />
-        <button onClick={() => onChange({ ...defaultSettings, theme: settings.theme, onboarded: settings.onboarded, chatTipPending: settings.chatTipPending })}><Icon name="refresh" />기본값으로</button>
+        <button onClick={() => onChange(restoreDefaultSettings(settings))}><Icon name="refresh" />기본값으로</button>
       </nav>
       <div className="settings-main">
       <header className="settings-drag" onPointerDown={dragSettings}>

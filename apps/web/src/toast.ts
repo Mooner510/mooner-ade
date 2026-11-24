@@ -1,5 +1,4 @@
 import { remoteCopy } from './transport';
-import { tipDue, type TipHistory } from './tips';
 // Icon-only toast that rises a short way from the pointer (after a mouse action) or the focused terminal's cursor (after a key press) and fades.
 type Point = { x: number; y: number; selected?: boolean } | undefined;
 let x = innerWidth / 2, y = innerHeight / 2, last = 0, lastKey = 0, lastClick = 0, lastDrag: Point, down: Point, anchor: (() => Point) | undefined;
@@ -58,15 +57,3 @@ const copiedText = (event: ClipboardEvent) => {
 };
 document.addEventListener('copy', event => { const text = copiedText(event); if (text) toastCopied(text); });
 document.addEventListener('paste', event => toastPasted(event.clipboardData?.getData('text/plain') ?? ''), true);
-
-// Tip pacing: true (and recorded) when the tip may be shown now. The pane draws it itself, in its own header, so it never covers the terminal.
-// History lives in localStorage so a tip does not nag across restarts; `gap` is the minimum time between showings and `max` the lifetime cap.
-const TIPS = 'ade:tips';
-export const resetTips = () => { try { localStorage.removeItem(TIPS); } catch { /* storage blocked: nothing was kept */ } };
-const tipHistory = (): TipHistory => { try { return JSON.parse(localStorage.getItem(TIPS) || '{}'); } catch { return {}; } };
-export function claimTip(id: string, { gap = 864e5, max = 2 }: { gap?: number; max?: number } = {}) {
-  const history = tipHistory(), now = Date.now();
-  if (!tipDue(history, id, now, gap, max)) return false;
-  try { history[id] = { n: (history[id]?.n ?? 0) + 1, at: now }; localStorage.setItem(TIPS, JSON.stringify(history)); } catch { /* private mode: the tip just may repeat */ }
-  return true;
-}

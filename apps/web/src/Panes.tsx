@@ -19,10 +19,10 @@ import type { FileBuffer } from './file-buffer';
 import { Icon, IconButton, SplitButton, type IconName } from './Icon';
 import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
-import { copyText, toastPasted, toastAttached, setToastAnchor, claimTip } from './toast';
+import { copyText, toastPasted, toastAttached, setToastAnchor } from './toast';
 import { playSound } from './sound';
-import { contextTip, nextHint, queueTip, splitTip } from './tips';
-import { useNotice } from './use-notice';
+import { hintCandidates } from './tips';
+import { useTipNotice } from './use-notice';
 import { Hint } from './Hint';
 import { useShells, shellLabel } from './shells';
 import { LauncherModes } from './LauncherMenu';
@@ -152,13 +152,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const followUp = useRef(createClaudeFollowUp());
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null), editingRef = useRef(false);
   editingRef.current = editing !== null;
-  // A tip takes the header's title slot for 10 s (not while the agent waits on a question, whose alert sits in that slot).
-  const [tip, setTip] = useState(''), tipTimer = useRef(0);
-  const showTip = useRef((id: string, text: string, options?: { gap?: number; max?: number }) => {
-    if (!claimTip(id, options)) return;
-    setTip(text); clearTimeout(tipTimer.current); tipTimer.current = window.setTimeout(() => setTip(''), 10_000);
-  }).current;
-  useEffect(() => () => clearTimeout(tipTimer.current), []);
+  const [switchingToChat, setSwitchingToChat] = useState(false);
   const [tmuxPlace, setTmuxPlace] = useState<'top' | 'bottom' | null>(null);
   // Another device's size is shown (the PTY is not this pane's size); typing here or the button brings it back.
   const [otherSize, setOtherSize] = useState(false), claimSize = useRef<() => void>(() => {});
@@ -263,14 +257,6 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       const typed = claudeComposerText(screenText());
       // The last typed characters may not be echoed yet, which makes the composer look empty; err towards asking.
       return isClaudeMessageText(typed) || (!typed && Date.now() - lastTyped < 80) ? warning : undefined;
-    };
-    // Tips ride on a message about to be sent (Enter on real message text): a long context suggests /clear, and Enter while Claude is working suggests Tab.
-    const tipOnSend = () => {
-      const config = settingsRef.current, cache = cachesRef.current[id];
-      if (!config.tips || sshRef.current || replays || callbacks.current.agentOf(id) !== 'claude') return;
-      const context = !cache?.compacted && contextTip(cache?.tokens, config.contextTipK), queue = working && followUpSupported && config.followUpQueue;
-      if ((context || queue) && isClaudeMessageText(claudeComposerText(screenText())))
-        { if (context) showTip('context', context, { gap: 10 * 60_000, max: Infinity }); else showTip('queue', queueTip); }
     };
     const askBeforeSend = (warning: CacheSendWarning) => {
       sendGate = true;
@@ -473,7 +459,6 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       if (data === '\r') {
         const warning = enterWarning();
         if (warning) { askBeforeSend(warning); return; }
-        tipOnSend();
         followUp.current.submitted();
       } else if (data.charCodeAt(0) >= 32) lastTyped = Date.now();
       // Focus-in/out and mouse reports are sent by xterm on its own when a TUI (Claude Code) asks for them, e.g. merely focusing the pane.
@@ -653,16 +638,15 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const exited = cwds[id] !== undefined && !live.has(id);
   const agent = exited ? undefined : agentOf(id), agentState = !agent ? undefined : attention[id] ?? (workingSet.has(id) ? 'working' : 'idle'), canChat = !isSsh && (agent === 'codex' || agent === 'cursor' || agent === 'claude' && attention[id] !== 'attention' && !workingSet.has(id));
   // Points at the Chat switch once; held back while the "try Chat" card (chatTipPending) is up so only one thing asks for attention.
-  const hintDue = focused && visible && canChat && !settings.chatTipPending ? nextHint(settings, [['tochat', true]]) : undefined;
-  const hint = useNotice(`hint:${id}`, hintDue !== undefined) ? hintDue : undefined;
+  const hint = useTipNotice(`hint:${id}`, hintCandidates(settings, [['tochat', focused && visible && canChat && !settings.chatTipPending]]));
   const hintSeen = () => { if (!settings.hintsSeen.includes('tochat')) chat.onSettingsChange({ ...settings, hintsSeen: [...settings.hintsSeen, 'tochat'] }); };
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-feedback-region="터미널 pane" data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
-      {tip && agentState !== 'attention' ? <span className="pane-tip" role="status" onClick={() => setTip('')}>{tip}</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span>}</span>}
+      {switchingToChat && agentState !== 'attention' ? <span className="pane-tip" role="status" onClick={() => setSwitchingToChat(false)}>Chat으로 전환하는 중…</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
-        {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setTip('Chat으로 전환하는 중…'); clearTimeout(tipTimer.current); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
-        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={(direction, event) => { onSplit(id, direction); if (event.detail && settings.tips) showTip('split', splitTip(keys => showAppKey(settings.appKeys, keys === 'ctrl+d' ? 'splitRight' : 'splitDown'))); }} />
+        {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setSwitchingToChat(true); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
+        <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={direction => onSplit(id, direction)} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />

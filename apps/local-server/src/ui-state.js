@@ -1,4 +1,4 @@
-import { fault } from './files.js';
+import { fault, serial } from './files.js';
 import { validMcpTrust } from './mcp-trust.js';
 import { validMinK } from './chat-idle-compact.js';
 
@@ -91,6 +91,23 @@ export function validateAppState(state) {
   if (typeof state.activeProjectId !== 'string' || state.activeProjectId.length > 128 || (state.activeProjectId && !ids.has(state.activeProjectId))) invalid();
   if (state.settings !== undefined && state.settings !== null) validateSettings(state.settings, invalid);
   return { version: 1, openProjects: state.openProjects.map(({ id, root }) => ({ id, root })), activeProjectId: state.activeProjectId, settings: state.settings ?? null };
+}
+
+// Claim before rendering so refreshes and simultaneous windows cannot repeat a tip.
+export function createTipClaims({ read, write }) {
+  const save = serial();
+  return (id, version) => {
+    if (typeof id !== 'string' || !/^[a-z]{1,16}$/.test(id) || !Number.isSafeInteger(version) || version < 1)
+      throw fault('INVALID_INPUT', '잘못된 팁 기록입니다.');
+    return save(async () => {
+      const previous = await read();
+      if (previous?.version > version) return false;
+      const seen = previous?.version === version && Array.isArray(previous.seen) ? previous.seen : [];
+      if (seen.includes(id) || seen.length >= 64) return false;
+      await write({ version, seen: [...seen, id] });
+      return true;
+    });
+  };
 }
 
 // The tab/pane layout every device shares: a tab created on the phone shows on the PC and the other way round (docs/REMOTE_UI.md).
