@@ -27,6 +27,7 @@ import { Collapse, useHeightMorph } from './Collapse';
 import { ShellCard } from './ShellCard';
 import { isShellDraft, parseShellInput, shellBang, shownDraft } from './chat-shell';
 import { FileIcon } from './FileIcon';
+import { caretEdges } from './caret-lines';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPendingText, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, briefDuration,toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
@@ -1895,7 +1896,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             if (shellBang(text) && !shownDraft(text) && (event.key === 'Backspace' || (event.key === '!' && !event.ctrlKey && !event.metaKey && !event.altKey))) { event.preventDefault(); setText(''); return; }
             if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; hintSeen('keyeffort'); const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void setChat({ id, effort }).catch(ctx.fail); return; }
             if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); hintSeen('keymodel'); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void setChat({ id, model: next }).catch(ctx.fail); return; }
-            if (keyOf('stash')) { event.preventDefault(); hintSeen('keystash'); if (text.trim()) { setStash(text); setText(''); } else if (stash) { setText(stash); setStash(''); } return; }
+            if (keyOf('stash')) { event.preventDefault(); hintSeen('keystash'); if (text.trim()) { setStash(text); setText(''); setRecall(null); } else if (stash) { setText(stash); setStash(''); } return; }
             // One Esc does every composer role at once: close slash and @ menus, stop a running turn, then leave the field.
             if (event.key === 'Escape' && plain) {
               event.preventDefault();
@@ -1937,8 +1938,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && plain) {
               const field = event.currentTarget, up = event.key === 'ArrowUp';
               if (up && !text && view.steers.length && caps?.cancelSteer !== false) { event.preventDefault(); void ctx.call('chat/cancel-steer', { id }).catch(ctx.fail); return; }
-              const sent = shown.flatMap(item => item.kind === 'user' ? [item.text] : []);
-              if (field.selectionStart !== field.selectionEnd || !(up ? !field.value.slice(0, field.selectionStart).includes('\n') : recall && !field.value.slice(field.selectionEnd).includes('\n'))) return;
+              // Picture-only messages (no text) are skipped, and the same message sent twice in a row counts once.
+              const sent = shown.flatMap(item => item.kind === 'user' && item.text.trim() ? [item.text] : []).filter((line, index, all) => line !== all[index - 1]);
+              if (field.selectionStart !== field.selectionEnd || !(up || recall)) return;
+              // The caret must be on the first (↑) / last (↓) visual line: a long paragraph that only wraps still moves the caret first.
+              const edge = caretEdges(field);
+              if (!(up ? edge.first : edge.last)) return;
               const at = up ? (recall ? recall.at - 1 : sent.length - 1) : recall ? recall.at + 1 : -1;
               if (!sent.length || at < 0 || (!up && !recall)) return;
               event.preventDefault();

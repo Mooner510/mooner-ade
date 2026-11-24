@@ -42,13 +42,27 @@ await press('ArrowDown'); check('H5 ↓ after sending does not bring the old dra
 await press('ArrowUp'); check('H5 ↑ → the message just sent', await value(), 'two');
 await press('ArrowUp'); check('H5 ↑ → the one before it', await value(), 'three');
 await press('ArrowDown'); await press('ArrowDown'); check('H5 ↓↓ → back to empty', await value(), '');
+// ---- same message twice in a row counts once ----
+await send('two'); await idle();
+await focus(); await press('ArrowUp'); check('H6 ↑ → the message just sent (sent twice in a row)', await value(), 'two');
+await press('ArrowUp'); check('H6 ↑ → skips the identical one and shows the one before', await value(), 'three');
+await press('ArrowDown'); await press('ArrowDown'); await sleep(100);
+// ---- one long paragraph that only wraps (no line break): ↑ moves the caret through the wrapped lines first ----
+await c.type('word '.repeat(80).trim()); await sleep(150);
+const wrapped = await value();
+await press('ArrowUp'); check('H7 ↑ inside a wrapped paragraph moves the caret, it does not recall', await value(), wrapped);
+let presses = 1; while (presses < 40 && (await value()) === wrapped) { await press('ArrowUp'); presses++; }
+check('H7 it took several ↑ (one per visual line) before recalling', presses >= 4, true);
+check('H7 ↑ from the first visual line recalls the last message', await value(), 'two');
+await press('ArrowDown'); check('H7 ↓ brings the wrapped draft back', await value(), wrapped);
+await clearBox(); await sleep(100);
 
 }
 // ---- steering ----
 await idle(); await clearBox();
 await send('slow one'); await c.waitFor(`!!document.querySelector('button.chat-send.stop')`, 8000);
 await send('steer A'); await c.waitFor(`!!document.querySelector('.chat-bubble.steer')`, 8000);
-check('S1 a steering message waits under the running reply, with the new hint', (await steers()).map(text => text.replace(/steer A$/, '')), ['스티어링 · 대기 중 · ↑ 되돌리기 · Esc 바로 보내기']);
+check('S1 a steering message waits under the running reply, with the new hint', (await steers()).map(text => text.replace(/steer A$/, '')), ['스티어링 · ↑ 수정 · Esc 바로 보내기']);
 await focus(); await press('ArrowUp'); await sleep(800);
 check('S1 ↑ takes the last steering message back into the box', await value(), 'steer A');
 check('S1 and it is gone from the thread, while the turn keeps running', [await steers(), await busy()], [[], true]);
