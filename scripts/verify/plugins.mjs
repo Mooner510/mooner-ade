@@ -74,7 +74,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
     refreshTools: input => manager.refreshTools(String(input.args?.[0])),
     checkUpdates: input => manager.checkUpdates(typeof input.args?.[0] === 'string' ? input.args[0] : undefined),
     installUpdate: input => manager.installUpdate(String(input.args?.[0])),
-    setUpdateMode: input => manager.setUpdateMode(String(input.args?.[0]), String(input.args?.[1])),
+    setUpdateMode: input => manager.setUpdateMode(String(input.args?.[0])),
     connectGithub: input => manager.connectGithub(String(input.args?.[0] ?? '')),
     disconnectGithub: () => manager.disconnectGithub(), signInGithub: () => manager.signInGithub(), cancelSignIn: () => manager.cancelSignIn(), probeGithub: () => manager.probeGithub(),
     selectGithubAccount: input => manager.selectGithubAccount(String(input.args?.[0] ?? '')),
@@ -82,7 +82,6 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
     hubCatalog: input => manager.hubCatalog({ force: input.args?.[0]?.force === true }),
     hubInstall: input => manager.installFromHub(String(input.args?.[0] ?? '')),
     openFolder: () => ({ ...handlers.state(), message: `테스트 플러그인 폴더: ${dir}` }),
-    openSource: input => { const source = manager.snapshot().plugins.find(plugin => plugin.id === String(input.args?.[0]))?.update?.source; return { ...handlers.state(), ...(source?.kind === 'github' && source.github && { openUrl: `https://github.com/${source.github}/releases` }) }; },
     openTokenPage: () => ({ ...handlers.state(), openUrl: 'https://github.com/settings/personal-access-tokens/new' }),
     uploadZip: async input => {
       if (typeof input.zip !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.zip) || input.zip.length > 12 * 1024 * 1024) throw new Error('8MB 이하의 플러그인 zip을 선택하세요.');

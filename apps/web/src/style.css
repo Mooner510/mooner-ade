@@ -473,6 +473,7 @@ summary { cursor: pointer; }
 .quick ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
 .quick li { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; cursor: pointer; border-radius: 6px; }
 .quick li > .icon { align-self: center; flex: none; }
+.quick ul:has(> li > .icon) > li:not(.none, :has(> .icon))::before { content: ""; flex: 0 0 16px; }
 .quick li.selected { background: var(--selected); }
 .quick li small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quick li kbd { margin-left: auto; }
@@ -784,6 +785,9 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .setting-control .theme-list button.on { background: var(--selected); border-color: var(--accent); font-weight: 600; }
 .setting-control .theme-list button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .setting-control .theme-list button .icon { flex: none; color: var(--accent); }
+.theme-chat-dark { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--fg) 3%, transparent); cursor: pointer; }
+.theme-chat-dark > span { display: grid; gap: 2px; min-width: 0; color: var(--fg); font-size: 13px; text-align: left; }
+.theme-chat-dark small { color: var(--muted); font-size: 11.5px; font-weight: 400; line-height: 1.4; }
 .accent-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .setting-control .accent-choices button { width: 26px; height: 26px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--swatch); box-shadow: inset 0 0 0 1px #00000026; }
 .setting-control .accent-choices button:hover:not(:disabled) { background: var(--swatch); }
@@ -1073,28 +1077,15 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-item-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .plugin-item-actions .plugin-button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 
-/* Updates from the plugin's GitHub releases. */
-.plugin-update { display: flex; flex-direction: column; gap: 10px; }
-.plugin-update-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
-.plugin-update[data-tone=info] .plugin-update-status:has(.primary) { border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 7%, transparent); }
-.plugin-update-status > .icon, .plugin-update-status > .plugin-spinner { flex: none; color: var(--tone); }
-.plugin-update-status > div:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-update-status strong { font-weight: 600; }
-.plugin-update-status small { color: var(--muted); overflow-wrap: anywhere; }
-.plugin-update-actions { flex: none; display: flex; gap: 6px; }
-.plugin-review { margin: 4px 0 0; padding-left: 18px; }
-.plugin-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.plugin-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); cursor: pointer; transition: border-color .12s, background .12s; }
-.plugin-mode:hover { border-color: var(--border-strong); }
-.plugin-mode[data-checked] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); }
-.plugin-mode input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
-.plugin-mode:has(input:focus-visible) { outline: 1px solid var(--focus); outline-offset: 2px; }
-.plugin-mode > span { display: flex; flex-direction: column; gap: 3px; }
-.plugin-mode strong { font-size: 12.5px; font-weight: 600; }
-.plugin-mode small { color: var(--muted); line-height: 1.45; }
-.plugin-default { margin-left: 6px; font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--muted); }
-.plugin-source { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; background: none; font-size: 11.5px; }
-@media (max-width: 640px) { .plugin-modes { grid-template-columns: 1fr; } }
+.plugin-update-policy fieldset { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; }
+.plugin-update-policy legend { padding: 6px 8px; color: var(--muted); font-size: 12px; }
+.plugin-update-policy label { flex-direction: row; align-items: flex-start; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.plugin-update-policy label:hover, .plugin-update-policy label:focus-within { background: var(--selected); }
+.plugin-update-policy input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+.plugin-update-policy strong, .plugin-update-policy small { display: block; }
+.plugin-update-policy small { margin-top: 2px; color: var(--muted); }
+.plugin-update-policy:popover-open { width: min(295px, calc(100vw - 24px)); }
+.plugin-list .plugin-callout { margin-top: 4px; }
 
 /* GitHub account for private plugin repositories: a toolbar button that opens a modal. */
 .plugin-github-open { position: relative; }
@@ -1640,7 +1631,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-row.in-process > div > * { transition: opacity .24s ease .12s, transform .34s var(--ease) .06s; }
 .chat-row.in-process[data-folded] { transition: grid-template-rows .3s var(--ease) .07s, opacity .2s ease .1s; }
 .chat-row.in-process[data-folded] > div > * { opacity: 0; transform: translateY(-8px); transition: opacity .1s ease, transform .2s ease; }
-.chat-row.sub > div > * { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--border); }
+/* Mark subagent steps only when they appear inline in the main thread. The drawer uses ordinary turn spacing. */
+.chat-thread .chat-row.sub > div > * { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--border); }
 .chat-row .md-table th, .chat-row .md-table td { overflow-wrap: break-word; }
 .chat-msg-actions { display: flex; gap: 2px; margin: 4px 0 0 -6px; color: var(--muted); }
 .chat-turn > .chat-msg-actions { margin-top: 4px; }
@@ -1798,7 +1790,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-bundle-head[data-inert]:hover { background: none; }
 .chat-bundle-list { position: relative; }
 .chat-bundle-item .chat-thinking { padding: 4px 6px; min-height: 28px; }
-.chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
+.chat-thread .chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
 .chat-diff { max-height: 420px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden auto; }
 /* The diff sizes itself to its content (DiffView compact sets the height), so a two-line edit is not a 240px box; long ones scroll inside the card. */
 .chat-diff > .compact-diff { min-height: 0; height: 22px; }
@@ -2016,6 +2008,12 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md-file:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .md blockquote { padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
+.md-media { display: grid; justify-items: start; gap: 4px; min-width: 0; max-width: 100%; margin: 0; }
+.md-media > button { padding: 0; border: 0; background: transparent; max-width: 100%; cursor: zoom-in; }
+.md-media > button > img, .md-media > video { display: block; max-width: 100%; max-height: min(440px, 60vh); border-radius: 8px; object-fit: contain; }
+.md-media > video { background: black; }
+.md-media > figcaption { color: var(--muted); font-size: .9em; }
+.md-media > figcaption a { margin-inline-start: 4px; }
 .md-table { position: relative; min-width: 0; max-width: 100%; overflow: clip; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }
 .md-table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
 .md-table[data-scroll-left]::before, .md-table[data-scroll-right]::after { content: ''; position: absolute; inset-block: 0; width: 16px; pointer-events: none; }
@@ -2108,6 +2106,7 @@ dialog.mermaid-modal[open] { display: flex; flex-direction: column; }
 .ui-native:checked + .ui-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--input); }
 .ui-native:focus-visible + .ui-mark { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .ui-field input:not([type=checkbox]):not([type=radio]):not([type=range]), .ui-field textarea, .ui-field select { width: 100%; color: var(--fg); }
+.ui-field textarea { resize: vertical; }
 .ui-opts { display: flex; flex-wrap: wrap; gap: 0 18px; } .ui-opts .ui-choice { margin: 0 -8px; max-width: 100%; } /* a long option wraps inside the row instead of running past the form edge */
 .ui-range { display: flex; align-items: center; gap: 12px; color: var(--fg); }
 .ui-range input { flex: 1; min-width: 0; height: 18px; padding: 0; margin: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; cursor: pointer; }
@@ -2978,6 +2977,8 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 }
 /* Monaco draws a 1px outline (its default focus blue, #007fd4) just inside every editor. Inside a rounded, clipped box (the chat diff, a review file, an editor group) the straight outline cannot follow the curve, so its ends show as blue flecks behind the corners. The editors here have their own cursor and selection, so the outline goes. */
 :root :is(.monaco-editor, .monaco-diff-editor) { outline: none; }
+/* Chat-only darkening overrides the pane's surfaces. Monaco paints its own hex, so the editor canvas follows the pane. */
+.chat-pane[data-chat-dark] :is(.monaco-editor, .monaco-editor .margin, .monaco-editor-background, .monaco-editor .monaco-editor-background) { background-color: var(--surface) !important; }
 /* Side-by-side diffs: Monaco casts a scrollbar shadow from each side onto the middle, which reads as a smudge between them; one thin rule in
    the app's border colour instead (:root outranks Monaco's own rule, which loads later). */
 :root .monaco-diff-editor.side-by-side .editor.modified, :root .monaco-diff-editor.side-by-side .editor.original { box-shadow: none; }

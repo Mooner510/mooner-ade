@@ -282,6 +282,25 @@ export const isThemeId = (id: string): id is ThemeId => byId.has(id as ThemeId);
 
 export const themeById = (id: string | undefined): AppTheme => (id && byId.get(id as ThemeId)) || byId.get('dark')!;
 
+// Surfaces on the other dark themes sit well above the default dark. Chat-only darkening pulls each
+// surface down toward black until it is no lighter than the same token on the default dark, so the
+// hue stays and the steps between background, cards and borders stay.
+const CHAT_DARK_KEYS = ['--bg', '--surface', '--raised', '--overlay', '--input', '--border', '--border-strong'] as const;
+const towardBlack = (hex: string, ceiling: string) => {
+  if (luminance(hex) <= luminance(ceiling)) return hex;
+  let lo = 0, hi = 1;
+  for (let step = 0; step < 14; step++) {
+    const mid = (lo + hi) / 2;
+    if (luminance(mix(hex, '#000000', mid)) > luminance(ceiling)) lo = mid;
+    else hi = mid;
+  }
+  return mix(hex, '#000000', hi);
+};
+export const chatDarkVars = (vars: Record<string, string>) => {
+  const cap = themeById('dark').vars;
+  return Object.fromEntries(CHAT_DARK_KEYS.map(key => [key, towardBlack(vars[key], cap[key])]));
+};
+
 export const nextTheme = (id: string) => APP_THEMES[(APP_THEMES.findIndex(theme => theme.id === id) + 1) % APP_THEMES.length];
 
 export const themeChoices = () => APP_THEMES.map((theme, index) => ({

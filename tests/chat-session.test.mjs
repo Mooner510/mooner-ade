@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
 import { agentExitBenign, chatFolder, openChatSession, seedChat, probeAgentModels } from '../apps/local-server/src/chat.js';
+import { createCursorModelCache, cursorSurface } from '../apps/local-server/src/cursor-model-cache.js';
 import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
+import { fromReplay, pendingAsyncQuestions } from '../apps/web/src/chat-model.ts';
 
 const fixture = fileURLToPath(new URL('./fixtures/fake-chat-rpc.mjs', import.meta.url));
 const until = async predicate => { for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('chat did not settle'); };
@@ -32,6 +34,52 @@ test('Codex manual compact remains busy until its turn completes', async t => {
   assert.equal(events.filter(event => event.kind === 'result').length, 1);
   await session.send('follow-up'); await until(() => session.state().status === 'idle');
   assert.ok(events.some(event => event.kind === 'user' && event.text === 'follow-up'));
+});
+test('Codex steers wait for a user-message echo in the same turn', async t => {
+  const { session, events } = await setup(t, 'codex');
+  const steerEvents = () => events.filter(event => event.kind === 'steer');
+  await session.send('approval');
+  await until(() => session.state().status === 'attention');
+  await session.send('guidance', [], { steer: true });
+  await session.send('guidance', [], { steer: true });
+  assert.deepEqual(steerEvents().map(event => event.phase), ['queued', 'queued']);
+
+  await session.approve(session.replay().approvals[0].requestId, { allow: true });
+  await until(() => session.state().status === 'idle');
+  const [first, second, appliedFirst, appliedSecond] = steerEvents();
+  assert.notEqual(first.uuid, second.uuid);
+  assert.deepEqual([appliedFirst, appliedSecond].map(event => [event.phase, event.uuid]), [['applied', first.uuid], ['applied', second.uuid]]);
+  assert.deepEqual(events.filter(event => event.kind === 'user').map(event => event.text), ['approval']);
+  assert.equal(events.filter(event => event.kind === 'result').length, 1);
+
+  await session.send('approval');
+  await until(() => session.state().status === 'attention');
+  await session.send('interrupted guidance', [], { steer: true });
+  await session.interrupt();
+  await until(() => session.state().status === 'idle');
+  assert.equal(steerEvents().at(-1).phase, 'cancelled');
+});
+test('Codex async questions keep their choices in chat replay and allow steering while work continues', async t => {
+  const ctx = await setup(t, 'codex'), { session, events } = ctx;
+  await session.send('async-question');
+  await until(() => events.some(event => event.kind === 'message' && event.id === 'async-q1'));
+  const replay = session.replay(), view = fromReplay(replay);
+  assert.equal(session.state().status, 'working');
+  assert.deepEqual(view.approvals, []);
+  const question = view.items.find(item => item.kind === 'assistant' && item.id === 'async-q1');
+  assert.equal(question.blocks.length, 1);
+  assert.deepEqual(question.blocks[0].questions, [{ title: '어느 쪽에서 검증할까요?', options: ['실기기', '에뮬레이터'] }]);
+  const [card] = pendingAsyncQuestions(view.items, new Set());
+  assert.equal(card.prompt, '어느 쪽에서 검증할까요?');
+  assert.deepEqual(card.options.map(option => option.label), ['실기기', '에뮬레이터']);
+  assert.deepEqual(pendingAsyncQuestions(view.items, new Set([card.id])), []);
+  await session.send('에뮬레이터', [], { steer: true });
+  await until(() => events.some(event => event.kind === 'steer' && event.phase === 'applied' && event.text === '에뮬레이터'));
+  await session.interrupt();
+  await until(() => session.state().status === 'idle');
+  const restored = await ctx.reopen();
+  assert.deepEqual(restored.replay().events.find(event => event.kind === 'message' && event.id === 'async-q1').blocks[0].questions, question.blocks[0].questions);
+  assert.deepEqual(pendingAsyncQuestions(fromReplay(restored.replay()).items, new Set()), []);
 });
 for (const agent of ['codex', 'cursor']) {
   test(`${agent}: streaming, images, restart and exact session restore`, async t => {
@@ -64,7 +112,7 @@ for (const agent of ['codex', 'cursor']) {
     await until(() => session.state().status === 'idle');
     await session.send('hold');
     await assert.rejects(session.send('busy'), /이전 응답/);
-    if (agent === 'codex') { await session.send('steer', [], { steer: true }); assert.ok(events.some(e => e.kind === 'steer' && e.phase === 'applied')); }
+    if (agent === 'codex') { await session.send('steer', [], { steer: true }); await until(() => events.some(e => e.kind === 'steer' && e.phase === 'applied')); }
     else await assert.rejects(session.send('steer', [], { steer: true }), /추가 지시/);
     await assert.rejects(session.cancelSteer(), /개별 취소/);
     await session.interrupt(); await until(() => session.state().status === 'idle');
@@ -98,6 +146,38 @@ for (const agent of ['codex', 'cursor']) {
     assert.ok(events.some(event => event.kind === 'message' && event.blocks?.some(block => block.text === '안녕')));
   });
 }
+test('Cursor: a session id with no store starts a new session instead of failing Invalid params', async () => {
+  const events = [], sent = [];
+  let protocol;
+  const write = async line => {
+    const message = JSON.parse(line); sent.push(message);
+    queueMicrotask(() => {
+      if (message.method === 'initialize') protocol.handle({ id: message.id, result: { agentCapabilities: { loadSession: true } } });
+      else if (message.method === 'session/load') protocol.handle({ id: message.id, error: { code: -32602, message: 'Invalid params', data: { message: 'Session "gone" not found' } } });
+      else if (message.method === 'session/new') protocol.handle({ id: message.id, result: { sessionId: 'fresh' } });
+      else if (message.id !== undefined) protocol.handle({ id: message.id, result: {} });
+    });
+  };
+  protocol = createChatProtocol('cursor', { write, emit: event => events.push(event) });
+  await protocol.initialize({ sessionId: 'gone', permissionMode: 'default' }, '/repo');
+  assert.equal(events.find(event => event.kind === 'session').sessionId, 'fresh');
+  assert.deepEqual(sent.filter(message => message.method === 'session/load' || message.method === 'session/new').map(message => message.method), ['session/load', 'session/new']);
+});
+
+test('Cursor: session/load Invalid params that is not a missing session still fails', async () => {
+  let protocol;
+  const write = async line => {
+    const message = JSON.parse(line);
+    queueMicrotask(() => {
+      if (message.method === 'initialize') protocol.handle({ id: message.id, result: { agentCapabilities: { loadSession: true } } });
+      else if (message.method === 'session/load') protocol.handle({ id: message.id, error: { code: -32602, message: 'Invalid params', data: { message: 'mcpServers.0.env is required' } } });
+      else if (message.id !== undefined) protocol.handle({ id: message.id, result: {} });
+    });
+  };
+  protocol = createChatProtocol('cursor', { write, emit: () => {} });
+  await assert.rejects(protocol.initialize({ sessionId: 'gone', permissionMode: 'default' }, '/repo'), error => error.code === 'AGENT_PROTOCOL' && /mcpServers\.0\.env is required/.test(error.message));
+});
+
 test('agent exit 143 is treated like SIGTERM', () => {
   assert.equal(agentExitBenign(143, null), true);
   assert.equal(agentExitBenign(0, null), true);
@@ -570,6 +650,76 @@ test('Cursor: the picked model shows before the CLI answers, and the next messag
   await sent; await until(() => session.state().status === 'idle');
   assert.equal(session.state().model, 'composer-test');
   assert.deepEqual(session.state().capabilities.configOptions.map(option => option.id), ['model', 'fast']);
+});
+
+const cursorModelId = 'cursor-test[effort=high,fast=false]';
+const cursorModelEntry = {
+  at: 1,
+  model: cursorModelId,
+  catalog: [{ id: cursorModelId, name: 'Cursor test', family: '', window: 0, main: true }, { id: 'composer-test', name: 'Composer test', family: '', window: 0, main: true }],
+  configOptions: [
+    { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: cursorModelId, options: [{ value: cursorModelId, name: 'Cursor test' }, { value: 'composer-test', name: 'Composer test' }] },
+    { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }, { value: 'max', name: 'Max' }] },
+  ],
+  byModel: {
+    [cursorModelId]: { at: 1, configOptions: null },
+    'composer-test': { at: 2, configOptions: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'composer-test', options: [{ value: 'composer-test', name: 'Composer test' }] },
+      { id: 'fast', name: 'Fast', category: 'model_config', type: 'select', currentValue: 'false', options: [{ value: 'false', name: 'Off' }, { value: 'true', name: 'Fast' }] },
+    ] },
+  },
+};
+cursorModelEntry.byModel[cursorModelId].configOptions = cursorModelEntry.configOptions;
+
+test('Cursor: a stored catalog fills the bar before the process starts, and a saved effort stays', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-cursor-cache-'));
+  const root = path.join(directory, 'chat', 'chat');
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, 'meta.json'), JSON.stringify({ agent: 'cursor', model: cursorModelId, effort: 'low', permissionMode: 'plan' }));
+  const session = await openChatSession({ directory, id: 'chat', cwd: directory, agent: 'cursor', cursorModels: () => ({ get: () => cursorModelEntry, note() {} }) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  assert.equal(session.state().model, cursorModelId);
+  assert.equal(session.state().effort, 'low');
+  assert.equal(session.state().permissionMode, 'plan');
+  assert.deepEqual(session.state().capabilities.catalog.map(item => item.id), [cursorModelId, 'composer-test']);
+  assert.deepEqual(session.state().capabilities.efforts, ['low', 'high', 'max']);
+});
+
+test('Cursor: a model seen before shows its options before the CLI answers', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-cursor-switch-'));
+  const session = await openChatSession({ directory, id: 'chat', cwd: directory, agent: 'cursor', executable: process.execPath, executableArgs: [fixture, 'cursor'], env: { HOLD_CONFIG: '1' }, cursorModels: () => ({ get: () => cursorModelEntry, note() {} }) });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  await session.send('hello'); await until(() => session.state().status === 'idle');
+  const hold = path.join(directory, '.hold-config'), go = path.join(directory, '.hold-config-go');
+  const switching = session.set({ model: 'composer-test' });
+  assert.equal(session.state().model, 'composer-test');
+  assert.deepEqual(session.state().capabilities.configOptions.map(option => option.id), ['model', 'fast']);
+  assert.deepEqual(session.state().capabilities.efforts, []);
+  await until(() => existsSync(hold));
+  assert.equal(existsSync(go), false);
+  await writeFile(go, '1');
+  await switching;
+  assert.deepEqual(session.state().capabilities.configOptions.map(option => option.id), ['model', 'fast']);
+});
+
+test('cursor model cache reloads per-model options from disk', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-cursor-disk-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'cursor-models.json');
+  const cache = createCursorModelCache({ file }), key = cache.key('/tmp/cursor', 'login');
+  cache.note(key, { model: 'a', catalog: [{ id: 'a', name: 'A' }], configOptions: [{ id: 'effort', type: 'select', currentValue: 'high', options: [{ value: 'low' }, { value: 'high' }] }] });
+  cache.note(key, { model: 'b', catalog: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], configOptions: [{ id: 'fast', type: 'select', currentValue: 'false', options: [{ value: 'false' }, { value: 'true' }] }] });
+  assert.deepEqual(cursorSurface(cache.get(key), 'a').efforts, ['low', 'high']);
+  assert.deepEqual(cursorSurface(cache.get(key), 'b').configOptions.map(option => option.id), ['fast']);
+  assert.equal(cursorSurface(cache.get(key), 'unseen').configOptions.length, 0);
+  assert.equal(cursorSurface(cache.get(key), 'unseen').catalog.length, 2);
+  await cache.flush();
+  const again = createCursorModelCache({ file });
+  await again.load();
+  assert.equal(again.get(key).model, 'b');
+  assert.deepEqual(cursorSurface(again.get(key), 'a').efforts, ['low', 'high']);
+  assert.equal(again.fresh({ at: Date.now() - 3_600_001 }), false);
+  assert.deepEqual(again.payload(again.get(key)).catalog.map(item => item.id), ['a', 'b']);
 });
 
 test('Cursor advertises agent/plan/ask and switches between them', async t => {

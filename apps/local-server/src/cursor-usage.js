@@ -1,5 +1,5 @@
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -53,7 +53,27 @@ export function cursorSessionCookie(token) {
   return userId ? `WorkosCursorSessionToken=${userId}%3A%3A${token}` : null;
 }
 
+// `security default-keychain` fails closed (no dialog) when this HOME has no login keychain. `find-generic-password` does not: it raises the system "키체인을 찾을 수 없음" window.
+let loginKeychainMissingCache;
+export function loginKeychainMissing(platform = process.platform, run = execFileSync) {
+  if (platform !== 'darwin') return false;
+  if (run === execFileSync && loginKeychainMissingCache !== undefined) return loginKeychainMissingCache;
+  let missing = false;
+  try { run('/usr/bin/security', ['default-keychain'], { stdio: 'ignore', timeout: 3_000 }); }
+  catch { missing = true; }
+  if (run === execFileSync) loginKeychainMissingCache = missing;
+  return missing;
+}
+
+// cursor-agent stores its login as the keychain account "cursor-user". With no login keychain that add pops the dialog on every start, then asks to log in again because the write never landed. A file store under this HOME does not touch the keychain.
+export function cursorAuthWithoutKeychain(env = process.env, platform = process.platform, run = execFileSync) {
+  if (platform !== 'darwin' || env.AGENT_CLI_CREDENTIAL_STORE || !loginKeychainMissing(platform, run)) return false;
+  env.AGENT_CLI_CREDENTIAL_STORE = 'file';
+  return true;
+}
+
 const keychain = (service, account) => new Promise(resolve => {
+  if (loginKeychainMissing()) return resolve(null);
   const args = ['find-generic-password', '-s', service, '-w'];
   if (account) args.splice(2, 0, '-a', account);
   execFile('security', args, { timeout: 10_000 }, (error, stdout) => resolve(error ? null : stdout.trim()));

@@ -7,13 +7,14 @@ import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { WebSocketServer } from 'ws';
 import { createLocalRuntime, LocalProcesses, LocalWorkspace } from './runtime.js';
-import { listIdes, openPath, outsideTarget } from './ide.js';
+import { listIdes, openPath, resolveIdeTarget } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
-import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
+import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, openProjectMedia, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
 import { validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
@@ -31,7 +32,8 @@ import { watchProjectFiles } from './project-watch.js';
 import { readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
 import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
-import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
+import { cursorConfigDir, forkCursorSession, listCursorSessions } from './cursor-sessions.js';
+import { createCursorModelCache } from './cursor-model-cache.js';
 import { readSessionStats, sessionFiles, withSubagents } from './chat-stats.js';
 import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
 import { spawnAgent } from './agent-spawn.js';
@@ -39,6 +41,7 @@ import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { createRemoteUi, listFolders } from './remote-ui.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
+import { createChatTextStore } from './chat-text.js';
 import { MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
 import { signatureGuard } from './agent-signature.js';
 import { claudeBusy } from './claude-busy.js';
@@ -46,6 +49,7 @@ import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
 import { createApiSpend } from './api-spend.js';
 import { createAccountResolver, createUsage } from './usage.js';
+import { cursorAuthWithoutKeychain } from './cursor-usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
 import { createFeedbackStore, issueTitle } from './feedback-store.js';
@@ -56,6 +60,10 @@ import { createFeedbackProgress, viewOf } from './feedback-progress.js';
 import { deviceUUID, feedbackIdentity } from './feedback-identity.js';
 
 const dataRoot = process.env.ADE_DATA_DIR || path.join(process.platform === 'win32' ? process.env.LOCALAPPDATA || os.homedir() : path.join(os.homedir(), 'Library', 'Application Support'), 'mooner-ade');
+const chatText = createChatTextStore(dataRoot);
+const pruneChatText = () => chatText.prune().catch(error => console.warn(`채팅 임시 파일 정리 실패: ${error.message}`));
+const chatTextTimer = setInterval(pruneChatText, 60_000).unref();
+void pruneChatText();
 const webRoot = path.resolve(import.meta.dirname, '../../web/dist');
 // ADE_DEV=1 serves the web UI through an in-process Vite dev server (same origin, so cookie auth keeps working) instead of web/dist.
 const devWeb = process.env.ADE_DEV === '1', devTokenEnv = process.env.ADE_DEV_TOKEN ?? ''; // read here: both are removed from the environment below
@@ -90,6 +98,8 @@ ptyHost?.onClose(() => { ptyHostLost = true; });
 delete process.env.ADE_PTY_ENDPOINT; delete process.env.ADE_PTY_TOKEN; delete process.env.ADE_DEV; delete process.env.ADE_DEV_TOKEN; delete process.env.ADE_VERIFY_PLUGINS;
 // Same for Claude Code's session markers: an app launched from a Claude session would make every `claude` in its terminals a "child session" (no transcripts).
 for (const name of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN']) delete process.env[name];
+// A verify session sets HOME to a folder with no login keychain. cursor-agent would pop "키체인을 찾을 수 없음" for account cursor-user on every start, then ask to log in again.
+cursorAuthWithoutKeychain();
 const localPty = ptyHost ? null : await import('node-pty').catch(() => null);
 // A host that went away mid-run: new terminals open in this process instead (they are then not kept through a restart).
 let fallbackPty = null;
@@ -410,9 +420,9 @@ const chatProcHost = ptyHost?.procs ? {
 } : null;
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
-    keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend,
+    keyAvailable: () => agentKeys.hasKey(agent), spend: apiSpend, cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
-    prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults,
+    prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults, chatText,
     // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
     shell: () => resolveShell(terminalShell), shellEnv: () => pluginEnv(),
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
@@ -500,6 +510,8 @@ function applyMcpServers() {
   setAgentMcpServers([...own, ...pluginTerminal.plugins.map(plugin => plugin.mcp).filter(Boolean).filter(server => server.name !== 'ade_feedback')]);
 }
 const agentModelProbes = new Map();
+const cursorModels = createCursorModelCache({ file: path.join(dataRoot, 'cursor-models.json') });
+await cursorModels.load();
 let modelsProbe = null; // { at, root, promise } for chat/models; the default model can come from a project's own settings, so it is per project folder
 const commandsProbes = new Map(); // cwd + config -> { at, promise }
 // The only helper CLI start there is (see probeInit): its init event holds the folder's slash commands and the model it resolved, so the command menu and
@@ -532,6 +544,48 @@ async function claudeCatalog(refresh = false) {
   }
   const list = await apiCatalog.promise;
   return list.length ? list : readModelCatalog();
+}
+const cursorModelKeyNow = () => cursorModels.key(pluginEnv().CURSOR_CONFIG_DIR || cursorConfigDir(), agentKeys.signature('cursor'));
+const cursorChatOpen = () => [...projects.values()].some(project => [...project.chats.values()].some(chat => chat.agent === 'cursor'));
+// One cursor-agent probe per account. A chat that is already up publishes the same data; a second process would only compete with it.
+function cursorProbe(key, force = false) {
+  const flightKey = `cursor:${key}`;
+  let flight = agentModelProbes.get(flightKey);
+  if (force || !flight || Date.now() - flight.at > 3_600_000) {
+    flight = { at: Date.now(), promise: probeAgentModels({ agent: 'cursor', cwd: os.homedir(), env: chatEnv('cursor'), executableArgs: chatArgs('cursor') }) };
+    agentModelProbes.set(flightKey, flight);
+    flight.promise.then(result => cursorModels.note(key, { model: result.models?.[''] || null, catalog: result.catalog, configOptions: result.configOptions }), () => { if (agentModelProbes.get(flightKey) === flight) agentModelProbes.delete(flightKey); });
+    if (agentModelProbes.size > 32) agentModelProbes.delete(agentModelProbes.keys().next().value);
+  }
+  return flight.promise;
+}
+function refreshCursorModels() {
+  if (cursorChatOpen()) return;
+  const key = cursorModelKeyNow();
+  if (cursorModels.fresh(cursorModels.get(key))) return;
+  void cursorProbe(key).catch(() => {});
+}
+// A stored list is returned at once. Warm (one process) only when nothing is stored yet. A refresh skips both and probes.
+async function cursorModelsAnswer(project, input) {
+  const key = cursorModelKeyNow();
+  const entries = [...project.chats.entries()].filter(([, chat]) => chat.agent === 'cursor');
+  const read = chat => {
+    const state = chat.state(), catalog = state.capabilities?.catalog ?? [];
+    return catalog.length ? { models: state.model ? { '': state.model } : {}, catalog, configOptions: state.capabilities.configOptions ?? [] } : null;
+  };
+  const remember = live => { cursorModels.note(key, { model: live.models[''] || null, catalog: live.catalog, configOptions: live.configOptions }); return live; };
+  if (input.refresh === true) return null;
+  const live = entries.map(([, chat]) => read(chat)).find(Boolean);
+  if (live) return remember(live);
+  const cached = cursorModels.get(key);
+  if (cached?.catalog?.length) { if (!cursorModels.fresh(cached)) refreshCursorModels(); return cursorModels.payload(cached); }
+  if (entries.length) {
+    const preferred = entries.find(([id]) => id === input.id)?.[1] ?? entries[0][1];
+    await preferred.warm().catch(() => {});
+    const warmed = entries.map(([, chat]) => read(chat)).find(Boolean);
+    if (warmed) return remember(warmed);
+  }
+  return null;
 }
 function pluginEnv() {
   if (!pluginTerminal.plugins.length) return {};
@@ -1110,8 +1164,7 @@ async function route(action, input, project) {
       // Small JPEG thumbnails the chat shows in the thread (the full images only go to the agent). Anything malformed is just dropped.
       const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= MAX_PREVIEW_CHARS && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
       chat.setInteractiveUi(input.interactiveUi);
-      await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true, artifact: input.artifact === true, previews });
-      return {};
+      return await chat.send(input.text, images.map(({ mime, data }) => ({ mime, data })), { steer: input.steer === true, artifact: input.artifact === true, previews, clientMessageId: input.clientMessageId }) ?? {};
     }
     case 'chat/branch': {
       const chat = project.chats.get(input.id);
@@ -1197,20 +1250,12 @@ async function route(action, input, project) {
       const agent = input.agent ?? 'claude';
       if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
       if (agent !== 'claude') {
-        if (agent === 'cursor' && input.refresh !== true) {
-          const entries = [...project.chats.entries()].filter(([, chat]) => chat.agent === 'cursor');
-          const read = chat => {
-            const state = chat.state(), catalog = state.capabilities?.catalog ?? [];
-            return catalog.length ? { models: state.model ? { '': state.model } : {}, catalog, configOptions: state.capabilities.configOptions ?? [] } : null;
-          };
-          let live = entries.map(([, chat]) => read(chat)).find(Boolean);
-          if (!live && entries.length) {
-            const preferred = entries.find(([key]) => key === input.id)?.[1] ?? entries[0][1];
-            await preferred.warm().catch(() => {});
-            live = entries.map(([, chat]) => read(chat)).find(Boolean);
-          }
-          // The open chat already has the list. A second cursor-agent would only compete with it.
-          if (live) return live;
+        if (agent === 'cursor') {
+          const listed = await cursorModelsAnswer(project, input);
+          if (listed) return listed;
+          const result = await cursorProbe(cursorModelKeyNow(), input.refresh === true);
+          const chat = project.chats.get(input.id); if (chat?.agent === 'cursor') chat.loadCatalog(result.catalog, result.models[''], result.configOptions);
+          return result;
         }
         const key = JSON.stringify([agent, workspace.root, pluginEnv().CODEX_HOME ?? '', pluginEnv().CURSOR_CONFIG_DIR ?? '', agentKeys.signature(agent)]);
         let cached = agentModelProbes.get(key);
@@ -1286,16 +1331,14 @@ async function route(action, input, project) {
       const name = path.basename(String(input.name ?? '')).replace(/[^\w.\-가-힣]+/g, '_').slice(-80) || 'file';
       return { path: await savePaste(bytes, `upload-${randomUUID()}-${name}`) };
     }
-    case 'ide/open': {
-      // The editors installed here (ide/list) or the OS file manager ('files'); a chat's path is relative to the folder that chat works in (its worktree, if it has one).
-      const base = new LocalWorkspace(input.chatId ? project.chats.get(input.chatId)?.cwd || workspace.root : workspace.root);
-      let target;
+    case 'ide/resolve': case 'ide/open': {
+      const chat = project.chats.get(input.chatId);
+      const roots = [...new Set([chat?.state().cwd, chat?.cwd, workspace.root].filter(Boolean))];
       const requested = text(input.path ?? '.', '경로', 4096);
-      // Inside the project the workspace checks it (no `..`, no symlink out). A chip may also name a place outside it (a sibling repo); that is shown as written,
-      // and the user has already picked how to open it in the dialog.
-      try { target = await base.resolve(requested); } catch (error) { if (error.code === 'INVALID_INPUT') throw error; target = outsideTarget(base.root, requested); }
+      const { root, target } = await resolveIdeTarget(requested, roots);
+      if (action === 'ide/resolve') return { path: target };
       const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
-      return openPath({ ide: text(input.ide, '편집기', 100), root: base.root, target, line: whole(input.line), column: whole(input.column) });
+      return openPath({ ide: text(input.ide, '편집기', 100), root, target, line: whole(input.line), column: whole(input.column) });
     }
     case 'files/directory': return { entries: await projectDirectory(workspace, input.path) };
     case 'files/read': return { file: await readProjectFile(workspace, input.path) };
@@ -1351,6 +1394,42 @@ function authenticated(request) {
   const match = /(?:^|;\s*)ade_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.cookie || '');
   return match && sessions.has(match[1]);
 }
+
+async function serveChatMedia(request, response, params) {
+  if (!authenticated(request)) throw fault('UNAUTHORIZED', '로컬 인증이 필요합니다.', 401);
+  const chat = projects.get(params.get('projectId'))?.chats.get(params.get('chatId'));
+  if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+  const workspace = new LocalWorkspace(chat.cwd);
+  // Claude can enter a nested worktree mid-chat. Its reported path must still be inside the original workspace.
+  const active = chat.state().cwd;
+  const directory = active && active !== chat.cwd ? await workspace.resolve(active).catch(() => chat.cwd) : chat.cwd;
+  const { handle, size, type } = await openProjectMedia(workspace, text(params.get('path'), '미디어 경로'), directory);
+  try {
+    response.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    response.setHeader('Accept-Ranges', 'bytes');
+    const range = request.method === 'GET' && request.headers.range;
+    let start = 0, end = size - 1;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (match?.[1]) {
+        start = Number(match[1]);
+        if (match[2]) end = Math.min(end, Number(match[2]));
+      } else if (match?.[2]) start = Math.max(0, size - Number(match[2]));
+      if ((!match?.[1] && !match?.[2]) || start > end) {
+        response.writeHead(416, { 'Content-Range': `bytes */${size}` }).end();
+        return;
+      }
+      response.statusCode = 206;
+      response.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+    response.setHeader('Content-Type', type);
+    response.setHeader('Content-Length', end - start + 1);
+    if (request.method === 'HEAD' || !size) response.end();
+    else await pipeline(handle.createReadStream({ start, end, autoClose: false }), response);
+  } finally { await handle.close(); }
+}
+
 // Images and escaped editor text can exceed the standard 3 MiB JSON body limit.
 async function body(request, limit = 3 * 1024 * 1024) {
   if (request.headers['content-type'] !== 'application/json') throw fault('INVALID_CONTENT_TYPE', 'JSON 요청만 허용됩니다.', 415);
@@ -1365,12 +1444,14 @@ const server = http.createServer(async (request, response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
-  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader('Content-Security-Policy', devWeb ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob: https:; media-src 'self' https:; worker-src 'self' blob:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: https:; media-src 'self' https:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     if (closing) throw fault('SHUTTING_DOWN', '서버가 종료 중입니다.', 503);
     if (!trusted(request, false)) throw fault('UNTRUSTED_HOST', '잘못된 Host입니다.', 403);
     const url = new URL(request.url, origin);
-    if (url.pathname.startsWith('/api/')) {
+    if (url.pathname === '/chat-media' && (request.method === 'GET' || request.method === 'HEAD')) {
+      await serveChatMedia(request, response, url.searchParams);
+    } else if (url.pathname.startsWith('/api/')) {
       if (request.method !== 'POST' || !trusted(request)) throw fault('UNTRUSTED_ORIGIN', '동일 출처 POST만 허용됩니다.', 403);
       const wideBody = url.pathname.startsWith('/api/feedback/image/') || url.pathname === '/api/files/upload' || (verifyPlugins && url.pathname === '/api/verify/plugins/uploadZip');
       const input = await body(request, url.pathname === '/api/chat/send' ? MAX_CHAT_SEND_BODY :
@@ -1420,6 +1501,7 @@ const server = http.createServer(async (request, response) => {
       response.end(content);
     }
   } catch (error) {
+    if (response.headersSent || response.destroyed) { response.destroy(); return; }
     response.statusCode = error.status || (error.code === 'ENOENT' ? 404 : 400);
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ error: errorValue(error) }));
   }
@@ -1774,6 +1856,7 @@ if (verifyPluginsEnabled) {
 }
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
+refreshCursorModels();
 origin = `http://127.0.0.1:${server.address().port}`;
 void watchFeedback();
 console.log(`무너에이드: ${origin}/#token=${bootstrap}`);
@@ -1789,8 +1872,10 @@ async function syncSessionsBeforeExit() {
   await Promise.race([Promise.all(syncs), new Promise(resolve => setTimeout(resolve, 2000).unref())]);
 }
 // `keep: false` (the user quit the app): chats end instead of being left to the next server. Anything else (update, dev reload, background) keeps them.
-async function shutdown({ keep = true } = {}) {
+async function shutdown({ keep = true, clearChatText = !keep } = {}) {
   if (closing) return; closing = true; clearInterval(sshTimer); clearInterval(remoteTimer); clearInterval(wakatimeTimer); clearInterval(lockTimer); clearInterval(pasteTimer); clearInterval(pluginBufferTimer); feedbackQueue.stop(); feedbackProgress?.stop();
+  clearInterval(chatTextTimer);
+  await chatText.stop(clearChatText).catch(error => console.warn(`채팅 임시 파일 정리 실패: ${error.message}`));
   verifyPlugins?.close();
   for (const client of [...pluginSessions.values()]) client.close();
   await syncSessionsBeforeExit();
@@ -1800,13 +1885,13 @@ async function shutdown({ keep = true } = {}) {
   for (const client of clients) client.close(); wss.close(); server.close(); ptyHost?.close(); void vite?.close();
 }
 // Exit explicitly: the IPC channel to the app would otherwise keep the process alive after shutdown.
-process.on('SIGINT', () => void shutdown().finally(() => process.exit(0))); process.on('SIGTERM', () => void shutdown().finally(() => process.exit(0)));
+process.on('SIGINT', () => void shutdown({ clearChatText: true }).finally(() => process.exit(0))); process.on('SIGTERM', () => void shutdown({ clearChatText: true }).finally(() => process.exit(0)));
 // Every terminal lives in this process (outside `pnpm dev`), so one stray error in a callback must not end all of them.
 process.on('uncaughtException', error => console.error(`처리되지 않은 오류: ${error?.stack || error}`));
 process.on('unhandledRejection', error => console.error(`처리되지 않은 거부: ${error?.stack || error}`));
 // The app asks over IPC because Windows has no SIGTERM for child processes.
 function fromApp(message) {
-  if (message?.type === 'shutdown') void shutdown({ keep: message.keep !== false }).finally(() => process.exit(0));
+  if (message?.type === 'shutdown') void shutdown({ keep: message.keep !== false, clearChatText: message.clearChatText }).finally(() => process.exit(0));
   else if (message?.type === 'busy?') {
     const answer = report => process.send?.({ type: 'busy', id: message.id, ...report });
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));

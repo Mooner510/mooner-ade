@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, pbkdf2Sync } from 'node:crypto';
-import { parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, cursorSessionCookie, cursorUserId, jwtExpiry, readCursorLogin, resetCursorLoginCache } from '../apps/local-server/src/cursor-usage.js';
+import { parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, cursorAuthWithoutKeychain, cursorSessionCookie, cursorUserId, jwtExpiry, loginKeychainMissing, readCursorLogin, resetCursorLoginCache } from '../apps/local-server/src/cursor-usage.js';
 import { createUsage } from '../apps/local-server/src/usage.js';
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
@@ -117,4 +117,19 @@ test('Cursor usage is fetched from dashboard APIs', async () => {
   assert.equal(result.plan, 'Pro');
   assert.equal(result.windows.find(item => item.key === 'total')?.percent, 12);
   assert.equal(result.windows.find(item => item.key === 'grok')?.percent, 5);
+});
+
+test('a home with no login keychain stores cursor auth in a file instead of prompting', () => {
+  const fail = () => { throw new Error('no keychain'); };
+  assert.equal(loginKeychainMissing('linux', fail), false);
+  assert.equal(loginKeychainMissing('darwin', fail), true);
+  const env = {};
+  assert.equal(cursorAuthWithoutKeychain(env, 'darwin', fail), true);
+  assert.equal(env.AGENT_CLI_CREDENTIAL_STORE, 'file');
+  const pinned = { AGENT_CLI_CREDENTIAL_STORE: 'memory' };
+  assert.equal(cursorAuthWithoutKeychain(pinned, 'darwin', fail), false);
+  assert.equal(pinned.AGENT_CLI_CREDENTIAL_STORE, 'memory');
+  const present = {};
+  assert.equal(cursorAuthWithoutKeychain(present, 'darwin', () => {}), false);
+  assert.equal(present.AGENT_CLI_CREDENTIAL_STORE, undefined);
 });

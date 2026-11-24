@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, type IconName } from './Icon';
 
-export type QuickItem = { id: string; label: string; detail?: string; keys?: string; icon?: IconName };
+export type QuickItem = { id: string; detail?: string; keys?: string } &
+  ({ label: string; icon: IconName } | { label: '확인' | '취소'; icon?: never });
 export type QuickRequest =
   | { kind: 'pick'; title: string; items: QuickItem[]; resolve(value: string | null): void }
   | { kind: 'input'; title: string; initial?: string; resolve(value: string | null): void };

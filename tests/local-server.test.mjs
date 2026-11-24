@@ -2,18 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat, symlink, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // The Windows terminal shell is PowerShell, which only runs a quoted path through its call operator.
 const runNode = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}"`;
 const WebSocket = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 const git = (cwd, ...args) => new Promise((resolve, reject) => spawn('git', args, { cwd, stdio: 'ignore' }).on('exit', code => code ? reject(new Error(`git ${args}`)) : resolve()));
 
-async function boot(t, extraEnv = {}) {
+async function boot(t, extraEnv = {}, { ipc = false } = {}) {
   const data = await mkdtemp(join(tmpdir(), 'ade-data-')), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo-')));
-  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ...extraEnv, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ...extraEnv, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit', ...(ipc ? ['ipc'] : [])] });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
       const exited = new Promise(resolve => child.once('exit', resolve));
@@ -43,8 +44,32 @@ async function boot(t, extraEnv = {}) {
   await git(repo, 'add', '.');
   await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'files');
   const project = await api('project/open', { path: repo });
-  return { origin, cookie, api, repo, data, projectId: project.id, call: (action, body, expected) => api(action, { projectId: project.id, ...body }, expected) };
+  return { origin, cookie, api, repo, data, child, projectId: project.id, call: (action, body, expected) => api(action, { projectId: project.id, ...body }, expected) };
 }
+
+test('chat/send passes a large pasted log to the CLI by temporary file, then deletes it at shutdown', { skip: process.platform === 'win32' }, async t => {
+  const tmp = await mkdtemp(join(tmpdir(), 'ade-chat-text-api-'));
+  t.after(() => rm(tmp, { recursive: true, force: true }));
+  const bin = join(tmp, 'bin'), log = join(tmp, 'prompt');
+  const fake = fileURLToPath(new URL('./fixtures/fake-chat-rpc.mjs', import.meta.url));
+  const quote = value => `'${value.replaceAll("'", "'\"'\"'")}'`;
+  await mkdir(bin);
+  await writeFile(join(bin, 'codex'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fake)} "$@"\n`, { mode: 0o700 });
+  const { call, child } = await boot(t, { PATH: `${bin}${delimiter}${process.env.PATH}`, CODEX_HOME: join(tmp, 'config'), FAKE_CHAT_PROMPT_LOG: log }, { ipc: true });
+  const id = 'pasted-log', text = `\n${'[console-api] 요청 "본문"\n'.repeat(12_000)}\n`;
+  await call('chat/open', { id, agent: 'codex' });
+  await call('chat/send', { id, text });
+  const prompt = await readFile(log, 'utf8');
+  const [, file] = /\[\[file:([^\]]+)\]\]/.exec(prompt);
+  assert.ok(prompt.length < 1000);
+  assert.equal(await readFile(file, 'utf8'), text);
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  const replay = await call('chat/open', { id, agent: 'codex' });
+  assert.equal(replay.events.find(event => event.kind === 'user').text, prompt);
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  child.send({ type: 'shutdown', keep: false, clearChatText: true }); await exited;
+  await assert.rejects(stat(file), { code: 'ENOENT' });
+});
 
 test('chat API preserves agent identity and rejects unsupported Cursor settings', async t => {
   const { call } = await boot(t);
@@ -67,6 +92,46 @@ test('chat API preserves agent identity and rejects unsupported Cursor settings'
     const restored = await call('chat/open', { id: `chat-${agent}`, agent });
     assert.equal(restored.agent, agent);
     await call('chat/close', { id: `chat-${agent}`, forget: true });
+  }
+});
+
+test('chat media serves files from the chat workspace with authentication and byte ranges', async t => {
+  const { call, cookie, origin, projectId, repo, data } = await boot(t);
+  const chatId = 'media', image = '미리보기 #1.PNG', bytes = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]);
+  await call('chat/open', { id: chatId, path: 'src' });
+  await writeFile(join(repo, 'src', image), bytes);
+  await writeFile(join(repo, 'src', 'movie.webm'), bytes);
+  await writeFile(join(repo, 'private.png'), bytes);
+  const url = (path, chat = chatId) => `${origin}/chat-media?${new URLSearchParams({ projectId, chatId: chat, path })}`;
+  const get = (path, options = {}) => fetch(url(path), { ...options, headers: { Cookie: cookie, ...options.headers } });
+
+  assert.equal((await fetch(url(image))).status, 401);
+  assert.equal((await fetch(url(image, 'unknown'), { headers: { Cookie: cookie } })).status, 404);
+  const preview = await get(image);
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('content-type'), 'image/png');
+  assert.equal(preview.headers.get('cross-origin-resource-policy'), 'same-origin');
+  assert.deepEqual(Buffer.from(await preview.arrayBuffer()), bytes);
+  assert.equal((await get(join(repo, 'src', image), { method: 'HEAD' })).headers.get('content-length'), String(bytes.length));
+
+  for (const [range, start, end] of [['bytes=2-4', 2, 4], ['bytes=5-', 5, 7], ['bytes=-3', 5, 7], ['bytes=6-99', 6, 7]]) {
+    const result = await get('movie.webm', { headers: { Range: range } });
+    assert.equal(result.status, 206);
+    assert.equal(result.headers.get('content-type'), 'video/webm');
+    assert.equal(result.headers.get('content-range'), `bytes ${start}-${end}/${bytes.length}`);
+    assert.deepEqual(Buffer.from(await result.arrayBuffer()), bytes.subarray(start, end + 1));
+  }
+  const invalidRange = await get('movie.webm', { headers: { Range: 'bytes=100-' } });
+  assert.equal(invalidRange.status, 416);
+  assert.equal(invalidRange.headers.get('content-range'), 'bytes */8');
+  assert.equal((await get('b.ts')).status, 415);
+  assert.equal((await get('missing.png')).status, 404);
+  assert.equal((await get('../private.png')).status, 400);
+  assert.equal((await get(join(repo, 'private.png'))).status, 400);
+  if (process.platform !== 'win32') {
+    await writeFile(join(data, 'outside.png'), bytes);
+    await symlink(join(data, 'outside.png'), join(repo, 'src', 'link.png'));
+    assert.equal((await get('link.png')).status, 400);
   }
 });
 
@@ -658,6 +723,32 @@ test('a plugin chat may run in a git worktree of the project', async t => {
   await call('chat/open', { id: 'wt', agent: 'claude', path: worktree, show: true });
   assert.equal((await call('chat/peers')).find(chat => chat.id === 'wt').cwd, worktree);
   await call('chat/open', { id: 'out', agent: 'claude', path: stranger }, 400);
+});
+
+test('IDE paths resolve from the chat worktree or project and can be copied as absolute paths', async t => {
+  const { call, repo } = await boot(t);
+  const sibling = await realpath(await mkdtemp(join(tmpdir(), 'ade-ide-')));
+  t.after(() => rm(sibling, { recursive: true, force: true }));
+  const worktree = join(sibling, '.worktrees', 'feature');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'ide/feature', worktree);
+  await call('chat/open', { id: 'feature', path: worktree });
+
+  const inWorktree = join('src', 'b.ts');
+  const target = join(worktree, inWorktree);
+  const projectRelative = relative(repo, target);
+  const chatId = 'feature';
+  assert.deepEqual(await call('ide/resolve', { path: inWorktree, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: projectRelative, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: target, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: inWorktree }), { path: join(repo, inWorktree) });
+  assert.deepEqual(await call('ide/resolve', { path: '.' }), { path: repo });
+  await call('ide/resolve', { path: '//server/share/file.txt', chatId }, 400);
+
+  // Lookup of the editor happens after the file is found. Use an unavailable editor to avoid launching a GUI.
+  const open = path => call('ide/open', { ide: 'test-missing-editor', path, chatId }, 404);
+  for (const path of [projectRelative, target]) assert.match((await open(path)).error.message, /해당 편집기를 찾을 수 없습니다/);
+  const missing = join(worktree, 'missing.sql');
+  assert.equal((await open('missing.sql')).error.message, `파일을 찾을 수 없습니다: ${missing}`);
 });
 
 test('a chat keeps the login it started on; the setting only decides where new chats start; Claude chats can switch', async t => {

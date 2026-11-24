@@ -559,7 +559,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'contextTipK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -648,7 +648,13 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {searching && <p className="search-empty">일치하는 설정이 없습니다.</p>}
         {(searching || section === 'appearance') && <SectionFrame label="외관" searching={searching}>
           <Group title="전체">
-            <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다. 이름에 올리면 오른쪽 미리보기가 그 테마로 바뀝니다." preview="theme"><ThemePicker value={settings.theme} onChange={value => set('theme', value)} /></Row>
+            <Row title="색 테마" hint="화면, 터미널, diff에 함께 적용됩니다. 이름에 올리면 오른쪽 미리보기가 그 테마로 바뀝니다. 기본 다크가 아닌 다크 테마는 Chat 화면만 더 어둡게 할 수 있습니다." preview="theme">
+              <ThemePicker value={settings.theme} onChange={value => set('theme', value)} />
+              {themeById(settings.theme).scheme === 'dark' && settings.theme !== 'dark' && <label className="theme-chat-dark">
+                <span>Chat 화면만 더 어둡게<small>말풍선, 코드, 입력창, 카드의 밝은 면을 기본 다크만큼 낮춥니다. 다른 화면은 그대로입니다.</small></span>
+                {toggle('chatDarker')}
+              </label>}
+            </Row>
             <Row title="강조 색" hint="버튼, 선택, 포커스 표시에 쓰는 색입니다. 기본은 테마 색을 씁니다." preview="accent">
               <span className="accent-choices" role="radiogroup" aria-label="강조 색">
                 <button type="button" role="radio" aria-checked={settings.accentColor === ''} aria-label="기본" title="기본" style={{ '--swatch': themeById(settings.theme).vars['--accent'] } as CSSProperties} onClick={() => set('accentColor', '')} />

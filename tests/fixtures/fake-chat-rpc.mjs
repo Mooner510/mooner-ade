@@ -7,6 +7,12 @@ const cursor = process.argv.includes('cursor'), send = value => process.stdout.w
 const reply = (id, result) => send({ id, result });
 const notify = (method, params) => send({ method, params });
 let sessionId = randomUUID(), turnId, promptId, requestId, count = 0;
+const queuedSteers = [];
+function userMessage(input, clientId) {
+  const item = { type: 'userMessage', id: randomUUID(), clientId, content: input };
+  notify('item/started', { threadId: sessionId, turnId, item });
+  notify('item/completed', { threadId: sessionId, turnId, item });
+}
 const catalog = [{ modelId: 'cursor-test[effort=high,fast=false]', name: 'Cursor test' }];
 let currentModel = catalog[0].modelId, values = {};
 const configOptions = () => [
@@ -22,6 +28,8 @@ const configOptions = () => [
 ];
 const cursorInfo = () => ({ sessionId, models: { currentModelId: currentModel, availableModels: catalog }, configOptions: configOptions(), modes: { availableModes: [{ id: 'agent' }, { id: 'plan' }, { id: 'ask' }] } });
 function finish(status = 'completed') {
+  const steers = queuedSteers.splice(0);
+  requestId = undefined;
   if (cursor) {
     notify('session/update', { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '안녕' + (process.argv.includes('--force') ? ' [force]' : '') + (process.argv.includes('--sandbox') ? ` [sandbox:${process.argv[process.argv.indexOf('--sandbox') + 1]}]` : '') } } });
     const size = values.context === '1m' ? 1_000_000 : 300_000;
@@ -29,6 +37,7 @@ function finish(status = 'completed') {
     notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', title: `Cursor 테스트 ${count}` } });
     reply(promptId, { stopReason: status === 'interrupted' ? 'cancelled' : 'end_turn', ...(process.env.FAKE_CURSOR_USAGE === '1' && { usage: { inputTokens: 10, outputTokens: 2, cachedReadTokens: 100, cachedWriteTokens: 5 } }) });
   } else {
+    if (status === 'completed') for (const steer of steers) userMessage(steer.input, steer.clientUserMessageId);
     notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: `m${count}`, delta: '안녕' });
     notify('item/completed', { threadId: sessionId, turnId, item: { id: `m${count}`, type: 'agentMessage', text: '안녕' } });
     notify('thread/tokenUsage/updated', { threadId: sessionId, turnId, tokenUsage: { total: { inputTokens: count * 10, cachedInputTokens: count, cacheWriteInputTokens: count * 3, outputTokens: count * 2 }, last: { totalTokens: 12 }, modelContextWindow: 1000 } });
@@ -68,9 +77,22 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   } else if (raw.method === 'session/new' || raw.method === 'session/load') { sessionId = p.sessionId ?? sessionId; reply(raw.id, cursorInfo()); }
   else if (raw.method === 'turn/start' || raw.method === 'session/prompt') {
     turnId = `turn-${++count}`; promptId = raw.id;
-    if (!cursor) { reply(raw.id, { turn: { id: turnId } }); notify('turn/started', { threadId: sessionId, turn: { id: turnId } }); }
     const text = (p.input ?? p.prompt).find(item => item.type === 'text').text;
+    if (process.env.FAKE_CHAT_PROMPT_LOG) fs.writeFileSync(process.env.FAKE_CHAT_PROMPT_LOG, text);
+    if (!cursor) {
+      reply(raw.id, { turn: { id: turnId } });
+      notify('turn/started', { threadId: sessionId, turn: { id: turnId } });
+      userMessage(p.input, null);
+    }
     if (text === 'hold') return;
+    if (!cursor && text === 'async-question') {
+      const title = '어느 쪽에서 검증할까요?', options = ['실기기', '에뮬레이터'];
+      const text = [title, ...options.map(option => `- ${option}`)].join('\n');
+      const id = 'async-q1';
+      notify('item/agentMessage/delta', { threadId: sessionId, turnId, itemId: id, delta: text });
+      notify('item/completed', { threadId: sessionId, turnId, item: { id, type: 'agentMessage', delivery: 'async', text, questions: [{ title, options }] } });
+      return;
+    }
     if (cursor && text === 'empty') { reply(promptId, { stopReason: 'end_turn' }); return; }
     if (text === 'crash') { process.exit(2); return; }
     if (text === 'retry-once') {
@@ -88,7 +110,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     turnId = `compact-${++count}`; reply(raw.id, {}); notify('turn/started', { threadId: sessionId, turn: { id: turnId } });
     notify('item/started', { threadId: sessionId, turnId, item: { id: 'compact', type: 'contextCompaction' } });
     setTimeout(() => { notify('item/completed', { threadId: sessionId, turnId, item: { id: 'compact', type: 'contextCompaction' } }); setTimeout(() => notify('turn/completed', { threadId: sessionId, turn: { id: turnId, status: 'completed' } }), 100); }, 100);
-  } else if (raw.method === 'turn/steer') reply(raw.id, { turnId });
+  } else if (raw.method === 'turn/steer') {
+    if (p.threadId !== sessionId || p.expectedTurnId !== turnId) throw new Error('steer must target the running turn');
+    reply(raw.id, { turnId });
+    if (requestId) queuedSteers.push(p);
+    else userMessage(p.input, p.clientUserMessageId);
+  }
   else if (raw.method === 'turn/interrupt') { reply(raw.id, {}); finish('interrupted'); }
   else if (raw.method === 'session/cancel') finish('interrupted');
   else reply(raw.id, {});

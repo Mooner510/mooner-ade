@@ -57,7 +57,7 @@ const sealed0512 = { version: 1, enabled: true, approved: { 'demo-plugin': { has
   github: { token: `ghp_${'x'.repeat(30)}`, login: 'octo', via: 'pat', at: 5 }, ghAccount: 'octo' };
 const plain0512 = { ...sealed0512, approved: {}, data: {}, github: { login: 'octo', via: 'pat', at: 5 } };
 
-test('plugin settings, approvals, stored data and the GitHub sign-in written by 0.5.12 are all still there in 0.6.0 (which adds an empty Hub sign-in)', async () => {
+test('plugin data from 0.5.12 is preserved when settings move to a global update mode and add Hub sign-in', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ade-update-plugins-'));
   try {
     const file = path.join(dir, 'plugins.bin');
@@ -69,14 +69,17 @@ test('plugin settings, approvals, stored data and the GitHub sign-in written by 
     assert.equal(state.enabled, true);
     assert.deepEqual({ ...state.approved }, sealed0512.approved, 'the approved plugin keeps its approval (the content hash is unchanged)');
     assert.deepEqual({ ...state.data }, sealed0512.data);
-    assert.deepEqual(state.mcp, sealed0512.mcp); assert.deepEqual(state.builtin, sealed0512.builtin); assert.deepEqual(state.updates, sealed0512.updates);
+    assert.deepEqual(state.mcp, sealed0512.mcp); assert.deepEqual(state.builtin, sealed0512.builtin);
+    assert.deepEqual(state.updates, { 'demo-plugin': { notified: '1.3.0' } });
+    assert.equal(state.updateMode, 'notify', 'legacy auto does not authorize all plugins');
     assert.equal(state.github.login, 'octo'); assert.equal(state.github.token, sealed0512.github.token); assert.equal(state.ghAccount, 'octo');
     assert.equal(state.hub, null, 'no Hub sign-in yet');
-    // A change made by 0.6.0 keeps everything that was sealed, and the file stays readable by a fresh store.
-    store.update(current => ({ ...current, updates: { ...current.updates, 'demo-plugin': { mode: 'notify', notified: '1.3.0' } } }));
+    // Changing the global mode keeps everything that was sealed, and a fresh store can read it.
+    store.update(current => ({ ...current, updateMode: 'manual' }));
     const again = createPluginStore({ file, crypto }).load();
     assert.deepEqual({ ...again.approved }, sealed0512.approved); assert.deepEqual({ ...again.data }, sealed0512.data); assert.equal(again.github.token, sealed0512.github.token);
-    assert.equal(again.updates['demo-plugin'].mode, 'notify');
+    assert.equal(again.updateMode, 'manual');
+    assert.deepEqual(again.updates, state.updates);
     assert.equal(JSON.parse(await readFile(path.join(dir, 'plugins.json'), 'utf8')).github.token, undefined, 'the token never lands in the plain file');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

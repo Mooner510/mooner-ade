@@ -12,7 +12,7 @@ export const ideIcon = (ide: Pick<IdeInfo, 'id' | 'kind'>): IconName =>
           : ide.id === 'zed' || ide.kind === 'zed' ? 'zed'
             : ide.kind === 'jetbrains' ? 'jetbrains'
               : ide.kind === 'vscode' ? 'vscode' : 'code';
-// path is relative to the project (or to the chat's own folder when chatId is given); the server refuses anything outside it.
+// The server turns file references (including paths outside the project) into absolute paths before opening them.
 export type OpenTarget = { path: string; line?: number; column?: number; folder?: boolean; chatId?: string };
 
 let cached: { at: number; value: Promise<IdeList> } | null = null;

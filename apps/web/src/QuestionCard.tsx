@@ -1,7 +1,7 @@
 import { Tick } from './Icon';
 import { useEffect, useId, useRef, useState } from 'react';
 import { useHeightMorph } from './Collapse';
-import { emptyPick, pickOption, pickOther, questionAnswers, questionsAnswered, type Approval, type ChatQuestion, type QuestionPick } from './chat-model';
+import { emptyPick, pickOption, pickOther, questionAnswers, questionsAnswered, type ChatQuestion, type QuestionPick } from './chat-model';
 
 // An entrance that must not replay when a hidden tab is shown again. display:none cancels the animation, so without this
 // the card would fade up from opacity 0 on every return. Once it has played (or was cancelled by hiding), it stays put.
@@ -18,9 +18,9 @@ export function usePlayedEntrance() {
 // own answer, and a question with no options is just a text box.
 // Esc closes the question and stops the turn at once (the same as the stop button next to the skip one): from inside the card, from the message box
 // (its own Esc handling), or with focus nowhere (the document listener below, which leaves any key another control already took).
-export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Approval; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>): void; onInterrupt(): void }) {
+export function QuestionCard({ questions, title = '질문', submitting = false, onAnswer, onInterrupt }: { questions: ChatQuestion[]; title?: string; submitting?: boolean; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>): void; onInterrupt?(): void }) {
   const played = usePlayedEntrance();
-  const questions = approval.questions ?? [], uid = useId();
+  const uid = useId();
   const [picks, setPicks] = useState<Record<string, QuestionPick>>({}), [active, setActive] = useState(0), [card, capture] = useHeightMorph<HTMLDivElement>();
   const answers = questionAnswers(questions, picks), ready = questionsAnswered(questions, answers), done = questions.filter(question => answers[question.id]?.length).length;
   const answered = (question: ChatQuestion) => Boolean(answers[question.id]?.length), tabs = questions.length > 1, advance = useRef(0);
@@ -31,7 +31,7 @@ export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Ap
   useEffect(() => () => clearTimeout(advance.current), []);
   const stop = useRef(onInterrupt); stop.current = onInterrupt;
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && event.target === document.body) { event.preventDefault(); stop.current(); } };
+    const onKey = (event: KeyboardEvent) => { if (stop.current && event.key === 'Escape' && !event.defaultPrevented && !event.isComposing && event.target === document.body) { event.preventDefault(); stop.current(); } };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
@@ -43,12 +43,11 @@ export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Ap
     clearTimeout(advance.current);
     if (at >= 0) advance.current = window.setTimeout(() => go(at), 260);
   };
-  const submit = () => { if (ready) onAnswer(true, false, answers); };
-  const title = approval.tool === 'AskUserQuestion' || approval.tool === '질문' ? '질문' : approval.tool;
+  const submit = () => { if (ready && !submitting) onAnswer(true, false, answers); };
   return <div ref={card} className="chat-question" {...played} role="group" aria-label={`에이전트의 ${title}`} onKeyDown={event => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submit(); }
-    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onInterrupt(); }
+    else if (event.key === 'Escape' && onInterrupt) { event.preventDefault(); event.stopPropagation(); onInterrupt(); }
   }}>
     <header><span className="icon material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">help</span><strong>{title}</strong>
       <span>{questions.length > 1 ? `${questions.length}개 질문에 답해 주세요` : '답변을 기다리고 있어요'}</span></header>
@@ -83,10 +82,10 @@ export function QuestionCard({ approval, onAnswer, onInterrupt }: { approval: Ap
     <footer>
       {/* Several questions: "다음" (to the next one still unanswered) until every one is answered, then that same button becomes "답변 보내기". */}
       <span className="chat-q-hint">{ready ? 'Ctrl/⌘+Enter로 보내기' : `${done}/${questions.length}개 답변함`}</span>
-      <button type="button" className="secondary" onClick={onInterrupt} title="중단 (Esc)">중단</button>
-      <button type="button" onClick={() => onAnswer(false, false)}>{tabs ? '모두 건너뛰기' : '건너뛰기'}</button>
+      {onInterrupt && <button type="button" className="secondary" onClick={onInterrupt} title="중단 (Esc)">중단</button>}
+      <button type="button" disabled={submitting} onClick={() => onAnswer(false, false)}>{tabs ? '모두 건너뛰기' : '건너뛰기'}</button>
       {tabs && !ready ? <button type="button" className="primary" onClick={() => go(nextOpen)}>다음</button>
-        : <button type="button" className="primary" disabled={!ready} onClick={submit}>답변 보내기</button>}
+        : <button type="button" className="primary" disabled={!ready || submitting} onClick={submit}>{submitting ? '보내는 중…' : '답변 보내기'}</button>}
     </footer>
   </div>;
 }

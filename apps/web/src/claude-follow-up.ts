@@ -64,7 +64,8 @@ export function claudeDraftInput(data: string): string | undefined {
   return value && !/[\x00-\x08\x0b-\x1f\x7f]/.test(value) && (paste || !/[\n\t]/.test(value)) ? value : undefined;
 }
 
-export const claudePromptInput = (text: string) => `\x1b[200~${text}\x1b[201~\r`;
+export const claudeDraftPaste = (text: string) => `\x1b[200~${text}\x1b[201~`;
+export const claudePromptInput = (text: string) => claudeDraftPaste(text) + '\r';
 export const validClaudeDraft = (text: string) => Boolean(text.trim()) && text.length <= 16000 && !/[\x00-\x08\x0b-\x1f\x7f]/.test(text);
 
 // Earlier versions could clear progress between tool calls, which would inject the follow-up mid-task.

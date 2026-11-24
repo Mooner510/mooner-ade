@@ -91,7 +91,11 @@ test('moving an update source between GitHub, the Hub and nowhere is listed for 
 
 test('saved update modes and the GitHub account are checked when read', () => {
   const state = validPluginState({ version: 1, updates: { demo: { mode: 'auto', notified: 'v1.2.0' }, bad: { mode: 'sometimes' }, 'Bad Id': { mode: 'auto' } }, github: { token: 'ghp_' + 'a'.repeat(36), login: 'someone', via: 'oauth', at: 5 } });
-  assert.deepEqual(state.updates, { demo: { mode: 'auto', notified: '1.2.0' } });
+  assert.equal(state.updateMode, 'notify', 'legacy auto does not grant global consent');
+  assert.deepEqual(state.updates, { demo: { notified: '1.2.0' } });
+  const updates = { demo: { mode: 'auto' }, other: { mode: 'manual' } };
+  assert.equal(validPluginState({ version: 1, updateMode: 'invalid', updates }).updateMode, 'manual');
+  assert.equal(validPluginState({ version: 1, updateMode: 'notify', updates }).updateMode, 'notify');
   assert.deepEqual(state.github, { token: 'ghp_' + 'a'.repeat(36), login: 'someone', via: 'oauth', at: 5 });
   assert.equal(validPluginState({ version: 1, github: { token: 'short', login: 'x' } }).github, null);
 });
@@ -223,7 +227,7 @@ function fakeHost() {
   return child;
 }
 // latest: what the fake release holds ({ version, extra }); answers: the dialog buttons pressed, in order.
-function setup(t, { latest, answers = [], probeCredential }) {
+function setup(t, { latest, answers = [], probeCredential, extractZip = jsonExtractor }) {
   const root = temp(t), dir = path.join(root, 'plugins'), asked = [], notices = [], hosts = [];
   fs.mkdirSync(path.join(dir, 'demo'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'demo', 'plugin.json'), JSON.stringify(manifestOf('1.0.0')));
@@ -237,7 +241,7 @@ function setup(t, { latest, answers = [], probeCredential }) {
     whoami: async token => { if (token !== 'good'.repeat(10)) throw Object.assign(new Error('bad token'), { code: 'UNAUTHORIZED' }); return { login: 'me' }; }
   };
   const manager = createPluginManager({
-    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, github, probeCredential,
+    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip, github, probeCredential,
     log: { log() {}, warn() {}, error() {} }, notify: notice => notices.push(notice),
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; }
@@ -257,7 +261,7 @@ function approve(env) {
 test('notify mode: a background round announces a new version once; installing asks in the native dialog', async t => {
   const env = setup(t, { latest: { version: '1.1.0' }, answers: [0] });
   approve(env);
-  assert.equal(env.plugin().update.mode, 'notify');
+  assert.equal(env.manager.snapshot().updateMode, 'notify');
   assert.equal(env.plugin().update.status, 'idle');
   await env.manager.runUpdateRound();
   await env.manager.runUpdateRound();
@@ -279,7 +283,8 @@ test('notify mode: a background round announces a new version once; installing a
 test('cancelling the update dialog keeps the installed version and the update on offer', async t => {
   const env = setup(t, { latest: { version: '1.1.0' }, answers: [1] });
   approve(env);
-  await env.manager.installUpdate('demo');
+  const result = await env.manager.installUpdate('demo');
+  assert.equal(result.plugins.find(plugin => plugin.id === 'demo').update.status, 'available', 'the list can offer the update again');
   assert.equal(env.plugin().version, '1.0.0');
   assert.equal(env.plugin().update.status, 'available');
   assert.deepEqual(fs.readdirSync(path.join(env.root, 'staging')), [], 'the download is not left behind');
@@ -288,10 +293,11 @@ test('cancelling the update dialog keeps the installed version and the update on
 test('auto mode is turned on in a native dialog and installs updates that ask for nothing new without one', async t => {
   const env = setup(t, { latest: { version: '1.2.0' }, answers: [1, 0] });
   approve(env);
-  await env.manager.setUpdateMode('demo', 'auto');
-  assert.equal(env.plugin().update.mode, 'notify', 'cancelled');
-  await env.manager.setUpdateMode('demo', 'auto');
-  assert.equal(env.plugin().update.mode, 'auto');
+  await env.manager.setUpdateMode('auto');
+  assert.equal(env.manager.snapshot().updateMode, 'notify', 'cancelled');
+  await env.manager.setUpdateMode('auto');
+  assert.equal(env.manager.snapshot().updateMode, 'auto');
+  assert.match(env.asked[1].message, /모든 플러그인/);
   assert.match(env.asked[1].detail, /확인 창 없이/);
   await env.manager.runUpdateRound();
   assert.equal(env.asked.length, 2, 'no install dialog');
@@ -299,15 +305,15 @@ test('auto mode is turned on in a native dialog and installs updates that ask fo
   assert.equal(env.store.state.approved.demo.version, '1.2.0');
   assert.match(env.notices.at(-1).body, /1\.0\.0에서 1\.2\.0\(으\)로 자동 업데이트했습니다/);
   // Turning it back down needs no dialog.
-  await env.manager.setUpdateMode('demo', 'manual');
+  await env.manager.setUpdateMode('manual');
   assert.equal(env.asked.length, 2);
-  assert.equal(env.plugin().update.mode, 'manual');
+  assert.equal(env.manager.snapshot().updateMode, 'manual');
 });
 
 test('auto mode never installs an update that asks for a new permission or moves its source; it is announced for review', async t => {
   const env = setup(t, { latest: { version: '2.0.0', extra: { workspace: true } }, answers: [0] });
   approve(env);
-  await env.manager.setUpdateMode('demo', 'auto');
+  await env.manager.setUpdateMode('auto');
   await env.manager.runUpdateRound();
   assert.equal(env.plugin().version, '1.0.0');
   assert.equal(env.plugin().update.status, 'available');
@@ -317,6 +323,20 @@ test('auto mode never installs an update that asks for a new permission or moves
   env.asked.length = 0;
   await env.manager.installUpdate('demo');
   assert.match(env.asked[0].detail, /전에 없던 것을 요청합니다:\n• 새 권한: 이 PC의 프로젝트와 터미널/);
+});
+
+test('switching to manual while an automatic update is unpacked stops the install', async t => {
+  const env = setup(t, { latest: { version: '1.1.0' }, answers: [0], extractZip: async options => {
+    await jsonExtractor(options);
+    await env.manager.setUpdateMode('manual');
+  } });
+  approve(env);
+  await env.manager.setUpdateMode('auto');
+  await env.manager.runUpdateRound();
+  assert.equal(env.plugin().version, '1.0.0');
+  assert.equal(env.plugin().update.status, 'available');
+  assert.equal(env.notices.length, 0);
+  assert.equal(env.asked.length, 1);
 });
 
 test('a release whose zip is another plugin or another version is not installed', async t => {
@@ -329,17 +349,24 @@ test('a release whose zip is another plugin or another version is not installed'
   assert.equal(env.plugin().update.status, 'error');
 });
 
-test('manual mode is left out of the background round; a plugin without a source cannot be checked', async t => {
+test('manual mode persists and skips background checks for all plugins, including ones added later', async t => {
   const env = setup(t, { latest: { version: '1.1.0' } });
   approve(env);
-  await env.manager.setUpdateMode('demo', 'manual');
+  await env.manager.setUpdateMode('manual');
+  env.store.load();
+  assert.equal(env.manager.snapshot().updateMode, 'manual');
+  const other = path.join(env.dir, 'other');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'plugin.json'), JSON.stringify(manifestOf('1.0.0', { id: 'other', name: 'Other' })));
+  fs.writeFileSync(path.join(other, 'host.js'), '// 1.0.0');
+  env.manager.rescan();
   await env.manager.runUpdateRound();
-  assert.equal(env.plugin().update.status, 'idle');
+  assert.deepEqual(env.manager.snapshot().plugins.map(plugin => plugin.update.status), ['idle', 'idle']);
   assert.match((await env.manager.checkUpdates('demo')).message, /Demo 1\.1\.0 업데이트가 있습니다/);
-  assert.match((await env.manager.checkUpdates()).message, /업데이트 1개: Demo/);
+  assert.match((await env.manager.checkUpdates()).message, /업데이트 2개: Demo, Other/);
   fs.writeFileSync(path.join(env.dir, 'demo', 'plugin.json'), JSON.stringify({ ...manifestOf('1.0.0'), source: undefined }));
   env.manager.rescan();
-  assert.deepEqual(env.plugin().update, { source: null, mode: 'manual' });
+  assert.deepEqual(env.plugin().update, { source: null });
   await assert.rejects(env.manager.checkUpdates('demo'), { code: 'NO_SOURCE' });
 });
 

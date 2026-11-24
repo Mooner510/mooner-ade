@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeFollowUp, hasEmptyClaudeComposer, claudeDraftInput, claudePromptInput, validClaudeDraft, claudeFollowUpVersion, claudeComposerText } from '../apps/web/src/claude-follow-up.ts';
+import { createClaudeFollowUp, hasEmptyClaudeComposer, claudeDraftInput, claudeDraftPaste, claudePromptInput, validClaudeDraft, claudeFollowUpVersion, claudeComposerText } from '../apps/web/src/claude-follow-up.ts';
 
 test('automatic follow-up requires a Claude version with progress covering the whole turn', () => {
   assert.equal(claudeFollowUpVersion('Claude Code v2.1.123'), false);
@@ -72,6 +72,7 @@ test('only a visibly empty Claude composer permits automatic input', () => {
 test('draft capture preserves Unicode and multiline paste without stealing terminal controls', () => {
   assert.equal(claudeDraftInput('한글🙂'), '한글🙂');
   assert.equal(claudeDraftInput('\x1b[200~first\r\nsecond\x1b[201~'), 'first\nsecond');
+  assert.equal(claudeDraftPaste('한글\nsecond'), '\x1b[200~한글\nsecond\x1b[201~');
   for (const input of ['\t', '\r', '\x1b[A', '\x03', '\x1b[I', '\x1b[200~bad\x1btext\x1b[201~']) assert.equal(claudeDraftInput(input), undefined);
   assert.equal(claudePromptInput('한글\nsecond'), '\x1b[200~한글\nsecond\x1b[201~\r');
   for (const input of ['', '  ', 'x'.repeat(16001), '\x1b[201~\rmalicious']) {

@@ -30,3 +30,8 @@ test('the interactive UI setting must be a boolean', () => {
   validateAppState(app({ interactiveUi: false }));
   assert.throws(() => validateAppState(app({ interactiveUi: 'yes' })));
 });
+
+test('chat-only darkening is a boolean', () => {
+  validateAppState(app({ chatDarker: true }));
+  assert.throws(() => validateAppState(app({ chatDarker: 'yes' })));
+});

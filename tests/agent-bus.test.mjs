@@ -337,7 +337,7 @@ test('the plugin store touches safeStorage (the macOS Keychain) only when someth
   // Plain settings (plugins on, a built-in's choice, an update mode) never reach it.
   store.update(state => ({ ...state, enabled: true }));
   store.update(state => ({ ...state, builtin: { ...state.builtin, 'agent-bus': { enabled: false } } }));
-  store.update(state => ({ ...state, updates: { ...state.updates, example: { mode: 'manual' } } }));
+  store.update(state => ({ ...state, updateMode: 'manual' }));
   assert.equal(calls, 0);
   // Sealing an approval and the GitHub token does.
   store.update(state => ({ ...state, approved: { ...state.approved, example: approval } }));
@@ -348,7 +348,7 @@ test('the plugin store touches safeStorage (the macOS Keychain) only when someth
   const again = open();
   assert.equal(again.state.enabled, true);
   assert.equal(again.state.builtin['agent-bus'].enabled, false);
-  assert.equal(again.state.updates.example.mode, 'manual');
+  assert.equal(again.state.updateMode, 'manual');
   assert.equal(again.state.github.login, 'octo');
   assert.equal(calls, 0);
   again.update(state => ({ ...state, mcp: { ...state.mcp, example: { off: true, disabled: [] } } }));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { APP_THEMES, isThemeId, themeById, themeStyleSheet } from '../apps/web/src/themes.ts';
+import { APP_THEMES, chatDarkVars, isThemeId, themeById, themeStyleSheet } from '../apps/web/src/themes.ts';
 import { validateAppState } from '../apps/local-server/src/ui-state.js';
 
 const channel = hex => {
@@ -72,6 +72,21 @@ test('text, buttons and terminal colours stay readable on each theme', () => {
     }
   }
   assert.deepEqual(failures, []);
+});
+
+test('chat-only darkening stops at the default dark surfaces and leaves that theme alone', () => {
+  const cap = themeById('dark').vars;
+  const keys = ['--bg', '--surface', '--raised', '--overlay', '--input', '--border', '--border-strong'];
+  assert.deepEqual(chatDarkVars(cap), Object.fromEntries(keys.map(key => [key, cap[key]])));
+  const nord = themeById('nord').vars, dim = chatDarkVars(nord);
+  assert.ok(luminance(dim['--surface']) < luminance(nord['--surface']) / 2, 'nord chat surface should drop hard');
+  for (const theme of APP_THEMES) {
+    const darker = chatDarkVars(theme.vars);
+    for (const key of keys) {
+      assert.ok(luminance(darker[key]) <= luminance(theme.vars[key]) + 1e-9, `${theme.id} ${key} got lighter`);
+      assert.ok(luminance(darker[key]) <= luminance(cap[key]) + 1e-6, `${theme.id} ${key} ${darker[key]} is above default ${cap[key]}`);
+    }
+  }
 });
 
 test('saved theme ids are accepted and junk is not', () => {

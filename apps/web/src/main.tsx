@@ -235,7 +235,7 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
   }, []);
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, [Boolean(list)]);
   const fail = (cause: unknown) => pushError(target.root, errorText(cause));
-  const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: '.' }).catch(fail); };
+  const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: target.root }).catch(fail); };
   const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span></button>;
   const ides = byLastUsed(list?.ides ?? []);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
@@ -493,14 +493,14 @@ function Shell() {
   };
   // Stable identity, so a project that is not being shown does not re-render when another changes.
   const projectCommands = useMemo<Command[]>(() => [
-    { id: 'addProject', label: '프로젝트 열기…', run: () => actions.current.add() },
-    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', run: () => actions.current.toggle() },
-    { id: 'settings', label: '설정 열기', run: () => actions.current.settings() },
-    { id: 'closeProject', label: '프로젝트 닫기', run: () => actions.current.close() },
-    { id: 'tutorial', label: '둘러보기 다시 보기', run: () => actions.current.tutorial() },
-    { id: 'nextProject', label: '다음 프로젝트', run: () => actions.current.cycle(1) },
-    { id: 'prevProject', label: '이전 프로젝트', run: () => actions.current.cycle(-1) },
-    ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
+    { id: 'addProject', label: '프로젝트 열기…', icon: 'folderOpen', run: () => actions.current.add() },
+    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', icon: 'panelLeft', run: () => actions.current.toggle() },
+    { id: 'settings', label: '설정 열기', icon: 'settings', run: () => actions.current.settings() },
+    { id: 'closeProject', label: '프로젝트 닫기', icon: 'x', run: () => actions.current.close() },
+    { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
+    { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', run: () => actions.current.cycle(1) },
+    { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', run: () => actions.current.cycle(-1) },
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
   // With an agent, Settings opens on that agent's AI 툴 tab (where its API key is).
