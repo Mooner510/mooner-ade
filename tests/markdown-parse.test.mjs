@@ -75,6 +75,23 @@ test('[[file:…]] is an inline span, and its path, line and folder-ness are rea
   assert.equal(fileRef('a\nb'), null);
 });
 
+test('file chips keep dynamic route brackets inside the path', () => {
+  const route = '../gamebiz-console/src/app/console/wave/(console)/campaigns/[id]/picks/page.tsx';
+  const optionalRoute = 'app/[[...slug]]/page.tsx';
+  const single = `[[file:${route}:42:7]]`, optional = `[[file:${optionalRoute}]]`, folder = '[[file:app/[id]/]]';
+  assert.deepEqual(spans(`경로 (${single})와 ${optional}, ${folder}.`), [single, optional, folder]);
+  const refs = [...`${single} ${optional} ${folder}`.matchAll(INLINE)].map(match => fileRef(match[8].slice(7, -2)));
+  assert.deepEqual(refs, [
+    { path: route, line: 42, column: 7, folder: false },
+    { path: optionalRoute, folder: false },
+    { path: 'app/[id]', folder: true }
+  ]);
+  for (const chip of [single, optional, '[[file:app/[id]]]']) {
+    for (let i = 2; i < chip.length; i++) assert.equal(holdBack(`앞 ${chip.slice(0, i)}`), '앞 ');
+    assert.equal(holdBack(`앞 ${chip}`), `앞 ${chip}`);
+  }
+});
+
 test('a markdown link to a path counts as a file, a link to an address does not', () => {
   for (const href of ['https://x.com/a.ts', 'mailto:a@b.c', '#top', '//cdn.x/a.js']) assert.equal(fileHref(href), null, href);
   assert.deepEqual(fileHref('src/a.ts#L9'), { path: 'src/a.ts', line: 9, folder: false });

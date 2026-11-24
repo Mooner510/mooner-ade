@@ -94,7 +94,10 @@ export function stableSplit(text: string): [string, string] {
 // While text streams, a line still being typed that is only a block marker so far ("1", "-", "#", "**") or a table/fence line would render as a
 // paragraph and jump to its real shape a moment later; it is held back until it can no longer change shape. So is a table head still waiting for its |---| row.
 const PENDING_LINE = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)]?|>|[-*_]{2,}|`{1,2}|~{1,2})\s*$|\||```|~~~)/;
-const PENDING_FILE = /\[\[(?:f(?:i(?:l(?:e(?::[^\]\n]*)?)?)?)?)?\]?$/;
+// Consume route segments like [id] and [[...slug]] as units before looking for the chip's closing brackets.
+const PATH_BRACKETS = String.raw`\[\[[^\[\]\n]+\]\]|\[[^\[\]\n]+\]`;
+const FILE_PATH_PART = String.raw`(?:${PATH_BRACKETS}|(?!${PATH_BRACKETS})[^\]\n]|\](?!\]))`;
+const PENDING_FILE = new RegExp(String.raw`\[\[(?:f(?:i(?:l(?:e(?::${FILE_PATH_PART}*)?)?)?)?)?\]?$`);
 export function holdBack(tail: string): string {
   const all = tail.split('\n');
   if (all.length && PENDING_LINE.test(all[all.length - 1])) all.pop();
@@ -107,4 +110,5 @@ export function holdBack(tail: string): string {
 
 // Inline spans, one capture group each: code, **bold**, __bold__, *italic*, _italic_, [label](url), bare URL, [[file:path:line]] (file-ref.ts). Like CommonMark, `__` and `_` only open and close
 // at a word edge, so identifiers such as `mcp__server__tool` or `snake_case_name` stay plain text.
-export const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\b__[^_\n]+__\b)|(\*[^*\s][^*\n]*\*)|(\b_[^_\s][^_\n]*_\b)|(\[(?:[^\[\]\n]|\[[^\]\n]*\])+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)|(\[\[file:[^\]\n]+\]\])/g;
+const INLINE_TEXT = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\b__[^_\n]+__\b)|(\*[^*\s][^*\n]*\*)|(\b_[^_\s][^_\n]*_\b)|(\[(?:[^\[\]\n]|\[[^\]\n]*\])+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)/;
+export const INLINE = new RegExp(String.raw`${INLINE_TEXT.source}|(\[\[file:${FILE_PATH_PART}+\]\])`, 'g');
