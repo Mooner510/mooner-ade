@@ -17,7 +17,8 @@ import { claudeMcp, isTrusted } from './mcp-trust.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
 import { cursorSurface } from './cursor-model-cache.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
-import { readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
+import { autoCompactDisabled, readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
+import { IDLE_LEAD, idleCompactDue, idleCompactOn, idleCompactSkip } from './chat-idle-compact.js';
 import { readSessionCache } from './claude-cache.js';
 import { chatEventStats, eventWeightSince, subagentExtra, withSubagents } from './chat-stats.js';
 import { readClaudeDefaults } from './claude-defaults.js';
@@ -66,7 +67,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, trusted = () => [], readUsage = null, limitPollMs = POLL_MS, chatText = createChatTextStore(directory) }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, trusted = () => [], readUsage = null, limitPollMs = POLL_MS, idleCompact = () => null, idleLead = IDLE_LEAD, chatText = createChatTextStore(directory) }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -186,10 +187,42 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     try {
       const configDir = configDirOf();
       cacheReading = await readSessionCache(configDir, { sessionId: state.sessionId, cwd: meta.worktreePath ?? cwd }, cacheReading, { idle: false });
-      const next = cacheReading?.value ?? null;
-      if (!closed && JSON.stringify(next) !== JSON.stringify(state.cache ?? null)) { state.cache = next; publish(); }
+      await syncIdleCompact();
     } catch { /* an unreadable transcript keeps the last reading */ } finally { cacheBusy = false; }
   };
+  // Idle auto-compact (chat-idle-compact.js): one timer per cache window, armed after every reading of the cache. `state.cache.compactAt` is when it is due (the chip says
+  // "자동 Compact 예정"). The timer is the only thing that sends the /compact; when it fires every condition is looked at again, and the window gets no second chance.
+  // idleCompactTried: the `at` of the window whose chance was used (sent or skipped). The CLI's compact_boundary marks a compact we sent as "manual": the chip calls it automatic.
+  let idleCompactTimer = null, idleCompactSeq = 0, idleCompactTried = 0;
+  const stopIdleCompact = () => { idleCompactSeq += 1; clearTimeout(idleCompactTimer); idleCompactTimer = null; };
+  const idleSetting = () => ({ on: idleCompactOn(meta.idleCompact, idleCompact()), minK: idleCompact()?.minK });
+  // What stops a compact for reasons outside the cache's own numbers; `fire`: also what only matters at the moment it would be sent (work in progress).
+  async function idleCompactBlock(fire) {
+    if (closed || !state.sessionId) return 'closed';
+    if (fire && (!quiet() || steers.size)) return 'busy';
+    if (limitBypass || meta.limit?.stop || (meta.limit && evaluateLimit(meta.limit, { cost: shown().costUsd, windows: null }).hit)) return 'limit';
+    const { settings, env } = await readClaudeSettingsLayers(configDirOf(), meta.worktreePath ?? cwd);
+    return autoCompactDisabled(settings, env) ? 'auto-compact-off' : null;
+  }
+  async function syncIdleCompact() {
+    const seq = ++idleCompactSeq; clearTimeout(idleCompactTimer); idleCompactTimer = null;
+    const base = cacheReading?.value ?? null, { on, minK } = idleSetting();
+    let due = agent === 'claude' ? idleCompactDue({ on, minK, cache: base, lead: idleLead }) : undefined;
+    if (due !== undefined && (base.at === idleCompactTried || await idleCompactBlock(false))) due = undefined;
+    if (seq !== idleCompactSeq || closed) return;
+    const shownCache = !base ? null : due !== undefined ? { ...base, compactAt: due } : base.compacted && base.at === idleCompactTried ? { ...base, compacted: { ...base.compacted, trigger: 'auto' } } : base;
+    if (JSON.stringify(shownCache) !== JSON.stringify(state.cache ?? null)) { state.cache = shownCache; publish(); }
+    if (due !== undefined) { idleCompactTimer = setTimeout(() => void fireIdleCompact(base), Math.max(0, due - Date.now())); idleCompactTimer.unref?.(); }
+  }
+  async function fireIdleCompact(base) {
+    idleCompactTimer = null;
+    const cache = cacheReading?.value;
+    if (!cache || cache.at !== base.at) return;
+    const { on, minK } = idleSetting(), skip = idleCompactSkip({ on, minK, cache, lead: idleLead, now: Date.now(), tried: idleCompactTried, busy: await idleCompactBlock(true) });
+    idleCompactTried = cache.at;
+    if (skip) { void syncIdleCompact(); return; }
+    try { await chatApi.send('/compact', [], { idle: true }); } catch { /* refused (busy, stopped by a limit): not tried again in this window */ }
+  }
   // The CLI writes the transcript a moment after it reports the response.
   const refreshCacheSoon = () => { clearTimeout(cacheLater); cacheLater = setTimeout(() => void refreshCache(), 500); cacheLater.unref?.(); };
   // Until the CLI's init event names the real model and mode, show what a plain `claude` would use here (settings.json). Never stored, never passed as a flag.
@@ -252,7 +285,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, mediaBlocks: meta.mediaBlocks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, limit: meta.limit, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, mediaBlocks: meta.mediaBlocks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, limit: meta.limit, idleCompact: typeof meta.idleCompact === 'boolean' ? meta.idleCompact : undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
   let lastMeta = null;
   const saveMeta = () => {
@@ -278,7 +311,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // The API Usage figure grows with the running turn too (the in-flight part is billed to the key), so it moves live like the session cost.
     const costUsd = typeof base === 'number' ? base + inflight : base;
     return { ...state, tokens, costUsd, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn(),
-      limit: meta.limit ? limitView(meta.limit, { ...limitNow, ...(typeof costUsd === 'number' && { cost: costUsd }) }) : null, limitOptions: limitOptions({ agent, cost: state.capabilities.cost, apiKey: state.apiKey }) };
+      limit: meta.limit ? limitView(meta.limit, { ...limitNow, ...(typeof costUsd === 'number' && { cost: costUsd }) }) : null, limitOptions: limitOptions({ agent, cost: state.capabilities.cost, apiKey: state.apiKey }),
+      ...(agent === 'claude' && { idleCompact: { chat: typeof meta.idleCompact === 'boolean' ? meta.idleCompact : null, on: idleSetting().on } }) };
   };
   // Every publish (usage and result events, live token ticks) looks at the chat's own cost, so a cost limit stops the turn while it runs, with no polling.
   const publish = () => {
@@ -365,7 +399,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
     } else if (event.kind === 'divider') {
       subLive.clear();
-      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; resetLive(); state.cache = null; cacheReading = null;
+      state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; resetLive(); state.cache = null; cacheReading = null; stopIdleCompact(); idleCompactTried = 0;
       state.segmentTitles = { custom: '', ai: '', agent: '' }; refreshChatTitle();
       if (!replay) void refreshAutoCompact();
     } else if (event.kind === 'title') {
@@ -606,6 +640,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (cliMode === 'plan' && state.permissionMode !== 'plan') meta.prePlanMode = prePlanMode = state.permissionMode;
         meta.permissionMode = cliMode;
       }
+      if (event.kind === 'compact' && inflight?.idle) event = { ...event, trigger: 'idle' }; // the CLI calls the /compact ADE sent "manual"; the thread says it was ADE's idle compact
       emit(event);
       if (surfaceSuppressed) return;
       if (moved) { emit(moved); publish(); }
@@ -620,7 +655,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       if (event.kind === 'capabilities' || event.kind === 'usage' || event.kind === 'settings' || event.kind === 'compact') publish();
       if (event.kind === 'compact' && agent === 'claude') {
-        if (inflight && event.trigger === 'manual') inflight.compacted = true;
+        if (inflight && (event.trigger === 'manual' || event.trigger === 'idle')) inflight.compacted = true;
         refreshCacheSoon();
       }
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
@@ -943,7 +978,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         approvals: [...approvals.values()], steers: [...steers], taskIds: [...taskIds], liveTasks: state.liveTasks, protocol: protocol?.snapshot() };
       proc.detach();
       closed = true; child = null; protocol = null;
-      clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); clearInterval(limitTimer); stopCursorStorePoll();
+      clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); clearInterval(limitTimer); stopIdleCompact(); stopCursorStorePoll();
       await writing.catch(() => {});
       await saveMeta().catch(() => {});
       await fs.writeFile(liveFile, JSON.stringify(saved), { mode: 0o600 });
@@ -967,6 +1002,18 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       await refreshAutoCompact(model);
       return { autoCompact: state.autoCompact };
     },
+    // /idlecompact: this chat's own choice for the idle auto-compact (true, false, or null = follow the setting). No argument only reads it.
+    async setIdleCompact(value) {
+      if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', '캐시 만료 전 압축은 Claude 채팅에서만 쓸 수 있습니다.', 409);
+      live();
+      if (value !== undefined) {
+        if (value !== null && typeof value !== 'boolean') throw fault('INVALID_INPUT', 'on, off 또는 auto로 입력하세요.');
+        meta.idleCompact = value ?? undefined; await syncIdleCompact(); publish(); await saveMeta();
+      }
+      return shown().idleCompact;
+    },
+    // The global setting changed: arm or cancel the timer.
+    resyncIdleCompact() { if (!closed) { void syncIdleCompact(); publish(); } },
     // /limit: this chat's limit (see chat-limit.js). No argument reads it; null clears it. Setting one takes the share's baseline and looks at the numbers at once.
     async setLimit(input) {
       live();
@@ -1048,7 +1095,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
-    async send(input, images = [], { steer = false, artifact = false, previews = [], clientMessageId } = {}) {
+    async send(input, images = [], { steer = false, artifact = false, previews = [], clientMessageId, idle = false } = {}) {
       live();
       const text = await chatText.prepare(input);
       live();
@@ -1068,13 +1115,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       await assertLimit();
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
-      state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
+      state.error = null; turnOpen = true; reopened = false; turnSeq += 1; stopIdleCompact();
       // What the user ran with `!` since their last message goes ahead of this one (the thread still shows only what they typed).
       const sendText = takeShellContext(text) + text, shells = shellTaken;
       const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
       if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
       // The message is shown right away; starting the process, a model change still in flight, or the previous turn's checkpoint must not delay it.
-      emit({ kind: 'user', text, images: images.length, previews, shells }); inflight = { text: sendText, images, uuid: randomUUID(), acked: false, produced: false, retried: false };
+      emit({ kind: 'user', text, images: images.length, previews, shells }); inflight = { text: sendText, images, uuid: randomUUID(), acked: false, produced: false, retried: false, idle };
       setStatus();
       try {
         if (agent === 'cursor') { await new Promise(resolve => setImmediate(resolve)); await cursorSnapshot; }
@@ -1435,7 +1482,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
       await endShells();
-      closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); clearInterval(limitTimer); stopCursorStorePoll();
+      closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); clearInterval(limitTimer); stopIdleCompact(); stopCursorStorePoll();
       if (agent === 'codex') dropSteers();
       if (child) {
         const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();

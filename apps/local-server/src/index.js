@@ -36,6 +36,7 @@ import { cursorConfigDir, forkCursorSession, listCursorSessions } from './cursor
 import { createCursorModelCache } from './cursor-model-cache.js';
 import { readSessionStats, sessionFiles, withSubagents } from './chat-stats.js';
 import { chatFolder, openChatSession, listChatSessions, listCommands, seedChat, seedFromTranscript, resolveModels, probeInit, probeAgentModels, readModelCatalog, fetchApiModelCatalog } from './chat.js';
+import { DEFAULT_K, validMinK } from './chat-idle-compact.js';
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
@@ -239,12 +240,17 @@ const apiSpend = createApiSpend({ file: path.join(dataRoot, 'api-key-spend.json'
 await apiSpend.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
-let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true, mcpTrust = {};
+let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true, mcpTrust = {}, idleCompactSetting = { enabled: false, minK: DEFAULT_K };
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
   if (feedbackAgentTool !== (state?.settings?.feedbackAgentTool !== false)) { feedbackAgentTool = !feedbackAgentTool; applyMcpServers(); }
   terminalShell = typeof state?.settings?.terminalShell === 'string' ? state.settings.terminalShell : '';
   mcpTrust = state?.settings?.mcpTrust ?? {};
+  const idle = { enabled: state?.settings?.idleCompact === true, minK: validMinK(state?.settings?.idleCompactMinK) ? state.settings.idleCompactMinK : DEFAULT_K };
+  if (idle.enabled !== idleCompactSetting.enabled || idle.minK !== idleCompactSetting.minK) {
+    idleCompactSetting = idle;
+    for (const project of projects.values()) for (const chat of project.chats.values()) chat.resyncIdleCompact?.();
+  }
   wakatime.configure(state?.settings?.wakatime === true);
   wakatimeBackground = state?.settings?.wakatimeBackground !== false;
 }
@@ -421,7 +427,7 @@ const chatProcHost = ptyHost?.procs ? {
 } : null;
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
-    keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], spend: apiSpend, readUsage: (provider, options) => verifyUsage?.(provider) ?? usage.status(provider, { ...options, project }), cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
+    keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], idleCompact: () => idleCompactSetting, spend: apiSpend, readUsage: (provider, options) => verifyUsage?.(provider) ?? usage.status(provider, { ...options, project }), cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults, chatText,
     // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
@@ -1232,6 +1238,12 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       return chat.setAutoCompact(text(input.value, '창 크기', 40));
+    }
+    // /idlecompact: this chat's choice (true, false, null = follow the setting). Without `value` it is only read.
+    case 'chat/idlecompact': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return 'value' in input ? chat.setIdleCompact(input.value) : chat.setIdleCompact();
     }
     // /limit: this chat's limit. Without `limit` it is only read; null clears it.
     case 'chat/limit': {

@@ -1,12 +1,11 @@
 import { memo, useEffect, useState, type CSSProperties } from 'react';
 import { Icon } from './Icon';
 import { cacheExpires, cacheTimerState } from './cache-timer-state';
+import { cacheReadShare } from './cache-read-share';
 
 // `compactAt`: idle compaction (auto-compact on, long conversation, 1h cache) summarizes the conversation at this time, before the cache would go cold.
 // `compacted`: the conversation was summarized after that request (token counts before/after when Claude Code reports them); its old cache is no longer used.
 export type ClaudeCache = { at: number; ttl: number; tokens: number; model: string; compactAt?: number; compacted?: { at: number; trigger: 'auto' | 'manual'; before?: number; after?: number } };
-// ponytail: cache-read price as a share of base input from Anthropic pricing (2026-10); other models read at 0.1×. Update when prices move.
-const cacheReadShare = (model: string) => /fable-5-1|mythos-5-1/.test(model) ? 0.025 : /opus-5-5/.test(model) ? 0.05 : 0.1;
 const formatTokens = (count: number) => count >= 1e6 ? `${(count / 1e6).toFixed(1)}M` : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
 const clockTime = (at: number) => new Date(at).toLocaleTimeString('ko-KR', { hour12: false });
 // Claude Code's prompt cache for the conversation at hand. Each main-thread request reads it and restarts its TTL from that request's start;
