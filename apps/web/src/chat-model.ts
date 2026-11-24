@@ -13,7 +13,7 @@ export type ChatLimit = { cost?: number; share?: { window: LimitWindow; percent:
 export type ChatState = {
   agent?: 'claude' | 'codex' | 'cursor'; capabilities?: ChatCapabilities;
   status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sandbox?: string | null; network?: boolean; runEverything?: boolean; configuring?: boolean; restartPending?: boolean; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
-  contextTokens: number; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
+  contextTokens: number | null; contextWindow: number | null; contextUsageSource?: 'acp' | 'store'; autoCompact?: AutoCompact | null; tokens: Tokens; slashCommands: string[]; commandInfo?: { name: string; description: string; hint?: string }[]; tools: string[]; pending: number; error: string | null; recoverable?: boolean; startedAt: number;
   segmentTitles?: ChatSegmentTitles; chatTitle?: string;
   liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
   cwd?: string; // the folder the CLI runs in (file paths under it are shown relative)
@@ -507,7 +507,8 @@ export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 
   const compact = state.autoCompact && state.autoCompact.window > 0 && state.autoCompact.window < max ? state.autoCompact : null;
   const basis = compact?.window ?? max;
   // Not capped: a gauge stuck at 100% hid that the context had already outgrown the window.
-  return { percent: Math.round(state.contextTokens * 100 / basis), used: state.contextTokens, basis, max, autoCompact: Boolean(compact) };
+  const used = state.contextTokens ?? 0;
+  return { percent: Math.round(used * 100 / basis), used, basis, max, autoCompact: Boolean(compact) };
 };
 export const contextPercent = (state: Parameters<typeof contextGauge>[0]) => contextGauge(state).percent;
 // Each model family has its own color (CSS variables --model-*, defined per theme in style.css); unknown models stay uncolored.
@@ -636,7 +637,8 @@ const contextRank = (value: string) => { const match = /^(\d+(?:\.\d+)?)([km])$/
 export const parseContextSetting = (value: string | null | undefined) => contextRank((value ?? '').trim());
 // Claude reports from the first turn; Codex/Cursor only after usage_update or a known window from config.
 export const contextReported = (state: Pick<ChatState, 'agent' | 'contextTokens' | 'contextWindow'>) =>
-  state.agent === 'claude' || state.contextTokens > 0 || (state.contextWindow ?? 0) > 0;
+  state.contextTokens !== null && (state.agent === 'claude' || state.contextTokens > 0 || (state.contextWindow ?? 0) > 0);
+export const contextPendingText = '다음 응답에서 컨텍스트가 갱신됩니다';
 // The largest advertised context window is what MAX selects. ACP has no separate max-mode flag (cursor-agent 2026.11).
 export function contextEnds(option: { options: { value: string }[] }) {
   const ranked = option.options.map(item => ({ value: item.value, rank: contextRank(item.value) })).filter(item => item.rank > 0).sort((a, b) => a.rank - b.rank);

@@ -52,6 +52,14 @@ const mergeTurnUsage = (current, patch) => ({
   cacheRead: patch.cacheRead || current?.cacheRead || 0,
   cacheCreate: patch.cacheCreate || current?.cacheCreate || 0,
 });
+const contextReading = event => {
+  if (event.kind === 'usage') return event.contextTokens;
+  if (event.kind === 'compact') return event.postTokens;
+  if (event.kind === 'message' && event.usage && !event.parentToolUseId) {
+    const { input, cacheRead, cacheCreate, output } = event.usage;
+    return input + cacheRead + cacheCreate + output;
+  }
+};
 
 // One chat tab = one transcript + (while a turn or an approval is open) one `claude -p` child. The child starts on the first
 // message and is resumed with `--resume <session id>` when it ended in between, so closing the app never loses the conversation.
@@ -157,6 +165,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       else kept.push(event);
     }
     return retainedCache = kept;
+  }
+  function rewoundClaudeContext(kept, rewind) {
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const event = kept[i];
+      if (event.kind === 'divider') return event.seq > rewind.seq ? 0 : null;
+      const reading = contextReading(event);
+      if (Number.isFinite(reading)) return reading;
+    }
+    return null;
   }
   // An alias ("sonnet") has no catalog row of its own: the family's first (newest) row stands in, else Auto Compact would be judged against 200k and switched off.
   const maxContextForModel = model => (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (state.capabilities.catalog?.find(item => item.id === model) ?? state.capabilities.catalog?.find(item => item.family === model))?.window) || state.contextWindow || 200_000;
@@ -352,6 +369,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   };
   // The view of the world the status line shows, derived from events so that a replayed transcript gives the same numbers.
   function fold(event, replay = false) {
+    const reading = contextReading(event);
+    if (Number.isFinite(reading)) state.contextTokens = reading;
     if (event.kind === 'session') {
       state.sessionId = event.sessionId ?? state.sessionId;
       if (!(cursorModelHold !== null && event.model && event.model !== cursorModelHold)) {
@@ -383,12 +402,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     }
     else if (event.kind === 'usage') {
       if (event.tokens) state.tokens = event.tokens;
-      state.contextTokens = event.contextTokens ?? state.contextTokens; state.contextWindow = event.contextWindow ?? state.contextWindow;
+      state.contextWindow = event.contextWindow ?? state.contextWindow;
       if (event.contextSource === 'acp' || event.contextSource === 'store') state.contextUsageSource = event.contextSource;
       state.capabilities = { ...state.capabilities, context: true, tokens: Boolean(event.tokens) || state.capabilities.tokens };
       if (Number.isFinite(event.costUsd) && event.costUsd >= 0) { state.costUsd = event.costUsd; state.capabilities.cost = true; }
-    } else if (event.kind === 'message' && event.usage && !event.parentToolUseId) {
-      state.contextTokens = event.usage.input + event.usage.cacheRead + event.usage.cacheCreate + event.usage.output;
     } else if (event.kind === 'result') {
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
@@ -396,7 +413,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && event.costUsd > state.costUsd) costPerUnit = (event.costUsd - state.costUsd) / spent; state.costUsd = event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       else if (event.turnCostUsd > 0) { const spent = weigh(event.usage ?? zero()); if (spent > 0) costPerUnit = event.turnCostUsd / spent; } // a reopened chat still prices subagent usage that landed after the last result
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
-    } else if (event.kind === 'compact') { if (event.postTokens != null) state.contextTokens = event.postTokens;
+    } else if (event.kind === 'rewind' && agent === 'claude') {
+      const kept = retainedEvents();
+      state.contextTokens = rewoundClaudeContext(kept, event);
+      const window = kept.findLast(item => (item.kind === 'usage' || item.kind === 'result') && item.contextWindow)?.contextWindow ?? null;
+      if (state.contextWindow !== window) {
+        state.contextWindow = window;
+        void refreshAutoCompact();
+      }
     } else if (event.kind === 'divider') {
       subLive.clear();
       state.tokens = zero(); state.turns = 0; state.durationMs = 0; state.contextTokens = 0; resetLive(); state.cache = null; cacheReading = null; stopIdleCompact(); idleCompactTried = 0;
@@ -411,6 +435,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     else if (event.kind === 'error') state.error = event.message;
   }
   for (const event of retainedEvents()) fold(event, true);
+  // A rewind marker is absent from the retained transcript; consult the log so a missing reading also stays pending on reopen.
+  const lastClaudeRewind = agent === 'claude' && events.findLast(event => event.kind === 'rewind');
+  if (lastClaudeRewind) state.contextTokens = rewoundClaudeContext(retainedEvents(), lastClaudeRewind);
   // Replaying old init events would show the model the child started with, not the one picked since (set_model sends no new init): the pick is stored, so it wins.
   if (meta.model) state.model = meta.model;
   // A new Cursor chat has no capabilities in the log yet. Paint the last list (and this model's options, if seen) before the process starts.

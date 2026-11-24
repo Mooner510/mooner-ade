@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type 
 import { api } from './api';
 import { placeAbove } from './Usage';
 import { chatStatusLayout, usageHue, type Settings } from './Editor';
-import { compact, dollars, limitChip, contextGauge, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
+import { compact, dollars, limitChip, contextGauge, contextPendingText, contextPercent, contextReported, contextWindow, duration, fillFormat, displayModel, modelAppearance, permissionLabel, permissionModeColor, statusLabelsKo, type ChatState } from './chat-model';
 
 // The chat tab's status line: only items that read the conversation. Branch, changes, usage, clock, CPU, memory and path live in the bottom status bar.
 export type ChatStatusContext = { state: ChatState; share?: string | null };
@@ -60,7 +60,11 @@ export const chatItemView = (id: string, context: ChatStatusContext): { text: st
   const { state } = context;
   // On a Claude API key the same dollars sit in the API Usage item, so the cost item would show them twice.
   if (id === 'cost' && (state.costUsd === null || state.apiKey === true && state.agent === 'claude') || id === 'tokens' && state.capabilities?.tokens === false) return null;
-  if (id === 'context' && (state.capabilities?.context === false || !contextReported(state))) return null;
+  if (id === 'context') {
+    if (state.capabilities?.context === false) return null;
+    if (state.contextTokens === null) return { text: '컨텍스트 갱신 대기', icon: def.icon, tip: contextPendingText };
+    if (!contextReported(state)) return null;
+  }
   const hue = def.hue?.(context);
   const extra = def.extra && (def.extra.show?.(context) ?? true) ? { text: fillFormat(def.extra.format, values), icon: def.extra.icon, tip: def.extra.tip } : undefined;
   return { text: fillFormat(def.format, values), icon: def.icon, extra, tip: def.tip?.(context), color: def.color?.(context) ?? (hue !== undefined ? `hsl(${hue} 65% var(--usage-l, 55%))` : undefined) };

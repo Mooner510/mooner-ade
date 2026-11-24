@@ -1,6 +1,6 @@
 // No React imports: node tests load this file as it is.
 export type Auth = 'login' | 'key';
-export type AuthLike = { agent?: string; turns?: number; auth?: Auth; lastAuth?: Auth | null; contextTokens?: number };
+export type AuthLike = { agent?: string; turns?: number; auth?: Auth; lastAuth?: Auth | null; contextTokens?: number | null };
 export type AuthSendWarning = { from: Auth; to: Auth; tokens: number };
 
 export const authWords: Record<Auth, string> = { login: 'CLI 플랜으로', key: 'API 키로' };
