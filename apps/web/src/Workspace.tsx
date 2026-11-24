@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useExit, useNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsState } from './PluginSettings';
-import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
+import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -122,6 +122,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   const detailCredit = provider === 'claude' ? usage?.credit : null;
   const detailCodex = provider === 'codex' ? usage?.codexCredits : null;
   if (!usage || (!compact.length && !credit && !codexCredits)) return null;
+  const gone = missingMeters(provider, allWindows, chosen.filter(id => id !== 'session' || sessionOn));
   const peak = Math.max(0, ...compact.map(item => item.percent), credit?.percent ?? 0, codexCredits?.limit?.percent ?? 0);
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
@@ -143,6 +144,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
       <dl><dt>계정</dt><dd>{account}</dd>{from && <><dt>기준</dt><dd>{from}</dd></>}</dl>
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
+      {!usage.error && gone.length > 0 && <p className="usage-note">{gone.join(', ')} 한도는 이 계정에 없어 표시하지 않습니다.</p>}
     </div>
   </>;
 });

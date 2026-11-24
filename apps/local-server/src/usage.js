@@ -54,8 +54,10 @@ export function parseClaudeUsage(body) {
   const add = (key, label, value) => { if (value && value.utilization !== null && value.utilization !== undefined) windows.push({ key, label, percent: percent(value.utilization), resetsAt: Date.parse(value.resets_at) || null }); };
   add('session', '5시간', body?.five_hour);
   add('weekly', '주간', body?.seven_day);
-  // Present only on accounts that have a Fable window. A bare `fable` object uses the same shape; a string (a model name) is ignored.
-  add('fable', 'Fable', body?.seven_day_fable ?? (body?.fable && typeof body.fable === 'object' ? body.fable : null));
+  // Per-model weekly windows come in `limits`: { kind: 'weekly_scoped', percent, resets_at, scope: { model: { display_name: 'Fable' } } } (percent is on the same 0-100 scale as utilization).
+  // Only accounts that have a Fable window get that entry; a top-level seven_day_fable or bare `fable` object is still accepted (a string, i.e. a model name, is ignored).
+  const scoped = Array.isArray(body?.limits) ? body.limits.find(item => item?.kind === 'weekly_scoped' && /fable/i.test(item.scope?.model?.display_name ?? '')) : null;
+  add('fable', 'Fable', scoped ? { utilization: scoped.percent, resets_at: scoped.resets_at } : body?.seven_day_fable ?? (body?.fable && typeof body.fable === 'object' ? body.fable : null));
   return windows;
 }
 

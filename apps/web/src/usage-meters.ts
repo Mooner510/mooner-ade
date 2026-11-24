@@ -28,3 +28,7 @@ export const usageMetersOf = (provider: UsageProvider, shown?: Partial<Record<Us
 // `showSession` is the Claude 5-hour switch (plans without that window hide it even when the chip is enabled).
 export const barWindows = <T extends { key: string }>(windows: T[], meters: string[], showSession: boolean) =>
   windows.filter(item => meters.includes(item.key) && (item.key !== 'session' || showSession));
+
+// Meters the user left on that the reading does not include (the account has no such window), for the detail popover: otherwise the chip just never appears.
+export const missingMeters = (provider: UsageProvider, windows: { key: string }[], meters: string[]) =>
+  usageMeterCatalog[provider].filter(item => item.id !== 'credit' && meters.includes(item.id) && !windows.some(window => window.key === item.id)).map(item => item.label);

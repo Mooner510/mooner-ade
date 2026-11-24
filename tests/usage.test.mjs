@@ -41,6 +41,14 @@ test('usage bodies become 5-hour and weekly windows', () => {
   assert.deepEqual(parseClaudeUsage({ fable: { utilization: 7, resets_at: null } }), [
     { key: 'fable', label: 'Fable', percent: 7, resetsAt: null }
   ]);
+  // Shape of the live response (synthetic values): the Fable window is a weekly_scoped entry in `limits`, and the top-level per-model fields are null.
+  const limit = (kind, scope, percent) => ({ kind, group: kind === 'session' ? 'session' : 'weekly', percent, severity: 'normal', resets_at: '2026-10-23T10:00:00Z', scope, is_active: false });
+  const live = { five_hour: { utilization: 3, resets_at: '2026-10-23T10:00:00Z' }, seven_day: { utilization: 4, resets_at: '2026-10-24T10:00:00Z' }, seven_day_opus: null, seven_day_sonnet: null,
+    limits: [limit('session', null, 3), limit('weekly_all', null, 4), limit('weekly_scoped', { model: { id: null, display_name: 'Fable' }, surface: null }, 12.4)] };
+  assert.deepEqual(parseClaudeUsage(live).map(item => [item.key, item.percent]), [['session', 3], ['weekly', 4], ['fable', 12]]);
+  assert.equal(parseClaudeUsage(live)[2].resetsAt, Date.parse('2026-10-23T10:00:00Z'));
+  assert.deepEqual(parseClaudeUsage({ ...live, limits: [limit('weekly_scoped', { model: { id: null, display_name: 'Opus' }, surface: null }, 9)] }).map(item => item.key), ['session', 'weekly']);
+  assert.deepEqual(parseClaudeUsage({ seven_day_fable: null }), []);
   assert.deepEqual(parseCodexUsage({ rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 18000, reset_after_seconds: 60 }, secondary_window: { used_percent: 130, limit_window_seconds: 604800, reset_at: 1000 } } }, 0), [
     { key: 'session', label: '5시간', percent: 12, resetsAt: 60_000 },
     { key: 'weekly', label: '주간', percent: 100, resetsAt: 1_000_000 }
