@@ -58,7 +58,7 @@ export type Item = ItemBase & (
   | { kind: 'error'; message: string; recoverable?: boolean }
   | { kind: 'command'; text: string; isError: boolean } // what a slash command printed (or that it finished with no output)
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
-  | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
+  | { kind: 'agent_end'; toolUseId: string; run?: number } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
   | { kind: 'limit'; local?: boolean } // /limit: the limit card (rules, auto compact), client-only
   | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
@@ -356,11 +356,16 @@ export function reduce(view: ChatView, event: any): ChatView {
       return { ...view, items };
     }
     case 'task': {
-      const id = typeof event.toolUseId === 'string' ? event.toolUseId : '';
+      let id = typeof event.toolUseId === 'string' ? event.toolUseId : '', base = view.tasks;
       if (!id) return view;
-      const prev = view.tasks[id] ?? {}, at = Number(event.at) || Date.now(), { kind: _k, phase, toolUseId: _t, seq: _s, at: _a, ...info } = event;
-      const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
-      const tasks = { ...view.tasks, [id]: next };
+      // A finished subagent woken by SendMessage starts a task under that call but with the same task id: it is the original Agent call's again (events stored before the server renamed them too).
+      const first = event.phase === 'start' && event.taskId ? Object.keys(base).find(key => key !== id && base[key].taskId === event.taskId) : undefined;
+      if (first) base = { ...base, [id]: { alias: first } };
+      id = base[id]?.alias ?? id;
+      const prev = base[id] ?? {}, at = Number(event.at) || Date.now(), { kind: _k, phase, toolUseId: _t, seq: _s, at: _a, ...info } = event;
+      // A new run clears what the last one ended with, so the card reads "running" again.
+      const next: TaskInfo = { ...prev, ...info, ...(phase === 'start' && { startedAt: at, status: undefined, endedAt: undefined, report: '' }), ...(phase === 'end' && { endedAt: at, activity: '' }) };
+      const tasks = { ...base, [id]: next };
       // Only background subagents get a marker: a foreground one's result is already right under its own card, and a shell/Monitor ends quietly (its chip just goes away).
       const owner = view.items.find((item): item is AssistantItem => item.kind === 'assistant' && item.blocks.some(block => block.type === 'tool_use' && block.id === id && isJobTool(block)));
       const isJob = Boolean(owner);
@@ -372,7 +377,7 @@ export function reduce(view: ChatView, event: any): ChatView {
         const message = `${next.description || '백그라운드 작업'} ${status}`;
         return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });
       }
-      if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
+      if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id && item.run === next.startedAt)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, run: next.startedAt, fresh }); // one marker per run: a resumed agent ends again
       return { ...view, tasks };
     }
     case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
@@ -751,7 +756,7 @@ export function withSettingChange(items: Item[], change: SettingsChange, key: st
 
 // ---- subagents (Claude's Agent/Task calls) ----
 export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task';
-export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number };
+export type TaskInfo = { description?: string; agentType?: string; background?: boolean; activity?: string; lastTool?: string; status?: string; report?: string; tokens?: number; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; taskId?: string; alias?: string };
 export type AgentStatus = 'running' | 'done' | 'error' | 'stopped';
 export type SubAgent = { id: string; type: string; description: string; prompt: string; background: boolean; status: AgentStatus; startedAt?: number; endedAt?: number; durationMs?: number;
   tokens?: number; model?: string; effort?: string; toolCount: number; now: string; report: string; items: AssistantItem[]; job?: true };

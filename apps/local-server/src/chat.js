@@ -635,6 +635,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         }
         emit(event, { store: false }); return;
       }
+      if (event.kind === 'task') canonTask(event);
       if (event.kind === 'task' && event.phase !== 'progress') { trackTask(event); publishSoon(); }
       if (event.kind === 'raw' || (event.kind === 'task' && event.phase === 'progress')) { emit(event, { store: false }); return; } // progress ticks often: live only
       // The CLI may print the same command output both in its echo and as a message of its own: it is shown once.
@@ -746,6 +747,13 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (!turnOpen) { turnOpen = true; reopened = true; setStatus(); }
     if (reopened) { clearTimeout(activityTimer); activityTimer = setTimeout(() => { if (reopened && turnOpen && !approvals.size) { reopened = false; turnOpen = steers.size > 0; setStatus(); } }, quietMs); activityTimer.unref(); }
   }
+  // SendMessage to a finished subagent resumes it: the CLI starts a task keyed by that SendMessage call but with the same task_id. Everything the pane
+  // knows (card, tracker row, stop) hangs on the original Agent call, so the resumed run's events are renamed to it.
+  const taskOwner = new Map(), taskAlias = new Map(); // task_id -> first call id; resume call id -> original call id
+  const canonTask = event => {
+    if (event.phase === 'start' && event.taskId) { const first = taskOwner.get(event.taskId); if (first && first !== event.toolUseId) taskAlias.set(event.toolUseId, first); else taskOwner.set(event.taskId, event.toolUseId); }
+    event.toolUseId = taskAlias.get(event.toolUseId) ?? event.toolUseId;
+  };
   // A subagent counts as running only while the child that started it lives: after a crash or an ADE restart nothing reports its end.
   const trackTask = event => { const live = new Set(state.liveTasks); if (event.phase === 'start') { live.add(event.toolUseId); if (event.taskId) taskIds.set(event.toolUseId, event.taskId); } else { live.delete(event.toolUseId); taskIds.delete(event.toolUseId); } state.liveTasks = [...live];
     // The last background task ended without a turn of its own: the pending restart or the idle countdown can go on now.

@@ -591,6 +591,22 @@ test('subagents: the end report wins; a background one runs while its child live
   assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 1, 'a repeated end report adds no second marker');
 });
 
+test('a finished subagent woken by SendMessage runs again as the same card and marks its second end', () => {
+  let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'scan', run_in_background: true } }] });
+  view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'ag', taskId: 'a1', description: 'scan', background: true, at: 1000 });
+  view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'ag', status: 'completed', report: 'first', at: 2000 });
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, [])[0].status, 'done');
+  // The CLI keys the resumed run by the SendMessage call (same task id), and its end by that call too.
+  view = reduce(view, { seq: 4, kind: 'task', phase: 'start', toolUseId: 'sm', taskId: 'a1', description: 'scan', background: true, at: 3000 });
+  const [again] = agentsOf(view.items, view.results, view.tasks, false, ['ag']);
+  assert.equal(agentsOf(view.items, view.results, view.tasks, false, ['ag']).length, 1);
+  assert.equal(again.status, 'running'); assert.equal(again.startedAt, 3000); assert.equal(again.report, '');
+  view = reduce(view, { seq: 5, kind: 'task', phase: 'end', toolUseId: 'sm', status: 'completed', report: 'second', at: 4000 });
+  const [done] = agentsOf(view.items, view.results, view.tasks, false, []);
+  assert.equal(done.status, 'done'); assert.equal(done.report, 'second');
+  assert.equal(view.items.filter(item => item.kind === 'agent_end').length, 2, 'each run marks its own end');
+});
+
 test('a background shell ends quietly: its end leaves no divider in the thread, and it is a job (not a subagent)', () => {
   let view = reduce(emptyView(), { seq: 1, kind: 'message', id: 'm', blocks: [{ type: 'tool_use', id: 'sh', name: 'Bash', input: { command: 'sleep 99', run_in_background: true } }] });
   view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'sh', taskId: 'babc12345', description: 'sleep', background: true, at: 1000 });
