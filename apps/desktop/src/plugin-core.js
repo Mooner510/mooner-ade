@@ -682,7 +682,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   // Asks the signed-in plugin how far some feedback has come (`feedback/status` → `feedback/status-result`). Only plugins that said `statusQuery: true` are asked,
   // and every failure resolves to an answer the caller treats as "not now": it never rejects and never hangs.
-  function queryFeedbackStatus({ keys }) {
+  function queryFeedbackStatus({ keys, have }) {
     const status = feedbackStatus(), host = status.ok && status.statusQuery ? hosts.get(status.plugin) : null;
     if (!host?.child?.connected) return Promise.resolve({ ok: false, error: { code: 'unsupported' } });
     const id = ++feedbackSequence;
@@ -690,7 +690,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const timer = setTimeout(() => { host.feedbackStatusPending.delete(id); resolve({ ok: false, error: { code: 'network_error', message: '플러그인이 제때 응답하지 않았습니다.' } }); }, FEEDBACK_STATUS_TIMEOUT_MS);
       timer.unref?.();
       host.feedbackStatusPending.set(id, value => { clearTimeout(timer); resolve(value); });
-      host.child.send({ type: 'feedback/status', id, keys: keys.slice(0, 50) });
+      // `have`: the comment counts the app already holds (key → count), so the Hub reads a thread's comments again only when its count changed.
+      const held = Object.fromEntries(Object.entries(have && typeof have === 'object' ? have : {}).filter(([key, count]) => /^[A-Za-z0-9_-]{8,64}$/.test(key) && Number.isSafeInteger(count) && count >= 0 && count <= 1_000_000).slice(0, 50));
+      host.child.send({ type: 'feedback/status', id, keys: keys.slice(0, 50), have: held });
     });
   }
   // What the user turned off stays out: a server turned off is not given at all, single tools are named for the agents to leave out.
@@ -847,7 +849,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         emitFeedback();
         break;
       }
-      // The answer to `feedback/status`: only well-formed {state, version?} entries are passed on (no text of the feedback is ever in it).
+      // The answer to `feedback/status`: only well-formed {state, version?, commentCount?, comments?} entries are passed on. The comments are the maintainers' answers ({at, body}, no author); none of the feedback's own text is in it.
       case 'feedback/status-result': {
         const answer = host.feedbackStatusPending.get(message.id);
         if (!answer) break;
@@ -856,7 +858,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
         const items = {};
         for (const [key, value] of Object.entries(message.items && typeof message.items === 'object' ? message.items : {}).slice(0, 50)) {
           if (!/^[A-Za-z0-9_-]{8,64}$/.test(key) || !value || !['pending', 'beta', 'released', 'closed', 'declined'].includes(value.state)) continue;
-          items[key] = { state: value.state, ...(typeof value.version === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(value.version) && { version: value.version }) };
+          items[key] = { state: value.state, ...(typeof value.version === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(value.version) && { version: value.version }),
+            ...(Number.isSafeInteger(value.commentCount) && value.commentCount >= 0 && { commentCount: value.commentCount }),
+            ...(Array.isArray(value.comments) && { comments: value.comments.slice(-50).filter(entry => typeof entry?.body === 'string' && typeof entry.at === 'string').map(entry => ({ at: entry.at.slice(0, 40), body: entry.body.slice(0, 4000) })) }) };
         }
         answer({ ok: true, items, ...(typeof message.latestStable === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(message.latestStable) && { latestStable: message.latestStable }) });
         break;

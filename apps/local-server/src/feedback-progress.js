@@ -3,11 +3,16 @@
 // plugin all leave the item as plain "제출됨", and nothing in this file reports an error to the user.
 //
 // What is stored on a submitted item (`feedback.json`, only ever added; an item without it just has not been checked):
-//   track: { state, version?, sig, seenSig?, checkedAt, changedAt, latestStable? }
+//   track: { state, version?, sig, seenSig?, checkedAt, changedAt, latestStable?, commentCount?, comments?, seenComments? }
 //   state: pending | beta | released | closed | declined; `sig` = "state:version" and `seenSig` = the sig the person has looked at,
 //   so "news" is `sig !== seenSig` (and not pending). The Hub's answer never carries the feedback text.
+//   Comments (what the maintainers answered): `commentCount` is the number the Hub counted last time (sent back as `have`, so the Hub only reads the
+//   comments again when it changed), `comments` the [{at, body}] it gave (no author), `seenComments` how many of them the person has looked at.
 
 const FINAL = new Set(['released', 'declined']);
+// A finished item is still asked about for this long, so an answer added after the fix still arrives.
+const FINAL_WATCH_MS = 14 * 86_400_000;
+const MAX_COMMENTS = 50, MAX_COMMENT_CHARS = 4000;
 export const STATES = new Set(['pending', 'beta', 'released', 'closed', 'declined']);
 const CHUNK = 50, FIRST_MS = 20_000, MANUAL_GAP_MS = 20_000;
 export const POLL_MS = 15 * 60_000, MAX_BACKOFF_MS = 6 * 3_600_000, UNSUPPORTED_MS = 24 * 3_600_000;
@@ -54,11 +59,21 @@ export function settle(remote, { latestStable, appVersion } = {}) {
   return { state, ...(version && { version }) };
 }
 export const signature = track => `${track.state}:${track.version ?? ''}`;
+/** The comments in the Hub's answer for one item: { count, list } when it sent them (they replace the stored ones), { count } when only the number came, null when neither. */
+export function commentsOf(remote) {
+  const count = Number.isSafeInteger(remote?.commentCount) && remote.commentCount >= 0 ? remote.commentCount : null;
+  if (count === null) return null;
+  if (!Array.isArray(remote.comments)) return count === 0 ? { count, list: [] } : { count }; // the Hub leaves a thread with no comments out of the answer
+  const list = remote.comments.filter(entry => typeof entry?.body === 'string' && entry.body.trim() && Number.isFinite(Date.parse(entry.at)))
+    .slice(-MAX_COMMENTS).map(entry => ({ at: new Date(entry.at).toISOString(), body: entry.body.trim().slice(0, MAX_COMMENT_CHARS) }));
+  return { count, list };
+}
 /** What the screen needs about an item, from its stored track and the version of this app (computed on every read, never stored). */
 export function viewOf(track, appVersion) {
   if (!track || !STATES.has(track.state)) return null;
   const sig = signature(track), inApp = track.version && appVersion ? compareVersions(appVersion, track.version) : null;
-  return { state: track.state, ...(track.version && { version: track.version }), ...(inApp !== null && { inApp: inApp >= 0 }), news: track.state !== 'pending' && track.seenSig !== sig, checkedAt: track.checkedAt, changedAt: track.changedAt };
+  const comments = track.comments ?? [], stateNews = track.state !== 'pending' && track.seenSig !== sig, commentNews = comments.length > (track.seenComments ?? 0);
+  return { state: track.state, ...(track.version && { version: track.version }), ...(inApp !== null && { inApp: inApp >= 0 }), news: stateNews || commentNews, stateNews, commentNews, ...(comments.length && { comments }), checkedAt: track.checkedAt, changedAt: track.changedAt };
 }
 
 // ---- the poller ----------------------------------------------------------------------------------------------------------
@@ -74,11 +89,15 @@ export function createFeedbackProgress({ store, appVersion, fetchers, canAsk = (
   async function apply(item, remote, context) {
     const settled = settle(remote, context);
     if (!settled) return false;
-    const at = now(), sig = signature(settled), prior = item.track;
-    if (prior && prior.sig === sig) return false; // nothing new: not written again, so the screen is not reloaded for nothing
+    const at = now(), sig = signature(settled), prior = item.track, found = commentsOf(remote);
+    const commentsChanged = !!found?.list && (found.count !== (prior?.commentCount ?? 0) || JSON.stringify(found.list) !== JSON.stringify(prior?.comments ?? []));
+    if (prior && prior.sig === sig && !commentsChanged) return false; // nothing new: not written again, so the screen is not reloaded for nothing
     // A first sight of 'pending' is nothing to read; anything else is news until the person looks at it.
     const seenSig = prior ? prior.seenSig : settled.state === 'pending' ? sig : undefined;
-    const track = { ...settled, sig, checkedAt: at, changedAt: at, ...(context.latestStable && { latestStable: context.latestStable }), ...(seenSig !== undefined && { seenSig }) };
+    // The count is only kept together with the comments it belongs to: when the Hub left the comments out (it failed to read them), the old count stays, so the next round asks again.
+    const comments = found?.list ?? prior?.comments, commentCount = found?.list ? found.count : prior?.commentCount;
+    const track = { ...settled, sig, checkedAt: at, changedAt: prior?.sig === sig ? prior.changedAt : at, ...(context.latestStable && { latestStable: context.latestStable }), ...(seenSig !== undefined && { seenSig }),
+      ...(commentCount !== undefined && { commentCount }), ...(comments && { comments }), ...(prior?.seenComments !== undefined && { seenComments: prior.seenComments }) };
     await store.setTrack(item.id, track);
     return true;
   }
@@ -88,7 +107,9 @@ export function createFeedbackProgress({ store, appVersion, fetchers, canAsk = (
     if (!fetcher || !canAsk()[via] || now() < slot.until || !items.length) return;
     let changed = 0;
     for (let at = 0; at < items.length; at += CHUNK) {
-      const chunk = items.slice(at, at + CHUNK), answer = await fetcher(chunk.map(item => item.id)).catch(error => ({ ok: false, error: { code: 'network_error', message: error?.message } }));
+      // `have`: the comment counts this install already holds, so the Hub reads a thread again only when its count differs.
+      const chunk = items.slice(at, at + CHUNK), have = Object.fromEntries(chunk.filter(item => item.track?.commentCount !== undefined).map(item => [item.id, item.track.commentCount]));
+      const answer = await fetcher(chunk.map(item => item.id), have).catch(error => ({ ok: false, error: { code: 'network_error', message: error?.message } }));
       if (!answer?.ok) {
         const code = String(answer?.error?.code ?? '');
         if (code === 'unsupported') { unsupportedUntil = now() + UNSUPPORTED_MS; slot.until = unsupportedUntil; return; } // the Hub has no such endpoint (yet)
@@ -106,7 +127,7 @@ export function createFeedbackProgress({ store, appVersion, fetchers, canAsk = (
   }
 
   async function run() {
-    const open = (await store.list()).filter(item => item.status === 'submitted' && !FINAL.has(item.track?.state));
+    const open = (await store.list()).filter(item => item.status === 'submitted' && (!FINAL.has(item.track?.state) || now() - (item.track.changedAt ?? 0) < FINAL_WATCH_MS));
     await ask('anonymous', open.filter(item => item.via === 'anonymous'));
     await ask('account', open.filter(item => item.via === 'account'));
   }

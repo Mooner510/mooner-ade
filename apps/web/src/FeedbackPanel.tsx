@@ -227,6 +227,7 @@ function FeedbackList({ items, available, queue, now, loaded, ask, fail, onWrite
                 {item.types.map(typeId => <span key={typeId} className="feedback-tag">{typeTag(typeId)}</span>)}
                 {item.source !== 'human' && <span className="feedback-source"><Icon name={sourceIcons[item.source]} size={13} />{sourceLabels[item.source]}</span>}
                 {item.images.length > 0 && <span className="feedback-count"><Icon name="image" size={12} />{item.images.length}</span>}
+                {!!item.progress?.comments?.length && <span className="feedback-count feedback-replies-count" title="받은 답변"><Icon name="chat" size={12} />{item.progress.comments.length}</span>}
                 <time dateTime={new Date(item.updatedAt).toISOString()} title={new Date(item.updatedAt).toLocaleString('ko-KR')}>{ago(item.updatedAt, stamp)}</time>
               </small>
             </span>
@@ -408,6 +409,13 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
           <input ref={file} type="file" accept="image/*" multiple hidden onChange={event => { addFiles([...(event.target.files ?? [])]); event.target.value = ''; }} />
         </div>
       </section>
+      {item.status === 'submitted' && !!item.progress?.comments?.length && <section className="feedback-replies" aria-label="받은 답변">
+        <h4><Icon name="chat" size={13} />답변 {item.progress.comments.length}</h4>
+        <ol>{item.progress.comments.map((comment, index) => <li key={`${index}:${comment.at}`}>
+          <time dateTime={comment.at} title={new Date(comment.at).toLocaleString('ko-KR')}>{ago(Date.parse(comment.at), now)}</time>
+          <Markdown text={comment.body} />
+        </li>)}</ol>
+      </section>}
     </div>
     <AvailabilityNote available={editable ? available : null} />
     {editable && <>

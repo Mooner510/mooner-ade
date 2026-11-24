@@ -129,15 +129,15 @@ const feedbackAvailability = () => pluginFeedback.ok ? { ok: true, mode: 'accoun
 const feedbackRequests = new Map(); // id -> resolve, answers to `feedback/submit` sent to the app
 let feedbackRequestId = 0;
 // Asks the signed-in plugin (through the app) how far some of this account's feedback has come; the answer is `feedback/status-result`.
-function statusThroughApp(keys) {
-  if (verifyPlugins) return verifyPlugins.queryFeedbackStatus ? verifyPlugins.queryFeedbackStatus({ keys }) : Promise.resolve({ ok: false, error: { code: 'unsupported' } });
+function statusThroughApp(keys, have) {
+  if (verifyPlugins) return verifyPlugins.queryFeedbackStatus ? verifyPlugins.queryFeedbackStatus({ keys, have }) : Promise.resolve({ ok: false, error: { code: 'unsupported' } });
   if (!process.connected) return Promise.resolve({ ok: false, error: { code: 'unsupported' } });
   const id = ++feedbackRequestId;
   return new Promise(resolve => {
     const timer = setTimeout(() => { feedbackRequests.delete(id); resolve({ ok: false, error: { code: 'network_error', message: '플러그인이 제때 응답하지 않았습니다.' } }); }, 45_000);
     timer.unref();
     feedbackRequests.set(id, value => { clearTimeout(timer); resolve(value); });
-    process.send({ type: 'feedback/status-query', id, keys }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'unsupported', message: error.message } }); });
+    process.send({ type: 'feedback/status-query', id, keys, have }, error => { if (error) feedbackRequests.get(id)?.({ ok: false, error: { code: 'unsupported', message: error.message } }); });
   });
 }
 function submitThroughApp(meta, images) {
@@ -228,8 +228,8 @@ const feedbackProgress = process.env.ADE_FEEDBACK_STATUS === '0' ? null : create
   store: feedback, appVersion, intervalMs: Number(process.env.ADE_FEEDBACK_STATUS_MS) || undefined, firstMs: process.env.ADE_FEEDBACK_STATUS_FIRST_MS === undefined ? undefined : Number(process.env.ADE_FEEDBACK_STATUS_FIRST_MS),
   canAsk: () => ({ anonymous: true, account: pluginFeedback.ok === true && pluginFeedback.statusQuery === true }),
   fetchers: {
-    anonymous: async keys => fetchAnonymousStatus({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), keys }),
-    account: keys => statusThroughApp(keys)
+    anonymous: async (keys, have) => fetchAnonymousStatus({ hubUrl: feedbackHubUrl, deviceId: feedbackDevice ??= await anonymousDeviceId(feedback.root), keys, have }),
+    account: (keys, have) => statusThroughApp(keys, have)
   },
   log: { debug: message => { if (process.env.ADE_DEV) console.debug(message); } }
 });
