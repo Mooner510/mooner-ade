@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { cursorRefreshClientID, cursorSessionCookie, cursorUserId, parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, readCursorLogin } from './cursor-usage.js';
+import { cursorRefreshClientID, cursorSessionCookie, cursorUserId, loginKeychainMissing, parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, readCursorLogin } from './cursor-usage.js';
 import { fault } from './files.js';
 
 // Plan limits move slowly and both endpoints are rate limited, so a reading is reused for a few minutes.
@@ -18,6 +18,7 @@ export function claudeKeychainServices(env = process.env) {
 }
 
 const keychain = service => new Promise(resolve => {
+  if (loginKeychainMissing()) return resolve(null);
   execFile('security', ['find-generic-password', '-s', service, '-w'], { timeout: 10_000 }, (error, stdout) => resolve(error ? null : stdout.trim()));
 });
 

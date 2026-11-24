@@ -17,3 +17,11 @@ test('falls back to the original command when nothing is found or off Windows', 
   assert.deepEqual(resolveAgentCommand('cursor-agent', ['acp'], { platform: 'darwin', env }), { file: 'cursor-agent', args: ['acp'] });
   assert.deepEqual(resolveAgentCommand('claude', ['-p'], { platform: 'win32', env }), { file: 'claude', args: ['-p'] });
 });
+
+test('cursor-agent is not started where the file credential store has no login (it would open the sign-in page each time)', () => {
+  const file = { AGENT_CLI_CREDENTIAL_STORE: 'file', HOME: '/h' };
+  assert.throws(() => resolveAgentCommand('cursor-agent', ['acp'], { platform: 'darwin', env: file, exists: () => false }), { code: 'CURSOR_LOGIN_REQUIRED' });
+  assert.deepEqual(resolveAgentCommand('cursor-agent', ['acp'], { platform: 'darwin', env: file, exists: p => p === '/h/.cursor/auth.json' }), { file: 'cursor-agent', args: ['acp'] });
+  assert.deepEqual(resolveAgentCommand('cursor-agent', ['acp'], { platform: 'darwin', env: { ...file, CURSOR_API_KEY: 'k' }, exists: () => false }), { file: 'cursor-agent', args: ['acp'] });
+  assert.deepEqual(resolveAgentCommand('cursor-agent', ['acp'], { platform: 'darwin', env: { HOME: '/h' }, exists: () => false }), { file: 'cursor-agent', args: ['acp'] });
+});

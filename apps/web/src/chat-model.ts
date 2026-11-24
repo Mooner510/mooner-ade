@@ -23,7 +23,8 @@ export type ChatState = {
 // `key` keeps a block's React identity from its first streamed character to the stored message (so nothing remounts or replays its entrance);
 // `partial` marks a block that is still streaming. `slot` is a streamed tool's content-block index, `partialJson` its input so far.
 type BlockBase = { key?: string; partial?: boolean };
-export type Block = BlockBase & ({ type: 'text'; text: string } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
+export type AsyncQuestion = { title: string; options?: string[] | null };
+export type Block = BlockBase & ({ type: 'text'; text: string; questions?: AsyncQuestion[] } | { type: 'thinking'; text: string } | { type: 'tool_use'; id: string; name: string; input: any; slot?: number; partialJson?: string } | { type: 'other'; original: string });
 /** A tool call the auto-mode classifier refused, as the server recorded it. `rule` is the exact session allow rule it can offer (null: only "allow and retry" by message). `allowed`: the user allowed it without a retry. */
 export type BlockedAction = { toolUseId: string; tool: string; input: Record<string, unknown>; reason: string; rule: string | null; allowed?: boolean };
 export type Approval = { requestId: string; tool: string; input: any; toolUseId?: string; suggestions: unknown[]; questions?: ChatQuestion[]; exists?: boolean };
@@ -1198,6 +1199,22 @@ export function questionAnswers(questions: ChatQuestion[], picks: Record<string,
   return Object.fromEntries(questions.map(question => { const pick = picks[question.id] ?? emptyPick(question), typed = pick.other?.trim(); return [question.id, [...pick.options, ...(typed ? [typed] : [])]]; }));
 }
 export const questionsAnswered = (questions: ChatQuestion[], answers: Record<string, string[]>) => questions.length > 0 && questions.every(question => (answers[question.id]?.length ?? 0) > 0);
+
+export function pendingAsyncQuestions(items: Item[], dismissed: ReadonlySet<string>): ChatQuestion[] {
+  const lastInput = lastIndexWhere(items, item => item.kind === 'user' || item.kind === 'divider');
+  const questions: ChatQuestion[] = [];
+  for (const item of items.slice(lastInput + 1)) {
+    if (item.kind !== 'assistant') continue;
+    for (const block of item.blocks) {
+      if (block.type !== 'text' || !block.questions) continue;
+      block.questions.forEach(({ title, options }, index) => {
+        const id = `${item.id}:${block.key ?? 'question'}:${index}`;
+        if (!dismissed.has(id)) questions.push({ id, prompt: title, allowOther: true, options: options?.map(label => ({ id: label, label })) });
+      });
+    }
+  }
+  return questions;
+}
 
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [

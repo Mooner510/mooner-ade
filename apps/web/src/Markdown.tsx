@@ -11,6 +11,8 @@ import { UI_LANG } from './ui-frame-protocol';
 import { NATIVE_LANG, parseUi } from './ui-spec';
 import { UiSpecView } from './UiBlocks';
 import { MermaidBlock } from './mermaid-block';
+import { ChatMedia } from './ChatMedia';
+import { MEDIA_LANG, parseChatMedia } from './chat-media';
 
 // A small Markdown renderer for chat replies. It builds React elements (no HTML strings except Monaco's escaped syntax colouring), so model output cannot inject markup,
 // and links go through the app's own "open external link?" dialog (ade:link).
@@ -115,10 +117,15 @@ function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
   </div>;
 }
 
-function renderNode(node: Node, key: string, live: boolean) {
+function renderNode(node: Node, key: string, live: boolean, media: boolean) {
   switch (node.t) {
     case 'h': { const Tag = `h${Math.min(6, node.level + 2)}` as 'h3'; return <Tag key={key}>{inline(node.text)}</Tag>; }
     case 'code':
+      if (media && node.lang === MEDIA_LANG) {
+        if (node.open && live) return <div key={key} className="ade-ui-pending">미디어 준비 중…</div>;
+        const spec = !node.open && parseChatMedia(node.code);
+        if (spec) return <ChatMedia key={`${key}:${spec.type}:${spec.src}`} media={spec} />;
+      }
       if (node.lang === UI_LANG || node.lang === NATIVE_LANG) return <UiBlock key={key} code={node.code} lang={node.lang} open={node.open} live={live} />;
       if (node.lang.toLowerCase() === 'mermaid') return node.open ? <CodeBlock key={key} code={node.code} lang="mermaid" /> : <MermaidBlock key={key} code={node.code} />;
       return <CodeBlock key={key} code={node.code} lang={node.lang} />;
@@ -127,24 +134,23 @@ function renderNode(node: Node, key: string, live: boolean) {
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul';
       return <Tag key={key}>{node.items.map((item, i) => <li key={i} value={item.num} style={{ listStyleType: item.num === undefined ? 'disc' : 'decimal' }} className={item.depth ? 'nested' : ''}>
-        {inline(item.text)}{item.blocks?.map((block, b) => renderNode(block, `${key}-${i}-${b}`, live))}</li>)}</Tag>;
+        {inline(item.text)}{item.blocks?.map((block, b) => renderNode(block, `${key}-${i}-${b}`, live, media))}</li>)}</Tag>;
     }
     case 'table': return <MarkdownTable key={key} {...node} />;
     default: return <p key={key}>{lines(node.text)}</p>;
   }
 }
 // Parsed nodes without a wrapper, memoized by text: the finished part of a streaming reply is parsed once, not on every revealed character.
-const Nodes = memo(function Nodes({ text, prefix, live = false }: { text: string; prefix: string; live?: boolean }) { return <>{parse(text).map((node, index) => renderNode(node, `${prefix}${index}`, live))}</>; });
+const Nodes = memo(function Nodes({ text, prefix, live = false, media = false }: { text: string; prefix: string; live?: boolean; media?: boolean }) { return <>{parse(text).map((node, index) => renderNode(node, `${prefix}${index}`, live, media))}</>; });
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  return <div className="md"><Nodes text={text} prefix="n" /></div>;
+export const Markdown = memo(function Markdown({ text, media }: { text: string; media?: boolean }) {
+  return <div className="md"><Nodes text={text} prefix="n" media={media} /></div>;
 });
 
 // A reply that is (or was) streaming: the stable head is parsed once per paragraph, only the tail on every step.
-// ponytail: a reply with an interactive UI (either kind) skips the head/tail split. Moving a finished block from tail to head would remount its iframe and reset what the user typed;
-// the whole reply is reparsed per step instead (UiFrame is memoized, so only that parse costs). Fine for one reply; revisit if replies get huge.
-export function LiveMarkdown({ text, live }: { text: string; live: boolean }) {
-  const [head, tail] = HAS_UI.test(text) ? ['', text] : stableSplit(text);
-  return <div className="md">{head && <Nodes text={head} prefix="h" />}<Nodes text={live ? holdBack(tail) : tail} prefix="t" live={live} /></div>;
+// ponytail: reparse replies with stateful blocks so moving the head/tail split does not remount a form or reset a playing video.
+export function LiveMarkdown({ text, live, media }: { text: string; live: boolean; media?: boolean }) {
+  const [head, tail] = HAS_STATEFUL_BLOCK.test(text) ? ['', text] : stableSplit(text);
+  return <div className="md">{head && <Nodes text={head} prefix="h" media={media} />}<Nodes text={live ? holdBack(tail) : tail} prefix="t" live={live} media={media} /></div>;
 }
-const HAS_UI = new RegExp(`^\\s*(\`{3,}|~{3,})\\s*(${UI_LANG}|${NATIVE_LANG})\\b`, 'm');
+const HAS_STATEFUL_BLOCK = new RegExp(`^\\s*(\`{3,}|~{3,})\\s*(${UI_LANG}|${NATIVE_LANG}|${MEDIA_LANG})\\b`, 'm');

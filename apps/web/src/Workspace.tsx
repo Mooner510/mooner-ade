@@ -11,7 +11,7 @@ import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsSta
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type ChatState } from './chat-model';
-import { Icon, IconButton } from './Icon';
+import { Icon, IconButton, type IconName } from './Icon';
 import { useHiddenAgents } from './installed-agents';
 import { chatAgent, Launchers, markSplit, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { useShells, shellLabel } from './shells';
@@ -47,7 +47,8 @@ export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; c
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 export type WorkspaceHandle = { requestClose(): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string): void; newTab(): void; renameTab(id: string): void; launcher(): void };
-export type Command = { id: string; label: string; keys?: string; hidden?: boolean; run(): void | Promise<unknown> };
+export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown> } &
+  ({ hidden?: false; icon: IconName } | { hidden: true; icon?: never });
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
   root: string; projectId?: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
@@ -290,7 +291,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     const onLink = (event: Event) => {
       const uri = (event as CustomEvent<string>).detail;
       if (!refs.active.current || typeof uri !== 'string') return;
-      void pick(`외부 링크를 열까요? 신뢰할 수 있는 주소인지 확인하세요.\n${uri}`, [{ id: 'open', label: '기본 브라우저로 열기' }, { id: 'copy', label: '링크 복사' }, { id: 'cancel', label: '취소' }]).then(choice => {
+      void pick(`외부 링크를 열까요? 신뢰할 수 있는 주소인지 확인하세요.\n${uri}`, [{ id: 'open', label: '기본 브라우저로 열기', icon: 'externalLink' }, { id: 'copy', label: '링크 복사', icon: 'copy' }, { id: 'cancel', label: '취소' }]).then(choice => {
         if (choice === 'open') window.open(uri, '_blank', 'noopener');
         else if (choice === 'copy') {
           copyText(uri);
@@ -394,7 +395,7 @@ ${where}`, [
     const dirty = [...new Set(paths)].filter(path => path.startsWith('file:')).map(path => fileBuffers.current.get(path.slice(5))).filter((buffer): buffer is FileBuffer => Boolean(buffer?.dirty));
     if (!dirty.length) return true;
     const choice = await pick(`저장하지 않은 변경 사항이 있습니다. 저장할까요?\n${dirty.map(buffer => basename(buffer.path)).join(', ')}`,
-      [{ id: 'save', label: '저장' }, { id: 'discard', label: '저장 안 함' }, { id: 'cancel', label: '취소' }]);
+      [{ id: 'save', label: '저장', icon: 'save' }, { id: 'discard', label: '저장 안 함', icon: 'undo' }, { id: 'cancel', label: '취소' }]);
     if (choice === 'discard') { dirty.forEach(buffer => buffer.revert()); return true; }
     if (choice !== 'save') return false;
     await Promise.all(dirty.map(buffer => buffer.save()));
@@ -505,7 +506,7 @@ ${where}`, [
     pickFile: () => run(async () => {
       const files = ((await call<{ files: string[] }>('files/list')).files ?? []).filter(file => !file.endsWith('/'));
       if (!files.length) throw new Error('열 수 있는 파일이 없습니다.');
-      const chosen = await pick('열 파일을 고르세요', files.map(file => ({ id: file, label: file })));
+      const chosen = await pick('열 파일을 고르세요', files.map(file => ({ id: file, label: file, icon: 'file' })));
       if (chosen) await askOpen({ path: chosen });
     }),
     selectTab: id => selectTab(id), closePane: id => run(() => closeTerminal(id)),
@@ -828,7 +829,7 @@ ${where}`, [
     if (chosen === 'cursor') {
       const sessions = await call<{ sessionId: string; title: string; updatedAt: number }[]>('terminal/chat-sessions', { id });
       if (!sessions.length) throw new Error('이 폴더의 Cursor 대화 기록이 없습니다. Cursor에서 응답을 완료한 뒤 다시 시도하세요.');
-      sessionId = (await pick('Chat으로 이어갈 Cursor 대화를 선택하세요. 원본은 보존하고 복사본으로 이어갑니다.', sessions.map(item => ({ id: item.sessionId, label: item.title, detail: new Date(item.updatedAt).toLocaleString('ko-KR') })))) ?? undefined;
+      sessionId = (await pick('Chat으로 이어갈 Cursor 대화를 선택하세요. 원본은 보존하고 복사본으로 이어갑니다.', sessions.map(item => ({ id: item.sessionId, label: item.title, icon: 'chat', detail: new Date(item.updatedAt).toLocaleString('ko-KR') })))) ?? undefined;
       if (!sessionId) return;
     }
     if (!(await ask.confirm(stop ? '진행 중인 작업과 터미널의 미전송 입력을 중단하고 같은 대화를 Chat으로 이어갈까요?' : '터미널의 미전송 입력은 사라집니다. 같은 대화를 Chat으로 이어갈까요?'))) return;
@@ -1040,14 +1041,14 @@ ${where}`, [
   }
   async function switchBranch() {
     const { branches } = await call<{ branches: string[] }>('git/branches');
-    const choice = await pick('브랜치 전환', branches.map(name => ({ id: name, label: name, detail: name === git.branch ? '현재' : '' })));
+    const choice = await pick('브랜치 전환', branches.map(name => ({ id: name, label: name, icon: 'branch', detail: name === git.branch ? '현재' : '' })));
     if (!choice || choice === git.branch) return;
     await call('git/checkout', { branch: choice }); await refreshGit();
   }
 
   // ---- quick input / commands ----
   async function openPalette() {
-    const items = refs.commands.current.filter(command => !command.hidden).map(command => ({ id: command.id, label: command.label, keys: command.keys && showKeys(command.keys) }));
+    const items = refs.commands.current.filter(command => !command.hidden).map(command => ({ id: command.id, label: command.label, icon: command.icon, keys: command.keys && showKeys(command.keys) }));
     const choice = await pick('명령 팔레트', items);
     if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
   }
@@ -1080,43 +1081,43 @@ ${where}`, [
   const hiddenAgents = useHiddenAgents(settings.agentsOff);
   const launchers = launchersFor(settings.defaultMode, shellLabel(shells, settings.terminalShell)).filter(item => !hiddenAgents.includes(item.id));
   async function pickLauncher(where: 'tab' | 'split') {
-    const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, detail: item.detail })));
+    const choice = await pick(where === 'tab' ? '새 탭에서 실행' : '오른쪽 pane에서 실행', launchers.map(item => ({ id: item.id, label: item.label, icon: item.icon, detail: item.detail })));
     const item = launchers.find(entry => entry.id === choice);
     if (item) await launch(item.command, where);
   }
   const allCommands: Command[] = [
-    { id: 'newTab', label: '새 탭', run: () => newTab() },
+    { id: 'newTab', label: '새 탭', icon: 'plus', run: () => newTab() },
     ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
-      { id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, run: () => launch(item.command, 'tab') },
-      { id: `split${item.id}`, label: `오른쪽 pane에서 ${item.label} 실행`, run: () => launch(item.command, 'split') }
+      { id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, icon: item.icon, run: () => launch(item.command, 'tab') },
+      { id: `split${item.id}`, label: `오른쪽 pane에서 ${item.label} 실행`, icon: item.icon, run: () => launch(item.command, 'split') }
     ]),
-    { id: 'launcher', label: '새 탭에서 실행…', run: () => pickLauncher('tab') },
-    { id: 'closeTab', label: '탭 닫기', run: () => closePaneTab(refs.activeTab.current) },
-    { id: 'renameTab', label: '탭 이름 바꾸기…', run: () => renamePaneTab(refs.activeTab.current) },
-    { id: 'nextTab', label: '다음 탭', run: () => cyclePaneTab(1) },
-    { id: 'prevTab', label: '이전 탭', run: () => cyclePaneTab(-1) },
-    { id: 'moveTabUp', label: '탭을 위로 이동', run: () => moveTabBy(-1) },
-    { id: 'moveTabDown', label: '탭을 아래로 이동', run: () => moveTabBy(1) },
-    { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
+    { id: 'launcher', label: '새 탭에서 실행…', icon: 'terminal', run: () => pickLauncher('tab') },
+    { id: 'closeTab', label: '탭 닫기', icon: 'x', run: () => closePaneTab(refs.activeTab.current) },
+    { id: 'renameTab', label: '탭 이름 바꾸기…', icon: 'edit', run: () => renamePaneTab(refs.activeTab.current) },
+    { id: 'nextTab', label: '다음 탭', icon: 'arrowRight', run: () => cyclePaneTab(1) },
+    { id: 'prevTab', label: '이전 탭', icon: 'arrowLeft', run: () => cyclePaneTab(-1) },
+    { id: 'moveTabUp', label: '탭을 위로 이동', icon: 'arrowUp', run: () => moveTabBy(-1) },
+    { id: 'moveTabDown', label: '탭을 아래로 이동', icon: 'arrowDown', run: () => moveTabBy(1) },
+    { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', icon: 'externalLink', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
     { id: 'nextTab2', label: '다음 탭', hidden: true, run: () => cyclePaneTab(1) },
     { id: 'prevTab2', label: '이전 탭', hidden: true, run: () => cyclePaneTab(-1) },
-    ...Array.from({ length: 9 }, (_, index) => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
-    { id: 'splitRight', label: '오른쪽으로 분할', run: () => splitTerminal(refs.focus.current, 'row') },
-    { id: 'splitDown', label: '아래로 분할', run: () => splitTerminal(refs.focus.current, 'column') },
-    { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },
-    { id: 'closePane', label: '포커스된 pane 닫기', run: closeFocused },
-    { id: 'preset', label: '현재 탭을 터미널 2 × 3 그리드로', run: preset },
-    { id: 'zoom', label: 'Pane 최대화 전환', run: () => setZoom(value => value ? '' : refs.focus.current) },
-    { id: 'equalize', label: 'Pane 크기 균등화', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
-    { id: 'focusNext', label: '다음 pane으로 이동', run: () => moveFocus(1) },
-    { id: 'focusPrev', label: '이전 pane으로 이동', run: () => moveFocus(-1) },
-    { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', run: toggleGit },
-    { id: 'feedback', label: '피드백 요청', run: toggleFeedback },
-    { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', run: startCapture },
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
+    { id: 'splitRight', label: '오른쪽으로 분할', icon: 'splitH', run: () => splitTerminal(refs.focus.current, 'row') },
+    { id: 'splitDown', label: '아래로 분할', icon: 'splitV', run: () => splitTerminal(refs.focus.current, 'column') },
+    { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', icon: 'terminal', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },
+    { id: 'closePane', label: '포커스된 pane 닫기', icon: 'x', run: closeFocused },
+    { id: 'preset', label: '현재 탭을 터미널 2 × 3 그리드로', icon: 'layers', run: preset },
+    { id: 'zoom', label: 'Pane 최대화 전환', icon: 'maximize', run: () => setZoom(value => value ? '' : refs.focus.current) },
+    { id: 'equalize', label: 'Pane 크기 균등화', icon: 'layers', run: () => { const tree = activePane(); if (tree) commitPane(equalize(tree)); } },
+    { id: 'focusNext', label: '다음 pane으로 이동', icon: 'arrowRight', run: () => moveFocus(1) },
+    { id: 'focusPrev', label: '이전 pane으로 이동', icon: 'arrowLeft', run: () => moveFocus(-1) },
+    { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', icon: 'graph', run: toggleGit },
+    { id: 'feedback', label: '피드백 요청', icon: 'feedback', run: toggleFeedback },
+    { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', icon: 'captureWindow', run: startCapture },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
-    { id: 'branch', label: '브랜치 전환…', run: switchBranch },
-    { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
+    { id: 'branch', label: '브랜치 전환…', icon: 'branch', run: switchBranch },
+    { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, icon: 'palette', run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
     ...projectCommands
   ];
   // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
@@ -1170,7 +1171,7 @@ ${where}`, [
     onModeChange,
     followUpInput: async (id: string, prompt: string, sequence: number, requestId: string) => (await call<{ accepted: boolean }>('terminal/follow-up', { id, prompt, sequence, requestId })).accepted,
     // "취소" comes first so it is the preselected entry: the Enter that triggered this must not also accept it.
-    confirmSend: async (message: string) => (await pick(message, [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }])) === 'yes',
+    confirmSend: async (message: string) => (await pick(message, [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기', icon: 'send' }])) === 'yes',
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
     onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, caches, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),

@@ -70,6 +70,31 @@ export async function readProjectFile(workspace, file) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
+const mediaTypes = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif',
+  '.mp4': 'video/mp4', '.webm': 'video/webm'
+};
+
+export async function openProjectMedia(workspace, file, directory = workspace.root) {
+  const type = mediaTypes[path.extname(file).toLowerCase()];
+  if (!type) throw fault('UNSUPPORTED_MEDIA', '지원하지 않는 미디어 형식입니다.', 415);
+  // Absolute paths are accepted only when they resolve inside the chat's workspace.
+  const relative = path.isAbsolute(file) ? path.relative(workspace.root, file) : [path.relative(workspace.root, directory), file].filter(Boolean).join('/');
+  if (path.sep === '\\' && relative.includes(':')) throw fault('INVALID_INPUT', '프로젝트 내부 경로를 지정하세요.');
+  const target = await targetOf(workspace, relative);
+  const entry = await fs.lstat(target);
+  if (!entry.isFile()) throw fault('NOT_FOUND', '미디어 파일이 없습니다.', 404);
+  const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || entry.dev !== stat.dev || entry.ino !== stat.ino) throw fault('NOT_FOUND', '미디어 파일이 없습니다.', 404);
+    return { handle, size: stat.size, type };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
 export function writeProjectFile(workspace, { path: file, revision, content }) {
   if ((revision !== null && (typeof revision !== 'string' || !/^[0-9a-f]{64}$/.test(revision))) ||
       typeof content !== 'string' || content.includes('\0') || !content.isWellFormed()) {

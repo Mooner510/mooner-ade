@@ -32,7 +32,9 @@ import { UserMessageBubble } from './user-message-bubble';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
+import type { QuickItem } from './QuickInput';
 import { busAgentName, parseBusMessages } from './bus-message';
+import { pendingAsyncQuestions } from './chat-model';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
 // `reconnect` after the socket came back, which makes the pane ask the server for what it missed.
@@ -41,7 +43,7 @@ export type ChatCtx = {
   subscribe(id: string, handler: (message: any) => void): () => void;
   settings: Settings; root: string; projectId: string;
   onState(id: string, state: ChatState): void; onTitle(id: string, title: string): void; onClose(id: string): void; onOpenSettings(agent?: 'claude' | 'codex' | 'cursor'): void;
-  pick(title: string, items: { id: string; label: string; detail?: string }[]): Promise<string | null>; fail(cause: unknown): void;
+  pick(title: string, items: QuickItem[]): Promise<string | null>; fail(cause: unknown): void;
   // Branch: opens a copy of chat `id` up to one assistant message as a new tab.
   branchChat(id: string, uuid: string, cwd?: string): Promise<void>;
   // Continue this conversation in a terminal (`claude --resume`); the server refuses unless the chat is idle.
@@ -354,16 +356,19 @@ function useReveal(text: string, live: boolean, smooth: boolean) {
   }, [behind]);
   return animate ? Math.min(shown, text.length) : text.length;
 }
-const RevealText = memo(function RevealText({ text, live, markdown, smooth }: { text: string; live: boolean; markdown: boolean; smooth: boolean }) {
+const RevealText = memo(function RevealText({ text, live, markdown, smooth, media }: { text: string; live: boolean; markdown: boolean; smooth: boolean; media?: boolean }) {
   const shown = useReveal(text, live, smooth), [streamed] = useState(live), part = shown < text.length ? text.slice(0, shown) : text, flowing = live || shown < text.length;
   if (!markdown) return <>{part}</>;
   // A block that streamed keeps the live renderer for good, so finishing never swaps its DOM.
-  return streamed ? <LiveMarkdown text={part} live={flowing} /> : <Markdown text={part} />;
+  return streamed ? <LiveMarkdown text={part} live={flowing} media={media} /> : <Markdown text={part} media={media} />;
 });
 
 function BlockView({ block, result, settings, running, plainThinking, enter }: { block: Block; result?: { content: string; isError: boolean }; settings: Settings; running: boolean; plainThinking?: boolean; enter?: boolean }) {
   const live = Boolean(block.partial);
-  if (block.type === 'text' || (plainThinking && block.type === 'thinking')) return <RevealText text={block.text} live={live && Boolean(enter)} markdown smooth={settings.chatSmoothStream} />;
+  if (block.type === 'text' && block.questions?.length) return <details className="chat-thinking"><summary>질문</summary>
+    <QuestionList questions={block.questions.map(({ title, options }) => ({ question: title, options: options?.map(label => ({ label })) }))} />
+  </details>;
+  if (block.type === 'text' || (plainThinking && block.type === 'thinking')) return <RevealText text={block.text} live={live && Boolean(enter)} markdown smooth={settings.chatSmoothStream} media={block.type === 'text'} />;
   if (block.type === 'thinking') return <details className="chat-thinking" open={settings.chatThinkingOpen === 'always' ? true : settings.chatThinkingOpen === 'never' ? false : live}><summary>생각</summary><p><RevealText text={block.text} live={live && Boolean(enter)} markdown={false} smooth={settings.chatSmoothStream} /></p></details>;
   if (block.type === 'tool_use') { const card = <ToolCard block={block} result={result} settings={settings} running={running} />; return isAgentTool(block.name) ? <AgentCard id={block.id} fallback={card} /> : card; }
   return null;
@@ -910,7 +915,7 @@ export function ApprovalCard({ approval, modes, settings, explain, asker, askerC
   const played = usePlayedEntrance();
   const [explaining, setExplaining] = useState(false), [note, setNote] = useState(''), instead = note.trim(), [card, capture] = useHeightMorph<HTMLDivElement>();
   const explainOpen = (value: boolean) => { capture(); setExplaining(value); };
-  if (approval.questions?.length) return <QuestionCard approval={approval} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
+  if (approval.questions?.length) return <QuestionCard questions={approval.questions} title={approval.tool === 'AskUserQuestion' ? '질문' : approval.tool} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
   // Claude's ExitPlanMode and Cursor's create_plan ('계획 승인') read the same; only Claude picks the mode it continues in.
   if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} />;
   const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
@@ -1030,7 +1035,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const title = (view.state.chatTitle ?? '').slice(0, 60);
   useEffect(() => { ctxRef.current.onTitle(id, title); }, [id, title]);
   const imageInput = useRef<HTMLInputElement>(null), fileInput = useRef<HTMLInputElement>(null);
-  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [shrinking, setShrinking] = useState(0), [queue, setQueue] = useState<{ text: string; images: Attachment[]; now?: boolean }[]>([]);
+  const [text, setText] = useState(''), [stash, setStash] = useState(''), [recall, setRecall] = useState<{ at: number; draft: string } | null>(null), [images, setImages] = useState<Attachment[]>([]), [shrinking, setShrinking] = useState(0), [queue, setQueue] = useState<{ text: string; images: Attachment[]; draft?: string; now?: boolean }[]>([]);
   useEffect(() => {
     const saved = loadChatDevDraft(ctx.projectId, id);
     if (saved) setText(current => current || saved);
@@ -1040,8 +1045,11 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     return () => clearTimeout(timer);
   }, [ctx.projectId, id, text]);
   const [queueSending, setQueueSending] = useState(false);
+  const [dismissedQuestions, setDismissedQuestions] = useState<ReadonlySet<string>>(new Set());
+  const [sendingQuestion, setSendingQuestion] = useState(false), sendingQuestionRef = useRef(false);
+  const asyncQuestions = useMemo(() => agent === 'codex' ? pendingAsyncQuestions(view.items, dismissedQuestions) : [], [agent, view.items, dismissedQuestions]);
   // Pictures of a steering message: the server keeps them only while the turn has not taken the message in, so the composer remembers them by uuid to restore them on withdraw (↑).
-  const pendingSteers = useRef<{ text: string; images: Attachment[] }[]>([]), steerImages = useRef(new Map<string, Attachment[]>());
+  const pendingSteers = useRef(new Map<string, { text: string; images: Attachment[] }>()), queuedSteers = useRef(new Map<string, { text: string; images: Attachment[] }>());
   const [commands, setCommands] = useState<CommandInfo[]>([]), [menuAt, setMenuAt] = useState(0), [openError, setOpenError] = useState(''), [user, setUser] = useState(''), [away, setAway] = useState(false);
   const greeting = useMemo(() => pickGreeting(user), [user, id]);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null), fitSig = useRef(''), flipping = useRef(0), tunePanel = `chat-tune-${useId()}`, scroller = useRef<HTMLDivElement>(null), thread = useRef<HTMLDivElement>(null), box = useRef<HTMLTextAreaElement>(null), stick = useRef(true), jump = useRef(false), ctxRef = useRef(ctx); ctxRef.current = ctx;
@@ -1132,13 +1140,18 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       if (message.type === 'chat/event') {
         enqueue(message);
         if (message.event?.kind === 'divider' && message.event.reason === 'clear') { setQueue([]); releaseUiSends(id); }
-        // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost.
-        // Queued steers are matched to the pictures sent with them (by text and count); applied ones are forgotten.
         const steer = message.event;
-        if (steer?.kind === 'steer' && steer.phase === 'queued') { const index = pendingSteers.current.findIndex(item => item.text === steer.text && item.images.length === steer.images); if (index >= 0) { steerImages.current.set(steer.uuid, pendingSteers.current[index].images); pendingSteers.current.splice(index, 1); } }
-        if (steer?.kind === 'steer' && steer.phase === 'applied') steerImages.current.delete(steer.uuid);
-        // A withdrawn steering message goes back into the input box (unless something is being typed there) so it is not lost, pictures included.
-        if (steer?.kind === 'steer' && steer.phase === 'cancelled' && !steer.resent && typeof steer.text === 'string') { const pictures = steerImages.current.get(steer.uuid); steerImages.current.delete(steer.uuid); setText(current => current || steer.text); if (pictures) setImages(current => current.length ? current : pictures); }
+        if (steer?.kind === 'steer' && steer.phase === 'queued') {
+          const draft = pendingSteers.current.get(steer.clientMessageId);
+          if (draft) { queuedSteers.current.set(steer.uuid, draft); pendingSteers.current.delete(steer.clientMessageId); }
+        }
+        if (steer?.kind === 'steer' && steer.phase === 'applied') queuedSteers.current.delete(steer.uuid);
+        if (steer?.kind === 'steer' && steer.phase === 'cancelled') {
+          const draft = queuedSteers.current.get(steer.uuid);
+          queuedSteers.current.delete(steer.uuid);
+          if (!steer.resent && draft) restoreDraft(draft.text, draft.images);
+          else if (!steer.resent && typeof steer.text === 'string') setText(current => current || steer.text);
+        }
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
@@ -1191,7 +1204,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (!confirmed && input.model && input.model !== resolvedModelValue && input.model !== selectedModel && shown.some(item => item.kind === 'user' || item.kind === 'assistant' || item.kind === 'compact')) {
       const canCompact = available.some(item => item.name === 'compact');
       const choice = await ctx.pick('모델을 바꾸면 프롬프트 캐시가 만료돼요\n다음 메시지에서 대화 전체를 다시 읽어 사용량이 늘 수 있어요.',
-        [{ id: 'yes', label: '모델 변경' }, ...(canCompact ? [{ id: 'compact', label: '압축하고 전환', detail: '요약본만 다시 읽음' }] : []), { id: 'clear', label: '새 대화로 전환', detail: '이전 대화 비움' }, { id: 'no', label: '취소' }]);
+        [{ id: 'yes', label: '모델 변경', icon: 'bot' }, ...(canCompact ? [{ id: 'compact', label: '압축하고 전환', icon: 'compress' as const, detail: '요약본만 다시 읽음' }] : []), { id: 'clear', label: '새 대화로 전환', icon: 'chat', detail: '이전 대화 비움' }, { id: 'no', label: '취소' }]);
       if (choice === 'clear') {
         if (busy || queue.length || queueSending) { note('응답이 끝난 뒤 다시 시도하세요.'); return false; }
         if (!await resetChat()) return false;
@@ -1332,7 +1345,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     syncPin();
   };
   const branch = useCallback((uuid: string) => void ctxRef.current.branchChat(id, uuid, leaf.cwd).catch(ctxRef.current.fail), [id, leaf.cwd]);
-  const rewind = useCallback((uuid: string) => void ctxRef.current.pick('여기로 되돌릴까요? 이후 대화는 사라지고 에이전트가 이미 바꾼 파일은 그대로입니다.', [{ id: 'yes', label: '되돌리기' }]).then(choice => choice === 'yes' ? ctxRef.current.call('chat/rewind', { id, uuid }) : undefined).catch(ctxRef.current.fail), [id]);
+  const rewind = useCallback((uuid: string) => void ctxRef.current.pick('여기로 되돌릴까요? 이후 대화는 사라지고 에이전트가 이미 바꾼 파일은 그대로입니다.', [{ id: 'yes', label: '되돌리기', icon: 'undo' }]).then(choice => choice === 'yes' ? ctxRef.current.call('chat/rewind', { id, uuid }) : undefined).catch(ctxRef.current.fail), [id]);
   const jumpToEnd = () => { const element = scroller.current; if (!element) return; readingTool.current = false; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
 
   const note = (message: string) => apply(view => ({ ...view, items: [...view.items, { kind: 'note', key: `n${Date.now()}${Math.random()}`, text: message, local: true, fresh: true }] }));
@@ -1348,16 +1361,25 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     } else if (busy) pending.started = true;
     else if (pending.started) { compactThenSwitch.current = null; note('압축이 완료되지 않아 모델을 바꾸지 않았습니다.'); }
   }, [compactCount, busy]);
-  const transmit = async (message: string, attachments: Attachment[], steer = false) => {
+  function restoreDraft(message: string, attachments: Attachment[]) {
+    if (message) setText(current => !current ? message : current === message ? current : `${message}\n\n${current}`);
+    if (attachments.length) setImages(current => current.length ? current : attachments);
+  }
+  const transmit = async (message: string, attachments: Attachment[], steer = false, clientMessageId?: string) => {
     readingTool.current = false; stick.current = true; jump.current = true;
-    try { const previews = (await Promise.all(attachments.map(item => thumbnail(item.url)))).filter((url): url is string => url !== null); await ctx.call('chat/send', { id, text: message, steer, interactiveUi: ctx.settings.interactiveUi, artifact: ctx.settings.artifactAlways, images: attachments.map(({ mime, data }) => ({ mime, data })), previews: previews.length === attachments.length ? previews : [] }); }
-    catch (cause) { ctx.fail(cause); }
+    try {
+      const previews = (await Promise.all(attachments.map(item => thumbnail(item.url)))).filter((url): url is string => url !== null);
+      const sent = await ctx.call<{ steered?: boolean }>('chat/send', { id, text: message, steer, clientMessageId, interactiveUi: ctx.settings.interactiveUi, artifact: ctx.settings.artifactAlways, images: attachments.map(({ mime, data }) => ({ mime, data })), previews: previews.length === attachments.length ? previews : [] });
+      if (clientMessageId && !sent?.steered) pendingSteers.current.delete(clientMessageId);
+      return true;
+    }
+    catch (cause) { ctx.fail(cause); return false; }
   };
   // A message typed while Claude answers waits here and goes out when the turn ends.
   useEffect(() => {
     if (state.status !== 'idle' || !queue.length || !view.ready || queueSending) return;
     const [next, ...rest] = queue; setQueueSending(true); setQueue(rest);
-    void transmit(next.text, next.images).finally(() => setQueueSending(false));
+    void transmit(next.text, next.images).then(sent => { if (!sent) restoreDraft(next.draft ?? next.text, next.images); }).finally(() => setQueueSending(false));
   }, [state.status, queue, view.ready, queueSending]);
   // Interactive UIs in a reply (ade-ui blocks) reach this chat through window events carrying the chat id. `ade.send` goes out like a typed message
   // (queued as a follow-up only while this agent is in a turn, so it never steers a running turn; a subagent running on its own does not count).
@@ -1386,7 +1408,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     window.addEventListener('ade:ui-send', send); window.addEventListener('ade:ui-prefill', prefill);
     return () => { window.removeEventListener('ade:ui-send', send); window.removeEventListener('ade:ui-prefill', prefill); };
   }, [id]);
-  const uiBlocks = useMemo(() => ({ chatId: id, enabled: ctx.settings.interactiveUi, fileChipLabel: ctx.settings.chatFileChipLabel }), [id, ctx.settings.interactiveUi, ctx.settings.chatFileChipLabel]);
+  const uiBlocks = useMemo(() => ({ projectId: ctx.projectId, chatId: id, enabled: ctx.settings.interactiveUi, fileChipLabel: ctx.settings.chatFileChipLabel }), [ctx.projectId, id, ctx.settings.interactiveUi, ctx.settings.chatFileChipLabel]);
 
   const available = useMemo(() => {
     const names = new Map<string, CommandInfo>();
@@ -1449,7 +1471,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // false when cancelled at the background-task question.
   async function resetChat() {
     const force = Boolean(state.liveTasks?.length);
-    if (force && await ctx.pick('백그라운드 작업이 실행 중입니다. 새 대화를 시작하면 작업이 종료됩니다.', [{ id: 'yes', label: '새 대화 시작' }, { id: 'no', label: '취소' }]) !== 'yes') return false;
+    if (force && await ctx.pick('백그라운드 작업이 실행 중입니다. 새 대화를 시작하면 작업이 종료됩니다.', [{ id: 'yes', label: '새 대화 시작', icon: 'chat' }, { id: 'no', label: '취소' }]) !== 'yes') return false;
     await ctx.call('chat/reset', { id, ...(force && { force }) });
     return true;
   }
@@ -1499,18 +1521,18 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       case 'config': ctx.onOpenSettings(); return true;
       case 'model': {
         if (agent === 'cursor' && !argument) { setModelsOpen(true); return true; }
-        const value = argument || await ctx.pick('모델 선택', modelRows(catalog, aliases).map(row => ({ id: row.value, label: row.label })));
+        const value = argument || await ctx.pick('모델 선택', modelRows(catalog, aliases).map(row => ({ id: row.value, label: row.label, icon: agent })));
         if (value) await chooseModel(value);
         return true;
       }
       case 'effort': {
         if (!effortOptions.length) { note('이 CLI는 별도의 Effort 선택지를 제공하지 않습니다. 지원되는 모델 변형을 모델 메뉴에서 선택하세요.'); return true; }
-        const value = argument || await ctx.pick('Effort 선택', effortOptions.map(item => ({ id: item, label: `${item} · ${effortLabel(item)}` })));
+        const value = argument || await ctx.pick('Effort 선택', effortOptions.map(item => ({ id: item, label: `${item} · ${effortLabel(item)}`, icon: 'chart' })));
         if (value) { if (!effortOptions.includes(value)) note(`알 수 없는 Effort: ${value} (${effortOptions.join(', ')})`); else await chooseEffort(value); }
         return true;
       }
       case 'permissions': {
-        const value = argument || await ctx.pick('권한 모드', modes.map(mode => ({ id: mode, label: permissionLabel(mode, agent) })));
+        const value = argument || await ctx.pick('권한 모드', modes.map(mode => ({ id: mode, label: permissionLabel(mode, agent), icon: 'shield' })));
         if (value) { if (!modes.includes(value)) note(`알 수 없는 권한 모드: ${value}`); else { await setChat({ id, permissionMode: value }); changed({ mode: { value: `${permissionLabel(value, agent)} 모드`, color: permissionModeColor(value), icon: MODE_ICONS[value] ?? 'tune' } }); } }
         return true;
       }
@@ -1590,7 +1612,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     let runCommand = shellInput?.kind === 'run' ? shellInput.command : '';
     if (shellInput?.kind === 'empty') { note('사용법: !명령 — 이 폴더에서 셸 명령을 직접 실행합니다. 예: !git status (!로 시작하는 메시지는 \\!로 시작해 보내세요)'); setText(''); return; }
     if (shellInput?.kind === 'ambiguous') {
-      const choice = await ctx.pick(`“${shellInput.command.length > 60 ? `${shellInput.command.slice(0, 60)}…` : shellInput.command}”을(를) 셸 명령으로 실행할까요, 메시지로 보낼까요?`, [{ id: 'run', label: '셸 명령으로 실행' }, { id: 'send', label: '메시지로 보내기' }, { id: 'no', label: '취소' }]);
+      const choice = await ctx.pick(`“${shellInput.command.length > 60 ? `${shellInput.command.slice(0, 60)}…` : shellInput.command}”을(를) 셸 명령으로 실행할까요, 메시지로 보낼까요?`, [{ id: 'run', label: '셸 명령으로 실행', icon: 'terminal' }, { id: 'send', label: '메시지로 보내기', icon: 'send' }, { id: 'no', label: '취소' }]);
       if (choice === 'run') runCommand = shellInput.command; else if (choice !== 'send') return;
     }
     if (runCommand) {
@@ -1603,19 +1625,24 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
     // Cold (or nearly) prompt cache on a filled, not-cleared context: confirm before the whole context is re-read; cancel keeps the draft.
     const cache = view.state.cache, warning = agent === 'claude' && !busy && !queue.length && !queueSending && !message.startsWith('/') && shown.length && cache ? cacheSendWarning(cache, Date.now(), { enabled: ctx.settings.cacheSendWarn, minutes: ctx.settings.cacheSendWarnMinutes, working: false }) : undefined;
-    if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기' }]) !== 'yes') return;
+    if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기', icon: 'send' }]) !== 'yes') return;
     // The login was switched (silently) after the chat's last turn: the first message on the other one asks, like a model change does.
     const authWarning = message.startsWith('/') ? undefined : authSendWarning(view.state, { working: busy || queue.length > 0 || queueSending });
     if (authWarning) {
-      const choice = await ctx.pick(authSendWarningText(authWarning), [{ id: 'yes', label: `${authWords[authWarning.to]} 보내기` }, { id: 'back', label: `${authWords[authWarning.from]} 되돌려 보내기` }, { id: 'no', label: '취소' }]);
+      const choice = await ctx.pick(authSendWarningText(authWarning), [{ id: 'yes', label: `${authWords[authWarning.to]} 보내기`, icon: 'send' }, { id: 'back', label: `${authWords[authWarning.from]} 되돌려 보내기`, icon: 'undo' }, { id: 'no', label: '취소' }]);
       if (choice === 'back') { try { await setChat({ id, auth: authWarning.from }); } catch (cause) { ctx.fail(cause); return; } } else if (choice !== 'yes') return;
     }
     const attachments = images; setText(''); setRecall(null); setImages([]); setCompact(true); setPicked(''); clearChatDevDraft(ctx.projectId, id);
-    const body = message || '(이미지)';
-    if (busy && mode === 'steer' && foldIn && !message.startsWith('/')) { if (attachments.length) pendingSteers.current.push({ text: body, images: attachments }); await transmit(body, attachments, true); }
-    else if (busy && mode === 'steer' && agent === 'cursor' && !message.startsWith('/')) { setQueue(items => enqueueSendNow(items, { text: body, images: attachments, now: true })); interrupt(false); }
-    else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments }]);
-    else await transmit(body, attachments);
+    // Match the server's file threshold so a pasted log keeps its outer whitespace too.
+    const body = message && !shellInput && !command && new Blob([text]).size > 64 * 1024 ? text : message || '(이미지)';
+    if (busy && mode === 'steer' && foldIn && !message.startsWith('/')) {
+      const clientMessageId = crypto.randomUUID();
+      pendingSteers.current.set(clientMessageId, { text, images: attachments });
+      if (!await transmit(body, attachments, true, clientMessageId) && pendingSteers.current.delete(clientMessageId)) restoreDraft(text, attachments);
+    }
+    else if (busy && mode === 'steer' && agent === 'cursor' && !message.startsWith('/')) { setQueue(items => enqueueSendNow(items, { text: body, images: attachments, draft: text, now: true })); interrupt(false); }
+    else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments, draft: text }]);
+    else if (!await transmit(body, attachments)) restoreDraft(text, attachments);
   }
   // Files that are not images go into the message as `@path` (the agent reads them itself). The desktop shell knows a dropped file's path; a browser
   // sends the file to the server (up to 8MB) and mentions that copy.
@@ -1644,6 +1671,19 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     } catch (cause) { ctx.fail(cause); } finally { if (large) setShrinking(count => Math.max(0, count - large)); }
   }
   const answer = (approval: Approval, allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer) => void ctx.call('chat/approve', { id, requestId: approval.requestId, allow, always, answers, ...extra }).catch(ctx.fail);
+  async function answerAsyncQuestion(allow: boolean, _always: boolean, answers?: Record<string, string[]>) {
+    if (sendingQuestionRef.current) return;
+    if (allow && answers) {
+      const message = asyncQuestions.map(question => `질문: ${question.prompt}\n답변: ${answers[question.id].join(', ')}`).join('\n\n');
+      sendingQuestionRef.current = true;
+      setSendingQuestion(true);
+      const sent = await transmit(message, [], busy && foldIn);
+      sendingQuestionRef.current = false;
+      setSendingQuestion(false);
+      if (!sent) return;
+    }
+    setDismissedQuestions(current => new Set([...current, ...asyncQuestions.map(question => question.id)]));
+  }
   const interrupt = (sendSteers = false) => { releaseUiSends(id); void ctx.call('chat/interrupt', { id, sendSteers }).catch(ctx.fail); };
   const allowBlocked = (toolUseIds: string[], retry: boolean) => ctx.call('chat/allow-blocked', { id, toolUseIds, retry }).catch(ctx.fail);
   const stopTask = (toolUseId: string) => void ctx.call('chat/stop-task', { id, toolUseId }).catch(ctx.fail);
@@ -1700,24 +1740,24 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Wide enough: the drawer sits beside the thread; narrower, it covers the thread's right side.
   const drawerDocked = paneWidth >= 760, drawerWidth = drawerDocked ? Math.round(Math.min(460, paneWidth * 0.42)) : Math.min(440, Math.max(0, paneWidth - 24));
   // What the running turn is doing right now, for the status row under it ('' = thinking).
-  const activity = useMemo(() => {
-    if (!busy || !lastTurn) return { label: '', thought: '' };
-    if (view.approvals.length) return { label: view.approvals.every(item => item.questions?.length) ? '답변을 기다리는 중' : view.approvals.some(item => item.tool === 'ExitPlanMode' || item.tool === '계획 승인') ? '계획 검토를 기다리는 중' : '승인을 기다리는 중', thought: '' };
+  const activityLabel = useMemo(() => {
+    if (!busy || !lastTurn) return '';
+    if (view.approvals.length) return view.approvals.every(item => item.questions?.length) ? '답변을 기다리는 중' : view.approvals.some(item => item.tool === 'ExitPlanMode' || item.tool === '계획 승인') ? '계획 검토를 기다리는 중' : '승인을 기다리는 중';
     for (let at = lastTurn.length - 1; at >= 0; at--) {
       const item = lastTurn[at];
       if (item.kind === 'assistant') {
         if (item.sub) continue;
         const block = item.blocks[lastIndexWhere(item.blocks, shownBlock)];
         if (!block) continue;
-        if (block.type === 'tool_use' && isAgentTool(block.name) && runningAgents) return { label: runningLabel, thought: '' };
-        if (block.type === 'tool_use') return { label: view.results[block.id] ? (runningAgents ? runningLabel : '') : `${block.name} ${block.partial ? '준비 중' : '실행 중'}…`, thought: '' };
-        if (block.type === 'text' && !block.partial && runningAgents) return { label: runningLabel, thought: '' };
-        if (block.type === 'thinking') return { label: '', thought: block.partial ? (block.text.trim().split('\n').at(-1) ?? '').slice(-200) : '' };
-        return { label: block.partial ? '응답을 작성하는 중…' : '', thought: '' };
+        if (block.type === 'tool_use' && isAgentTool(block.name) && runningAgents) return runningLabel;
+        if (block.type === 'tool_use') return view.results[block.id] ? (runningAgents ? runningLabel : '') : `${block.name} ${block.partial ? '준비 중' : '실행 중'}…`;
+        if (block.type === 'text' && !block.partial && runningAgents) return runningLabel;
+        if (block.type === 'thinking') return '';
+        return block.partial ? '응답을 작성하는 중…' : '';
       }
-      if (item.kind === 'user') { const slash = parseChatSlashCommand(item.text); return { label: slash?.name ? `/${slash.name} 실행 중…` : '', thought: '' }; }
+      if (item.kind === 'user') { const slash = parseChatSlashCommand(item.text); return slash?.name ? `/${slash.name} 실행 중…` : ''; }
     }
-    return { label: '', thought: '' };
+    return '';
   }, [busy, lastTurn, view.approvals.length, view.results, runningAgents, runningLabel]);
   const hiddenAgents = useHiddenAgents(ctx.settings.agentsOff);
   // The switcher lists the current provider plus every visible one; with nobody to switch to, it is not shown at all.
@@ -1774,8 +1814,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
-        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activity.label || (state.configuring ? '설정을 적용하는 중' : '')} thought={activity.thought} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">스티어링 · ↑ 수정 · Esc 바로 보내기</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
+        {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activityLabel || (state.configuring ? '설정을 적용하는 중' : '')} />}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링 · 반영 대기 중' : '스티어링 · ↑ 수정 · Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
@@ -1795,6 +1835,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
       {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} explain={agent === 'claude'} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
+      {!view.approvals.length && asyncQuestions.length > 0 && <QuestionCard key={asyncQuestions[0].id} questions={asyncQuestions} submitting={sendingQuestion} onAnswer={answerAsyncQuestion} />}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
       {queue.length > 0 && <div className="chat-queue"><div role="status">{sendQueueLabel(queue)}</div>
         <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
@@ -1857,6 +1898,17 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
               if (plain && (event.key === 'Tab' || event.key === 'Enter')) { event.preventDefault(); pickMention(mentions[Math.min(menuAt, mentions.length - 1)]); return; }
             }
             if (event.key === 'Tab' && plain && busy && ctx.settings.followUpQueue && (text.trim() || images.length)) { event.preventDefault(); void submit('queue'); return; }
+            if (event.key === 'ArrowUp' && event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !event.repeat && !text && !images.length && !shrinking) {
+              const last = queue.at(-1);
+              if (last && !last.now) {
+                event.preventDefault();
+                setQueue(items => items.filter(item => item !== last));
+                setRecall(null);
+                setText(last.draft ?? (isShellDraft(last.text) ? `\\${last.text}` : last.text));
+                setImages(last.images);
+                return;
+              }
+            }
             // A line led by a command this chat knows (`commandHead`; `/file/name` is a path, not a command) is one line: typed line breaks and Tab's focus move are blocked (pasted newlines still go in).
             if (event.key === 'Tab' && plain && commandHead) { event.preventDefault(); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.altKey && (!modSend || event.metaKey || event.ctrlKey)) { event.preventDefault(); void submit(); }
@@ -1878,7 +1930,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         </div>
         </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
-        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', detail: 'PNG·JPEG·GIF·WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
+        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', icon: 'image', detail: 'PNG·JPEG·GIF·WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', icon: 'file', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
@@ -1914,7 +1966,7 @@ function EffortSparks({ level }: { level: string }) {
 // The status row under the running turn. It stays mounted for the whole turn (and collapses smoothly when it ends) and only its words change, so the
 // thread does not jump each time a tool starts or the first token arrives. The CLI sends no thinking text for current models, only a running token
 // estimate, so that and the elapsed time are what can be shown; after 8s of uninterrupted thinking it says how hard it is thinking (the Effort setting) and drifts to red.
-function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boolean; effort: string | null; tokens: number; label: string; thought: string }) {
+function ChatStatusRow({ active, effort, tokens, label }: { active: boolean; effort: string | null; tokens: number; label: string }) {
   // `seconds` is the whole turn (what the small counter shows); `thinking` is how long the current bare "thinking" stretch has lasted. It restarts every time the
   // words change, so a long tool run does not make the model look as if it had been thinking hard all along. The restart happens while rendering, not in an effect,
   // so the first frame after a tool ends cannot flash the old, deep value.
@@ -1929,8 +1981,7 @@ function ChatStatusRow({ active, effort, tokens, label, thought }: { active: boo
   // The red rises in 10% steps every 5 s, not 2% every second: each change restarts the label's .6s colour transition, which repainted the row nearly nonstop.
   const deep = active && !label && thinking >= 8, red = Math.min(100, Math.max(0, Math.floor((thinking - 8) / 5) * 10));
   return <div className="chat-status-row" data-active={active || undefined} aria-hidden={!active}>
-    <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}
-      title={thought ? undefined : '추론 내용 미제공'}>
+    <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}>
       <i className="chat-spin" /><span className="chat-working-label">{label || (deep ? `${effort ? `${effortLabel(effort)} Effort로 ` : ''}깊게 생각하는 중…` : '생각하는 중…')}</span>
       <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small></div></div>
   </div>;

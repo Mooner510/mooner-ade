@@ -493,14 +493,14 @@ function Shell() {
   };
   // Stable identity, so a project that is not being shown does not re-render when another changes.
   const projectCommands = useMemo<Command[]>(() => [
-    { id: 'addProject', label: '프로젝트 열기…', run: () => actions.current.add() },
-    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', run: () => actions.current.toggle() },
-    { id: 'settings', label: '설정 열기', run: () => actions.current.settings() },
-    { id: 'closeProject', label: '프로젝트 닫기', run: () => actions.current.close() },
-    { id: 'tutorial', label: '둘러보기 다시 보기', run: () => actions.current.tutorial() },
-    { id: 'nextProject', label: '다음 프로젝트', run: () => actions.current.cycle(1) },
-    { id: 'prevProject', label: '이전 프로젝트', run: () => actions.current.cycle(-1) },
-    ...Array.from({ length: 9 }, (_, index) => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
+    { id: 'addProject', label: '프로젝트 열기…', icon: 'folderOpen', run: () => actions.current.add() },
+    { id: 'toggleProjects', label: '프로젝트 사이드바 접기/펼치기', icon: 'panelLeft', run: () => actions.current.toggle() },
+    { id: 'settings', label: '설정 열기', icon: 'settings', run: () => actions.current.settings() },
+    { id: 'closeProject', label: '프로젝트 닫기', icon: 'x', run: () => actions.current.close() },
+    { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
+    { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', run: () => actions.current.cycle(1) },
+    { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', run: () => actions.current.cycle(-1) },
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
   // With an agent, Settings opens on that agent's AI 툴 tab (where its API key is).

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { holdBack, INLINE, parse, stableSplit, tableSpans } from '../apps/web/src/markdown-parse.ts';
 import { fileHref, fileRef } from '../apps/web/src/file-ref.ts';
+import { MEDIA_LANG, parseChatMedia } from '../apps/web/src/chat-media.ts';
 
 test('a single newline inside a paragraph is kept as a line break', () => {
   assert.deepEqual(parse('첫 줄\n둘째 줄\n\n새 문단'), [{ t: 'p', text: '첫 줄\n둘째 줄' }, { t: 'p', text: '새 문단' }]);
@@ -83,6 +84,21 @@ test('a markdown link to a path counts as a file, a link to an address does not'
 
 test('a mermaid fence is parsed as a code block with lang mermaid', () => {
   assert.deepEqual(parse('```mermaid\nflowchart LR\n  A --> B\n```'), [{ t: 'code', lang: 'mermaid', code: 'flowchart LR\n  A --> B' }]);
+});
+
+test('chat media accepts a local file or direct HTTPS URL in a closed fence', () => {
+  const code = '{"type":"image","src":"screenshots/홈 화면 #1.png","alt":"홈 화면"}';
+  const [node] = parse(`\`\`\`${MEDIA_LANG}\n${code}\n\`\`\``);
+  assert.deepEqual(node, { t: 'code', lang: MEDIA_LANG, code });
+  assert.equal(parse(`\`\`\`${MEDIA_LANG}\n${code}`)[0].open, true);
+  assert.deepEqual(parseChatMedia(code), { type: 'image', src: 'screenshots/홈 화면 #1.png', alt: '홈 화면', remote: false });
+  assert.deepEqual(parseChatMedia('{"type":"video","src":"https://example.com/clip.mp4?version=2"}'),
+    { type: 'video', src: 'https://example.com/clip.mp4?version=2', alt: undefined, remote: true });
+  assert.equal(parseChatMedia('{"type":"video","src":"C:/work/clip.webm"}').remote, false);
+  for (const src of ['javascript:alert(1)', 'file:///private/test.png', 'data:image/png;base64,a', 'http://example.com/photo.png', '//example.com/photo.png', 'https://name:pass@example.com/photo.png', '   ']) {
+    assert.equal(parseChatMedia(JSON.stringify({ type: 'image', src })), null, src);
+  }
+  for (const invalid of ['null', '[]', 'broken JSON', '{"type":"audio","src":"clip.mp4"}']) assert.equal(parseChatMedia(invalid), null);
 });
 
 test('a file chip still being typed is held back until its brackets close', () => {

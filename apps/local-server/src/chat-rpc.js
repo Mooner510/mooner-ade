@@ -69,6 +69,12 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   let transportResumes = 0, transportDropped = false, dropDetail = '', transportResumeTimer = null;
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
   const send = value => write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n');
+  // cursor-agent reports a missing session as -32602 "Invalid params"; the useful text is data.message ("Session … not found").
+  const agentFault = error => {
+    const detail = typeof error?.data?.message === 'string' ? error.data.message : '';
+    const message = typeof error?.message === 'string' && error.message ? error.message : '에이전트 요청이 실패했습니다.';
+    return Object.assign(fault('AGENT_PROTOCOL', detail && !message.includes(detail) ? `${message}: ${detail}` : message, 502), { data: error?.data });
+  };
   const request = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
     const id = ++nextId;
     const timer = timeoutMs ? setTimeout(() => { pending.delete(id); reject(fault('AGENT_TIMEOUT', `${agent}: ${method} 응답 시간이 초과되었습니다.`, 504)); }, timeoutMs) : null;
@@ -117,10 +123,18 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   // arrive as deltas. Storing both phases wrote every item twice.
   function codexItem(item, completed, atTurn) {
     const extra = completed && item.type === 'agentMessage' ? { uuid: item.id, turnId: atTurn } : {};
-    if (item.type === 'agentMessage' || item.type === 'plan') { if (completed) message(item.id, [{ type: 'text', text: item.text ?? '' }], extra); }
+    if (item.type === 'agentMessage' || item.type === 'plan') {
+      // Async questions arrive as assistant messages, and their answers go through normal chat input.
+      const questions = item.type === 'agentMessage' && item.delivery === 'async' && Array.isArray(item.questions) ? item.questions : null;
+      if (completed) message(item.id, [{ type: 'text', text: item.text ?? '', ...(questions?.length && { questions }) }], extra);
+    }
     else if (item.type === 'reasoning') { if (completed) message(item.id, [{ type: 'thinking', text: [...(item.summary ?? []), ...(item.content ?? [])].join('\n') }]); }
     else if (item.type === 'contextCompaction') { if (completed) emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: null, postTokens: null }); }
-    else if (item.type !== 'userMessage') {
+    else if (item.type === 'userMessage') {
+      if (completed) emit({ kind: 'codex_user_echo', clientId: item.clientId,
+        text: (item.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n'),
+        images: (item.content ?? []).filter(part => /image/i.test(part.type)).length });
+    } else {
       const name = item.type === 'commandExecution' ? 'Bash' : item.type === 'fileChange' ? 'Patch' : item.tool ?? item.type;
       const input = item.type === 'commandExecution' ? { command: item.command, cwd: item.cwd } : item.type === 'fileChange' ? { changes: item.changes }
         : item.arguments ?? { query: item.query, path: item.path, description: item.prompt ?? item.review };
@@ -391,7 +405,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       else if (raw.id !== undefined) {
         const item = pending.get(raw.id); if (!item) return;
         pending.delete(raw.id); clearTimeout(item.timer);
-        raw.error ? item.reject(fault('AGENT_PROTOCOL', raw.error.message, 502)) : item.resolve(raw.result);
+        raw.error ? item.reject(agentFault(raw.error)) : item.resolve(raw.result);
       }
     },
     // What a server that stops hands to the next one, which goes on with the same running agent (chat.js `detach`). Answers to our own
@@ -447,11 +461,19 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         capabilities.resume = init.agentCapabilities?.loadSession === true;
         if (meta.sessionId && !capabilities.resume) throw fault('CHAT_UNSUPPORTED', '이 Cursor 버전은 세션 복원을 지원하지 않습니다.', 409);
         await request('authenticate', { methodId: 'cursor_login' });
-        const response = await request(meta.sessionId ? 'session/load' : 'session/new', { cwd, ...(meta.sessionId && { sessionId: meta.sessionId }),
-          // ACP cannot leave single tools out, so a plugin server with tools turned off is not given to Cursor at all.
-          mcpServers: servers.filter(s => !s.disabledTools?.length).map(s => ({ name: s.name, command: s.command, args: s.args, env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) })) });
+        // ACP cannot leave single tools out, so a plugin server with tools turned off is not given to Cursor at all.
+        const mcpServers = servers.filter(s => !s.disabledTools?.length).map(s => ({ name: s.name, command: s.command, args: s.args, env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) }));
+        const opened = method => request(method, { cwd, ...(method === 'session/load' && { sessionId: meta.sessionId }), mcpServers });
+        let response;
+        try { response = await opened(meta.sessionId ? 'session/load' : 'session/new'); }
+        catch (error) {
+          // The id is saved as soon as session/new returns, but cursor-agent writes no store until a turn runs. A process that exits before that
+          // answers the next load with -32602 Invalid params ("Session … not found"), and every later message dies the same way.
+          if (!meta.sessionId || !/not found/i.test(String(error.data?.message ?? ''))) throw error;
+          response = await opened('session/new');
+        }
         autoServers = servers.filter(s => s.autoApprove && !s.disabledTools?.length).map(s => s.name);
-        sessionId = meta.sessionId ?? response.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
+        sessionId = response.sessionId ?? meta.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
         let modelApplied = null;
         if (meta.model) { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
         if (meta.permissionMode !== 'default') await request('session/set_mode', { sessionId, modeId: modeOf(meta.permissionMode) });
@@ -495,7 +517,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       }
       if (permissionMode !== undefined) { cursorInfo(await request('session/set_mode', { sessionId, modeId: modeOf(permissionMode) })); emit({ kind: 'settings', permissionMode }); }
     },
-    async send(text, images, { steer = false } = {}) {
+    async send(text, images, { steer = false, clientUserMessageId } = {}) {
       if (images.length && !capabilities.images) throw fault('CHAT_UNSUPPORTED', '선택한 모델은 이미지 입력을 지원하지 않습니다.', 409);
       if (agent === 'codex') {
         if (/^\/compact\s*$/.test(text)) { startedAt = Date.now(); compacting = true; await request('thread/compact/start', { threadId: sessionId }); return; }
@@ -503,7 +525,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         if (command && !skill) throw fault('CHAT_UNSUPPORTED', '이 Codex 명령은 터미널에서 사용하세요. 채팅에서는 /compact, 스킬과 ADE 명령을 지원합니다.', 409);
         const input = [...images.map(image => ({ type: 'image', url: `data:${image.mime};base64,${image.data}` })), { type: 'text', text }];
         if (skill) input.push({ type: 'skill', name: skill.name, path: skill.path });
-        if (steer) { if (!turnId) throw fault('CHAT_BUSY', '실행 중인 턴이 없습니다.', 409); await request('turn/steer', { threadId: sessionId, expectedTurnId: turnId, input }); }
+        if (steer) { if (!turnId) throw fault('CHAT_BUSY', '실행 중인 턴이 없습니다.', 409); await request('turn/steer', { threadId: sessionId, expectedTurnId: turnId, input, clientUserMessageId }); }
         else { startedAt = Date.now(); const response = await request('turn/start', { threadId: sessionId, input, ...codexPermissions(config.permissionMode, config.cwd, config.addDirs, config.sandbox, config.network), ...(config.model && { model: config.model }), ...(config.effort && { effort: config.effort }) }); turnId = response.turn.id; }
       } else {
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);

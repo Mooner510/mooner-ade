@@ -473,6 +473,7 @@ summary { cursor: pointer; }
 .quick ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
 .quick li { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; cursor: pointer; border-radius: 6px; }
 .quick li > .icon { align-self: center; flex: none; }
+.quick ul:has(> li > .icon) > li:not(.none, :has(> .icon))::before { content: ""; flex: 0 0 16px; }
 .quick li.selected { background: var(--selected); }
 .quick li small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quick li kbd { margin-left: auto; }
@@ -1630,7 +1631,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-row.in-process > div > * { transition: opacity .24s ease .12s, transform .34s var(--ease) .06s; }
 .chat-row.in-process[data-folded] { transition: grid-template-rows .3s var(--ease) .07s, opacity .2s ease .1s; }
 .chat-row.in-process[data-folded] > div > * { opacity: 0; transform: translateY(-8px); transition: opacity .1s ease, transform .2s ease; }
-.chat-row.sub > div > * { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--border); }
+/* Mark subagent steps only when they appear inline in the main thread. The drawer uses ordinary turn spacing. */
+.chat-thread .chat-row.sub > div > * { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--border); }
 .chat-row .md-table th, .chat-row .md-table td { overflow-wrap: break-word; }
 .chat-msg-actions { display: flex; gap: 2px; margin: 4px 0 0 -6px; color: var(--muted); }
 .chat-turn > .chat-msg-actions { margin-top: 4px; }
@@ -1788,7 +1790,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-bundle-head[data-inert]:hover { background: none; }
 .chat-bundle-list { position: relative; }
 .chat-bundle-item .chat-thinking { padding: 4px 6px; min-height: 28px; }
-.chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
+.chat-thread .chat-bundle-item.sub > * { margin-left: 18px; border-left: 2px solid var(--border); }
 .chat-diff { max-height: 420px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden auto; }
 /* The diff sizes itself to its content (DiffView compact sets the height), so a two-line edit is not a 240px box; long ones scroll inside the card. */
 .chat-diff > .compact-diff { min-height: 0; height: 22px; }
@@ -2006,6 +2008,12 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .md-file:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .md blockquote { padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--border); width: 100%; }
+.md-media { display: grid; justify-items: start; gap: 4px; min-width: 0; max-width: 100%; margin: 0; }
+.md-media > button { padding: 0; border: 0; background: transparent; max-width: 100%; cursor: zoom-in; }
+.md-media > button > img, .md-media > video { display: block; max-width: 100%; max-height: min(440px, 60vh); border-radius: 8px; object-fit: contain; }
+.md-media > video { background: black; }
+.md-media > figcaption { color: var(--muted); font-size: .9em; }
+.md-media > figcaption a { margin-inline-start: 4px; }
 .md-table { position: relative; min-width: 0; max-width: 100%; overflow: clip; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg) 35%, var(--raised)); }
 .md-table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
 .md-table[data-scroll-left]::before, .md-table[data-scroll-right]::after { content: ''; position: absolute; inset-block: 0; width: 16px; pointer-events: none; }
@@ -2098,6 +2106,7 @@ dialog.mermaid-modal[open] { display: flex; flex-direction: column; }
 .ui-native:checked + .ui-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--input); }
 .ui-native:focus-visible + .ui-mark { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .ui-field input:not([type=checkbox]):not([type=radio]):not([type=range]), .ui-field textarea, .ui-field select { width: 100%; color: var(--fg); }
+.ui-field textarea { resize: vertical; }
 .ui-opts { display: flex; flex-wrap: wrap; gap: 0 18px; } .ui-opts .ui-choice { margin: 0 -8px; max-width: 100%; } /* a long option wraps inside the row instead of running past the form edge */
 .ui-range { display: flex; align-items: center; gap: 12px; color: var(--fg); }
 .ui-range input { flex: 1; min-width: 0; height: 18px; padding: 0; margin: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; cursor: pointer; }

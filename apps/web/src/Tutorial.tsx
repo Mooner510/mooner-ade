@@ -11,7 +11,7 @@ import { LauncherMenu } from './LauncherMenu';
 import { useShells, shellLabel } from './shells';
 import { launchersFor, type AgentMode } from './launchers';
 import { CacheTimer, Launchers, Splitter, chatAgent, terminalTheme, xtermOptions } from './Panes';
-import { QuickInput, type QuickRequest } from './QuickInput';
+import { QuickInput, type QuickItem, type QuickRequest } from './QuickInput';
 import { GitLog } from './GitLog';
 import { demoGit } from './git-demo';
 import { SettingsModal } from './Settings';
@@ -65,20 +65,20 @@ function tourChatCall(action: string): any {
   return {};
 }
 // The palette lists the real command names and keys; the launch rows follow the selected mode, as in the app.
-const paletteItems = (mode: AgentMode): { id: string; label: string; keys?: string; action?: Action }[] => [
-  { id: 'newTab', label: '새 탭', keys: 'mod+shift+t', action: { type: 'newTab' } },
-  ...launchersFor(mode).map(item => ({ id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, action: launchOf('', item.command) })),
-  { id: 'nextTab', label: '다음 탭', keys: 'alt+]', action: { type: 'cycle', step: 1 } },
-  { id: 'prevTab', label: '이전 탭', keys: 'alt+[', action: { type: 'cycle', step: -1 } },
-  { id: 'splitRight', label: '오른쪽으로 분할', action: { type: 'split', dir: 'row' } },
-  { id: 'splitDown', label: '아래로 분할', action: { type: 'split', dir: 'column' } },
-  { id: 'zoom', label: 'Pane 최대화 전환', keys: 'mod+shift+enter', action: { type: 'zoom' } },
-  { id: 'focusNext', label: '다음 pane으로 이동', keys: 'alt+shift+]', action: { type: 'focusBy', step: 1 } },
-  { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', keys: 'mod+shift+g', action: { type: 'diff' } },
-  { id: 'settings', label: '설정 열기', keys: 'mod+,', action: { type: 'settings', open: true } },
-  { id: 'nextProject', label: '다음 프로젝트', keys: 'mod+alt+]', action: { type: 'projectCycle', step: 1 } },
-  { id: 'prevProject', label: '이전 프로젝트', keys: 'mod+alt+[', action: { type: 'projectCycle', step: -1 } },
-  { id: 'tutorial', label: '둘러보기 다시 보기' }
+const paletteItems = (mode: AgentMode): (QuickItem & { action?: Action })[] => [
+  { id: 'newTab', label: '새 탭', icon: 'plus', keys: 'mod+shift+t', action: { type: 'newTab' } },
+  ...launchersFor(mode).map(item => ({ id: `new${item.id}`, label: `새 탭에서 ${item.label} 실행`, icon: item.icon, action: launchOf('', item.command) })),
+  { id: 'nextTab', label: '다음 탭', icon: 'arrowRight', keys: 'alt+]', action: { type: 'cycle', step: 1 } },
+  { id: 'prevTab', label: '이전 탭', icon: 'arrowLeft', keys: 'alt+[', action: { type: 'cycle', step: -1 } },
+  { id: 'splitRight', label: '오른쪽으로 분할', icon: 'splitH', action: { type: 'split', dir: 'row' } },
+  { id: 'splitDown', label: '아래로 분할', icon: 'splitV', action: { type: 'split', dir: 'column' } },
+  { id: 'zoom', label: 'Pane 최대화 전환', icon: 'maximize', keys: 'mod+shift+enter', action: { type: 'zoom' } },
+  { id: 'focusNext', label: '다음 pane으로 이동', icon: 'arrowRight', keys: 'alt+shift+]', action: { type: 'focusBy', step: 1 } },
+  { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', icon: 'graph', keys: 'mod+shift+g', action: { type: 'diff' } },
+  { id: 'settings', label: '설정 열기', icon: 'settings', keys: 'mod+,', action: { type: 'settings', open: true } },
+  { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', keys: 'mod+alt+]', action: { type: 'projectCycle', step: 1 } },
+  { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', keys: 'mod+alt+[', action: { type: 'projectCycle', step: -1 } },
+  { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book' }
 ];
 // Where a tab dropped on another lands: edges reorder, the middle merges (as in the real sidebar).
 function dropMode(event: DragEvent<Element>, sourceId: string, targetId: string) {
@@ -392,7 +392,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
   const gitAsk = useMemo<Ask>(() => ({ input: async () => { note('실제 앱에서는 여기서 값을 입력합니다.'); return null; }, confirm: async () => { note('실제 앱에서는 여기서 확인을 묻습니다.'); return false; } }), []);
   const request = useMemo<QuickRequest>(() => {
     const items = paletteItems(mode);
-    return { kind: 'pick', title: '명령 팔레트', items: items.map(item => ({ id: item.id, label: item.label, keys: item.keys && showKeys(item.keys) })),
+    return { kind: 'pick', title: '명령 팔레트', items: items.map(item => ({ ...item, keys: item.keys && showKeys(item.keys) })),
       resolve: id => { const item = items.find(entry => entry.id === id); if (item?.action) dispatch(item.action); else if (item) note('지금 보고 계신 것이 둘러보기예요.'); if (item) dispatch({ type: 'command' }); } };
   }, [paletteKey]);
   const usage = (provider: 'claude' | 'codex', session: number, week: number) => <button className="stat usage" title={`${provider === 'claude' ? 'Claude' : 'Codex'} 사용량 (예시)\n클릭: 새로고침`}>

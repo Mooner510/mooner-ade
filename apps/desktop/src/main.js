@@ -178,7 +178,7 @@ function startServer() {
 
 // Graceful stop lets the server save state and release the project lock; SIGKILL after 5 s. `keep: false` (a plain quit) ends the chat
 // agents instead of leaving them in the pty-host for the next server.
-function stopServer({ keep = true } = {}) {
+function stopServer({ keep = true, clearChatText = !keep } = {}) {
   if (!server) return Promise.resolve();
   const child = server;
   return new Promise(resolve => {
@@ -186,7 +186,7 @@ function stopServer({ keep = true } = {}) {
     // and a new server started earlier fails to open those projects. SIGTERM would only re-enter its running shutdown.
     const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
     child.once('exit', () => { clearTimeout(timer); resolve(); });
-    if (child.connected) child.send({ type: 'shutdown', keep }, error => { if (error) child.kill(); }); else child.kill();
+    if (child.connected) child.send({ type: 'shutdown', keep, clearChatText }, error => { if (error) child.kill(); }); else child.kill();
   });
 }
 
@@ -438,7 +438,7 @@ if (leavingConsole) {
   const quitNow = () => {
     quitting = true;
     // Linger is set before the server lets go of the terminals; shutdown after it has saved the sessions it reads from them.
-    const steps = keepTerminalsOnQuit ? [releasePtyHost, () => stopServer()] : [() => stopServer({ keep: false }), releasePtyHost];
+    const steps = keepTerminalsOnQuit ? [releasePtyHost, () => stopServer({ clearChatText: leftInBackground })] : [() => stopServer({ keep: false }), releasePtyHost];
     void steps.reduce((chain, step) => chain.then(step).catch(error => console.warn(error.message)), Promise.resolve()).finally(() => app.quit());
   };
   // Quitting with terminals or chat agents running asks whether to end them or leave them running in the pty-host (the background), where the

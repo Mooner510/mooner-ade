@@ -14,6 +14,7 @@ import { cursorAutoCompact, cursorStorePath, readCursorStoreUsage } from './curs
 import { backupCursorStore, cursorConfigDir, exportCursorSession, forkCursorSession, readCursorBilledUsage, snapshotCursorSession } from './cursor-sessions.js';
 import { cleanCursorSummarizeOutput, isCursorSummarizeCommand, runCursorSummarize } from './cursor-summarize.js';
 import { chatAgents, chatCapabilities, createChatProtocol, cursorEffortOption } from './chat-rpc.js';
+import { cursorSurface } from './cursor-model-cache.js';
 import { cleanChatTitle, resolveChatTitle, segmentUserEvents } from './chat-title.js';
 import { readAutoCompact, readClaudeSettingsLayers, writeAutoCompact } from './claude-auto-compact.js';
 import { readSessionCache } from './claude-cache.js';
@@ -22,6 +23,7 @@ import { readClaudeDefaults } from './claude-defaults.js';
 import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
+import { createChatTextStore } from './chat-text.js';
 import { readLastLines } from './file-util.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
 
@@ -62,7 +64,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, chatText = createChatTextStore(directory) }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -78,6 +80,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   const cursorCheckpoints = new Map();
   let cursorSnapshot = Promise.resolve();
   const cursorDirOf = () => meta.configDir || cursorConfigDir({ ...process.env, ...envNow() });
+  // Last catalog and per-model options, so the bar is filled before cursor-agent answers. `null` in tests and for other agents.
+  const cursorModelCache = agent === 'cursor' && typeof cursorModels === 'function' ? cursorModels(cursorDirOf()) : null;
   // Settings' defaults for a brand-new chat; a saved chat keeps what it has. Only modes this agent can apply, and never bypassPermissions.
   if (saved === null && defaults) {
     const caps = chatCapabilities(agent);
@@ -246,7 +250,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, mediaBlocks: meta.mediaBlocks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
   let lastMeta = null;
   const saveMeta = () => {
@@ -321,8 +325,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       cursorCheckpoints.set(event.uuid, event.file);
       state.capabilities = { ...state.capabilities, branch: true, rewind: true };
     } else if (event.kind === 'capabilities' && cursorModelHold !== null && !cursorSurfaceLive) { /* the model the process started with; the picked model's options follow */ }
-    else if (event.kind === 'capabilities') state.capabilities = { ...event.capabilities, ...(cursorCheckpoints.size && { branch: true, rewind: true }),
-      ...(state.capabilities.tokens && { tokens: true }), ...(state.capabilities.cost && { cost: true }) };
+    else if (event.kind === 'capabilities') {
+      state.capabilities = { ...event.capabilities, ...(cursorCheckpoints.size && { branch: true, rewind: true }),
+        ...(state.capabilities.tokens && { tokens: true }), ...(state.capabilities.cost && { cost: true }) };
+      if (agent === 'cursor' && state.model && state.capabilities.configOptions?.length) cursorModelCache?.note({ model: state.model, catalog: state.capabilities.catalog, configOptions: state.capabilities.configOptions });
+    }
     else if (event.kind === 'worktree') { if (typeof event.path === 'string') state.cwd = event.path; }
     else if (event.kind === 'settings') {
       if (event.permissionMode !== undefined && !(cursorModeHold && event.permissionMode !== cursorModeHold)) state.permissionMode = event.permissionMode;
@@ -360,6 +367,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   for (const event of retainedEvents()) fold(event, true);
   // Replaying old init events would show the model the child started with, not the one picked since (set_model sends no new init): the pick is stored, so it wins.
   if (meta.model) state.model = meta.model;
+  // A new Cursor chat has no capabilities in the log yet. Paint the last list (and this model's options, if seen) before the process starts.
+  if (agent === 'cursor' && !state.capabilities.catalog.length) {
+    const surface = cursorSurface(cursorModelCache?.get(), state.model);
+    if (surface) {
+      state.capabilities = { ...state.capabilities, catalog: surface.catalog, ...(surface.configOptions.length && { configOptions: surface.configOptions, efforts: surface.efforts, ...(surface.effortConfigId && { effortConfigId: surface.effortConfigId }) }) };
+      if (!state.model && surface.model) state.model = surface.model;
+      if (surface.configOptions.length && meta.effort === undefined) state.effort = surface.effort;
+    }
+  }
   if (agent === 'codex' && meta.effort !== undefined) state.effort = meta.effort;
   if (agent === 'claude' && meta.permissionMode !== undefined) state.permissionMode = meta.permissionMode; // a mode picked since (or reported by the CLI) wins over older events
   refreshChatTitle();
@@ -439,7 +455,14 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     await Promise.all(runs.map(run => run.done.catch(() => {})));
   };
 
-  // A steering message is "applied" when the CLI echoes it back (--replay-user-messages) at the moment the running turn takes it in.
+  // A steer becomes a transcript message when the CLI echoes it back from the running turn.
+  function applySteer(uuid) {
+    const steer = steers.get(uuid);
+    if (!steer) return false;
+    steers.delete(uuid);
+    emit({ kind: 'steer', phase: 'applied', uuid, text: steer.text, images: steer.images, previews: steer.previews, shells: steer.shells });
+    return true;
+  }
   function dropSteers(emitCancelled = true) {
     for (const [uuid, item] of steers) if (emitCancelled) emit({ kind: 'steer', phase: 'cancelled', uuid, text: item.text });
     steers.clear();
@@ -452,8 +475,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function handleRaw(raw) {
     if (raw?.type === 'user' && raw.isReplay === true) {
       if (inflight && raw.uuid === inflight.uuid) { inflight.acked = true; echoesSeen = true; }
-      const steer = steers.get(raw.uuid);
-      if (steer) { steers.delete(raw.uuid); emit({ kind: 'steer', phase: 'applied', uuid: raw.uuid, text: steer.text, images: steer.images, previews: steer.previews }); return; }
+      if (applySteer(raw.uuid)) return;
       // Any other echo is our own message coming back; only what a local slash command printed in it is new.
       for (const event of normalizeClaude(raw)) if (event.kind === 'command_output') handleEvent(event);
       return;
@@ -491,6 +513,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     setStatus();
   }
   function handleEvent(event) {
+      if (event.kind === 'codex_user_echo') {
+        if (event.clientId) { applySteer(event.clientId); return; }
+        // Older app-servers omit clientId. Skip the initial prompt's echo and match the remaining echoes in send order.
+        if (inflight && !inflight.acked && inflight.text === event.text && inflight.images.length === event.images) { inflight.acked = true; return; }
+        for (const [uuid, steer] of steers) {
+          if (steer.sentText === event.text && steer.images === event.images) { applySteer(uuid); break; }
+        }
+        return;
+      }
       eventCount += 1;
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (agent === 'claude' && event.kind === 'tool_result' && event.isError) noteAutoDenied(event);
@@ -580,6 +611,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       // A steer the turn never took in (it finished first) becomes the next turn on its own: stay working until it has run.
       if (event.kind === 'result') {
+        if (agent === 'codex') dropSteers();
         if (agent === 'claude' && inflight && isClaudeCompact(inflight.text)) inflight = null;
         if (agent === 'cursor' && state.sessionId) {
           const sessionId = state.sessionId, last = retainedEvents().findLast(item => item.kind === 'message');
@@ -670,6 +702,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function start() { if (starting) return starting; if (child) return Promise.resolve(); return starting = startNow().finally(() => { starting = null; }); }
   async function startNow() {
     if (closed) throw fault('NOT_FOUND', '닫힌 채팅입니다.', 404);
+    if (agent !== 'cursor' && !state.sessionId && !meta.sessionId) meta.mediaBlocks = true;
     // A new Claude chat runs on the account the project's allowed .envrc names (what its terminals use) and keeps it; an old chat keeps the folder its history is in.
     if (agent === 'claude' && account && !meta.configDir && !meta.sessionId) { const dir = await account().catch(() => ''); if (dir) { meta.configDir = dir; await saveMeta(); } }
     if (agent !== 'claude' && meta.worktree && !meta.worktreePath) {
@@ -681,7 +714,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // Without a pick the CLI would follow ~/.claude/settings.json at every (re)start, so a change made in another project (or a terminal `/model`) would silently
     // switch this conversation on its next resume. The model and Effort it is running with are pinned to the chat instead.
     if (agent === 'claude') { let pinned = false; if (!meta.model && state.model) { meta.model = state.model; pinned = true; } if (meta.effort === undefined && state.effort && state.capabilities.efforts.includes(state.effort)) { meta.effort = state.effort; pinned = true; } if (pinned) await saveMeta(); }
-    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true, fileLinks: meta.fileLinks === true }) : {};
+    const extra = agent === 'claude' && prepare ? await prepare(root, { chatId: id, projectId, agent, interactiveUi: meta.interactiveUi === true, fileLinks: meta.fileLinks === true, mediaBlocks: meta.mediaBlocks === true }) : {};
     const args = [...argsOf(executableArgs, meta.auth), ...(agent === 'claude' ? buildClaudeArgs({ sessionId: meta.sessionId, model: meta.model, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, resumeAt: meta.resumeAt, fork: meta.fork, ...extra }) : agent === 'codex' ? ['app-server'] : [...(meta.sandbox ? ['--sandbox', meta.sandbox] : []), 'acp'])];
     if (agent !== 'claude') protocol = createChatProtocol(agent, { write, emit: handleEvent });
     if (agent === 'claude') {
@@ -716,7 +749,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent === 'claude' && meta.sessionAllow?.length) await applySessionAllow(meta.sessionAllow);
     if (protocol) {
       try {
-        const ready = await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true));
+        const ready = await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true, agent, meta.mediaBlocks === true));
         if (agent === 'cursor') cursorAppliedModel = ready?.modelApplied ?? null;
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
@@ -930,15 +963,23 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
-    async send(text, images = [], { steer = false, artifact = false, previews = [] } = {}) {
+    async send(input, images = [], { steer = false, artifact = false, previews = [], clientMessageId } = {}) {
       live();
-      if (typeof text !== 'string' || !text.trim() || text.length > 200_000 || text.includes('\0')) throw fault('INVALID_INPUT', '메시지를 확인하세요.');
+      const text = await chatText.prepare(input);
+      live();
       if (turnOpen && steer && child) {
         if (!state.capabilities.steer) throw fault('CHAT_UNSUPPORTED', state.capabilities.limitations.steer, 409);
-        const uuid = randomUUID(), sendText = takeShellContext(text) + text, shells = shellTaken; steers.set(uuid, { text, images: images.length, previews, data: images });
-        emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews, shells });
-        try { if (protocol) { await protocol.send(sendText, images, { steer: true }); steers.delete(uuid); emit({ kind: 'steer', phase: 'applied', uuid, text, images: images.length, previews, shells }); } else await write(userLine(sendText, images, uuid)); } catch (error) { steers.delete(uuid); emit({ kind: 'steer', phase: 'cancelled', uuid, text }); throw error; }
-        return;
+        const uuid = randomUUID(), sendText = takeShellContext(text) + text, shells = shellTaken;
+        steers.set(uuid, { text, images: images.length, previews, data: images, ...(agent === 'codex' && { sentText: sendText, shells }) });
+        emit({ kind: 'steer', phase: 'queued', uuid, text, images: images.length, previews, shells, ...(validMessageUuid(clientMessageId) && { clientMessageId }) });
+        try {
+          if (protocol) await protocol.send(sendText, images, { steer: true, clientUserMessageId: uuid });
+          else await write(userLine(sendText, images, uuid));
+        } catch (error) {
+          if (steers.delete(uuid)) emit({ kind: 'steer', phase: 'cancelled', uuid, text });
+          throw error;
+        }
+        return { steered: true };
       }
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
@@ -952,7 +993,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       try {
         if (agent === 'cursor') { await new Promise(resolve => setImmediate(resolve)); await cursorSnapshot; }
         if (configuring) await configChain;
-        if (agent === 'claude' && !meta.artifact && (artifact || wantsArtifact(text))) await enableArtifact();
+        if (agent === 'claude' && !meta.artifact && (artifact || wantsArtifact(input))) await enableArtifact();
         await start(); await saveMeta();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 600_000);
         if (agent === 'cursor' && isCursorSummarizeCommand(text) && protocol) {
@@ -1110,16 +1151,22 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         }
         if (agent === 'cursor' && (model !== undefined || effort !== undefined || configOption !== undefined || permissionMode !== undefined)) {
           if ([model, effort, configOption, permissionMode].filter(value => value !== undefined).length > 1 || worktree !== undefined || addDirs !== undefined) throw fault('INVALID_INPUT', '모델 설정은 한 번에 하나씩 바꾸세요.');
-          const previous = { model: meta.model, effort: meta.effort, permissionMode: meta.permissionMode, configValues: { ...(meta.configValues ?? {}) }, stateModel: state.model, stateEffort: state.effort, stateMode: state.permissionMode, options: state.capabilities.configOptions };
+          const previous = { model: meta.model, effort: meta.effort, permissionMode: meta.permissionMode, configValues: { ...(meta.configValues ?? {}) }, stateModel: state.model, stateEffort: state.effort, stateMode: state.permissionMode, options: state.capabilities.configOptions, efforts: state.capabilities.efforts, effortConfigId: state.capabilities.effortConfigId };
           const restore = () => {
             meta.model = previous.model; meta.effort = previous.effort; meta.permissionMode = previous.permissionMode; meta.configValues = previous.configValues;
             state.model = previous.stateModel; state.effort = previous.stateEffort; state.permissionMode = previous.stateMode;
-            if (state.capabilities.configOptions !== previous.options) state.capabilities = { ...state.capabilities, configOptions: previous.options };
+            if (state.capabilities.configOptions !== previous.options) state.capabilities = { ...state.capabilities, configOptions: previous.options, efforts: previous.efforts, ...(previous.effortConfigId && { effortConfigId: previous.effortConfigId }) };
           };
           configCount += 1; configuring = state.configuring = true;
           if (model !== undefined) {
             meta.model = model ?? undefined; meta.configValues = {}; meta.effort = undefined;
             state.model = model ?? state.model; cursorModelHold = state.model; cursorSurfaceLive = false;
+            // Options already seen for this model go up at once. The ACP echo still replaces them; an unseen model waits for that echo.
+            const surface = typeof model === 'string' ? cursorSurface(cursorModelCache?.get(), model) : null;
+            if (surface?.configOptions.length) {
+              state.capabilities = { ...state.capabilities, configOptions: surface.configOptions, efforts: surface.efforts, ...(surface.effortConfigId && { effortConfigId: surface.effortConfigId }), ...(surface.catalog.length && { catalog: surface.catalog }) };
+              state.effort = surface.effort;
+            }
           }
           if (permissionMode !== undefined) { meta.permissionMode = state.permissionMode = permissionMode; cursorModeHold = permissionMode; }
           if (model !== undefined || permissionMode !== undefined) publish();
@@ -1216,7 +1263,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         const end = kept.findIndex(item => item.kind === 'cursor_checkpoint' && item.uuid === uuid);
         return { events: kept.slice(0, end + 1), meta: { agent, cwd, configDir: cursorDirOf(), cursorCheckpoint: path.join(root, checkpoint), model: meta.model, effort: meta.effort, configValues: meta.configValues, sandbox: meta.sandbox, permissionMode: meta.permissionMode, runEverything: meta.runEverything, addDirs: [] } };
       }
-      return { events: kept.slice(0, selected + 1), meta: { agent, cwd, worktree: meta.worktree, worktreePath: meta.worktreePath, configDir: meta.configDir, sessionId: meta.sessionId, resumeAt: agent === 'codex' ? events[at].turnId : uuid, fork: true, model: meta.model, effort: meta.effort, addDirs: meta.addDirs, permissionMode: meta.permissionMode } };
+      return { events: kept.slice(0, selected + 1), meta: { agent, cwd, worktree: meta.worktree, worktreePath: meta.worktreePath, configDir: meta.configDir, sessionId: meta.sessionId, resumeAt: agent === 'codex' ? events[at].turnId : uuid, fork: true, model: meta.model, effort: meta.effort, addDirs: meta.addDirs, permissionMode: meta.permissionMode, mediaBlocks: meta.mediaBlocks || undefined } };
     },
     // Rewind: drop everything after one assistant message. The next message starts a fork of the session at that point (conversation only; files Claude already changed stay).
     async rewind(uuid) {
@@ -1302,6 +1349,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (closed) return;
       await endShells();
       closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
+      if (agent === 'codex') dropSteers();
       if (child) {
         const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();
         // Closed means the child is gone: on Windows a still-exiting child keeps its folder locked, so the caller (or a test) could not delete it right after close.
