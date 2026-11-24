@@ -26,6 +26,7 @@ import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
 import { createChatTextStore } from './chat-text.js';
 import { readLastLines } from './file-util.js';
+import { evaluateLimit, limitOptions, limitView, normalizeLimit, POLL_MS } from './chat-limit.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
@@ -65,7 +66,7 @@ export function withUtf8Ctype(env, platform = process.platform) {
 
 // `procHost` (the pty-host's piped processes, pty-client.js) runs the agent outside this server: `detach()` then leaves it running for the
 // next server, which takes it over from `live.json` exactly where this one stopped reading. Without it the agent is a child of this server.
-export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, trusted = () => [], chatText = createChatTextStore(directory) }) {
+export async function openChatSession({ directory, id, projectId, cwd, agent = 'claude', env = {}, spawnProcess = spawnAgent, procHost = null, keyAvailable = () => true, spend = null, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], onEvent, onState, prepare, recover, defaults, account, quietMs = BACKGROUND_QUIET_MS, shell = null, shellEnv = null, shellTimeoutMs = SHELL_TIMEOUT_MS, cursorModels = null, trusted = () => [], readUsage = null, limitPollMs = POLL_MS, chatText = createChatTextStore(directory) }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '지원하지 않는 에이전트입니다.');
   const root = chatFolder(directory, id);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -251,7 +252,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const since = kept.findLastIndex(event => event.kind === 'divider');
     state.chatTitle = resolveChatTitle(state.segmentTitles, segmentUserEvents(kept, since));
   };
-  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, mediaBlocks: meta.mediaBlocks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
+  const snapshotMeta = () => ({ configValues: meta.configValues, agent, cwd, worktreePath: meta.worktreePath, configDir: meta.configDir, resumeAt: meta.resumeAt, fork: meta.fork || undefined, sessionId: state.sessionId ?? undefined, model: meta.model, lastModel: state.model ?? undefined, effort: meta.effort, worktree: meta.worktree, addDirs: meta.addDirs, permissionMode: meta.permissionMode, prePlanMode: meta.prePlanMode, sandbox: meta.sandbox ?? undefined, network: meta.network || undefined, runEverything: meta.runEverything || undefined, interactiveUi: meta.interactiveUi, fileLinks: meta.fileLinks || undefined, mediaBlocks: meta.mediaBlocks || undefined, sessionAllow: meta.sessionAllow?.length ? meta.sessionAllow : undefined, allowTools: meta.allowTools?.length ? meta.allowTools : undefined, apiCostAdopted: meta.apiCostAdopted || undefined, artifact: meta.artifact || undefined, costBase: typeof state.costUsd === 'number' ? state.costUsd : meta.costBase, auth: meta.auth, lastAuth: meta.lastAuth, apiCostUsd: meta.apiCostUsd || undefined, limit: meta.limit, title: state.chatTitle }); // the file keeps the running total, so a crash or kill keeps the cost
   // Most calls (every send, every child close) find nothing changed: identical content is not written again. A failed write is forgotten so the next call retries.
   let lastMeta = null;
   const saveMeta = () => {
@@ -261,6 +262,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
     writing = saved.catch(error => { if (lastMeta === data) lastMeta = null; reportStorage(error); }); return saved;
   };
+  // Limits (chat-limit.js). limitNow: the last window readings for the chip. limitBypass: the automatic compact after a stop runs outside the limit.
+  let limitNow = {}, limitTimer = null, limitBypass = false;
+  const hasWindowRule = () => Boolean(meta.limit?.share || meta.limit?.usage);
   const tokensShown = () => {
     const reported = turnUsage ?? zero();
     const live = outputFinal ? reported : { ...reported, output: Math.max(reported.output, thinkingTokens + (streamBytes >> 2)) };
@@ -272,9 +276,16 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const tokens = tokensShown(), live = weigh(tokens) - weigh(state.tokens), base = typeof state.costUsd === 'number' ? state.costUsd + uncoveredCost() : state.costUsd;
     const inflight = typeof base === 'number' && costPerUnit && live > 0 ? live * costPerUnit : 0;
     // The API Usage figure grows with the running turn too (the in-flight part is billed to the key), so it moves live like the session cost.
-    return { ...state, tokens, costUsd: typeof base === 'number' ? base + inflight : base, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn() };
+    const costUsd = typeof base === 'number' ? base + inflight : base;
+    return { ...state, tokens, costUsd, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn(),
+      limit: meta.limit ? limitView(meta.limit, { ...limitNow, ...(typeof costUsd === 'number' && { cost: costUsd }) }) : null, limitOptions: limitOptions({ agent, cost: state.capabilities.cost, apiKey: state.apiKey }) };
   };
-  const publish = () => { clearTimeout(publishTimer); publishTimer = null; onState?.(shown()); };
+  // Every publish (usage and result events, live token ticks) looks at the chat's own cost, so a cost limit stops the turn while it runs, with no polling.
+  const publish = () => {
+    clearTimeout(publishTimer); publishTimer = null;
+    const view = shown(), hit = meta.limit && !meta.limit.stop && !limitBypass ? limitStep(view.costUsd, null) : null;
+    if (hit) stopByLimit(hit); else onState?.(view);
+  };
   // Another chat spent on the key this one runs on: repaint, so the shared API Usage figure moves here too.
   const unsubscribeSpend = spend?.subscribe(id => { if (!closed && state.apiKey && id === spend.idOf(agent, keyNow())) publishSoon(); });
   // Live token counts change many times a second; they go out at most every 150ms. Status changes still use publish() and go out at once.
@@ -298,7 +309,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     return Boolean(last?.text?.trim() && !last.images);
   }
   const setStatus = () => {
-    state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; publish();
+    state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; syncLimitPoll(); publish();
     // An idle Claude or Codex child holds a few hundred MB; the conversation resumes from its session id, so it can go.
     // Cursor's process takes several seconds to start, so it stays for the life of the chat. Closing the chat still stops it.
     clearTimeout(idleTimer);
@@ -633,7 +644,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
           }).catch(() => {});
         }
         clearTimeout(activityTimer); reopened = false;
-        streamIds.clear(); toolInputSize.clear(); resetLive(); turnOpen = steers.size > 0; setStatus();
+        // The turn's cost is known now (Claude reports it only here): a cost limit reached by it stops the chat before the turn counts as over.
+        if (meta.limit && !meta.limit.stop && !limitBypass) { const hit = limitStep(shown().costUsd, null); if (hit) stopByLimit(hit, { interrupt: false }); }
+        streamIds.clear(); toolInputSize.clear(); resetLive(); turnOpen = steers.size > 0; setStatus(); limitAfterResult();
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
         if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
@@ -836,6 +849,62 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     meta.artifact = true;
   }
 
+  // ── limits (chat-limit.js) ──
+  const readLimitWindows = async force => { if (!readUsage) return null; try { return (await readUsage(agent, { force }))?.windows ?? null; } catch { return null; } };
+  // One look at the numbers; returns the rule reached. A new share baseline is stored (and kept across restarts).
+  function limitStep(cost, windows) {
+    const limit = meta.limit;
+    if (!limit || limitBypass) return null;
+    const result = evaluateLimit(limit, { cost, windows });
+    limitNow = { ...limitNow, ...result.now };
+    if (JSON.stringify(result.base) !== JSON.stringify(limit.base)) { limit.base = result.base; void saveMeta().catch(reportStorage); }
+    return result.hit;
+  }
+  // Marks the chat stopped (the thread line, the refusal of new sends) and, when a turn is running, interrupts it like the stop button.
+  // `live`: it happened while the chat was working (an event, a poll), not when a limit was set or a send was tried: only then does the automatic compact follow.
+  // `interrupt` is off when the turn's own result just brought the number (nothing is left to interrupt).
+  function stopByLimit(hit, { live = true, interrupt = true } = {}) {
+    const limit = meta.limit;
+    if (!limit || limit.stop) return;
+    limit.stop = { rule: hit.label, live };
+    emit({ kind: 'limit_stop', rule: hit.label });
+    void saveMeta().catch(reportStorage);
+    if (live && interrupt && turnOpen && child) void chatApi.interrupt().catch(() => {});
+    syncLimitPoll(); publish();
+  }
+  // Plan windows are read every POLL_MS (the pace usage.js allows: a forced read is served from its cache inside FORCE_GAP, and its 429 backoff applies), and only while a turn is running. A send reads once before the turn starts.
+  function syncLimitPoll() {
+    const want = !closed && turnOpen && !approvals.size && !limitBypass && hasWindowRule() && !meta.limit.stop;
+    if (want === Boolean(limitTimer)) return;
+    if (!want) { clearInterval(limitTimer); limitTimer = null; return; }
+    const poll = async () => {
+      const windows = await readLimitWindows(true);
+      if (closed || !hasWindowRule()) return;
+      const hit = limitStep(shown().costUsd, windows);
+      if (hit) stopByLimit(hit); else publishSoon();
+    };
+    limitTimer = setInterval(() => void poll(), limitPollMs); limitTimer.unref?.();
+  }
+  // A send is refused while a rule is reached (windows are read now, so a reset or a raised limit lets it through at once).
+  async function assertLimit() {
+    if (!meta.limit || limitBypass) return;
+    const windows = hasWindowRule() ? await readLimitWindows(true) : null;
+    live();
+    const hit = limitStep(shown().costUsd, windows);
+    if (!meta.limit) return;
+    if (!hit) { if (meta.limit.stop) { delete meta.limit.stop; await saveMeta(); publish(); } return; }
+    stopByLimit(hit, { live: false });
+    throw fault('CHAT_LIMIT', `제한 규칙(${hit.label})에 도달해 보낼 수 없습니다. /limit에서 제한을 바꾸거나 해제하세요.${hit.resetsAt ? ' 한도 창이 초기화되면 다시 보낼 수 있습니다.' : ''}`, 409);
+  }
+  // The turn a limit interrupted has ended: compact once if asked to. The compact's own result ends the bypass. Never again for the same stop.
+  function limitAfterResult() {
+    if (limitBypass) { limitBypass = false; syncLimitPoll(); return; }
+    const limit = meta.limit;
+    if (!limit?.stop?.live || limit.stop.compacted || !limit.compact || !state.sessionId || closed) return;
+    limit.stop.compacted = true; limitBypass = true; void saveMeta().catch(reportStorage);
+    chatApi.send('/compact').catch(() => { limitBypass = false; });
+  }
+
   // A command that was running when the last server stopped never reported its end: it did not survive, and its card must not spin.
   for (const orphan of retainedEvents().filter(event => event.kind === 'shell' && event.phase === 'start' && !events.some(item => item.kind === 'shell' && item.phase === 'end' && item.id === event.id))) emit({ kind: 'shell', phase: 'end', id: orphan.id, status: 'interrupted', exitCode: null, signal: null, ms: null, stdout: '', stderr: '' });
   await saveMeta(); setStatus();
@@ -861,7 +930,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent === 'cursor') startCursorStorePoll();
     setStatus();
   }
-  return {
+  const chatApi = {
     id, agent, get cwd() { return cwd; },
     // Server shutdown: an agent running in the pty-host stays, and live.json tells the next server how far this one read and what was open.
     // Everything is taken in the same tick as the last line handled, so nothing is read twice or lost. Without the host it is a plain close.
@@ -874,7 +943,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         approvals: [...approvals.values()], steers: [...steers], taskIds: [...taskIds], liveTasks: state.liveTasks, protocol: protocol?.snapshot() };
       proc.detach();
       closed = true; child = null; protocol = null;
-      clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); stopCursorStorePoll();
+      clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); clearInterval(limitTimer); stopCursorStorePoll();
       await writing.catch(() => {});
       await saveMeta().catch(() => {});
       await fs.writeFile(liveFile, JSON.stringify(saved), { mode: 0o600 });
@@ -897,6 +966,19 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       try { await writeAutoCompact(configDirOf(), concreteModel(model), value, maxContextForModel(model)); } catch (cause) { throw fault('INVALID_INPUT', cause.message); }
       await refreshAutoCompact(model);
       return { autoCompact: state.autoCompact };
+    },
+    // /limit: this chat's limit (see chat-limit.js). No argument reads it; null clears it. Setting one takes the share's baseline and looks at the numbers at once.
+    async setLimit(input) {
+      live();
+      if (input !== undefined) {
+        try { meta.limit = normalizeLimit(input, limitOptions({ agent, cost: state.capabilities.cost, apiKey: state.apiKey }), meta.limit) ?? undefined; } catch (cause) { throw fault('INVALID_INPUT', cause.message); }
+        limitNow = {};
+        const hit = limitStep(shown().costUsd, hasWindowRule() ? await readLimitWindows(true) : null);
+        if (hit) stopByLimit(hit, { live: false });
+        syncLimitPoll(); publish(); await saveMeta();
+      }
+      const { limit, limitOptions: options } = shown();
+      return { limit, options };
     },
     // /mcp: the CLI's own MCP controls over its control channel (status, reconnect, enable/disable, OAuth), so nothing restarts. env/headers never leave this process.
     async mcp({ action, server, enabled, url }) {
@@ -984,6 +1066,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         }
         return { steered: true };
       }
+      await assertLimit();
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1;
       // What the user ran with `!` since their last message goes ahead of this one (the thread still shows only what they typed).
@@ -998,6 +1081,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (configuring) await configChain;
         if (agent === 'claude' && !meta.artifact && (artifact || wantsArtifact(input))) await enableArtifact();
         await start(); await saveMeta();
+        if (meta.limit?.stop && !limitBypass) throw fault('CHAT_LIMIT', `제한 규칙(${meta.limit.stop.rule})에 도달해 보내지 못했습니다.`, 409); // a limit was reached while the agent was starting
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 600_000);
         if (agent === 'cursor' && isCursorSummarizeCommand(text) && protocol) {
           if (images.length) throw fault('CHAT_UNSUPPORTED', '컨텍스트 압축 명령에는 이미지를 붙일 수 없습니다.', 409);
@@ -1342,16 +1426,16 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (configuring) throw fault('CHAT_BUSY', '모델 설정을 적용 중입니다.', 409);
       if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 새 대화를 시작할 수 있습니다.', 409);
       if (state.liveTasks.length && !force) throw fault('CHAT_BACKGROUND', '백그라운드 작업이 실행 중입니다. 새 대화를 시작하면 종료됩니다.', 409);
-      if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: snapshotMeta() });
+      if (state.sessionId) await seedChat({ directory, id: randomUUID(), events: retainedEvents(), meta: { ...snapshotMeta(), limit: undefined } });
       restart();
       meta.resumeAt = undefined; meta.fork = false;
-      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.sessionAllow = undefined; meta.allowTools = undefined; meta.costBase = 0; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
+      clearApprovals(); dropSteers(false); turnOpen = false; meta.sessionId = undefined; meta.sessionAllow = undefined; meta.allowTools = undefined; meta.costBase = 0; if (meta.limit?.stop) delete meta.limit.stop; state.sessionId = null; state.costUsd = agent === 'claude' ? 0 : null; state.contextTokens = 0; state.tokens = zero(); resetLive(); state.turns = 0; state.durationMs = 0;
       emit({ kind: 'divider', reason: 'clear' }); await saveMeta(); setStatus();
     },
     async close({ forget = false, archiveAs } = {}) {
       if (closed) return;
       await endShells();
-      closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); stopCursorStorePoll();
+      closed = true; unsubscribeSpend?.(); clearTimeout(idleTimer); clearTimeout(activityTimer); clearInterval(limitTimer); stopCursorStorePoll();
       if (agent === 'codex') dropSteers();
       if (child) {
         const proc = dropChild(); setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 3000).unref();
@@ -1364,6 +1448,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
     }
   };
+  return chatApi;
 }
 
 // Only this project's stored Chat sessions are listed; the provider's private CLI history stays with its CLI.

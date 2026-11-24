@@ -137,3 +137,22 @@
 .mc-empty, .mc-error { margin: 0; padding: 6px 0; font-size: 12px; color: var(--muted); } .mc-error { color: var(--error); }
 .mc-chev { flex: none; width: 14px; display: inline-flex; color: var(--muted); }
 .mc-more { padding-left: 22px; }
+
+/* ── /limit ─────────────────────────────────────────────── */
+.lc .mc-head button, .lc .lc-foot button { padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.lc .mc-head button:hover:not(:disabled), .lc .lc-foot button:hover:not(:disabled) { background: var(--hover); } .lc button:disabled { opacity: .5; cursor: default; }
+.lc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 0; font-size: 13px; }
+.lc-row + .lc-row { border-top: 1px solid var(--border); }
+.lc-name { display: inline-flex; align-items: center; gap: 7px; min-width: 96px; }
+.lc-row small { flex-basis: 100%; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.lc-field { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.lc-field input { width: 76px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 8px; outline: 0; background: var(--input); color: var(--fg); font: inherit; font-size: 12.5px; }
+.lc-field input:focus { border-color: color-mix(in srgb, var(--fg) 38%, var(--border-strong)); }
+.lc-field input:disabled { opacity: .5; }
+.lc-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hover); }
+.lc-seg button { padding: 2px 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.lc-seg button[aria-checked=true] { color: var(--accent); font-weight: 600; background: var(--overlay); box-shadow: 0 0 0 1px var(--border); }
+.lc-foot { display: flex; justify-content: flex-end; padding-top: 4px; }
+.chat-stat-limit { color: var(--warn); } .chat-stat-limit.stopped { color: var(--error); }
+.lc label, .lc label.lc-row { flex-direction: row; align-items: center; }
+.lc label.lc-row { flex-wrap: wrap; } .lc .lc-name input { margin: 0; }

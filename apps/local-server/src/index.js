@@ -421,7 +421,7 @@ const chatProcHost = ptyHost?.procs ? {
 } : null;
 async function openChat(project, id, { cwd, agent, defaults }) {
   const chat = await openChatSession({ directory: project.directory, id, projectId: project.id, cwd, agent, env: chatEnv(agent), executableArgs: chatArgs(agent), procHost: chatProcHost,
-    keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], spend: apiSpend, cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
+    keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], spend: apiSpend, readUsage: (provider, options) => verifyUsage?.(provider) ?? usage.status(provider, { ...options, project }), cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults, chatText,
     // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
@@ -1232,6 +1232,12 @@ async function route(action, input, project) {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       return chat.setAutoCompact(text(input.value, '창 크기', 40));
+    }
+    // /limit: this chat's limit. Without `limit` it is only read; null clears it.
+    case 'chat/limit': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
+      return 'limit' in input ? chat.setLimit(input.limit) : chat.setLimit();
     }
     case 'chat/mcp': {
       const chat = project.chats.get(input.id);

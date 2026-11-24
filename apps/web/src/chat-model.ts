@@ -6,6 +6,9 @@ export type ModelConfigOption = { id: string; name: string; description?: string
 export type ChatCapabilities = { configOptions?: ModelConfigOption[]; images: boolean; steer: boolean; cancelSteer: boolean; branch: boolean; rewind: boolean; worktree: boolean; addDirs: boolean; terminal: boolean; terminalToChat: boolean; cost: boolean; tokens: boolean; context: boolean; permissionModes: string[]; sandboxes?: string[]; runEverything?: boolean; efforts: string[]; catalog: CatalogModel[]; limitations: Record<string, string> };
 export type AutoCompact = { window: number; maxWindow: number; auto: boolean; source?: string };
 export type ChatSegmentTitles = { custom?: string; ai?: string; agent?: string };
+/** This chat's limit (/limit, server chat-limit.js): the rules, the rule that stopped the chat (null: not stopped) and the last numbers. */
+export type LimitWindow = 'session' | 'weekly';
+export type ChatLimit = { cost?: number; share?: { window: LimitWindow; percent: number }; usage?: { window: LimitWindow; percent: number }; compact: boolean; stop: string | null; now: { cost?: number; share?: number; usage?: number } };
 export type ChatState = {
   agent?: 'claude' | 'codex' | 'cursor'; capabilities?: ChatCapabilities;
   status: 'idle' | 'working' | 'attention' | 'closed'; model: string | null; effort: string | null; worktree: boolean; addDirs: string[]; permissionMode: string; sandbox?: string | null; network?: boolean; runEverything?: boolean; configuring?: boolean; restartPending?: boolean; sessionId: string | null; costUsd: number | null; turns: number; durationMs: number;
@@ -13,6 +16,7 @@ export type ChatState = {
   segmentTitles?: ChatSegmentTitles; chatTitle?: string;
   liveTasks?: string[]; // Claude: the Agent calls whose subagent runs in the current child process
   cwd?: string; // the folder the CLI runs in (file paths under it are shown relative)
+  limit?: ChatLimit | null; limitOptions?: { cost: boolean; windows: LimitWindow[] }; // what this chat can be limited by: cost where dollars are reported, plan windows on a plan login
   apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
   auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button (Claude)
   lastAuth?: 'login' | 'key' | null; // the login its last turn ran on: a message that would change it asks first
@@ -54,6 +58,7 @@ export type Item = ItemBase & (
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
+  | { kind: 'limit'; local?: boolean } // /limit: the limit card (rules, auto compact), client-only
   | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
@@ -454,6 +459,8 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (old.kind === 'note' && old.text === line.text) return view;
       return { ...view, items: view.items.map((item, index) => index === at ? { ...item, ...line, key: id } as Item : item) };
     }
+    // A limit stopped the chat: a line in the style of the compact divider, the rule named in it.
+    case 'limit_stop': { const rule = String(event.rule ?? ''); return append(view, { kind: 'note', key, text: `제한 규칙(${rule})에 따라 중지되었습니다`, tones: [{ value: rule, color: 'var(--warn)' }], fresh }); }
     case 'compact': return append(view, { kind: 'compact', key, trigger: event.trigger === 'auto' ? 'auto' : 'manual', preTokens: Number.isFinite(event.preTokens) ? event.preTokens : null, postTokens: Number.isFinite(event.postTokens) ? event.postTokens : null, fresh });
     case 'divider': return refreshViewTitle({ ...append({ ...view, items: settleItems(view.items) }, { kind: 'divider', key, fresh }), blocked: {}, live: {}, liveId: null, approvals: [], steers: [], thinkingTokens: 0 }, {});
     // A steering message waits below the running reply until the turn takes it in; then it is an ordinary user message at that point. Cancelled: it just goes away.
@@ -821,6 +828,17 @@ const parentOf = (event: any): { parent?: string } => typeof event.parentToolUse
 
 // A session's cost: under $0.1 five decimals (small turns still show), from $0.1 two.
 // Enough digits to see a cheap turn move (a Haiku reply is a fraction of a cent), without five zeros for nothing.
+const limitWindowName = { session: '5시간', weekly: '주간' };
+/** The status line's limit chip: what is set and how far the chat is from it; `stopped` once a rule has stopped the chat. null when no limit is set. */
+export function limitChip(limit?: ChatLimit | null): { text: string; tip: string; stopped: boolean } | null {
+  if (!limit) return null;
+  const rules: { short: string; now: string; name: string; max: string }[] = [];
+  if (limit.cost !== undefined) rules.push({ short: `$${limit.cost.toFixed(2)}`, now: limit.now.cost !== undefined ? `$${dollars(limit.now.cost)}` : '—', name: '비용', max: `$${limit.cost.toFixed(2)}` });
+  if (limit.usage) rules.push({ short: `${limitWindowName[limit.usage.window]} ${limit.usage.percent}%`, now: limit.now.usage !== undefined ? `${limit.now.usage}%` : '—', name: `${limitWindowName[limit.usage.window]} 사용량`, max: `${limit.usage.percent}%` });
+  if (limit.share) rules.push({ short: `${limitWindowName[limit.share.window]} 할당 ${limit.share.percent}%`, now: limit.now.share !== undefined ? `${limit.now.share}%` : '—', name: `${limitWindowName[limit.share.window]} 할당(추정)`, max: `${limit.share.percent}%` });
+  const lines = rules.map(rule => `${rule.name} ${rule.now} / ${rule.max}`);
+  return { text: limit.stop ? '제한 도달' : rules.map(rule => rule.short).join(' · '), tip: ['제한', ...(limit.stop ? [`${limit.stop}에 따라 중지됨`] : []), ...lines, ...(limit.compact ? ['중지되면 자동 압축'] : [])].join('\n'), stopped: Boolean(limit.stop) };
+}
 export const dollars = (value: number) => value === 0 ? '0.00' : value < 1 ? value.toFixed(4) : value.toFixed(2);
 
 // One name for what a tool is called in the UI (internal ones read as what they do).
