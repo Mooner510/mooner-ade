@@ -29,7 +29,7 @@ import { LauncherModes } from './LauncherMenu';
 import { launchersFor, type AgentMode } from './launchers';
 import { ANSI, createBannerDetector, createQuestionTracker, stableTitle } from './terminal-agent';
 import type { Agent } from './terminal-agent';
-import { claudeComposerText, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
+import { claudeComposerText, claudeDraftPaste, createClaudeFollowUp, hasEmptyClaudeComposer, claudeFollowUpVersion } from './claude-follow-up';
 import { cacheSendWarning, cacheSendWarningText, isClaudeMessageText, type CacheSendWarning } from './claude-cache-warning';
 import { createPrefixGuide, guideActive, guideGroups, isModifierOnly, isPrefixKey, looksLikeTmux, normalizePrefix, type ScreenRow } from './tmux-guide';
 export type { Agent } from './terminal-agent';
@@ -531,6 +531,22 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         return false;
       }
       if (event.key === 'Enter') clearTimeout(composedEnter);
+      if (event.key === 'ArrowUp' && event.shiftKey && !event.ctrlKey && !event.isComposing && !event.repeat && !sshRef.current
+        && !asking && !sendGate && !queueAsking && !sendingFollowUp && !editingRef.current && !replays && !writes
+        && callbacks.current.agentOf(id) === 'claude' && terminal.modes.bracketedPasteMode && Date.now() - lastTyped >= 80) {
+        const last = followUp.current.items.at(-1);
+        if (last) {
+          const screen = screenText();
+          if ((hasEmptyClaudeComposer(screen) || /^Try "/.test(claudeComposerText(screen) ?? ''))
+            && callbacks.current.send({ type: 'terminal/input', id, data: claudeDraftPaste(last.text) })) {
+            event.preventDefault();
+            lastTyped = Date.now();
+            followUp.current.remove(last.id);
+            refreshQueue();
+            return false;
+          }
+        }
+      }
       // Tab in Claude's composer queues a follow-up while a turn runs; every other Tab (autocomplete, thinking/ultra toggle) goes to the CLI.
       if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.isComposing && !sshRef.current && callbacks.current.agentOf(id) === 'claude' && !asking) {
         const typed = claudeComposerText(screenText()), text = typed && !/^Try "/.test(typed) ? typed : undefined; // an empty composer shows a `Try "…"` hint
