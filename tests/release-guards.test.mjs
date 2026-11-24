@@ -61,7 +61,7 @@ test('a release is refused anywhere but on master that equals origin/master, and
   assert.match(again.stderr, /v0\.6\.0 already exists on origin/);
 });
 
-test('a stable release needs its changelog entry, a beta does not, and an empty entry does not count', t => {
+test('every release, a beta too, needs its changelog entry, and an empty entry does not count', t => {
   const missing = repository(t, { entries: [{ ...changelog[0], version: '0.5.12' }] });
   const refused = missing.release();
   assert.notEqual(refused.status, 0);
@@ -72,7 +72,13 @@ test('a stable release needs its changelog entry, a beta does not, and an empty 
   assert.notEqual(empty.release().status, 0, 'an entry with no items would publish an empty release body');
   assert.equal(empty.tags(), '');
 
-  const beta = repository(t, { version: '0.6.0-beta6', entries: [] });
+  const betaMissing = repository(t, { version: '0.6.0-beta6', entries: [] });
+  const betaRefused = betaMissing.release();
+  assert.notEqual(betaRefused.status, 0, 'a beta needs notes too');
+  assert.match(betaRefused.stderr, /Add 0\.6\.0-beta6 to apps\/web\/src\/changelog\.json first/);
+  assert.equal(betaMissing.tags(), '');
+
+  const beta = repository(t, { version: '0.6.0-beta6', entries: [{ ...changelog[0], version: '0.6.0-beta6' }] });
   assert.equal(beta.release().status, 0, beta.work);
   assert.match(beta.tags(), /refs\/tags\/v0\.6\.0-beta6$/m);
 
