@@ -79,6 +79,24 @@ test('a compaction boundary marks the cache as compacted until the next main-thr
   await fs.rm(config, { recursive: true, force: true });
 });
 
+test('a request and its compaction boundary read in one go give a compacted value; the next request clears it', async () => {
+  const config = await fs.mkdtemp(path.join(os.tmpdir(), 'ade-cache-'));
+  const dir = path.join(config, 'projects', '-Users-me-my-project'), file = path.join(dir, `${session}.jsonl`);
+  await fs.mkdir(dir, { recursive: true });
+  const boundary = JSON.stringify({ type: 'system', subtype: 'compact_boundary', isSidechain: false, timestamp: '2026-11-06T10:10:00.000Z', compactMetadata: { trigger: 'manual', preTokens: 120000, postTokens: 9000 } });
+  await fs.writeFile(file, `${request('r1', '2026-11-06T10:00:00.000Z')}\n${reply({ requestRef: 'r1', promptCacheRequested: '1h' }, { cache_read_input_tokens: 120000 })}\n${boundary}\n`);
+  // A chat (`idle: false`) and a restarted ADE read the whole file with no earlier state.
+  const compacted = await readSessionCache(config, { sessionId: session, cwd }, null, { idle: false });
+  assert.equal(compacted.value.compacted.trigger, 'manual');
+  assert.equal(compacted.value.compactAt, undefined);
+  assert.equal(compacted.value.at, Date.parse('2026-11-06T10:00:00.000Z'));
+  await fs.appendFile(file, `${request('r2', '2026-11-06T10:20:00.000Z')}\n${reply({ requestRef: 'r2', promptCacheRequested: '1h' }, { cache_read_input_tokens: 9000 })}\n`);
+  const next = await readSessionCache(config, { sessionId: session, cwd }, compacted, { idle: false });
+  assert.equal(next.value.compacted, undefined);
+  assert.equal(next.value.at, Date.parse('2026-11-06T10:20:00.000Z'));
+  await fs.rm(config, { recursive: true, force: true });
+});
+
 test('a chat reads its cache clock by session id (no sessions/<pid>.json), and never promises an idle compaction', async () => {
   const config = await fs.mkdtemp(path.join(os.tmpdir(), 'ade-cache-'));
   const dir = path.join(config, 'projects', '-Users-me-my-project');
