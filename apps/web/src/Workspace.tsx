@@ -304,18 +304,21 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   // A file or folder clicked in a chat reply (or picked from the sidebar menu): ask how to open it (an installed editor, the file manager, or just copy the path), then do it.
   // Like a link, only the visible project answers a click.
   const askOpen = async (target: OpenTarget) => {
-    const { ides, fileManager } = await ideList().catch(() => ({ ides: [] as IdeInfo[], fileManager: '파일 관리자' }));
-    const last = lastIde(), where = target.line ? `${target.path}:${target.line}` : target.path, kind = target.folder ? '폴더를' : '파일을';
+    const [{ ides, fileManager }, { path }] = await Promise.all([
+      ideList().catch(() => ({ ides: [] as IdeInfo[], fileManager: '파일 관리자' })),
+      call<{ path: string }>('ide/resolve', { path: target.path, chatId: target.chatId })
+    ]);
+    const last = lastIde(), where = target.line ? `${path}:${target.line}` : path, kind = target.folder ? '폴더를' : '파일을';
     const choice = await pick(`${kind} 열까요?
 ${where}`, [
       ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, icon: ideIcon(ide), ...(ide.id === last && { detail: '마지막 사용' }) })),
       { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기`, icon: 'folderOpen' },
       { id: 'copy', label: '경로 복사', icon: 'copy' }, { id: 'cancel', label: '취소' }]);
-    if (choice === 'copy') copyText(target.path);
+    if (choice === 'copy') copyText(path);
     else if (choice === 'files' || choice?.startsWith('ide:')) {
       const ide = choice === 'files' ? 'files' : choice.slice(4);
       if (ide !== 'files') rememberIde(ide);
-      await call('ide/open', { ide, path: target.path, line: target.line, column: target.column, chatId: target.chatId });
+      await call('ide/open', { ide, path, line: target.line, column: target.column, chatId: target.chatId });
     }
   };
   const askOpenRef = useRef(askOpen); askOpenRef.current = askOpen;

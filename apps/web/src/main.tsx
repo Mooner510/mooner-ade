@@ -235,7 +235,7 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
   }, []);
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, [Boolean(list)]);
   const fail = (cause: unknown) => pushError(target.root, errorText(cause));
-  const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: '.' }).catch(fail); };
+  const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: target.root }).catch(fail); };
   const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span></button>;
   const ides = byLastUsed(list?.ides ?? []);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />

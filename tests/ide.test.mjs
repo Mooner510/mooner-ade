@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectIdes, ideCommand, revealCommand, launch, openPath, outsideTarget } from '../apps/local-server/src/ide.js';
-import { FILE_PROMPT, chatPrompt } from '../apps/local-server/src/chat-prompt.js';
+import { FILE_PROMPT, MEDIA_PROMPT, chatPrompt } from '../apps/local-server/src/chat-prompt.js';
 import { UI_PROMPT } from '../apps/local-server/src/chat-ui-prompt.js';
 
 const touch = async file => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, ''); };
@@ -117,6 +117,8 @@ test('a new chat is told how to write file paths, the UI blocks only when enable
   assert.equal(chatPrompt(true, true), `${FILE_PROMPT}\n\n${UI_PROMPT}`);
   assert.equal(chatPrompt(true, false), UI_PROMPT, 'a chat from before this existed gets the same text as it always had (prompt cache)');
   assert.equal(chatPrompt(false, false), undefined);
+  assert.equal(chatPrompt(false, false, 'claude', true), MEDIA_PROMPT, 'media does not depend on interactive UI');
+  assert.ok(chatPrompt(false, false, 'codex', true).endsWith(MEDIA_PROMPT));
   for (const word of ['[[file:src/app.ts]]', ':42', 'relative to the project', 'folder', 'outside the project', '[[file:../', 'only when the user asks']) assert.ok(FILE_PROMPT.includes(word), word);
   assert.ok(!/outside the project stays in backticks/.test(FILE_PROMPT), 'a path outside the project is a chip too');
   assert.ok(FILE_PROMPT.length < 1200, `cached, but every word competes for attention: ${FILE_PROMPT.length} chars`);

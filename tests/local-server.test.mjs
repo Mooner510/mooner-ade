@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 // The Windows terminal shell is PowerShell, which only runs a quoted path through its call operator.
 const runNode = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}"`;
@@ -658,6 +658,32 @@ test('a plugin chat may run in a git worktree of the project', async t => {
   await call('chat/open', { id: 'wt', agent: 'claude', path: worktree, show: true });
   assert.equal((await call('chat/peers')).find(chat => chat.id === 'wt').cwd, worktree);
   await call('chat/open', { id: 'out', agent: 'claude', path: stranger }, 400);
+});
+
+test('IDE paths resolve from the chat worktree or project and can be copied as absolute paths', async t => {
+  const { call, repo } = await boot(t);
+  const sibling = await realpath(await mkdtemp(join(tmpdir(), 'ade-ide-')));
+  t.after(() => rm(sibling, { recursive: true, force: true }));
+  const worktree = join(sibling, '.worktrees', 'feature');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'ide/feature', worktree);
+  await call('chat/open', { id: 'feature', path: worktree });
+
+  const inWorktree = join('src', 'b.ts');
+  const target = join(worktree, inWorktree);
+  const projectRelative = relative(repo, target);
+  const chatId = 'feature';
+  assert.deepEqual(await call('ide/resolve', { path: inWorktree, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: projectRelative, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: target, chatId }), { path: target });
+  assert.deepEqual(await call('ide/resolve', { path: inWorktree }), { path: join(repo, inWorktree) });
+  assert.deepEqual(await call('ide/resolve', { path: '.' }), { path: repo });
+  await call('ide/resolve', { path: '//server/share/file.txt', chatId }, 400);
+
+  // Lookup of the editor happens after the file is found. Use an unavailable editor to avoid launching a GUI.
+  const open = path => call('ide/open', { ide: 'test-missing-editor', path, chatId }, 404);
+  for (const path of [projectRelative, target]) assert.match((await open(path)).error.message, /해당 편집기를 찾을 수 없습니다/);
+  const missing = join(worktree, 'missing.sql');
+  assert.equal((await open('missing.sql')).error.message, `파일을 찾을 수 없습니다: ${missing}`);
 });
 
 test('a chat keeps the login it started on; the setting only decides where new chats start; Claude chats can switch', async t => {

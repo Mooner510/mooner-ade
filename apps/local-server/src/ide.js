@@ -1,7 +1,6 @@
 // "Open in IDE": finds the editors installed on this machine (VS Code family, Zed, JetBrains) and starts one on a project folder or file,
 // and shows a path in the OS file manager. The server always runs on the user's own machine, so these open on their desktop.
-// Only absolute launcher paths found on disk are ever started (never a shell, never a bare name), and the target path is already
-// checked to be inside the project by the caller.
+// Editor launchers are found on disk and invoked with an absolute target path.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -87,7 +86,7 @@ export function detectIdes({ platform = process.platform, env = process.env, hom
   return out;
 }
 
-// The command line for opening `target` (an absolute path inside `root`) in an editor. A folder opens as the project; a file opens inside
+// The command line for opening `target` (an absolute path) in an editor. A folder opens as the project; a file opens inside
 // `root` as the project, at `line`/`column` when given. Pure, so it is tested without starting anything.
 export function ideCommand(ide, { root, target, directory, line, column }) {
   const at = Number.isInteger(line) && line > 0 ? line : 0, col = at && Number.isInteger(column) && column > 0 ? column : 0;
@@ -145,10 +144,23 @@ export function outsideTarget(root, requested) {
   return target;
 }
 
+export async function resolveIdeTarget(requested, roots) {
+  const [root] = roots;
+  const target = outsideTarget(root, requested);
+  if (roots.length === 1 || path.isAbsolute(requested)) return { root, target };
+  // A chat reply may use either its worktree or the original project as the base.
+  for (const base of roots) {
+    const candidate = base === root ? target : outsideTarget(base, requested);
+    const found = await fs.promises.stat(candidate).then(() => true, error => error.code !== 'ENOENT' && error.code !== 'ENOTDIR');
+    if (found) return { root: base, target: candidate };
+  }
+  return { root, target };
+}
+
 // Opens `target` (absolute; inside `root`, or outside the project, see outsideTarget) in editor `ideId`, or in the file manager when `ideId` is 'files'.
 export async function openPath({ ide: ideId, root, target, line, column }) {
   const stat = await fs.promises.stat(target).catch(() => null);
-  if (!stat) throw fault('NOT_FOUND', `파일을 찾을 수 없습니다: ${path.relative(root, target) || '.'}`, 404);
+  if (!stat) throw fault('NOT_FOUND', `파일을 찾을 수 없습니다: ${target}`, 404);
   const directory = stat.isDirectory();
   if (ideId === 'files') return launch(revealCommand({ target, directory }));
   const ide = findIde(ideId);
