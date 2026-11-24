@@ -345,6 +345,7 @@ function Shell() {
   const [projectDrag, setProjectDrag] = useState(''), [projectDrop, setProjectDrop] = useState<{ root: string; after: boolean } | null>(null);
   const { hub, connection } = useHub(ready);
   const entriesRef = useRef(entries); entriesRef.current = entries;
+  const activeRootRef = useRef('');
   const handles = useRef(new Map<string, WorkspaceHandle>());
   // One ref callback per project, kept: a new function every render makes the memoized Workspace re-render each time, for every open project.
   const handleRefs = useRef(new Map<string, (handle: WorkspaceHandle | null) => void>());
@@ -356,6 +357,7 @@ function Shell() {
   const statusRef = useRef(status); statusRef.current = status;
   const globalSettings = useRef(false);
   const current = entries.some(entry => entry.root === activeRoot) ? activeRoot : entries[0]?.root ?? '';
+  activeRootRef.current = current;
   const commit = (next: Entry[]) => { entriesRef.current = next; setEntries(next); };
   const moveProject = (root: string, targetRoot: string, after: boolean) => {
     const list = entriesRef.current, from = list.findIndex(entry => entry.root === root), target = list.findIndex(entry => entry.root === targetRoot);
@@ -470,16 +472,17 @@ function Shell() {
       if ('Notification' in window && Notification.permission === 'default' && entriesRef.current.length > 1) void Notification.requestPermission();
     } catch (cause) { report(cause); }
   }
-  const closeProject = useCallback(async (root: string) => {
+  const closeProject = useCallback(async (root: string, forceAsk = false) => {
     const handle = handles.current.get(root); if (!handle) return;
-    setActiveRoot(root); // the confirmation dialogs belong to the project, so it must be on screen
-    await new Promise(resolve => setTimeout(resolve, 0));
     let closed = false;
-    try { closed = await handle.requestClose(); } catch (cause) { report(cause); }
+    try { closed = await handle.requestClose(forceAsk); } catch (cause) { report(cause); }
     if (!closed) return;
     const list = entriesRef.current, index = list.findIndex(entry => entry.root === root), rest = list.filter(entry => entry.root !== root);
     commit(rest); setStatus(all => { const { [root]: _gone, ...others } = all; return others; });
-    setActiveRoot(rest[Math.min(index, rest.length - 1)]?.root ?? '');
+    // Closing a project you are not looking at leaves you where you were. Closing the one on screen moves to its neighbour.
+    const watching = activeRootRef.current;
+    const fallback = rest[Math.min(index, rest.length - 1)]?.root ?? '';
+    setActiveRoot(watching !== root && rest.some(entry => entry.root === watching) ? watching : fallback);
     void api<Recent[]>('recent').then(setRecent).catch(() => {});
   }, [report]);
   const actions = useRef({ select: (_index: number) => {}, cycle: (_step: number) => {}, close: () => {}, add: () => {}, toggle: () => {}, settings: () => {}, tutorial: () => {} });
@@ -613,7 +616,7 @@ function Shell() {
               {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
-                <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root); }}><Icon name="x" size={14} /></button>
+                <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root, true); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
@@ -636,7 +639,7 @@ function Shell() {
                   else return;
                   event.preventDefault();
                 };
-                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id); }}><Icon name="x" size={12} /></button>;
+                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id, true); }}><Icon name="x" size={12} /></button>;
                 // Edges of a row reorder (a line shows where); the middle merges, labelled so it is never a surprise.
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
@@ -695,7 +698,7 @@ function Shell() {
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
-                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id); }}><Icon name="x" size={12} /></button>
+                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id, true); }}><Icon name="x" size={12} /></button>
                     </li>; })}
                   </ul>{dropHint}
                 </li>;

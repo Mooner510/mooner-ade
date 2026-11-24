@@ -496,11 +496,19 @@ export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatS
 
 // ---- numbers shown in the status line ----
 // The CLI reports the real window on each result's modelUsage. Until that arrives, the model catalog's max input
-// tokens is the window (Sonnet 5.5 is 1M with no [1m] suffix). A [1m] id is 1M when the catalog has no row; anything else is 200k.
+// tokens is the window (Sonnet 5.5 is 1M with no [1m] suffix). A [1m] id is 1M when the catalog has no row.
+// With no catalog row at all (a restored chat before the catalog arrives), a model line that defaults to 1M (Fable 5+, Opus 4.7+, Sonnet 5+, Haiku 5.5+) is 1M too; anything else is 200k.
 // An alias ("opus") has no catalog row of its own: the family's first (newest) row stands in, as on the server.
 type CatalogRow = { id: string; family?: string; window?: number };
+const defaultsTo1m = (model: string) => {
+  const match = /(fable|opus|sonnet|haiku)-(\d+(?:-\d+)?)/i.exec(model);
+  if (!match) return false;
+  const family = match[1].toLowerCase(), version = modelVersion(match[2].replace('-', '.'));
+  return family === 'fable' ? versionAtLeast(version, [5]) : family === 'opus' ? versionAtLeast(version, [4, 7]) : family === 'sonnet' ? versionAtLeast(version, [5]) : versionAtLeast(version, [5, 5]);
+};
 export const contextWindow = (model: string | null, reported?: number | null, catalog?: CatalogRow[]) =>
-  reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (catalog?.find(item => item.id === model) ?? catalog?.find(item => item.family === model))?.window) || 200_000;
+  reported || (model && /\[1m\]|-1m\b/i.test(model) ? 1_000_000 : (catalog?.find(item => item.id === model) ?? catalog?.find(item => item.family === model))?.window)
+  || (model && defaultsTo1m(model) ? 1_000_000 : 0) || 200_000;
 export type ContextGauge = { percent: number; used: number; basis: number; max: number; autoCompact: boolean };
 export const contextGauge = (state: Pick<ChatState, 'contextTokens' | 'model' | 'autoCompact'> & { contextWindow?: number | null; capabilities?: { catalog?: CatalogRow[] } }): ContextGauge => {
   const max = contextWindow(state.model, state.contextWindow, state.capabilities?.catalog);
