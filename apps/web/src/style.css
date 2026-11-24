@@ -1073,28 +1073,15 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-item-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .plugin-item-actions .plugin-button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 
-/* Updates from the plugin's GitHub releases. */
-.plugin-update { display: flex; flex-direction: column; gap: 10px; }
-.plugin-update-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
-.plugin-update[data-tone=info] .plugin-update-status:has(.primary) { border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 7%, transparent); }
-.plugin-update-status > .icon, .plugin-update-status > .plugin-spinner { flex: none; color: var(--tone); }
-.plugin-update-status > div:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.plugin-update-status strong { font-weight: 600; }
-.plugin-update-status small { color: var(--muted); overflow-wrap: anywhere; }
-.plugin-update-actions { flex: none; display: flex; gap: 6px; }
-.plugin-review { margin: 4px 0 0; padding-left: 18px; }
-.plugin-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.plugin-mode { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); cursor: pointer; transition: border-color .12s, background .12s; }
-.plugin-mode:hover { border-color: var(--border-strong); }
-.plugin-mode[data-checked] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); }
-.plugin-mode input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
-.plugin-mode:has(input:focus-visible) { outline: 1px solid var(--focus); outline-offset: 2px; }
-.plugin-mode > span { display: flex; flex-direction: column; gap: 3px; }
-.plugin-mode strong { font-size: 12.5px; font-weight: 600; }
-.plugin-mode small { color: var(--muted); line-height: 1.45; }
-.plugin-default { margin-left: 6px; font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--muted); }
-.plugin-source { display: inline-flex; align-items: center; gap: 3px; margin: 0 2px; background: none; font-size: 11.5px; }
-@media (max-width: 640px) { .plugin-modes { grid-template-columns: 1fr; } }
+.plugin-update-policy fieldset { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; }
+.plugin-update-policy legend { padding: 6px 8px; color: var(--muted); font-size: 12px; }
+.plugin-update-policy label { flex-direction: row; align-items: flex-start; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.plugin-update-policy label:hover, .plugin-update-policy label:focus-within { background: var(--selected); }
+.plugin-update-policy input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+.plugin-update-policy strong, .plugin-update-policy small { display: block; }
+.plugin-update-policy small { margin-top: 2px; color: var(--muted); }
+.plugin-update-policy:popover-open { width: min(295px, calc(100vw - 24px)); }
+.plugin-list .plugin-callout { margin-top: 4px; }
 
 /* GitHub account for private plugin repositories: a toolbar button that opens a modal. */
 .plugin-github-open { position: relative; }

@@ -152,11 +152,11 @@ test('notify mode: a background round announces a Hub update once; installing as
   assert.equal(env.plugin('demo').update.status, 'latest');
 });
 
-test('auto mode is turned on in a dialog that names the Hub, then installs updates that ask for nothing new without one', async t => {
+test('auto mode covers Hub and GitHub sources, then installs approved Hub updates without a dialog', async t => {
   const env = await setup(t, { answers: [0], installed: [{ id: 'demo', version: '1.0.0' }] });
-  await env.manager.setUpdateMode('demo', 'auto');
-  assert.match(env.asked[0].detail, /MoonerADE Hub에 새 버전이 올라오면 확인 창 없이/);
-  assert.doesNotMatch(env.asked[0].detail, /github\.com/);
+  await env.manager.setUpdateMode('auto');
+  assert.match(env.asked[0].detail, /MoonerADE Hub 또는 GitHub 릴리스/);
+  assert.match(env.asked[0].detail, /앞으로 설치하는 플러그인/);
   env.fake.publish({ id: 'demo', version: '1.2.0', zip: zipOf('demo', '1.2.0') });
   await env.manager.runUpdateRound();
   assert.equal(env.asked.length, 1, 'no install dialog');
@@ -166,7 +166,7 @@ test('auto mode is turned on in a dialog that names the Hub, then installs updat
 
 test('auto mode does not install a Hub update that asks for a new permission or moves the source; it is announced for review', async t => {
   const env = await setup(t, { answers: [0, 0], installed: [{ id: 'demo', version: '1.0.0' }] });
-  await env.manager.setUpdateMode('demo', 'auto');
+  await env.manager.setUpdateMode('auto');
   env.fake.publish({ id: 'demo', version: '2.0.0', zip: zipOf('demo', '2.0.0', { workspace: true, source: { github: 'o/r', asset: 'demo.zip' } }) });
   await env.manager.runUpdateRound();
   assert.equal(env.plugin('demo').version, '1.0.0');
@@ -218,8 +218,8 @@ test('signed in: automatic mode installs a Hub-served plugin that was installed 
   const env = await setup(t, { github, answers: [0], installed: [{ id: 'listed', version: '1.0.0', source: githubSource }] });
   env.fake.publish({ id: 'listed', version: '1.2.0', zip: zipOf('listed', '1.2.0') });
   await env.manager.hubCatalog();
-  await env.manager.setUpdateMode('listed', 'auto');
-  assert.match(env.asked[0].detail, /MoonerADE Hub에 새 버전이 올라오면/);
+  await env.manager.setUpdateMode('auto');
+  assert.match(env.asked[0].detail, /MoonerADE Hub 또는 GitHub 릴리스/);
   await env.manager.runUpdateRound({ hubOnly: true });
   assert.equal(env.asked.length, 1, 'no install dialog');
   assert.equal(env.plugin('listed').version, '1.2.0');

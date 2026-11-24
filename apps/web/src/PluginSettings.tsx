@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import { isRemote } from './transport';
 import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -34,7 +34,7 @@ export type ManifestStep = { id: string; label: string; detail: string; optional
 export type UpdateMode = 'auto' | 'notify' | 'manual';
 export type PluginUpdate = {
   // Where updates come from: the plugin's GitHub repository, or MoonerADE Hub (then a GitHub repository may be named beside it for an older app).
-  source: { kind: 'github' | 'hub'; github?: string; asset?: string } | null; mode: UpdateMode;
+  source: { kind: 'github' | 'hub'; github?: string; asset?: string } | null;
   // `needs-login`: a Hub plugin, and this app is not signed in to the Hub.
   status?: 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'installing' | 'error' | 'needs-login';
   current?: string; latest?: string | null; available?: boolean; checkedAt?: number | null; error?: string | null; via?: string | null; viaLabel?: string; review?: string[];
@@ -73,7 +73,7 @@ export type PluginInfo = {
   commands?: string[]; envPrefix?: string | null; env?: string[]; tools?: PluginTools | null;
   setup?: ManifestStep[]; update?: PluginUpdate | null;
 };
-export type PluginsState = { available: boolean; problem: 'unavailable' | 'unreadable' | null; error: string | null; enabled: boolean; dir: string; plugins: PluginInfo[]; github?: GithubAccount; hub?: HubState; message?: string | null };
+export type PluginsState = { available: boolean; problem: 'unavailable' | 'unreadable' | null; error: string | null; enabled: boolean; dir: string; plugins: PluginInfo[]; updateMode: UpdateMode; github?: GithubAccount; hub?: HubState; message?: string | null };
 export type PluginsBridge = {
   state(): Promise<PluginsState>; onState(listener: (state: PluginsState) => void): () => void;
   setEnabled(on: boolean): Promise<PluginsState>; setBuiltin(id: string, on: boolean): Promise<PluginsState>; rescan(): Promise<PluginsState>; approve(folder: string): Promise<PluginsState>;
@@ -81,9 +81,9 @@ export type PluginsBridge = {
   action(id: string, action: string, values: Record<string, string>, item?: string): Promise<PluginsState>; openFolder(): Promise<PluginsState>;
   setMcp(id: string, change: { tool?: string; enabled: boolean }): Promise<PluginsState>; refreshTools(id: string): Promise<PluginsState>;
   pickZip(): Promise<PluginsState>; installZip(file: string): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
-  checkUpdates?(id?: string): Promise<PluginsState>; installUpdate?(id: string): Promise<PluginsState>; setUpdateMode?(id: string, mode: UpdateMode): Promise<PluginsState>;
+  checkUpdates?(): Promise<PluginsState>; installUpdate?(id: string): Promise<PluginsState>; setUpdateMode?(mode: UpdateMode): Promise<PluginsState>;
   connectGithub?(token: string): Promise<PluginsState>; disconnectGithub?(): Promise<PluginsState>; signInGithub?(): Promise<PluginsState>; cancelSignIn?(): Promise<PluginsState>;
-  probeGithub?(): Promise<PluginsState>; openSource?(id: string): Promise<PluginsState>; openTokenPage?(): Promise<PluginsState>;
+  probeGithub?(): Promise<PluginsState>; openTokenPage?(): Promise<PluginsState>;
   selectGithubAccount?(login: string): Promise<PluginsState>;
   // MoonerADE Hub: sign in with the browser, the market list, installing from it (the install asks in the desktop app's own dialog).
   signInHub?(): Promise<PluginsState>; cancelHubSignIn?(): Promise<PluginsState>; signOutHub?(): Promise<PluginsState>;
@@ -276,12 +276,6 @@ const currentStep = (steps: GuideStep[]) => steps.find(step => step.status === '
   ?? steps.find(step => !step.optional && step.status !== 'done');
 const stepStateLabel = (step: GuideStep, current: boolean): string => step.status === 'done' ? '완료' : step.status === 'active' ? '진행 중' : step.status === 'error' ? '확인 필요'
   : step.status === 'pending' ? '실행 후 확인' : current ? '지금 할 일' : step.optional ? '선택' : '대기';
-const ago = (at: number | null | undefined) => {
-  if (!at) return '';
-  const minutes = Math.round((Date.now() - at) / 60_000);
-  return minutes < 1 ? '방금' : minutes < 60 ? `${minutes}분 전` : minutes < 60 * 24 ? `${Math.round(minutes / 60)}시간 전` : `${Math.round(minutes / 1440)}일 전`;
-};
-
 // `step` is the button that ran: a plugin's own form shows its result next to its buttons, everything else at the top.
 type Notice = { text: string; error: boolean; step?: string };
 // `key` is '<where>:<step>': where the result is shown ('global' or a plugin folder) and which button shows progress.
@@ -400,7 +394,13 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   // so the button stays out of the way unless an installed plugin still uses GitHub. Signed out it is there as before.
   const showGithub = Boolean(state.github?.available) && (!state.hub?.signedIn || installed.some(plugin => plugin.update?.source?.kind === 'github'));
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
-  const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => <li key={plugin.folder}><PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!))} /></li>)}</ul>;
+  const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => {
+    const result = noticeFor(plugin.folder);
+    return <li key={plugin.folder}>
+      <PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!))} />
+      {result?.step === 'update' && <Callout tone={result.error ? 'error' : 'ok'}>{result.text}</Callout>}
+    </li>;
+  })}</ul>;
 
   return <div ref={rootRef} className={`plugins${dropOver ? ' plugin-drop-target' : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
     {dropOver && !filtering && <p className="plugin-drop-hint" aria-live="polite">zip을 놓으면 설치 확인 창이 뜹니다</p>}
@@ -417,13 +417,16 @@ export function PluginSettings({ query = '' }: { query?: string }) {
           마켓{hub.catalog && hub.catalog.plugins.length > 0 && <small>{hub.catalog.plugins.length}</small>}{shownTab !== 'market' && marketUpdates > 0 && <i className="plugin-new-dot" title="플러그인 업데이트 있음" />}
         </button>}
       </div>
-      {shownTab === 'installed' && <div className="plugin-toolbar">
-        {showGithub && state.github && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
-        {bridge.checkUpdates && installed.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
-        <IconButton icon="refresh" label="플러그인 폴더 다시 읽기" disabled={working} onClick={() => run('global:rescan', bridge.rescan)} />
-        <IconButton icon="folder" label="플러그인 폴더 열기" disabled={working} onClick={() => run('global:folder', bridge.openFolder)} />
-        <BusyButton className="primary" busy={working} running={busy === 'global:zip'} icon="plus" onClick={() => run('global:zip', bridge.pickZip)}>zip으로 설치</BusyButton>
-      </div>}
+      <div className="plugin-toolbar">
+        {shownTab === 'installed' && <>
+          {showGithub && state.github && <GithubSection github={state.github} busy={busy} run={run} bridge={bridge} notice={noticeFor('github')} />}
+          {bridge.checkUpdates && installed.some(plugin => plugin.update?.source) && <IconButton icon="update" label="모든 플러그인 업데이트 확인" disabled={working} onClick={() => run('global:updates', () => bridge.checkUpdates!())} />}
+          <IconButton icon="refresh" label="플러그인 폴더 다시 읽기" disabled={working} onClick={() => run('global:rescan', bridge.rescan)} />
+          <IconButton icon="folder" label="플러그인 폴더 열기" disabled={working} onClick={() => run('global:folder', bridge.openFolder)} />
+          <BusyButton className="primary" busy={working} running={busy === 'global:zip'} icon="plus" onClick={() => run('global:zip', bridge.pickZip)}>zip으로 설치</BusyButton>
+        </>}
+        {bridge.setUpdateMode && <UpdatePolicyMenu mode={state.updateMode} busy={working} onChange={mode => run('global:update-mode', () => bridge.setUpdateMode!(mode))} />}
+      </div>
     </div>}
 
     {hub && !filtering && shownTab === 'market' && <PluginMarket hub={hub} busy={busy} run={run} bridge={bridge} notice={noticeFor('market')} />}
@@ -451,7 +454,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
       <summary><Icon name="chevronRight" size={14} />설치 방법과 보안 안내</summary>
       <ul>
         <li>확인 창에서 <b>설치</b>를 누르기 전에는 아무것도 실행되지 않습니다. 이미 있는 플러그인은 업데이트되고 저장된 데이터는 남습니다.</li>
-        <li>Hub에 로그인하면 Hub가 제공하는 플러그인(마켓에서 설치했거나 Hub를 출처로 알려 주는 것)은 Hub에서만 업데이트를 받고, 새 버전이 올라오면 10분 안에 알려 드립니다. GitHub 로그인이나 릴리스는 쓰지 않습니다.</li>
+        <li>Hub에 로그인하면 Hub가 제공하는 플러그인(마켓에서 설치했거나 Hub를 출처로 알려 주는 것)은 Hub에서만 업데이트를 받고, 선택한 업데이트 방식이 적용됩니다. GitHub 로그인이나 릴리스는 쓰지 않습니다.</li>
         <li>Hub에 로그인하지 않았다면 업데이트 출처(GitHub 저장소)를 알려 주는 플러그인은 그 저장소의 릴리스에서 업데이트를 받습니다. 받은 파일은 릴리스의 체크섬과 맞춰 보고, 새 권한을 요청하는 업데이트는 자동 업데이트여도 물어봅니다.</li>
         <li>압축을 푼 폴더(안에 <span className="mono">plugin.json</span>이 있는 폴더)를 직접 넣었다면 플러그인을 열어 승인하세요.</li>
         <li>승인은 그때의 파일 내용에 묶입니다. 파일이 바뀌면 다시 승인해야 실행됩니다.</li>
@@ -469,6 +472,8 @@ function StatePill({ state }: { state: State }) {
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
 function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; onOpen(): void; onUpdate(): void }) {
   const left = setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
+  const updateStatus = plugin.update?.status;
+  const updating = busy === `${plugin.folder}:update` || updateStatus === 'downloading' || updateStatus === 'installing';
   // A div, not a button: the update button inside it must not be a button within a button.
   return <div role="button" tabIndex={0} className="plugin-row setting-hit" data-tone={stateTone(plugin.state)} onClick={onOpen} aria-label={`${plugin.name} 열기`}
     onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onOpen(); } }}>
@@ -481,7 +486,7 @@ function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; bus
       {plugin.description && <span className="plugin-row-desc">{plugin.description}</span>}
     </span>
     {canUpdate && <span className="plugin-row-update" onClick={event => event.stopPropagation()}>
-      <BusyButton className="primary" busy={Boolean(busy)} running={busy === `${plugin.folder}:update`} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
+      <BusyButton className="primary" busy={Boolean(busy) || updating || updateStatus === 'checking'} running={updating} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
     </span>}
     <StatePill state={plugin.state} />
     <Icon name="chevronRight" size={16} />
@@ -569,8 +574,6 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     {plugin.state !== 'invalid' && (plugin.terminal || plugin.mcp || plugin.workspace) && <Section title="제공하는 기능">
       <Provides plugin={plugin} busy={busy} run={run} bridge={bridge} />
     </Section>}
-
-    {id && plugin.update && <UpdateSection plugin={plugin} update={plugin.update} busy={busy} run={run} bridge={bridge} />}
 
     <details className="plugin-about">
       <summary><Icon name="chevronRight" size={14} />자세한 정보</summary>
@@ -729,44 +732,23 @@ const MODES: { mode: UpdateMode; label: string; hint: string }[] = [
   { mode: 'notify', label: '알림 후 설치', hint: '새 버전이 나오면 알리고, 설치는 확인 창에서 합니다.' },
   { mode: 'manual', label: '수동', hint: '직접 확인할 때만 새 버전을 찾습니다.' }
 ];
-// Where updates come from, how they are taken, and the newest version found.
-function UpdateSection({ plugin, update, busy, run, bridge }: { plugin: PluginInfo; update: PluginUpdate; busy: string; run: Run; bridge: PluginsBridge }) {
-  const id = plugin.id!, key = (step: string) => `${plugin.folder}:${step}`;
-  // A Hub plugin's updates are not shown until signing in to the Hub (정보 page).
-  if (update.status === 'needs-login') return null;
-  if (!update.source || !bridge.checkUpdates) return <Section title="업데이트">
-    <p className="plugin-muted">이 플러그인은 업데이트 출처(GitHub 저장소 또는 MoonerADE Hub)를 알려 주지 않습니다. 새 버전의 zip을 설치하면 업데이트됩니다. Hub에 로그인하면 Hub가 제공하는 플러그인은 자동으로 Hub에서 업데이트를 받습니다.</p>
-  </Section>;
-  const status = update.status ?? 'idle', working = Boolean(busy), fromHub = update.source.kind === 'hub';
-  const spinning = ['checking', 'downloading', 'installing'].includes(status);
-  const tone: Tone = status === 'available' ? 'info' : status === 'error' ? 'error' : status === 'latest' ? 'ok' : 'info';
-  const text = status === 'checking' ? '새 버전을 확인하는 중…' : status === 'downloading' ? `v${update.latest}을(를) 받는 중…` : status === 'installing' ? `v${update.latest}을(를) 설치하는 중…`
-    : status === 'available' ? `새 버전 v${update.latest}이(가) 있습니다` : status === 'latest' ? `최신 버전입니다 (v${update.current})` : status === 'error' ? update.error ?? '확인하지 못했습니다.'
-    : '아직 확인하지 않았습니다.';
-  return <Section title="업데이트" hint={fromHub ? <>출처 <b>MoonerADE Hub</b></> : <>출처 <button type="button" className="plugin-link plugin-source" onClick={() => run(key('source'), () => bridge.openSource!(id))}><Icon name="externalLink" size={12} />github.com/{update.source.github}</button> 릴리스</>}>
-    <div className="plugin-update" data-tone={tone}>
-      <div className="plugin-update-status">
-        {spinning ? <span className="plugin-spinner" aria-hidden="true" /> : <Icon name={status === 'available' ? 'download' : status === 'error' ? 'alert' : status === 'latest' ? 'check' : 'update'} size={16} />}
-        <div>
-          <strong>{text}</strong>
-          <small>{[status === 'available' && `지금 v${update.current}`, update.checkedAt && `${ago(update.checkedAt)} 확인`, update.checkedAt && status !== 'error' && update.viaLabel && `${update.viaLabel}으로 접속`].filter(Boolean).join(' · ')}</small>
-        </div>
-        <div className="plugin-update-actions">
-          {status === 'available' && <BusyButton className="primary" busy={working} running={busy === key('install')} icon="download" onClick={() => run(key('install'), () => bridge.installUpdate!(id))}>설치</BusyButton>}
-          <BusyButton busy={working || spinning} running={busy === key('check')} icon="refresh" onClick={() => run(key('check'), () => bridge.checkUpdates!(id))}>지금 확인</BusyButton>
-        </div>
-      </div>
-      {(update.review?.length ?? 0) > 0 && <Callout tone="warn">이 업데이트는 전에 없던 것을 요청해 자동으로 설치하지 않았습니다. 확인하고 설치하세요.
-        <ul className="plugin-review">{update.review!.map(line => <li key={line}>{line}</li>)}</ul></Callout>}
-      <div className="plugin-modes" role="radiogroup" aria-label="업데이트 방식">
-        {MODES.map(option => <label key={option.mode} className="plugin-mode" data-checked={update.mode === option.mode || undefined}>
-          <input type="radio" name={`update-mode-${id}`} value={option.mode} checked={update.mode === option.mode} disabled={working}
-            onChange={() => run(key('mode'), () => bridge.setUpdateMode!(id, option.mode))} />
-          <span><strong>{option.label}{option.mode === 'notify' && <em className="plugin-default">기본</em>}</strong><small>{option.hint}</small></span>
+function UpdatePolicyMenu({ mode, busy, onChange }: { mode: UpdateMode; busy: boolean; onChange(mode: UpdateMode): void }) {
+  const id = useId(), anchor = `--plugin-policy-${id.replace(/:/g, '')}`;
+  const popover = useRef<HTMLDivElement>(null);
+  return <>
+    <button type="button" className="icon-btn" aria-label="플러그인 업데이트 방식" data-tip="플러그인 업데이트 방식"
+      popoverTarget={id} style={{ anchorName: anchor } as CSSProperties} disabled={busy}><Icon name="more" /></button>
+    <div ref={popover} id={id} popover="auto" className="split-menu plugin-update-policy" style={{ positionAnchor: anchor } as CSSProperties}>
+      <fieldset>
+        <legend>모든 플러그인 업데이트 방식</legend>
+        {MODES.map(option => <label key={option.mode}>
+          <input type="radio" name={id} value={option.mode} checked={mode === option.mode} disabled={busy}
+            onChange={() => { popover.current?.hidePopover(); onChange(option.mode); }} />
+          <span><strong>{option.label}</strong><small>{option.hint}</small></span>
         </label>)}
-      </div>
+      </fieldset>
     </div>
-  </Section>;
+  </>;
 }
 
 // MoonerADE Hub sign-in, on the 정보 page. The plugin market (플러그인 › 마켓) appears only after signing in here.

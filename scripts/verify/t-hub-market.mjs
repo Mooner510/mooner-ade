@@ -15,6 +15,8 @@ const text = sel => c.ev(`return [...document.querySelectorAll(${JSON.stringify(
 const confirmText = async () => { await c.waitFor(`!!document.querySelector('dialog.verify-plugin-confirm[open]')`, 15000); return c.ev(`const d=document.querySelector('dialog.verify-plugin-confirm'); return {title:d.querySelector('h2').textContent, body:d.querySelector('pre').textContent, buttons:[...d.querySelectorAll('button')].map(b=>b.textContent)}`); };
 const answer = async accept => { await c.ev(`const b=[...document.querySelectorAll('dialog.verify-plugin-confirm button')]; (${accept}?b.at(-1):b[0]).click(); return 1`); await c.waitFor(`!document.querySelector('dialog.verify-plugin-confirm[open]')`, 15000); };
 const tab = async label => { const at = await c.ev(`const e=[...document.querySelectorAll('[role=tab]')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(label)})); if(!e) return null; const r=e.getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]`); if (!at) throw new Error(`no tab ${label}`); await c.click(...at); };
+const section = label => clickExact('.settings-nav button', label);
+const marketTab = `[...document.querySelectorAll('[role=tab]')].some(b=>b.textContent.startsWith('마켓'))`;
 const rows = () => c.ev(`return [...document.querySelectorAll('.plugin-market-row')].map(r=>({name:r.querySelector('.plugin-row-name strong')?.textContent, text:r.textContent.replace(/\\s+/g,' ').trim(), buttons:[...r.querySelectorAll('button')].map(b=>b.textContent.trim())}))`);
 
 // A fresh session starts with the first-run tutorial over everything: skip it (every step but the last has 건너뛰기).
@@ -25,7 +27,7 @@ const skipTour = async () => {
     await sleep(900);
   }
 };
-await check('hub.open', '설정 → 플러그인에 마켓 탭이 있다', async () => {
+await check('hub.open', '설정 → 플러그인에 업데이트 방식 메뉴가 있다', async () => {
   await c.waitFor(`!!document.querySelector('.tour, button[aria-label="설정"], button.recent-open')`, 20000);
   await skipTour();
   // After the tutorial the app may show the project picker: open the session's own project from the recent list.
@@ -37,14 +39,14 @@ await check('hub.open', '설정 → 플러그인에 마켓 탭이 있다', async
   await c.ev(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='알겠어요')?.click(); return 1`); // the "tutorial can be replayed" tip
   await c.clickSel('button[aria-label="설정"]');
   await c.waitFor(`[...document.querySelectorAll('button')].some(b=>/플러그인$/.test(b.textContent.trim()))`, 10000);
-  await c.clickSel('button', '플러그인');
-  await c.waitFor(`[...document.querySelectorAll('[role=tab]')].some(b=>b.textContent.startsWith('마켓'))`, 10000);
+  await section('플러그인');
+  await c.waitFor(`!!document.querySelector('button[aria-label="플러그인 업데이트 방식"]')`, 10000);
   return await text('[role=tab]');
 });
-await check('hub.signed-out', '로그아웃 상태의 마켓은 로그인을 안내하고 목록을 보이지 않는다', async () => {
-  await tab('마켓'); await c.waitFor(`!!document.querySelector('.plugin-market-signin')`);
-  const body = await text('.plugin-market'); ok(/Hub 로그인/.test(body) && /GitHub 계정은 필요 없습니다/.test(body), body);
-  eq(await c.ev(`return document.querySelectorAll('.plugin-market-row').length`), 0);
+await check('hub.signed-out', '로그아웃 상태에서는 마켓 탭이 숨겨지고 정보에서 로그인할 수 있다', async () => {
+  ok(!await c.ev(`return ${marketTab}`), 'market requires Hub sign-in');
+  await section('정보');
+  await c.waitFor(`[...document.querySelectorAll('button')].some(b=>b.textContent.trim().endsWith('Hub 로그인'))`);
   await c.shot('hub-1-signed-out');
 });
 await check('hub.sign-in', '로그인: 코드가 보이고, 승인하면 계정 이름과 목록이 나온다', async () => {
@@ -52,9 +54,11 @@ await check('hub.sign-in', '로그인: 코드가 보이고, 승인하면 계정 
   await test('publish', { id: 'hub-other', version: '0.2.0', name: '다른 플러그인', description: '두 번째 플러그인입니다.', grants: { terminal: true, mcp: true } });
   await test('state', { approval: 'manual' });
   await clickExact('button', 'Hub 로그인');
-  await c.waitFor(`/BCDF-GHJK/.test(document.querySelector('.plugin-market')?.textContent||'')`, 10000);
+  await c.waitFor(`/BCDF-GHJK/.test(document.querySelector('.settings-body')?.textContent||'')`, 10000);
   await c.shot('hub-2-code');
   await test('state', { approve: true });
+  await c.waitFor(`document.querySelector('.settings-body')?.textContent.includes('시험 계정')`, 15000);
+  await section('플러그인'); await c.waitFor(marketTab); await tab('마켓');
   await c.waitFor(`document.querySelectorAll('.plugin-market-row').length===2`, 15000);
   const account = await text('.plugin-market-account'); ok(/시험 계정/.test(account), account);
   const list = await rows(); eq(list.map(r => r.name), ['Hub 데모', '다른 플러그인']);
@@ -76,64 +80,69 @@ await check('hub.install', '설치: 설치 확인 창이 Hub를 출처로 적고
   const list = await rows(); ok(list[0].buttons.length === 0 && list[1].buttons.some(label => label.endsWith('설치')), JSON.stringify(list));
   await c.shot('hub-5-installed');
 });
-await check('hub.installed-tab', '설치한 플러그인에 나오고, 업데이트 출처는 MoonerADE Hub다', async () => {
-  await tab('설치한 플러그인'); await c.waitFor(`[...document.querySelectorAll('.plugin-row')].some(r=>r.textContent.includes('Hub 데모'))`, 15000);
-  await clickExact('.plugin-row', await c.ev(`return [...document.querySelectorAll('.plugin-row')].find(r=>r.textContent.includes('Hub 데모')).textContent.replace(/\\s+/g,' ').trim()`));
-  await c.waitFor(`!!document.querySelector('.plugin-update')`, 10000);
-  const section = await text('.plugin-section:has(.plugin-update)'); ok(/출처 MoonerADE Hub/.test(section) && /최신 버전입니다|아직 확인하지 않았습니다/.test(section) && !/github\.com/.test(section), section);
+await check('hub.installed-tab', '설치한 플러그인 목록에 나오고 상세 화면에는 업데이트 영역이 없다', async () => {
+  await tab('설치한 플러그인'); await c.waitFor(`!!document.querySelector('.plugin-row[aria-label="Hub 데모 열기"]')`, 15000);
+  await c.clickSel('.plugin-row[aria-label="Hub 데모 열기"]');
+  await c.waitFor(`!!document.querySelector('.plugin-detail-head')`);
+  ok(!await c.ev(`return [...document.querySelectorAll('.plugin-section h4')].some(h=>h.textContent.trim()==='업데이트')`), 'detail has no update section');
   await c.shot('hub-6-detail');
-});
-await check('hub.update', '새 버전: 지금 확인 → 새 버전 안내 → 설치 확인 창이 1.0.0 → 1.1.0을 적는다', async () => {
-  await test('publish', { id: 'hub-demo', version: '1.1.0', name: 'Hub 데모', description: 'Hub에서 받은 시험용 플러그인입니다.', grants: { workspace: true }, manifest: { workspace: true } });
-  await clickExact('button', '지금 확인');
-  await c.waitFor(`/새 버전 v1\\.1\\.0이\\(가\\) 있습니다/.test(document.querySelector('.plugin-update')?.textContent||'')`, 15000);
-  await c.shot('hub-7-update-available');
-  await clickExact('.plugin-update button', '설치');
-  const dialog = await confirmText(); eq(dialog.title, '플러그인 업데이트'); ok(/1\.0\.0 → 1\.1\.0/.test(dialog.body) && /받은 곳: MoonerADE Hub/.test(dialog.body), dialog.body);
-  await answer(true);
-  await c.waitFor(`/최신 버전입니다 \\(v1\\.1\\.0\\)/.test(document.querySelector('.plugin-update')?.textContent||'')`, 20000);
-  // The same update straight from the installed list: the row's own button (not a button inside the row's button).
-  await test('publish', { id: 'hub-demo', version: '1.2.0', name: 'Hub 데모', description: 'Hub에서 받은 시험용 플러그인입니다.', grants: { workspace: true }, manifest: { workspace: true } });
-  await clickExact('button', '지금 확인');
-  await c.waitFor(`/새 버전 v1\\.2\\.0이\\(가\\) 있습니다/.test(document.querySelector('.plugin-update')?.textContent||'')`, 15000);
   await c.clickSel('button.plugin-back');
-  await c.waitFor(`!!document.querySelector('.plugin-row-update button')`, 10000);
+});
+await check('hub.update-policy', '상단 메뉴에서 고른 방식이 다른 탭에도 적용된다', async () => {
+  const menu = 'button[aria-label="플러그인 업데이트 방식"]';
+  await c.clickSel(menu);
+  const before = await c.ev(`return document.querySelector('.plugin-update-policy:popover-open input:checked')?.value`);
+  const target = before === 'manual' ? 'notify' : 'manual';
+  await c.clickSel(`.plugin-update-policy input[value="${target}"]`);
+  await c.waitFor(`!document.querySelector('${menu}')?.disabled`);
+  await tab('내장 플러그인'); await c.clickSel(menu);
+  eq(await c.ev(`return document.querySelector('.plugin-update-policy:popover-open input:checked')?.value`), target);
+  await c.shot('hub-7-policy');
+  await c.clickSel(`.plugin-update-policy input[value="${before}"]`);
+  if (before === 'auto') { await confirmText(); await answer(true); }
+  await c.waitFor(`!document.querySelector('${menu}')?.disabled`);
+  await tab('설치한 플러그인');
+});
+await check('hub.update', '목록 상단에서 확인하고 행 버튼으로 업데이트를 설치한다', async () => {
+  await test('publish', { id: 'hub-demo', version: '1.1.0', name: 'Hub 데모', description: 'Hub에서 받은 시험용 플러그인입니다.', grants: { workspace: true }, manifest: { workspace: true } });
+  await c.clickSel('button[aria-label="모든 플러그인 업데이트 확인"]');
+  await c.waitFor(`document.querySelector('.plugin-row-update button')?.textContent.includes('업데이트 v1.1.0')`, 15000);
   ok(!await c.ev(`return !!document.querySelector('button .plugin-row-update, button.plugin-row')`), 'row must not be a button');
   await c.shot('hub-7b-row-update');
-  await clickExact('.plugin-row-update button', '업데이트 v1.2.0');
-  eq((await confirmText()).title, '플러그인 업데이트'); await answer(true);
-  await c.waitFor(`!document.querySelector('.plugin-row-update')`, 20000);
-  await clickExact('.plugin-row', await c.ev(`return [...document.querySelectorAll('.plugin-row')].find(r=>r.textContent.includes('Hub 데모')).textContent.replace(/\\s+/g,' ').trim()`));
-  await c.waitFor(`!!document.querySelector('.plugin-update')`, 10000);
+  await clickExact('.plugin-row-update button', '업데이트 v1.1.0');
+  const dialog = await confirmText(); eq(dialog.title, '플러그인 업데이트'); ok(/1\.0\.0 → 1\.1\.0/.test(dialog.body) && /받은 곳: MoonerADE Hub/.test(dialog.body), dialog.body);
+  await answer(true);
+  await c.waitFor(`document.querySelector('.plugin-row[aria-label="Hub 데모 열기"] .plugin-version')?.textContent==='v1.1.0' && !document.querySelector('.plugin-row-update')`, 20000);
 });
 await check('hub.expired', '토큰이 만료돼도 목록은 다시 받아지고(갱신 한 번), 로그인은 유지된다', async () => {
   await c.waitFor(`!![...document.querySelectorAll('button')].find(b=>b.textContent.includes('플러그인'))`, 5000).catch(() => {});
   const before = (await requests()).refreshCalls;
   await test('state', { expireAccess: true });
-  await c.clickSel('button.plugin-back');
-  await c.waitFor(`[...document.querySelectorAll('[role=tab]')].some(b=>b.textContent.startsWith('마켓'))`, 10000);
+  await c.waitFor(marketTab);
   await tab('마켓'); await c.waitFor(`document.querySelectorAll('.plugin-market-row').length>=1`, 10000);
   await c.clickSel('button[aria-label="목록 새로고침"]');
   await sleep(1500);
   eq((await requests()).refreshCalls, before + 1); ok(await text('.plugin-market-account'), 'still signed in');
 });
-await check('hub.sign-out', '로그아웃하면 마켓은 로그인 안내로, 설치한 Hub 플러그인은 로그인 필요로 바뀐다', async () => {
+await check('hub.sign-out', '로그아웃하면 마켓이 숨겨지고 수동 확인에서 로그인을 안내한다', async () => {
   await clickExact('.plugin-market-account button', '로그아웃');
-  await c.waitFor(`!!document.querySelector('.plugin-market-signin')`, 10000); eq((await requests()).signedOut, 1);
-  await tab('설치한 플러그인'); await c.waitFor(`!!document.querySelector('.plugin-row')`, 5000);
-  await c.ev(`[...document.querySelectorAll('.plugin-row')].find(r=>r.textContent.includes('Hub 데모')).click(); return 1`);
-  await c.waitFor(`/Hub에 로그인해야 새 버전을 확인할 수 있어요/.test(document.querySelector('.plugin-update')?.textContent||'')`, 10000);
-  ok(await c.ev(`return [...document.querySelectorAll('.plugin-update button')].some(b=>b.textContent.trim().endsWith('Hub 로그인'))`), 'sign-in button on the update section');
+  await c.waitFor(`!(${marketTab})`, 10000); eq((await requests()).signedOut, 1);
+  await tab('설치한 플러그인');
+  await c.clickSel('button[aria-label="모든 플러그인 업데이트 확인"]');
+  await c.waitFor(`document.querySelector('.plugins .plugin-callout')?.textContent.includes('정보에서 MoonerADE Hub에 로그인')`, 10000);
   await c.shot('hub-8-needs-login');
 });
-await check('hub.lost', '계정이 폐기되면 로그인 해제와 이유가 마켓에 보인다', async () => {
+await check('hub.lost', '계정이 폐기되면 마켓이 숨겨지고 정보에서 다시 로그인을 안내한다', async () => {
   await test('state', { approval: 'auto' });
-  await c.clickSel('button.plugin-back');
-  await tab('마켓'); await clickExact('button', 'Hub 로그인');
+  await section('정보'); await clickExact('button', 'Hub 로그인');
+  await c.waitFor(`document.querySelector('.settings-body')?.textContent.includes('시험 계정')`, 15000);
+  await section('플러그인'); await c.waitFor(marketTab); await tab('마켓');
   await c.waitFor(`document.querySelectorAll('.plugin-market-row').length===2`, 15000);
   await test('state', { revokeAll: true });
   await c.clickSel('button[aria-label="목록 새로고침"]');
-  await c.waitFor(`!!document.querySelector('.plugin-market-signin') && /다시 로그인하세요/.test(document.querySelector('.plugin-market')?.textContent||'')`, 15000);
+  await c.waitFor(`!(${marketTab})`, 15000);
+  await section('정보');
+  await c.waitFor(`/다시 로그인하세요/.test(document.querySelector('.settings-body')?.textContent||'')`, 15000);
   await c.shot('hub-9-lost');
 });
 console.log('problems', JSON.stringify(c.problems));

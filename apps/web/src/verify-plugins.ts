@@ -38,7 +38,7 @@ export function installVerifyPlugins() {
     } catch { /* A server restart navigates this same tab; never retry a mutation. */ }
     finally { polling = false; }
   }
-  const names = ['state', 'setEnabled', 'setBuiltin', 'rescan', 'approve', 'revoke', 'restart', 'action', 'setMcp', 'refreshTools', 'openFolder', 'checkUpdates', 'installUpdate', 'setUpdateMode', 'connectGithub', 'disconnectGithub', 'signInGithub', 'cancelSignIn', 'probeGithub', 'selectGithubAccount', 'openSource', 'openTokenPage', 'signInHub', 'cancelHubSignIn', 'signOutHub', 'hubCatalog', 'hubInstall'];
+  const names = ['state', 'setEnabled', 'setBuiltin', 'rescan', 'approve', 'revoke', 'restart', 'action', 'setMcp', 'refreshTools', 'openFolder', 'checkUpdates', 'installUpdate', 'setUpdateMode', 'connectGithub', 'disconnectGithub', 'signInGithub', 'cancelSignIn', 'probeGithub', 'selectGithubAccount', 'openTokenPage', 'signInHub', 'cancelHubSignIn', 'signOutHub', 'hubCatalog', 'hubInstall'];
   const bridge = Object.fromEntries(names.map(name => [name, async (...args: unknown[]) => {
     const result = await call(name, ...args);
     if (typeof result.openUrl === 'string' && /^https:\/\/github\.com\//.test(result.openUrl)) window.open(result.openUrl, '_blank', 'noopener,noreferrer');

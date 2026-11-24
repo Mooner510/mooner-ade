@@ -290,10 +290,10 @@ export function updateReview(before, after, { managed = false } = {}) {
 // ---- sealed settings ------------------------------------------------------------------------------------------------
 // `mcp[id]` is what the user turned off of a plugin's MCP server: all of it (`off`) or single tools (`disabled`).
 // `builtin[id]` is the on/off choice for a plugin that ships with the app (on until the user turns it off).
-// `updates[id]` is how a plugin is updated (`mode`: auto, notify or manual) and the newest version already announced.
+// `updateMode` applies to all installed plugins; `updates[id]` keeps the newest version already announced.
 // `github` is the GitHub account connected in MoonerADE for private plugin repositories: { token, login, via: 'pat'|'oauth' }.
 // `hub` is the sign-in to MoonerADE Hub (hub-client.js): { account, at, deviceId, access, refresh, accessExpiresAt }.
-export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updates: {}, github: null, ghAccount: null, hub: null });
+export const emptyPluginState = () => ({ version: 1, enabled: false, approved: {}, data: {}, mcp: {}, builtin: {}, updateMode: DEFAULT_UPDATE_MODE, updates: {}, github: null, ghAccount: null, hub: null });
 export function validPluginState(value) {
   const state = emptyPluginState();
   if (!value || typeof value !== 'object' || value.version !== 1) return state;
@@ -310,13 +310,15 @@ export function validPluginState(value) {
     const disabled = [...new Set(Array.isArray(entry.disabled) ? entry.disabled.filter(name => typeof name === 'string' && TOOL_NAME.test(name)) : [])].slice(0, 200);
     if (entry.off === true || disabled.length) state.mcp[id] = { off: entry.off === true, disabled };
   }
+  const hasGlobalMode = UPDATE_MODES.includes(value.updateMode);
+  if (hasGlobalMode) state.updateMode = value.updateMode;
   const updates = value.updates && typeof value.updates === 'object' && !Array.isArray(value.updates) ? value.updates : {};
   for (const [id, entry] of Object.entries(updates)) {
     if (!ID.test(id) || !entry || typeof entry !== 'object') continue;
-    const next = {};
-    if (UPDATE_MODES.includes(entry.mode)) next.mode = entry.mode;
-    if (typeof entry.notified === 'string' && versionText(entry.notified)) next.notified = versionText(entry.notified);
-    if (Object.keys(next).length) state.updates[id] = next;
+    // Preserve an opt-out from background checks. Automatic updates need fresh consent for the wider scope.
+    if (!hasGlobalMode && entry.mode === 'manual') state.updateMode = 'manual';
+    const notified = typeof entry.notified === 'string' ? versionText(entry.notified) : null;
+    if (notified) state.updates[id] = { notified };
   }
   const github = value.github;
   if (github && typeof github === 'object' && typeof github.token === 'string' && /^[\x21-\x7e]{20,255}$/.test(github.token) && typeof github.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(github.login)) {
@@ -374,7 +376,7 @@ export function createPluginStore({ file, crypto }) {
   // The state as callers see it. approved and data are not enumerable, so `{ ...state }` never opens the sealed file; reading them does.
   // So are the tokens: `github.token` and `hub.secret` ({ access, refresh, accessExpiresAt, deviceId }).
   function view() {
-    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updates: plain.updates, github: null, ghAccount: plain.ghAccount, hub: null };
+    const value = { version: 1, enabled: plain.enabled, mcp: plain.mcp, builtin: plain.builtin, updateMode: plain.updateMode, updates: plain.updates, github: null, ghAccount: plain.ghAccount, hub: null };
     if (plain.github) value.github = Object.defineProperty({ ...plain.github }, 'token', { get: () => openSealed().token });
     if (plain.hub) value.hub = Object.defineProperty({ ...plain.hub }, 'secret', { get: () => { const hub = openSealed().hub; return hub ? Object.fromEntries(HUB_SECRET.map(key => [key, hub[key]])) : null; } });
     for (const key of SEALED) Object.defineProperty(value, key, { get: () => openSealed()[key] });
@@ -606,7 +608,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   function snapshot() {
     return {
-      available: store.available, problem: store.problem, enabled: store.state.enabled, dir,
+      available: store.available, problem: store.problem, enabled: store.state.enabled, dir, updateMode: store.state.updateMode,
       // The GitHub account for private plugin repositories. Never the token itself.
       github: {
         available: Boolean(github), login: store.state.github?.login ?? null, via: store.state.github?.via ?? null, machine: machineVia, machineChecked, signIn: Boolean(clientId), error: githubError,
@@ -1097,6 +1099,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const installed = list.find(entry => !entry.builtin && !entry.error && entry.manifest?.id === manifest.id);
       const review = installed ? updateReview(installed.manifest, manifest, { managed: update?.managed === true }) : [];
       // Automatic: only an approved, running-eligible plugin whose update asks for nothing new goes in without a dialog.
+      if (update?.auto && store.state.updateMode !== 'auto') throw fail('플러그인 업데이트 방식이 바뀌었습니다.', 'UPDATE_MODE_CHANGED');
       const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
       if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
       if (!silent) {
@@ -1143,7 +1146,6 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // The client a source is served by (the Hub when the source is the Hub, else GitHub), or null when this app has none.
   const clientFor = source => sourceKind(source) === 'hub' ? hub : sourceKind(source) === 'github' ? github : null;
   const hubSignedIn = () => Boolean(hub && store.state.hub);
-  const modeOf = id => store.state.updates?.[id]?.mode ?? DEFAULT_UPDATE_MODE;
   // Where THIS plugin's updates come from right now. Signed in to the Hub, a plugin the Hub can serve (plugin.json says `source.hub`, or the
   // Hub's list has its id: installed from the market) comes only from the Hub: no GitHub sign-in, no release is asked. Signed out, it is what
   // the manifest names for GitHub (the Hub part is ignored), and a plugin that only names the Hub waits for the sign-in.
@@ -1163,7 +1165,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   function updateView(item) {
     const id = item.manifest.id, source = sourceOf(item);
-    if (!source) return { source: null, mode: modeOf(id) };
+    if (!source) return { source: null };
     const kind = sourceKind(source), raw = updates.get(id), entry = raw?.kind === kind ? raw : null;
     // The Hub's list already says what is newest, so an update shows (and flags) before the plugin itself was checked.
     let latest = entry?.found?.version ?? null;
@@ -1175,7 +1177,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (kind === 'hub' && !hubSignedIn() && !['checking', 'downloading', 'installing'].includes(status)) status = 'needs-login';
     return {
       source: kind === 'hub' ? { kind } : { kind, github: source.github, asset: source.asset },
-      mode: modeOf(id), status, current: item.manifest.version, latest, available,
+      status, current: item.manifest.version, latest, available,
       checkedAt: entry?.checkedAt ?? null, error: entry?.error ?? null, via: entry?.found?.via ?? null, viaLabel: credentialLabel(entry?.found?.via ?? null),
       review: available ? entry?.review ?? [] : []
     };
@@ -1197,7 +1199,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (checking.has(id)) return checking.get(id);
     const client = clientFor(source), kind = sourceKind(source);
     if (!client) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
-    if (kind === 'hub' && !hubSignedIn()) throw fail('MoonerADE Hub에 로그인해야 업데이트를 확인할 수 있습니다. 설정 → 플러그인 → 마켓에서 로그인하세요.', 'NOT_SIGNED_IN');
+    if (kind === 'hub' && !hubSignedIn()) throw fail('MoonerADE Hub에 로그인해야 업데이트를 확인할 수 있습니다. 설정 → 정보에서 로그인하세요.', 'NOT_SIGNED_IN');
     const entry = updates.get(id) ?? {};
     updates.set(id, entry);
     // An answer from the other place (the plugin moved from GitHub to the Hub) is not an answer for this one.
@@ -1239,9 +1241,10 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       now.status = 'installing'; changed();
       const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
       now.status = 'latest';
-      return result;
+      return { ...snapshot(), message: result.message };
     } catch (error) {
-      if (error.code === 'NEEDS_REVIEW') { now.status = 'available'; now.review = error.review ?? []; }
+      if (error.code === 'UPDATE_MODE_CHANGED') now.status = 'available';
+      else if (error.code === 'NEEDS_REVIEW') { now.status = 'available'; now.review = error.review ?? []; }
       else { now.status = 'error'; now.error = String(error?.message ?? error).slice(0, 300); }
       throw error;
     } finally {
@@ -1256,17 +1259,16 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     try { store.update(state => ({ ...state, updates: { ...state.updates, [id]: { ...state.updates?.[id], notified: version } } })); } catch { return; }
     notify({ id, title: '플러그인 업데이트', body });
   }
-  // The background round: every plugin with a source and not on manual. Automatic ones are installed, the rest announced.
+  // The background round checks installed plugins under the shared policy.
   // Signed in to the Hub, its list is read first (one request); a plugin it serves is only asked about when the list shows a newer version,
   // and one that no list entry has a newer version of is just marked checked. `hubOnly` is the frequent round: GitHub plugins wait for the 6-hourly one.
   async function checkAll({ hubOnly = false } = {}) {
+    if (store.state.updateMode === 'manual') return;
     if (hubSignedIn()) await hubCatalog({ force: true }).catch(() => {});
     for (const item of [...list]) {
       const id = item.manifest?.id;
-      if (closing) return;
+      if (closing || store.state.updateMode === 'manual') return;
       if (!id || item.builtin || item.error || !item.manifest.source && !hubListed(id)) continue;
-      // Manual keeps to itself: the dots come from the Hub's list above, nothing else is asked.
-      if (modeOf(id) === 'manual') continue;
       const source = sourceOf(item), kind = sourceKind(source);
       // Without the client (an app build without the Hub) or the Hub sign-in there is nothing to ask; the settings page says so.
       if (!source || !clientFor(source) || (kind === 'hub' && !hubSignedIn())) continue;
@@ -1284,20 +1286,25 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       }
       let found;
       try { found = await checkUpdate(id); } catch (error) { log.warn(`[plugin ${id}] 업데이트를 확인하지 못했습니다: ${error.message}`); continue; }
+      const mode = store.state.updateMode;
+      if (mode === 'manual') return;
       const { name, version } = item.manifest;
       if (!isNewer(found.version, version)) continue;
-      if (modeOf(id) === 'auto' && eligible(item)) {
+      if (mode === 'auto' && eligible(item)) {
         try {
           await installUpdate(id, { auto: true });
           notify({ id, title: '플러그인 업데이트', body: `${name} 플러그인을 ${version}에서 ${found.version}(으)로 자동 업데이트했습니다.` });
           continue;
         } catch (error) {
-          if (error.code !== 'NEEDS_REVIEW') { log.warn(`[plugin ${id}] 자동 업데이트하지 못했습니다: ${error.message}`); continue; }
-          announce(id, found.version, `${name} ${found.version}은(는) 새 권한을 요청해 자동으로 설치하지 않았습니다. 설정 → 플러그인 → ${name}에서 확인하고 설치하세요.`);
-          continue;
+          if (error.code === 'NEEDS_REVIEW') {
+            announce(id, found.version, `${name} ${found.version}은(는) 새 권한을 요청해 자동으로 설치하지 않았습니다. 설정 → 플러그인의 설치한 목록에서 확인하고 설치하세요.`);
+            continue;
+          }
+          if (error.code !== 'UPDATE_MODE_CHANGED') { log.warn(`[plugin ${id}] 자동 업데이트하지 못했습니다: ${error.message}`); continue; }
+          if (store.state.updateMode === 'manual') return;
         }
       }
-      announce(id, found.version, `${name} ${found.version} 업데이트가 있습니다(지금 ${version}). 설정 → 플러그인 → ${name}에서 설치하세요.`);
+      announce(id, found.version, `${name} ${found.version} 업데이트가 있습니다(지금 ${version}). 설정 → 플러그인의 설치한 목록에서 설치하세요.`);
     }
   }
   const runRound = options => { round ??= checkAll(options).catch(error => log.warn(`플러그인 업데이트 확인 실패: ${error.message}`)).finally(() => { round = null; }); return round; };
@@ -1324,7 +1331,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     const targets = list.filter(item => !item.builtin && !item.error && item.manifest && usable(item));
     if (!targets.length) {
       const waiting = list.some(item => !item.builtin && !item.error && sourceKind(sourceOf(item)) === 'hub' && !hubSignedIn());
-      return { ...snapshot(), message: waiting ? 'Hub에서 받은 플러그인을 확인하려면 설정 → 플러그인 → 마켓에서 MoonerADE Hub에 로그인하세요.' : '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
+      return { ...snapshot(), message: waiting ? 'Hub에서 받은 플러그인을 확인하려면 설정 → 정보에서 MoonerADE Hub에 로그인하세요.' : '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
     }
     const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
     const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && isNewer(results[index].value.version, item.manifest.version));
@@ -1332,21 +1339,18 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => item.manifest.name).join(', ')}` : '모두 최신입니다'}${failed ? ` · ${failed}개는 확인하지 못했습니다` : ''}.` };
   }
   // Automatic updates run new code without a dialog, so turning them on is confirmed natively; manual and notify only take away.
-  async function setUpdateMode(id, mode) {
+  async function setUpdateMode(mode) {
     if (!UPDATE_MODES.includes(mode)) throw fail('알 수 없는 업데이트 방식입니다.');
-    const item = sourceItem(id), { name } = item.manifest, source = sourceOf(item);
-    if (mode === 'auto' && modeOf(id) !== 'auto') {
-      const fromHub = sourceKind(source) === 'hub';
+    if (mode === store.state.updateMode) return snapshot();
+    if (mode === 'auto') {
       const answer = await ask({
-        type: 'warning', title: '플러그인 자동 업데이트', message: `“${name}” 플러그인을 자동으로 업데이트할까요?`,
-        detail: fromHub
-          ? `MoonerADE Hub에 새 버전이 올라오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 Hub가 알려 준 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\nHub에 플러그인을 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 Hub의 플러그인에만 켜세요.`
-          : `github.com/${source.github}에 새 릴리스가 나오면 확인 창 없이 받아 설치하고 다시 시작합니다. 받은 파일은 릴리스의 체크섬과 맞춰 봅니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌는 업데이트는 자동으로 설치하지 않고 알려 드립니다.\n\n이 저장소에 릴리스를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있게 됩니다. 믿을 수 있는 저장소에만 켜세요.`,
+        type: 'warning', title: '플러그인 자동 업데이트', message: '설치한 모든 플러그인을 자동으로 업데이트할까요?',
+        detail: '앞으로 설치하는 플러그인에도 적용됩니다. 승인된 플러그인의 새 버전을 MoonerADE Hub 또는 GitHub 릴리스에서 받아 체크섬을 확인하고, 확인 창 없이 설치한 뒤 다시 시작합니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌면 설치 전에 확인이 필요합니다.\n\n업데이트를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있습니다. 믿을 수 있는 플러그인만 설치하세요.',
         buttons: ['자동 업데이트 켜기', '취소'], defaultId: 1, cancelId: 1
       });
       if (answer !== 0) return snapshot();
     }
-    store.update(state => ({ ...state, updates: { ...state.updates, [id]: { ...state.updates?.[id], mode } } }));
+    store.update(state => ({ ...state, updateMode: mode }));
     changed();
     return snapshot();
   }

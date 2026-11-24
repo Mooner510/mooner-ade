@@ -116,7 +116,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     installZip: installPickedZip,
     checkUpdates: id => manager.checkUpdates(typeof id === 'string' ? id : undefined),
     installUpdate: id => manager.installUpdate(String(id)),
-    setUpdateMode: (id, mode) => manager.setUpdateMode(String(id), String(mode)),
+    setUpdateMode: mode => manager.setUpdateMode(String(mode)),
     connectGithub: token => manager.connectGithub(typeof token === 'string' ? token : ''),
     disconnectGithub: () => manager.disconnectGithub(),
     signInGithub: () => manager.signInGithub(),
@@ -129,12 +129,6 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     signOutHub: () => manager.signOutHub(),
     hubCatalog: options => manager.hubCatalog({ force: options?.force === true }),
     hubInstall: id => manager.installFromHub(String(id)),
-    // The plugin's releases page on GitHub (from its approved plugin.json, never from the page). A Hub plugin has no page to open.
-    openSource: async id => {
-      const source = manager.snapshot().plugins.find(plugin => plugin.id === String(id))?.update?.source;
-      if (source?.kind === 'github' && source.github) openExternal(`https://github.com/${source.github}/releases`);
-      return manager.snapshot();
-    },
     // Where a personal access token is made (read-only access to chosen repositories).
     openTokenPage: async () => { openExternal('https://github.com/settings/personal-access-tokens/new'); return manager.snapshot(); },
     pickZip: async () => {
