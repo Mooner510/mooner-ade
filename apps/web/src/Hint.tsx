@@ -3,7 +3,7 @@ import { Spotlight } from './Spotlight';
 import { EXIT_MS } from './use-notice';
 
 // A one-time pointer at an easy-to-miss button. The button gets the `hint-anchor` class (CSS anchor-name) and this card sits right under it
-// in the top layer, so pane edges never clip it. It never takes focus; "알겠어요" records it, and tips.ts nextHint decides which one is due.
+// In the top layer, it stays clear of pane edges and never takes focus. "알겠어요" closes it.
 // The card flips above or sideways when there is no room (composer controls sit at the bottom), so its tip is aimed here, at the anchor's centre.
 // `wide`: the anchor is wider than the card (the whole input box), so the card is centred on it instead of hanging from its right end.
 export function Hint({ title, text, onDone, wide }: { title: string; text: ReactNode; onDone(): void; wide?: boolean }) {

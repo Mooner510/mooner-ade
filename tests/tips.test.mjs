@@ -1,17 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contextTip, tipDue } from '../apps/web/src/tips.ts';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createTipClaims } from '../apps/local-server/src/ui-state.js';
+import { TIPS_VERSION } from '../apps/web/src/tips.ts';
 
-test('context tip appears only from the threshold up and names /clear', () => {
-  assert.equal(contextTip(undefined, 150), undefined);
-  assert.equal(contextTip(149_999, 150), undefined);
-  assert.match(contextTip(180_400, 150), /180k.*\/clear/);
-});
-
-test('a tip repeats only after its gap and never past max', () => {
-  const now = 1_000_000, minute = 60_000;
-  assert.equal(tipDue({}, 'a', now, minute), true);
-  assert.equal(tipDue({ a: { n: 1, at: now - 30_000 } }, 'a', now, minute), false);
-  assert.equal(tipDue({ a: { n: 1, at: now - 2 * minute } }, 'a', now, minute), true);
-  assert.equal(tipDue({ a: { n: 2, at: now - 2 * minute } }, 'a', now, minute, 2), false);
+test('tips survive a server restart, are claimed only once and reset on a higher tip version', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ade-tips-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'app-tips.json');
+  const newServer = () => createTipClaims({
+    read: async () => {
+      try { return JSON.parse(await readFile(file, 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    },
+    write: state => writeFile(file, JSON.stringify(state))
+  });
+  const claim = newServer(), version = TIPS_VERSION;
+  assert.deepEqual(await Promise.all([claim('bganim', version), claim('bganim', version), claim('tourhint', version)]), [true, false, true]);
+  const restarted = newServer();
+  assert.equal(await restarted('bganim', version), false);
+  assert.equal(await restarted('tourhint', version), false);
+  assert.equal(await restarted('bganim', version + 1), true);
+  assert.equal(await restarted('tourhint', version), false, 'an old page cannot overwrite the new history');
+  assert.equal(await restarted('tourhint', version + 1), true);
+  assert.equal(await restarted('tourhint', version + 1), false);
+  assert.throws(() => restarted('../bganim', version), { code: 'INVALID_INPUT' });
 });

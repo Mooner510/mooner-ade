@@ -4,6 +4,7 @@ import type { AgentMode } from './launchers';
 import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
 import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-meters';
 import type { FileBuffer } from './file-buffer';
+import { TIPS_VERSION } from './tips';
 
 // An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
 export type McpTrust = { server: string; tool?: string };
@@ -23,9 +24,9 @@ export type Settings = {
   chatKeys: Record<string, string>; appKeys: Record<string, string>; termKeys: Record<string, boolean>;
   // chatTipPending: Chat was never opened and its card was not dismissed (new users too: they may pick CLI and never see Chat).
   defaultMode: AgentMode; chatTipPending: boolean;
-  // tips: hint cards in a pane corner (long context, shortcuts for what was just done with the mouse); contextTipK = context size in thousands of tokens that triggers the /clear tip.
-  // hintsSeen: one-time pointers at easy-to-miss buttons (tips.ts nextHint) the user already acknowledged.
-  tips: boolean; contextTipK: number; hintsSeen: string[];
+  // tips: one-time cards and pointers.
+  // hintsSeen: pointers the user acknowledged or whose feature they already used.
+  tips: boolean; hintsSeen: string[];
   // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
   tmuxGuide: 'auto' | 'always' | 'off'; tmuxPrefix: string;
   // Customization. accentColor '' keeps the theme's own accent. The rest map onto xterm / Monaco options of the same meaning.
@@ -59,7 +60,7 @@ export type Settings = {
   gitUpdateMethod: 'merge' | 'rebase'; gitFetchPrune: boolean; gitProtected: string;
   // The changes panel was replaced by the Git graph: people who used the app before see a one-time card saying so (like the Chat tip).
   gitTipPending: boolean;
-  // `tipsVersion`: the tip reset last applied; one below TIPS_VERSION brings every tip back once (migrateSettings; main.tsx also clears claimTip's history).
+  // The tip version last applied to settings.
   tipsVersion: number;
 };
 export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' } as const;
@@ -90,8 +91,6 @@ export function chatStatusLayout(settings: Pick<Settings, 'chatStatusLeft' | 'ch
 export const usageHue = (percent: number) => Math.round(120 * (1 - Math.max(0, Math.min(100, percent)) / 100));
 // Raise when the tutorial changes enough that users who finished it should go through it again.
 export const TOUR_VERSION = 2;
-// Raise when every tip should show again (a release with new tips): the Chat and Git cards and the button pointers come back once; the `tips` switch stays as chosen.
-export const TIPS_VERSION = 1;
 export function migrateSettings(saved: Partial<Settings>): Settings {
   const next = { ...defaultSettings, ...saved, chatModelPins: { ...defaultSettings.chatModelPins, ...(saved.chatModelPins ?? {}) } };
   if (typeof next.theme !== 'string' || !isThemeId(next.theme)) next.theme = 'dark';
@@ -101,7 +100,11 @@ export function migrateSettings(saved: Partial<Settings>): Settings {
   // Missing mode marks the first upgrade to Chat: keep existing CLI habits and offer the new mode once.
   if (saved.defaultMode === undefined) { next.defaultMode = 'cli'; next.chatTipPending = next.onboarded; }
   // Tips reset: an untouched `saved.tipsVersion` below TIPS_VERSION means this install has not had it yet (new users save the current one).
-  if ((saved.tipsVersion ?? 0) < TIPS_VERSION && Object.keys(saved).length > 0) { next.hintsSeen = []; next.gitTipPending = true; next.chatTipPending = next.onboarded; }
+  if ((saved.tipsVersion ?? 0) < TIPS_VERSION && Object.keys(saved).length > 0) {
+    next.hintsSeen = [];
+    next.gitTipPending = true;
+    next.chatTipPending = next.onboarded || next.tourVersion > 0;
+  }
   next.tipsVersion = Math.max(next.tipsVersion, TIPS_VERSION);
   // A tutorial newer than the one finished: everyone sees it once more (after the Chat tip above was decided by the old record).
   // Someone who finished a tour before the version number existed counts as having finished version 1. The new tour clears `onboarded` below, and that gets saved: if the app is
@@ -143,7 +146,7 @@ export const defaultSettings: Settings = {
   theme: 'dark', chatDarker: false, fontSize: 13, terminalFontSize: 13, wordWrap: true, dimInactivePanes: true,
   terminalFont: '', lineHeight: 1.2, scrollback: 10000, cursorStyle: 'bar', cursorBlink: true, copyOnSelect: false,
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
-  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, idleCompact: false, idleCompactMinK: 200, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, contextTipK: 400, hintsSeen: [],
+  agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, idleCompact: false, idleCompactMinK: 200, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
@@ -161,8 +164,12 @@ export const defaultSettings: Settings = {
   gitCompactRefs: true, gitTagNames: false, gitLongEdges: false, gitCommitTime: false, gitRefsLeft: false, gitColumns: ['author', 'date'],
   gitMine: true, gitMerges: true, gitCurrent: true, gitPrettyDate: true, gitSaturation: 60, gitBrightness: 85,
   gitDetails: true, gitDiffPreview: false, gitFilesByDir: true, gitBranchesPane: true, gitBranchClick: 'none', gitBranchDirs: true, gitBranchTags: false, gitFavorites: ['main', 'master', 'origin/main', 'origin/master'],
-  gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false, tipsVersion: 1
+  gitUpdateMethod: 'merge', gitFetchPrune: false, gitProtected: 'main, master', gitTipPending: false, tipsVersion: TIPS_VERSION
 };
+
+export function restoreDefaultSettings({ theme, onboarded, tourVersion, tipsVersion, hintsSeen, chatTipPending, gitTipPending }: Settings): Settings {
+  return { ...defaultSettings, theme, onboarded, tourVersion, tipsVersion, hintsSeen, chatTipPending, gitTipPending };
+}
 // Same stack the terminal uses when it has a custom font, so a diff and the terminal beside it match.
 // Terminal default = the OS's own monospace font (Mac: Menlo, Windows: Cascadia Mono); a chosen font goes first and falls back to it.
 const systemMono = /Mac|iPhone|iPad/.test(navigator.platform) ? "Menlo, Monaco, monospace" : /Windows/.test(navigator.userAgent) ? "'Cascadia Mono', Consolas, monospace" : "'DejaVu Sans Mono', ui-monospace, monospace";

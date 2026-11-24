@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { launchersFor } from '../apps/web/src/launchers.ts';
-import { chatModeTipDue, nextHint } from '../apps/web/src/tips.ts';
+import { chatModeTipDue, hintCandidates, TIPS_VERSION } from '../apps/web/src/tips.ts';
 import { validateAppState } from '../apps/local-server/src/ui-state.js';
 
 const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
-const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings, TIPS_VERSION, TOUR_VERSION } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
-const { defaultSettings, migrateSettings, TIPS_VERSION, TOUR_VERSION, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+const bundle = await build({ stdin: { contents: "export { defaultSettings, migrateSettings, restoreDefaultSettings, TOUR_VERSION } from './apps/web/src/Editor'; export { shellLabel } from './apps/web/src/shells';", resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['monaco-editor', 'monaco-editor/*'] });
+const { defaultSettings, migrateSettings, restoreDefaultSettings, TOUR_VERSION, shellLabel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const app = settings => ({ openProjects: [], activeProjectId: '', settings });
 
 test('each mode has one launcher per provider and keeps the shell', () => {
@@ -77,16 +77,25 @@ test('the upgrade tip is limited to CLI providers, and dismissal survives saves 
 
 test('button hints: one at a time, in order, never during the tour, and remembered once acknowledged', () => {
   const settings = { ...defaultSettings, onboarded: true };
-  assert.equal(nextHint(settings, [['tocli', true], ['stats', true]]), 'tocli');
-  assert.equal(nextHint(settings, [['tocli', false], ['stats', 'sid']]), 'stats', 'any truthy condition counts');
-  assert.equal(nextHint({ ...settings, hintsSeen: ['tocli'] }, [['tocli', true], ['stats', true]]), 'stats');
-  assert.equal(nextHint({ ...settings, hintsSeen: ['tocli', 'stats'] }, [['tocli', true], ['stats', true]]), undefined);
-  assert.equal(nextHint({ ...settings, onboarded: false }, [['tocli', true]]), undefined, 'not over the tour');
-  assert.equal(nextHint({ ...settings, tips: false }, [['tocli', true]]), undefined);
+  const candidates = [['tocli', true], ['stats', 'sid']];
+  assert.deepEqual(hintCandidates(settings, candidates), candidates);
+  assert.deepEqual(hintCandidates({ ...settings, hintsSeen: ['tocli'] }, candidates), [['stats', 'sid']]);
+  assert.deepEqual(hintCandidates({ ...settings, hintsSeen: ['tocli', 'stats'] }, candidates), []);
+  assert.deepEqual(hintCandidates({ ...settings, onboarded: false }, candidates), []);
+  assert.deepEqual(hintCandidates({ ...settings, tips: false }, candidates), []);
   assert.deepEqual(validateAppState(app({ hintsSeen: ['tocli', 'stats', 'tochat'] })).settings.hintsSeen, ['tocli', 'stats', 'tochat']);
   const keys = ['keymodel', 'keyeffort', 'keymode', 'keystash']; // the composer's shortcut pointers (ChatPane)
   assert.deepEqual(validateAppState(app({ hintsSeen: keys })).settings.hintsSeen, keys);
   for (const hintsSeen of ['tocli', [1], ['<script>']]) assert.throws(() => validateAppState(app({ hintsSeen })), { code: 'INVALID_INPUT' });
+});
+
+test('restoring defaults preserves legacy tip history and the completed tour', () => {
+  const state = { ...defaultSettings, fontSize: 24, onboarded: true, tourVersion: TOUR_VERSION, tipsVersion: TIPS_VERSION,
+    hintsSeen: ['tocli'], chatTipPending: false, gitTipPending: true };
+  const restored = migrateSettings(restoreDefaultSettings(state));
+  assert.equal(restored.fontSize, defaultSettings.fontSize);
+  assert.deepEqual([restored.onboarded, restored.tourVersion, restored.tipsVersion, restored.hintsSeen, restored.chatTipPending, restored.gitTipPending],
+    [true, TOUR_VERSION, TIPS_VERSION, ['tocli'], false, true]);
 });
 
 test('mode and upgrade eligibility are validated at the persistence boundary', () => {

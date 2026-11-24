@@ -1,7 +1,7 @@
 // Which of the app's own cards, windows and pointers shows right now. Everything the app puts up by itself (the first-run tour, the changelog after an update, the one-time Git card,
 // the Chat card, the animation tip, the pointers at buttons) used to appear whenever its own condition held, so after an update several stacked on each other. Each of them now only
 // says it wants to show (`want`); the one that comes first in NOTICE_ORDER is the one that shows, and the next takes its place when that one is dismissed. A notice keeps its own
-// "only once" memory (a saved setting, claimTip's history); this file only decides who goes first. No DOM or React here, so node tests can load it.
+// visibility and history separately; this file only decides who goes first. No DOM or React here, so node tests can load it.
 export const NOTICE_ORDER = ['tour', 'changelog', 'git', 'chat-mode', 'bg-anim', 'tour-hint', 'hint'] as const;
 export type NoticeGroup = (typeof NOTICE_ORDER)[number];
 

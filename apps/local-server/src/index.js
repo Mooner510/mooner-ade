@@ -15,7 +15,7 @@ import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
 import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, openProjectMedia, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
-import { validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
+import { createTipClaims, validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
 import { connectPtyHost } from './pty-client.js';
@@ -209,6 +209,8 @@ async function watchFeedback() {
 const openings = new Map();
 const opening = id => { if (!openings.has(id)) openings.set(id, serial()); return openings.get(id); };
 const registryWrite = serial();
+const tipFile = path.join(dataRoot, 'app-tips.json');
+const claimTip = createTipClaims({ read: () => readJson(tipFile, null), write: state => writeJson(tipFile, state) });
 const clients = new Set();
 const sessions = new Set();
 // The app window exchanges this per-process token for a session cookie; it is never written to disk.
@@ -919,6 +921,7 @@ async function route(action, input, project) {
   if (action === 'fs/folders') return listFolders(input, (await defaultParent()).path);
   if (action === 'recent') return readJson(path.join(dataRoot, 'recent.json'), []);
   if (action === 'project/open') return snapshot(await openProject(input.path));
+  if (action === 'app/tip') return { claimed: await claimTip(input.id, input.version) };
   if (action === 'app/state') {
     const file = path.join(dataRoot, 'app-state.json');
     if (input.state === undefined) return readJson(file, { version: 1, openProjects: [], activeProjectId: '', settings: null });

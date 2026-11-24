@@ -5,7 +5,7 @@ import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLe
 import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
-import { useExit, useNotice } from './use-notice';
+import { useExit, useTipNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
@@ -1151,9 +1151,9 @@ ${where}`, [
   const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   // The one-time cards wait their turn (notices.ts) and are drawn in the dock strip below the workspaces (main.tsx): none covers a button or another card.
   // One id per project (the id's part before ":" is its place in the order): every open project has its own Workspace, and a shared id would let an inactive one withdraw what the active one asked for.
-  const gitCardOn = useNotice(`git:${root}`, Boolean(active && project && project.repositories.length > 0 && settings.gitTipPending && settings.onboarded));
-  const chatCardOn = useNotice(`chat-mode:${root}`, Boolean(active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)));
-  const gitCard = useExit(gitCardOn), chatCard = useExit(chatCardOn), gitSheet = useExit(gitOpen);
+  const gitCardOn = useTipNotice(`git:${root}`, [['gitgraph', active && project && project.repositories.length > 0 && settings.tips && settings.gitTipPending && settings.onboarded]]);
+  const chatCardOn = useTipNotice(`chat-mode:${root}`, [['chatmode', active && project && chatModeTipDue(settings, findLeaf(activePane(), focus)?.kind, project.terminals.some(terminal => terminal.id === focus && !terminal.exited) ? agentOf(focus) : undefined)]]);
+  const gitCard = useExit(Boolean(gitCardOn)), chatCard = useExit(Boolean(chatCardOn)), gitSheet = useExit(gitOpen);
   if (!project) return <main className="app loading" hidden={!active}><ErrorToast scope={root} active={active} />{openError && <div className="open-failed"><p>프로젝트를 열지 못했습니다: {openError}</p><button onClick={open}>다시 시도</button></div>}{quickDialog}</main>;
 
   const noGit = project.repositories.length === 0;
