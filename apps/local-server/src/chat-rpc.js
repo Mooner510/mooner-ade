@@ -548,7 +548,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         if (response.reasoningEffort !== undefined) emit({ kind: 'settings', effort: response.reasoningEffort });
         const resumed = agentTitle(response.thread?.name);
         if (resumed) emit(resumed);
-        const commands = [{ name: 'compact', description: '대화 컨텍스트를 압축합니다', hint: '[지침]' }, ...[...skills.values()].flatMap(skill => typeof skill?.name === 'string' ? [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description : '' }] : [])];
+        const commands = [{ name: 'compact', description: '대화 컨텍스트를 압축합니다' }, ...[...skills.values()].flatMap(skill => typeof skill?.name === 'string' ? [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description : '' }] : [])];
         const named = agentTitle(response.thread?.name);
         if (named) emit(named);
         emit({ kind: 'session', sessionId, model: response.model ?? meta.model, slashCommands: commands.map(item => item.name), commands });
@@ -571,18 +571,24 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         }
         autoServers = servers.filter(s => s.autoApprove).map(s => s.name);
         sessionId = response.sessionId ?? meta.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
-        let modelApplied = null;
-        if (meta.model) { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
+        let modelApplied = null, modelRejected = false;
+        if (meta.model) {
+          try { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
+          catch (error) {
+            if (error?.code === 'AGENT_UNAVAILABLE' || error?.code === 'AGENT_TIMEOUT') throw error;
+            modelApplied = null; modelRejected = true;
+          }
+        }
         if (meta.permissionMode !== 'default') await setCursorMode(meta.permissionMode);
         for (const [configId, value] of Object.entries(meta.configValues ?? {})) {
           const option = capabilities.configOptions.find(item => item.id === configId);
           if (option?.options.some(item => item.value === value)) await this.configure({ configOption: { configId, value } });
         }
         const effortOption = cursorEffortOption(capabilities.configOptions);
-        if (meta.effort && effortOption?.options.some(item => item.value === meta.effort)) await this.configure({ configOption: { configId: effortOption.id, value: meta.effort } });
+        if (!modelRejected && meta.effort && effortOption?.options.some(item => item.value === meta.effort)) await this.configure({ configOption: { configId: effortOption.id, value: meta.effort } });
         const commands = mergeCursorCommands([]);
         emit({ kind: 'session', sessionId, slashCommands: commands.map(item => item.name), commands }); publishCapabilities();
-        return { modelApplied };
+        return { modelApplied, modelRejected };
       }
     },
     // Codex takes the approval policy, reviewer and sandbox with every turn/start, so changing them needs no restart. A bypass switch also settles what is

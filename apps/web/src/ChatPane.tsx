@@ -108,8 +108,8 @@ type ResumeChoice = { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: str
 type ResumeEntry = { key: string; title: string; updatedAt: number; detail?: string; code: string; running?: boolean; choice: ResumeChoice };
 const when = (time: number) => new Date(time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const sizeOf = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-// "이전 대화 불러오기": one list, newest first, of everything this project can continue: ADE's saved chats plus (Claude only) conversations made
-// with the plain `claude` CLI. Where the source is does not matter to the user; a CLI conversation that already became a chat is listed once.
+// "이전 대화 불러오기": one list, newest first. ADE's saved chats, Claude's plain CLI transcripts, and this project's Cursor CLI sessions.
+// A CLI conversation that already became a chat is listed once. Codex history is usage-only and is not listed.
 function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude' | 'codex' | 'cursor'; exclude: string; call: ChatCtx['call']; onPick(choice: ResumeChoice): void; onClose(): void }) {
   const search = useRef<HTMLInputElement>(null), [query, setQuery] = useState('');
   const [saved, setSaved] = useState<SavedChat[] | null>(null), [cli, setCli] = useState<CliChat[] | null>(null), [failed, setFailed] = useState<string | null>(null);

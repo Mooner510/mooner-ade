@@ -97,7 +97,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   if (saved === null && defaults) {
     const caps = chatCapabilities(agent);
     if (caps.permissionModes.includes(defaults.permissionMode) && defaults.permissionMode !== 'bypassPermissions') meta.permissionMode = defaults.permissionMode;
-    if (agent !== 'cursor' && typeof defaults.model === 'string' && /^[\w.\[\]-]{1,100}$/.test(defaults.model)) meta.model = defaults.model;
+    if (typeof defaults.model === 'string' && (agent === 'cursor' ? /^[\w.\[\],=:-]{1,200}$/ : /^[\w.\[\]-]{1,100}$/).test(defaults.model)) meta.model = defaults.model;
     if (EFFORTS.includes(defaults.effort)) meta.effort = defaults.effort;
     if (defaults.auth === 'login' || defaults.auth === 'key') meta.auth = defaults.auth;
   }
@@ -793,7 +793,6 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   let lastMainModel, lastLimit; // the model the last main-thread reply came from; the last plan-limit report shown
   let ownMode; // ponytail: cleared when the report arrives or the request ends; a report that never comes could hide one later change to the same mode
   let prePlanMode = meta.prePlanMode ?? 'default'; // kept in meta so a plan approved after reopening goes back to the mode before it
-
   // Nothing in the child would be cut off: no turn, no approval, no background subagent.
   const quiet = () => !turnOpen && !approvals.size && state.liveTasks.length === 0;
   // A launch flag changed: replace the child now when quiet, else once the turn and its background tasks are over.
@@ -864,6 +863,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       try {
         const ready = await protocol.initialize({ ...meta, tokens: state.tokens }, cwd, chatMcpServers({ chatId: id, projectId, agent }), chatPrompt(meta.interactiveUi === true, meta.fileLinks === true, agent, meta.mediaBlocks === true, meta.colorChips === true));
         if (agent === 'cursor') cursorAppliedModel = ready?.modelApplied ?? null;
+        if (ready?.modelRejected) { meta.model = undefined; meta.effort = undefined; await forgetRememberedModel(directory, agent); }
         await saveMeta();
         if (agent === 'cursor') startCursorStorePoll();
       } catch (error) { restart(); throw error; }
@@ -1559,6 +1559,17 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     }
   };
   return chatApi;
+}
+
+async function forgetRememberedModel(directory, agent) {
+  const file = path.join(directory, 'last-picks.json');
+  let all;
+  try { all = JSON.parse(await fs.readFile(file, 'utf8')); } catch { return; }
+  if (!all?.[agent] || typeof all[agent] !== 'object') return;
+  delete all[agent].model;
+  delete all[agent].effort;
+  if (!Object.keys(all[agent]).length) delete all[agent];
+  await fs.writeFile(file, JSON.stringify(all), { mode: 0o600 });
 }
 
 // Only this project's stored Chat sessions are listed; the provider's private CLI history stays with its CLI.

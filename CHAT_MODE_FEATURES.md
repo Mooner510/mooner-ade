@@ -305,7 +305,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 ### 수동 압축 `/compact`
 - Claude: CLI의 `/compact`를 그대로 보냅니다. 압축 시작·끝이 구분선과 토큰 감소율로 남습니다.
-- Codex: `thread/compact/start`를 씁니다.
+- Codex: `thread/compact/start`를 씁니다. 이 요청에는 지침 필드가 없어 `/compact`만 보내고, 토큰 수는 압축 이벤트가 숫자를 실어 보낼 때만 보여 줍니다.
 - Cursor: `cursor-agent -p /summarize`를 세션에 `--resume`으로 붙여 실행합니다(`cursor-summarize.js`, 최대 10분). `/compress`, `/summarize`도 같은 동작입니다. 결과 요약은 명령 결과 말풍선으로 나옵니다.
 
 ### 캐시 만료 전 자동 Compact `/idlecompact` (Claude, 선택)
@@ -401,6 +401,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 | `/help` | 명령 목록 |
 | `/config` | ADE 설정 열기 |
 | `/exit` | 이 채팅 닫기 |
+| `/mcp` | 이 채팅에 붙은 MCP 서버. 이름, 꺼 둔 도구, 자동 승인. Claude는 CLI가 보고한 도구 개수도 함께 보여 줍니다 |
 
 ### 그 밖의 명령
 - 나머지는 **그대로 에이전트에 전달**합니다. 사용자 정의 명령과 스킬도 포함합니다.
@@ -416,10 +417,11 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - 시작 화면의 **이전 대화 불러오기** 버튼 또는 `/resume`으로 엽니다. 응답 중에는 열리지 않습니다.
 - 목록은 최신순 한 줄로 합칩니다.
   - ADE가 저장한 채팅(같은 프로젝트·같은 에이전트)
-  - Claude만: 플레인 `claude` CLI로 만든 대화(`chat/cli-sessions`). 이미 채팅으로 가져온 것은 한 번만 나옵니다.
+  - Claude: 플레인 `claude` CLI로 만든 대화(`chat/cli-sessions`). 이미 채팅으로 가져온 것은 한 번만 나옵니다.
+  - Cursor: 이 프로젝트의 Cursor CLI 세션(`chat/cursor-sessions`). 고르면 원본은 그대로 두고 복사본을 새 채팅으로 엽니다(`chat/import-cursor`). 읽지 못하는 형식은 목록에서 빠집니다. Codex 기록은 사용량 로그라 여기 나오지 않습니다.
 - 터미널에서 실행 중인 대화는 "터미널에서 실행 중" 표시와 함께 선택할 수 없습니다.
 - 검색(제목 부분 일치)을 지원합니다.
-- 고르면 이미 열린 탭이면 그 탭으로 가고, 닫힌 채팅이면 새 탭으로 열고, CLI 대화면 `chat/import-cli`로 채팅 기록을 만든 뒤 같은 세션을 이어 씁니다.
+- 고르면 이미 열린 탭이면 그 탭으로 가고, 닫힌 채팅이면 새 탭으로 엽니다. Claude CLI 대화는 `chat/import-cli`로 기록을 만든 뒤 같은 세션을 이어 쓰고, Cursor CLI 대화는 복사본을 새 채팅으로 엽니다.
 
 ---
 

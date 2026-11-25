@@ -97,7 +97,7 @@ async function setup(t, agent) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-test-'));
   const events = [], options = { directory, id: 'chat', cwd: directory, agent, executable: process.execPath, executableArgs: [fixture, agent], onEvent: event => events.push(event) };
   let session = await openChatSession(options);
-  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { directory, events, options, get session() { return session; }, async reopen() { await session.close(); session = await openChatSession(options); return session; } };
 }
 test('Codex manual compact remains busy until its turn completes', async t => {
@@ -1461,3 +1461,20 @@ test('Codex compaction reports token counts only when the item has them', () => 
   assert.deepEqual(events.filter(event => event.kind === 'compact').map(event => [event.preTokens, event.postTokens]), [[null, null], [10, 4]]);
   protocol.dispose();
 });
+test('Cursor: a rejected remembered model opens on the CLI default and is forgotten', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-model-'));
+  let session;
+  t.after(async () => { await session?.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  await writeFile(path.join(directory, 'last-picks.json'), JSON.stringify({ cursor: { model: 'no-such-model', effort: 'high', permissionMode: 'plan' } }));
+  session = await openChatSession({ directory, id: 'fresh', cwd: directory, agent: 'cursor', executable: process.execPath, executableArgs: [fixture, 'cursor'], defaults: { model: 'no-such-model', effort: 'high', permissionMode: 'plan' } });
+  await session.warm();
+  assert.equal(session.state().model, 'cursor-test[effort=high,fast=false]');
+  const meta = JSON.parse(await readFile(path.join(directory, 'chat', 'fresh', 'meta.json'), 'utf8'));
+  assert.equal(meta.model, undefined);
+  assert.equal(meta.effort, undefined);
+  const picks = JSON.parse(await readFile(path.join(directory, 'last-picks.json'), 'utf8'));
+  assert.equal(picks.cursor.model, undefined);
+  assert.equal(picks.cursor.effort, undefined);
+  assert.equal(picks.cursor.permissionMode, 'plan');
+});
+
