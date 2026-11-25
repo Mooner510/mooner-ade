@@ -55,6 +55,7 @@ node scripts/verify/session.mjs use [<checkout>]   # main의 서버를 다른 wo
 node scripts/verify/session.mjs build              # 폰이 받는 PC 화면(apps/web/dist)을 다시 만든다. 세션이 뜰 때 없으면 한 번 만든다
 node scripts/verify/session.mjs reset              # main의 데이터를 비우고 다시(첫 실행 화면이 필요할 때)
 ```
+- **공용 세션(tmp/main)에서 실제 Hub에 로그인하지 않는다.** 세션의 서버는 실제 원격 접속 플러그인을 돌리므로, 거기서 Hub 계정으로 로그인하면 그 계정에 두 번째 PC(같은 호스트 이름)로 등록되어 폰의 PC 목록에 테스트 세션이 섞여 보이고, 폰이 그 PC를 열면 빌드된 화면이 없거나 테스트 데이터가 보인다. 폰 연결은 지문과 실제 Hub 없이 도는 `t-phone-e2e.mjs`(로컬 DEV_LOGIN Hub, docs/REMOTE_UI.md)로 확인한다. 공용 세션의 서버는 바깥으로도 나간다(Cursor API, npm 업데이트 조회): 바깥 연결이 없어야 하는 시험은 그 rig(loopback 가드)를 쓴다.
 - **폰에 보이는 화면은 `apps/web/dist`다.** 폰은 PC의 서버가 내려 주는 빌드된 화면을 보므로(`ui/manifest`, docs/REMOTE_UI.md), HMR만 도는 세션에는 그 화면이 없어 `UI_UNAVAILABLE`이 되고 폰이 옛 기본 화면으로 떨어진다. 세션은 시작할 때 `apps/web/dist`가 없으면 한 번 만들고, 웹을 고친 뒤 폰 쪽에서 보려면 `session.mjs build`로 다시 만든다(Chrome의 페이지는 HMR로 이미 따라간다).
 - **소스는 알아서 따라간다.** 웹 소스는 Vite HMR로 바로 반영된다. 서버 소스(`apps/local-server/src`, `apps/desktop/src`, 플러그인 하네스)를 고치면 서버만 자동 재시작되고, 포트·토큰이 고정이라 주소와 로그인이 유지되며 열린 탭은 스스로 새로고침된다. 문법 오류로 서버가 못 뜨면 `status`에 오류가 보이고, 고치면 다시 뜬다. 수동 재시작은 `session.mjs restart`.
 - **main은 함께 쓴다.** `use`·`reset`은 main을 보는 모든 에이전트의 화면을 바꾸므로 `status`의 시작자·소스를 보고 쓴다. 설정을 바꾼 테스트는 끝나면 되돌린다. main의 소스가 내 worktree가 아니면 `status`가 알려 준다.
