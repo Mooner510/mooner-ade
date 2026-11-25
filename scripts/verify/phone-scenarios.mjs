@@ -48,11 +48,11 @@ export async function ensureChat(page, who) {
     const step = await page.ev(`
       const vis = e => e.getClientRects().length > 0, find = (sel, text) => [...document.querySelectorAll(sel)].find(e => vis(e) && (!text || (e.textContent || '').includes(text)));
       for (const t of ['나중에', '알겠어요', '확인']) if (find('button', t) && !find('.recent-open')) { find('button', t).click(); return 'dismiss ' + t; }
-      if (document.body.innerText.includes('변경 내역') && find('button', 'close') && !find('textarea')) return 'changelog';
+      if (document.querySelector('.changelog-close')) return 'changelog';
       if (find('button.recent-open')) return 'project';
       if (find('button', 'Claude') && find('button', 'Chat 모드') || find('button', 'Claude') && find('.launcher, .launchers, main, .pane')) return 'launch';
       return 'wait';`);
-    if (step === 'changelog') await page.pressKey('Escape', 'Escape', 27);
+    if (step === 'changelog') await dismissOverlays(page);
     else if (step === 'project') await page.tap('button.recent-open');
     else if (step === 'launch') await page.tap('button', 'Claude');
     else if (step.startsWith('dismiss')) { /* handled in page */ }
@@ -60,6 +60,8 @@ export async function ensureChat(page, who) {
   }
   throw new Error(`${who}: 채팅 입력창이 나타나지 않았습니다. 화면: ${await page.ev('return document.body.innerText.replace(/\\s+/g, " ").slice(0, 300)')}`);
 }
+// The app opens its own "변경 내역" dialog by itself once there is something unread (it did so in the middle of a run): closed whenever it is up.
+export const dismissOverlays = async page => { if (await page.ev(`const b = document.querySelector('.changelog-close'); if (b && b.getClientRects().length) { b.click(); return true; } return false;`)) await sleep(600); };
 export const dismissHints = page => page.ev(`for (const t of ['나중에', '알겠어요']) { const b = [...document.querySelectorAll('button')].find(e => e.getClientRects().length && (e.textContent || '').trim() === t); if (b) b.click(); }`);
 // What the chat shows: user messages, the answer text, how far the view is from its bottom, and how many stream lines are in it.
 export const chatView = (page, tag = '') => page.ev(`const s = document.querySelector('.chat-scroll'); if (!s) return null;
@@ -70,6 +72,7 @@ const composerValue = page => page.ev(`return document.querySelector(${JSON.stri
 // Types into the composer like a user and presses send. On the phone: a touch on the field, then real key events (adb input text); if the keys do not land
 // (the keyboard is slow to come up), once more, then DevTools text input. In the desktop browser: DevTools text input.
 export async function sendChat(page, text, adb = null) {
+  await dismissOverlays(page);
   // The previous turn is over (the send button is not the stop square) and the composer is usable.
   await page.waitFor(`!document.querySelector('.chat-send.stop') && document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector(${JSON.stringify(COMPOSER)}).disabled`, 60000, '이전 응답이 끝나고 입력창이 열림');
   const typed = async () => (await composerValue(page)).includes(text);
@@ -97,7 +100,7 @@ export async function scenarios({ argv }) {
     if (wanted.length && !wanted.includes(id)) return;
     const t0 = Date.now();
     try { const note = await fn(); results.push({ id, title, ok: true, note }); console.log(`PASS ${id} ${title}${note ? ' — ' + note : ''} (${((Date.now() - t0) / 1000).toFixed(1)}s)`); }
-    catch (error) { results.push({ id, title, ok: false, note: String(error.message ?? error).slice(0, 500) }); console.log(`FAIL ${id} ${title}\n     ${String(error.message ?? error).slice(0, 500)}`); try { shots.push(adb.screencap(`FAIL-${id}`)); } catch { /* best effort */ } }
+    catch (error) { results.push({ id, title, ok: false, note: String(error.message ?? error).slice(0, 500) }); console.log(`FAIL ${id} ${title}\n     ${String(error.message ?? error).slice(0, 500)}`); try { shots.push(adb.screencap(`FAIL-${id}`)); if (desktop) shots.push(await desktop.shot(`FAIL-${id}-desktop`)); } catch { /* best effort */ } }
   };
   const shot = name => { const file = adb.screencap(name); shots.push(file); return file; };
 
