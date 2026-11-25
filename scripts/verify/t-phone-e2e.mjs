@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adeClient, alive, dir, ensureSession, EXPECT, freePort, hex, hubApprove, hubBinary, lib, log, mainCheckout, needRig, readManifest, relayProxy, ROOT, shotsDir, sleep, startHub, stagePlugin, stopRecorded, until, writeManifest } from './phone-rig.mjs';
+import { adeClient, alive, dir, ensureSession, EXPECT, freePort, pickPort, hex, hubApprove, hubBinary, lib, log, mainCheckout, needRig, readManifest, relayProxy, ROOT, shotsDir, sleep, startHub, stagePlugin, stopRecorded, until, writeManifest } from './phone-rig.mjs';
 
 const argv = process.argv.slice(2), cmd = argv[0] ?? 'help';
 const flag = name => argv.includes(name), opt = (name, fallback) => { const i = argv.indexOf(name); return i < 0 ? fallback : argv[i + 1]; };
@@ -27,23 +27,26 @@ async function up() {
   const existing = readManifest();
   if (existing?.ready && alive(existing.pids?.owner)) { log('이미 떠 있습니다(status 참고).'); return; }
   ensureSession(dir, { kind: 'phone-e2e', reason: 'phone <-> test PC end-to-end rig' });
-  for (const name of ['hub.log', 'owner.log']) rmSync(join(dir, name), { force: true });
+  for (const name of ['hub.log', 'owner.log', 'blocked-connections.log']) rmSync(join(dir, name), { force: true });
   if (!flag('--keep')) for (const name of ['data', 'home', 'repo', 'fake-claude.jsonl', 'ctl.json', 'plugin-src', 'rig.json']) rmSync(join(dir, name), { recursive: true, force: true });
   const hub = where.hub(), plugins = where.plugins();
   for (const [what, p, probe] of [['Hub', hub, 'cmd/hub/main.go'], ['plugins', plugins, 'remote/plugin.json']]) if (!existsSync(join(p, probe))) throw new Error(`${what} checkout을 찾지 못했습니다(${p}). --${what === 'Hub' ? 'hub' : 'plugins'} <경로>로 알려 주세요.`);
   if (!existsSync(join(ROOT, 'apps/web/dist/index.html'))) throw new Error('apps/web/dist가 없습니다. 폰은 이 빌드를 받습니다: pnpm --filter @mooner/ade-web build');
-  writeManifest({ ready: false, config: { hub, plugins }, startedAt: Date.now() });
+  writeManifest({ ready: false, config: { hub, plugins, port: Number(opt('--port', process.env.PHONE_E2E_PORT ?? 47213)) }, startedAt: Date.now() });
   const out = openSync(join(dir, 'owner.log'), 'a');
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'owner'], { detached: true, stdio: ['ignore', out, out], windowsHide: true, env: { ...process.env, VERIFY_OUT: dir } });
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'owner'], { detached: true, stdio: ['ignore', out, out], windowsHide: true, env: { ...process.env, VERIFY_OUT: dir, ...loopbackOnly() } });
   child.unref();
   const m = await until(() => { const x = readManifest(); if (x?.error) throw new Error(x.error); return x?.ready && x; }, 180000, 500).catch(error => { throw new Error(`owner가 준비되지 않았습니다: ${error.message} (로그: ${join(dir, 'owner.log')})`); });
   log(`rig 시작: Hub ${m.hubUrl}  ADE ${m.ade.origin}  세션 폴더 ${dir}`);
 }
 
+// Every Node process of the rig (owner, ADE server, plugin host) preloads loopback-only.cjs: no socket leaves this machine, refusals go to blocked-connections.log.
+const loopbackOnly = () => ({ NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require=${join(ROOT, 'scripts/verify/loopback-only.cjs').replaceAll('\\', '/')}`.trim(), PHONE_E2E_GUARD_LOG: join(dir, 'blocked-connections.log') });
+
 async function owner() {
   const config = readManifest().config;
   try {
-    const bin = hubBinary(config.hub), hubPort = await freePort(), relayPort = await freePort(), ctlPort = await freePort(), ctlToken = hex(16);
+    const bin = hubBinary(config.hub), hubPort = await freePort(), relayPort = await pickPort(config.port), ctlPort = await freePort(), ctlToken = hex(16);
     const hub = startHub(bin, hubPort);
     await until(() => fetch(`http://127.0.0.1:${hubPort}/readyz`).then(r => r.ok), 20000, 200);
     const relay = relayProxy({ port: relayPort, targetPort: hubPort }); await relay.start();
@@ -51,7 +54,7 @@ async function owner() {
     const plugin = stagePlugin(config.plugins, join(dir, 'plugin-src'));
     // An onboarded profile in chat mode (as a user's PC has), so no tour is on screen, on the phone either.
     mkdirSync(join(dir, 'data'), { recursive: true });
-    writeFileSync(join(dir, 'data', 'app-state.json'), JSON.stringify({ version: 1, openProjects: [], activeProjectId: '', settings: { theme: 'dark', onboarded: true, tourVersion: 2, defaultMode: 'chat', chatTipPending: false, chatPermissionAutoSet: true } }));
+    writeFileSync(join(dir, 'data', 'app-state.json'), JSON.stringify({ version: 1, openProjects: [], activeProjectId: '', settings: { theme: 'dark', onboarded: true, tourVersion: 2, tipsVersion: 1, tips: false, gitTipPending: false, defaultMode: 'chat', chatTipPending: false, chatPermissionAutoSet: true } }));
     const devToken = hex(32), adePort = await freePort();
     const ade = await lib.boot({ dir, root: ROOT, port: adePort, env: {
       ADE_DEV: '1', ADE_DEV_TOKEN: devToken, ADE_VERIFY_PLUGINS: '1', VERIFY_PLUGIN_DIR: plugin.dir,
@@ -147,7 +150,7 @@ async function down() {
 }
 
 const commands = { up, owner, link, status, down };
-const later = ['apk', 'login', 'pair', 'open', 'scenarios', 'shot', 'all', 'help'];
+const later = ['apk', 'login', 'pair', 'open', 'scenarios', 'shot', 'all', 'describe', 'help'];
 if (commands[cmd]) await commands[cmd]();
 else if (later.includes(cmd)) await (await import('./phone-steps.mjs')).run(cmd, { argv, where, up, link, down, control });
 else { console.log('명령: up | link | apk | login | pair | open | scenarios | all | shot | status | down'); process.exitCode = 2; }

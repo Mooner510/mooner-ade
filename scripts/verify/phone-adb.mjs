@@ -100,7 +100,7 @@ export async function attach(target) {
   await send('Runtime.enable');
   const page = {
     target, send, ev, logs, close: () => socket.close(), get url() { return target.url; },
-    waitFor: (expression, ms = 15000, label = expression.slice(0, 100)) => until(() => ev(`return (${expression})`), ms, 250).catch(error => { throw new Error(`waitFor 시간 초과: ${label}${error.message.includes('until timeout') ? '' : ` (${error.message})`}`); }),
+    waitFor: (expression, ms = 15000, label = expression.slice(0, 100)) => until(() => ev(`const v = (${expression}); return v && typeof v === 'object' && v.nodeType ? true : v`), ms, 250).catch(error => { throw new Error(`waitFor 시간 초과: ${label}${error.message.includes('until timeout') ? '' : ` (${error.message})`}`); }),
     // The element (matching selector, containing text or aria-label text) as a viewport centre, scrolled into view; null when absent or hidden.
     centre: (selector, text) => ev(`const want = ${JSON.stringify(text ?? null)}, els = [...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.getClientRects().length && (want === null || (e.textContent || '').includes(want) || (e.getAttribute('aria-label') || '').includes(want) || (e.getAttribute('title') || '').includes(want)));
       const e = els[0]; if (!e) return null; e.scrollIntoView({ block: 'center', inline: 'center' }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];`),

@@ -35,6 +35,8 @@ export const shotsDir = process.env.PHONE_E2E_SHOTS ?? 'C:\\AI\\claude-temp\\pho
 
 // ---- small helpers ---------------------------------------------------------------------------------------------------------------
 export const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
+// The relay's port is baked into the debug APK (BuildConfig.HUB_URL), so it is the same every run (the APK is only rebuilt when it changes); a busy one falls back to a free port.
+export const pickPort = preferred => new Promise(res => { const s = net.createServer(); s.once('error', () => freePort().then(res)); s.listen(preferred, '127.0.0.1', () => s.close(() => res(preferred))); });
 export const hex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
 export const log = (...a) => console.log(`[${new Date().toLocaleTimeString('ko-KR', { hour12: false })}]`, ...a);
 export const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -172,3 +174,19 @@ export function stopRecorded(m, log = console.log) {
   }
 }
 export { ensureSession, mainCheckout, real, tmpRoot, resolve };
+
+// ---- the safety check: nothing of the rig talks beyond this machine ---------------------------------------------------------------------------------
+// The rig's process tree (owner, Hub, ADE server and everything they started) against Get-NetTCPConnection: any remote address that is not loopback is a finding
+// (the real Hub sits behind Cloudflare, 104.21.18.14 and 172.67.179.42). Also lists the tree, so a stray process shows up.
+export function netCheck(m) {
+  const roots = Object.values(m?.pids ?? {}).filter(Boolean);
+  const script = `$roots = @(${roots.join(',')}); $all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine;
+    $set = [System.Collections.Generic.HashSet[int]]::new(); foreach ($r in $roots) { [void]$set.Add([int]$r) };
+    do { $n = $set.Count; foreach ($p in $all) { if ($set.Contains([int]$p.ParentProcessId)) { [void]$set.Add([int]$p.ProcessId) } } } while ($set.Count -gt $n);
+    $procs = @($all | Where-Object { $set.Contains([int]$_.ProcessId) } | ForEach-Object { @{ pid = $_.ProcessId; name = $_.Name } });
+    $ext = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $set.Contains([int]$_.OwningProcess) -and $_.RemoteAddress -notin @('127.0.0.1','::1','0.0.0.0','::') } | ForEach-Object { @{ pid = $_.OwningProcess; remote = "$($_.RemoteAddress):$($_.RemotePort)"; state = "$($_.State)" } });
+    @{ processes = $procs; external = $ext } | ConvertTo-Json -Compress -Depth 4`;
+  const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, maxBuffer: 16 << 20 }).trim();
+  const value = JSON.parse(out);
+  return { processes: [].concat(value.processes ?? []), external: [].concat(value.external ?? []) };
+}
