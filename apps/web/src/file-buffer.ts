@@ -1,10 +1,12 @@
 export type FileVersion = { revision: string; content: string };
+export type FileLocation = { line?: number; column?: number };
 type BufferState = {
   file?: FileVersion | null;
   draft?: string;
   conflict?: { file: FileVersion | null };
   error?: string;
   busy?: boolean;
+  location?: FileLocation;
 };
 
 export class FileBuffer {
@@ -27,6 +29,13 @@ export class FileBuffer {
     return () => { this.listeners.delete(listener); };
   };
   get dirty() { return this.writing || Boolean(this.state.conflict) || (this.state.draft !== undefined && this.state.draft !== this.state.file?.content); }
+
+  requestLocation(location: FileLocation) { this.update({ location }); }
+  takeLocation() {
+    const { location } = this.state;
+    if (location) this.update({ location: undefined });
+    return location;
+  }
 
   private update(state: Partial<BufferState>) {
     this.state = { ...this.state, ...state };

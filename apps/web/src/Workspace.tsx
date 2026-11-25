@@ -24,7 +24,7 @@ import { GIT_STATUS_RETRY_MS, errorText, gitStatusPause, notAGitRepository, push
 import { ErrorPanel, ErrorTabButton, ErrorToast } from './error-ui';
 import { GitLog } from './GitLog';
 import { ProjectTree, type TreeHost } from './ProjectTree';
-import { FileBuffer } from './file-buffer';
+import { FileBuffer, type FileLocation } from './file-buffer';
 import { loadSpec } from './git-graph';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
 import { copyText } from './toast';
@@ -53,6 +53,8 @@ export type Command = { id: string; label: string; keys?: string; run(): void | 
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
   root: string; projectId?: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
+  requestedFile?: { path: string; location: FileLocation }; onOpenExternalFile(folder: string, path: string, location: FileLocation): Promise<void>;
+  onFileOpened(request: { path: string; location: FileLocation }): void;
   onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
@@ -198,7 +200,7 @@ function MobileStatus({ settings, projectId, active, connection, branch, onBranc
 }
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, requestedFile, onOpenExternalFile, onFileOpened, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
@@ -308,20 +310,26 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     return () => window.removeEventListener('ade:link', onLink);
   }, []);
 
-  // A file or folder clicked in a chat reply (or picked from the sidebar menu): ask how to open it (an installed editor, the file manager, or just copy the path), then do it.
+  // Chat chips, the sidebar picker and the project tree share the same open menu.
   // Like a link, only the visible project answers a click.
   const askOpen = async (target: OpenTarget) => {
-    const [{ ides, fileManager }, { path }] = await Promise.all([
+    const [{ ides, fileManager }, { path, editor }] = await Promise.all([
       ideList().catch(() => ({ ides: [] as IdeInfo[], fileManager: '파일 관리자' })),
-      call<{ path: string }>('ide/resolve', { path: target.path, chatId: target.chatId })
+      call<{ path: string; editor?: { file: string; folder?: string } }>('ide/resolve', { path: target.path, chatId: target.chatId, editor: !target.folder })
     ]);
+    const inAde = editor?.file && !readOnly && can('files/read') && (!editor.folder || !isRemote) ? editor : undefined;
     const last = lastIde(), where = target.line ? `${path}:${target.line}` : path, kind = target.folder ? '폴더를' : '파일을';
     const choice = await pick(`${kind} 열까요?
 ${where}`, [
       ...byLastUsed(ides).map(ide => ({ id: `ide:${ide.id}`, label: `${ide.label}에서 열기`, icon: ideIcon(ide), ...(ide.id === last && { detail: '마지막 사용' }) })),
+      ...(inAde ? [{ id: 'ade', label: 'ADE에서 열기', icon: 'fileOpen' as const }] : []),
       { id: 'files', label: `${fileManager}에서 ${target.folder ? '폴더' : '위치'} 열기`, icon: 'folderOpen' },
       { id: 'copy', label: '경로 복사', icon: 'copy' }, { id: 'cancel', label: '취소' }]);
-    if (choice === 'copy') copyText(path);
+    if (choice === 'ade' && inAde) {
+      const location = { line: target.line, column: target.column };
+      if (inAde.folder) await onOpenExternalFile(inAde.folder, inAde.file, location);
+      else openProjectFile(inAde.file, location);
+    } else if (choice === 'copy') copyText(path);
     else if (choice === 'files' || choice?.startsWith('ide:')) {
       const ide = choice === 'files' ? 'files' : choice.slice(4);
       if (ide !== 'files') rememberIde(ide);
@@ -378,8 +386,9 @@ ${where}`, [
     }
     setFocusLeaf(id);
   }
-  function openProjectFile(path: string) {
+  function openProjectFile(path: string, location?: FileLocation) {
     const spec = `file:${path}`;
+    if (location) fileBuffer(path).requestLocation(location);
     setZoom('');
     for (const tab of refs.paneTabs.current) {
       const group = leafList(tab.pane).find(leaf => leaf.kind === 'editor' && leaf.tabs?.includes(spec));
@@ -391,6 +400,11 @@ ${where}`, [
     }
     openEditorTab(spec);
   }
+  useEffect(() => {
+    if (!active || !project || restoring || !requestedFile) return;
+    openProjectFile(requestedFile.path, requestedFile.location);
+    onFileOpened(requestedFile);
+  }, [active, project, restoring, requestedFile, onFileOpened]);
   function fileBuffer(path: string) {
     let buffer = fileBuffers.current.get(path);
     if (!buffer) { buffer = new FileBuffer(path, call); fileBuffers.current.set(path, buffer); }
@@ -740,7 +754,7 @@ ${where}`, [
   }, tree);
   const agentKey = paneTabs.flatMap(tab => leafList(tab.pane)).map(leaf => leaf.kind === 'editor' || leaf.kind === 'chat' ? '' : savedAgent(leaf.id) ?? '').join(',');
   useEffect(() => {
-    const opened = new Set(paneTabs.flatMap(tab => leafList(tab.pane)).flatMap(leaf => leaf.tabs ?? []));
+    const opened = new Set(refs.paneTabs.current.flatMap(tab => leafList(tab.pane)).flatMap(leaf => leaf.tabs ?? []));
     for (const [path, buffer] of fileBuffers.current) {
       if (!buffer.dirty && !opened.has(`file:${path}`)) fileBuffers.current.delete(path);
     }

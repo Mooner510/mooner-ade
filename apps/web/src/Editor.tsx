@@ -229,16 +229,27 @@ export async function colorize(code: string, hint: string): Promise<string | nul
 }
 export type DiffLayoutChoice = Exclude<Settings['diffLayout'], 'auto'>;
 
-export function FileEditor({ buffer, settings, visible, watch }: {
-  buffer: FileBuffer; settings: Settings; visible: boolean;
+function revealFileLocation(editor: Monaco.editor.IStandaloneCodeEditor, buffer: FileBuffer) {
+  const location = buffer.takeLocation();
+  if (!location) return;
+  if (location.line) {
+    const position = { lineNumber: location.line, column: location.column ?? 1 };
+    editor.setPosition(position);
+    editor.revealPositionInCenter(editor.getPosition()!);
+  }
+  editor.focus();
+}
+
+export function FileEditor({ buffer, settings, visible, focused, watch }: {
+  buffer: FileBuffer; settings: Settings; visible: boolean; focused: boolean;
   watch(listener: (paths: string[]) => void): () => void;
 }) {
   const state = useSyncExternalStore(buffer.subscribe, buffer.get);
   const host = useRef<HTMLDivElement>(null);
   const live = useRef<{ monaco: typeof Monaco; editor: Monaco.editor.IStandaloneCodeEditor } | null>(null);
-  const latest = useRef({ state, settings, visible });
+  const latest = useRef({ state, settings, visible, focused });
   const updating = useRef(false);
-  latest.current = { state, settings, visible };
+  latest.current = { state, settings, visible, focused };
   const loaded = state.draft !== undefined;
   const readOnly = Boolean(state.conflict || state.busy);
   useEffect(() => {
@@ -270,6 +281,7 @@ export function FileEditor({ buffer, settings, visible, watch }: {
       const change = model.onDidChangeContent(() => { if (!updating.current) buffer.edit(model.getValue(undefined, true)); });
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { void buffer.save(); });
       if (now.visible && !now.state.conflict && document.activeElement?.closest('.project-tree')) editor.focus();
+      if (now.visible && now.focused) revealFileLocation(editor, buffer);
       cleanup = () => { live.current = null; change.dispose(); editor.dispose(); model.dispose(); };
     });
     return () => { disposed = true; cleanup(); };
@@ -283,6 +295,9 @@ export function FileEditor({ buffer, settings, visible, watch }: {
     try { model.setValue(state.draft); if (position) editor?.setPosition(position); }
     finally { updating.current = false; }
   }, [state.draft]);
+  useEffect(() => {
+    if (visible && focused && state.location && live.current) revealFileLocation(live.current.editor, buffer);
+  }, [buffer, visible, focused, state.location]);
   useEffect(() => {
     if (!live.current) return;
     const { monaco, editor } = live.current;
