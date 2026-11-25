@@ -92,10 +92,10 @@
   .git-resizer::after { left: 50%; width: 40px; margin-left: -20px; top: 7px; height: 4px; border-radius: 2px; background: var(--border-strong); }
   .git-drawer > :not(.git-resizer):first-of-type { padding-top: 10px; }
   /* ---- the phone's status strip (MobileStatus in Workspace.tsx): branch and each agent's highest usage, large; a tap opens the details ---- */
-  .statusbar.m-status { height: auto; min-height: 40px; gap: 8px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px)); justify-content: flex-start; font-size: 13px; }
-  .m-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+  .statusbar.m-status { height: auto; min-height: 32px; gap: 8px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom, 0px)); justify-content: flex-start; font-size: 13px; }
+  .m-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%; height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
   .m-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .m-usage { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+  .m-usage { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
   .m-usage-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--fg); font-variant-numeric: tabular-nums; }
   .m-usage-chip > b { font-weight: 600; font-size: 13px; }
   .m-usage-chip[style] > b { color: hsl(var(--usage-hue) 70% 60%); }
@@ -115,18 +115,47 @@
   /* ---- chat: full width, the composer stays above the keyboard (the page resizes with it) ---- */
   .chat-pane { --chat-width: 100%; }
   .chat-composer { padding: 10px 8px 6px 12px; border-radius: 16px; }
-  .chat-composer textarea { font-size: 16px; max-height: 40dvh; } /* 16px: a smaller font makes mobile browsers zoom the page on focus */
+  /* 15px: the page's own 16px rule for inputs is for iOS, which zooms in on a smaller one; the Android WebView does not, and 16px was larger than the messages above it. */
+  .chat-composer textarea { font-size: 15px; max-height: 40dvh; }
+  /* Closer to the screen's edges: the thread's sides, top and bottom, the dock under it, and its own status line. No scrollbar gutter: a touch screen scrolls with an overlay bar. */
+  .chat-scroll { scrollbar-gutter: auto; }
+  .chat-thread { padding: 12px 12px 22px; gap: 12px; }
+  .chat-dock { padding: 0 8px 6px; }
+  .chat-statusbar { padding: 3px 12px 0; min-height: 0; }
   .chat-pane button { touch-action: manipulation; }
 
-  /* ---- settings: one line of section tabs ---- */
-  .settings-nav { flex: none; gap: 2px; padding: 6px; scrollbar-width: none; }
-  .settings-nav button { flex: none; white-space: nowrap; min-height: 38px; }
+  /* ---- settings: a slim bar on top (search and a clear close button), one line of section tabs, then the page. The page scrolls on its own and the
+     appearance preview stays pinned under it, so a change can be watched without scrolling down to it. .settings-main is dissolved so the bar, tabs and page order as siblings. ---- */
+  .settings { flex-direction: column; min-height: 0; overflow: hidden; }
+  .settings-main { display: contents; }
+  .settings-main > header { order: 0; flex: none; gap: 8px; padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px 14px; }
+  .settings-main > header h3 { font-size: 16px; }
+  .settings-main > header .settings-search { max-width: none; min-width: 0; margin-left: 0; height: 38px; }
+  .settings-main > header .icon-btn { flex: none; width: 40px; height: 40px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--raised, var(--surface)); color: var(--fg); touch-action: manipulation; }
+  .settings-main > header .icon-btn:active { background: var(--hover); }
+  .settings-nav { order: 1; flex: none; gap: 2px; padding: 4px 6px; scrollbar-width: none; }
+  .settings-nav::-webkit-scrollbar { display: none; }
+  .settings-nav button { flex: none; white-space: nowrap; min-height: 36px; padding: 4px 10px; font-size: 13px; }
+  .settings-content { order: 2; flex: 1 1 0; min-height: 0; }
+  .settings-body { padding: 8px 14px calc(16px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; }
+  .look-preview { order: 3; flex: none; max-height: min(168px, 24dvh); padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  /* A row stacks: the name and its explanation on top at the full width, the control under them. A lone switch keeps the one-line row. */
+  .settings-body .setting-row { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 0; }
+  .settings-body .setting-row:has(> .setting-control > input[type=checkbox]:only-child) { flex-direction: row; align-items: center; }
+  .settings-body .setting-row:has(> .setting-control > input[type=checkbox]:only-child):has(small) { align-items: flex-start; }
+  .settings-body .setting-control { flex-wrap: wrap; justify-content: flex-start; }
+  .settings-body .setting-control .dropdown, .settings-body .setting-control input[type=text], .settings-body .setting-control input[type=password], .settings-body .setting-control input[type=search] { width: 100%; max-width: 100%; }
+  .settings-body .setting-control input[type=range] { flex: 1; min-width: 0; width: auto; }
   /* ---- git log: the filter row wraps instead of squeezing every control ---- */
   .git-toolbar { flex-wrap: wrap; height: auto; row-gap: 4px; padding-block: 4px; }
   .git-search { flex: 1 1 100%; }
 
   /* ---- dialogs: full screen ---- */
   .settings-modal, .project-modal { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+  /* The status-bar page leaves the PC's bar visible under the window (bar-live); the phone has its own strip and the window is full screen. */
+  .settings-modal.bar-live { height: 100dvh; max-height: 100dvh; }
+  dialog.settings-modal.bar-live::backdrop { mask-image: none; }
+  body:has(dialog.settings-modal.bar-live) .app > .statusbar { box-shadow: none; }
   .project-modal .welcome-card { padding: 18px 16px; }
   .project-modal .actions { padding: 8px 16px 16px; }
   .project-modal form { flex-wrap: wrap; }
