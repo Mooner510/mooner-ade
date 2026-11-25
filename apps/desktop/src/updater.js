@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport } from './update-policy.js';
+import { compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from './update-policy.js';
 import { APPLY, HELPER_STARTED, helperCommandLine, startHelperArguments, startHelperScript } from './update-windows.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
@@ -175,6 +175,8 @@ const REQUEST_TIMEOUT_MS = 30_000;
 // ADE_UPDATE_URL points the release lookup at a stand-in for api.github.com (a local fake release in scripts/verify/t-update.mjs).
 // The assets it names are checked against their sha256 digest and the code signature exactly as GitHub's are.
 const UPDATE_API = (process.env.ADE_UPDATE_URL || 'https://api.github.com').replace(/\/+$/, '');
+// The same stand-in also serves github.com's own pages (the release redirect and the atom feed) in tests.
+const UPDATE_WEB = (process.env.ADE_UPDATE_URL || 'https://github.com').replace(/\/+$/, '');
 
 // The installed bundle's shell key, written by package.mjs; null for builds that predate app-only updates.
 const installedShell = () => {
@@ -221,17 +223,48 @@ async function pickPackage(release, asset, version) {
 
 const mb = bytes => (bytes / 1048576).toFixed(1);
 
+// The newest published version, read from github.com's own pages: they do not count against api.github.com's 60 requests per hour and
+// IP (an office shares them, and a check every 10 minutes used up the whole allowance: HTTP 403). Stable: where /releases/latest redirects
+// to (a few hundred bytes). Beta: the highest tag in releases.atom (prereleases included). null when unreadable: the caller asks the API.
+async function probeLatest(repo, beta) {
+  try {
+    const init = { headers: { 'User-Agent': app.getName() }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+    const tagOf = text => { try { return decodeURIComponent(text).replace(/^v/, ''); } catch { return ''; } };
+    if (!beta) {
+      const response = await fetch(`${UPDATE_WEB}/${repo}/releases/latest`, { ...init, method: 'HEAD', redirect: 'manual' });
+      const version = tagOf(/\/releases\/tag\/([^/?#]+)$/.exec(response.headers.get('location') ?? '')?.[1] ?? '');
+      return VERSION_PATTERN.test(version) ? version : null;
+    }
+    const response = await fetch(`${UPDATE_WEB}/${repo}/releases.atom`, init);
+    if (!response.ok) return null;
+    const feed = await response.text();
+    return [...feed.matchAll(/<link [^>]*href="[^"]*\/releases\/tag\/([^"/]+)"/g)].map(match => tagOf(match[1])).filter(version => VERSION_PATTERN.test(version)).sort(compareVersions).at(-1) ?? null;
+  } catch { return null; }
+}
+
 async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart }) {
+  const upToDate = async () => {
+    if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.${beta ? ' (베타 포함)' : ''}` });
+    return 'latest';
+  };
+  // Nothing newer, or a version the timer must not bring up again: answered without api.github.com. Only a new, wanted version costs an API call.
+  const seen = await probeLatest(repo, beta);
+  if (seen) {
+    if (!isNewer(seen, app.getVersion())) return upToDate();
+    if (!manual && declined.has(seen)) return 'declined';
+    if (!manual && failures.blocked(seen)) return 'error';
+  }
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
   // /releases/latest never returns a prerelease; the beta channel reads the list instead (one request either way).
   const response = await fetch(`${UPDATE_API}/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`GitHub 응답 오류 (HTTP ${response.status})`);
+  if (!response.ok) {
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    const wait = response.headers.get('x-ratelimit-remaining') === '0' && reset ? ` — 요청 한도 초과, ${new Date(reset * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 이후 다시 시도하세요` : '';
+    throw new Error(`GitHub 응답 오류 (HTTP ${response.status})${wait}`);
+  }
   const body = await response.json();
   const picked = pickRelease(beta ? body : [body], { beta, asset });
-  if (!picked || !isNewer(picked.version, app.getVersion())) {
-    if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.${beta ? ' (베타 포함)' : ''}` });
-    return 'latest';
-  }
+  if (!picked || !isNewer(picked.version, app.getVersion())) return upToDate();
   const { release, version } = picked, label = isPrerelease(version) ? '베타 버전' : '버전';
   // The timer does not ask again about a version the user answered "later" to (and so does not even fetch its manifest).
   if (!manual && declined.has(version)) return 'declined';
