@@ -20,7 +20,7 @@ export type ChatState = {
   limit?: ChatLimit | null; limitOptions?: { cost: boolean; windows: LimitWindow[] }; // what this chat can be limited by: cost where dollars are reported, plan windows on a plan login
   idleCompact?: IdleCompactInfo; // Claude: whether ADE compacts this chat before its 1h prompt cache goes cold (chat: this chat's own choice, null = follows the setting)
   apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
-  auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button (Claude)
+  auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button
   mcpServers?: { name: string; disabledTools: string[]; autoApprove: boolean }[]; // ADE-attached servers, including tools the user turned off
   lastAuth?: 'login' | 'key' | null; // the login its last turn ran on: a message that would change it asks first
   apiCostUsd?: number; // what the turns that ran on the API key cost: real money (a plan's turns are not)

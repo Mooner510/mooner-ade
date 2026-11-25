@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-test('the chat status line shows usage for every agent and offers auth switching only for Claude', async t => {
+test('the chat status line shows usage for every agent and offers auth switching for Claude, Codex and Cursor', async t => {
   const require = createRequire(import.meta.url);
   const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
   const directory = await mkdtemp(join(tmpdir(), 'ade-chat-status-')); t.after(() => rm(directory, { recursive: true, force: true }));
@@ -40,9 +40,11 @@ test('the chat status line shows usage for every agent and offers auth switching
   assert.equal(plan.match(/usage-check/g)?.length, 1);
   assert.equal(api.match(/usage-check/g)?.length, 1);
   assert.match(busy, /응답이 끝난 뒤 바꿀 수 있습니다/); assert.match(busy, /usage-option plan"[^>]*disabled/);
-  assert.match(codex, /<span class="stat chat-stat chat-stat-share"><span[^>]*>speed<\/span>19\.5%p\(5h\)<\/span>/);
-  assert.match(cursor, /<span class="stat chat-stat chat-stat-share"><span[^>]*>key<\/span>API Usage \$0\.4200<\/span>/);
-  for (const readOnly of [codex, cursor]) assert.doesNotMatch(readOnly, /popoverTarget|usage-panel|usage-caret|role="dialog"/);
+  // Codex and Cursor switch their login like Claude does; only Claude has a prompt cache lifetime to pick, the others are told the account changes.
+  assert.match(codex, /usage-basis plan[^>]*popoverTarget/); assert.match(codex, />19\.5%p\(5h\)</);
+  assert.match(cursor, /usage-basis api[^>]*popoverTarget/); assert.match(cursor, /API Usage <b class="usage-money"[^>]*>\$0\.4200</);
+  for (const other of [codex, cursor]) { assert.match(other, /role="radio"/); assert.match(other, /다음 메시지부터 요금·한도를 쓰는 계정이 바뀝니다/); assert.doesNotMatch(other, /캐시 유지 시간/); }
+  assert.match(plan, /캐시 유지 시간/);
   delete globalThis.innerWidth; delete globalThis.innerHeight; delete globalThis.document;
 });
 
