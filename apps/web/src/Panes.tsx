@@ -643,7 +643,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   return <section className={`terminal-pane ${focused ? 'focused' : ''} ${exited ? 'exited' : ''}`} data-feedback-region="터미널 pane" data-ssh={isSsh ? '' : undefined} data-agent={agent} data-agent-state={agentState} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}>
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {agent === 'claude' && settings.cacheTimer && caches[id] && <CacheTimer cache={caches[id]} working={workingSet.has(id)} warn={settings.cacheWarn} />}
-      {switchingToChat && agentState !== 'attention' ? <span className="pane-tip" role="status" onClick={() => setSwitchingToChat(false)}>Chat으로 전환하는 중…</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span>}</span>}
+      {switchingToChat && agentState !== 'attention' ? <span className="pane-tip" role="status" onClick={() => setSwitchingToChat(false)}>Chat으로 전환하는 중…</span> : <span className="pane-title" data-copy={agent ? '' : undefined} title={agent ? `세션 ID 복사\n${cwds[id] ?? ''}` : cwds[id]} onClick={agent ? () => void chat.call<{ sessionId: string | null }>('terminal/session', { id, agent }).then(({ sessionId }) => sessionId ? copyText(sessionId) : chat.fail(new Error('아직 세션 ID를 알 수 없습니다. 대화를 시작한 뒤 다시 눌러 주세요.')), chat.fail) : undefined}><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{label}</span>{agentState === 'attention' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문, 승인 대기"><Icon name="alert" size={15} /></span>}</span>}
       <span className="pane-actions">
         {canChat && <><IconButton icon="claude-chat" tip="header" label="Chat으로 전환 (같은 대화 이어가기)" className={hint ? 'hint-anchor' : ''} onClick={() => { hintSeen(); setSwitchingToChat(true); onToChat(id); }} /><i className="pane-sep" aria-hidden="true" /></>}
         <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={direction => onSplit(id, direction)} />
@@ -662,10 +662,10 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
     {hint && <Hint title="언제든 Chat으로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 Chat 화면에서 그대로 이어가요. 코드 변경과 도구 실행을 한눈에 볼 수 있어요." onDone={hintSeen} />}
     {tmuxPlace && <TmuxGuide prefix={settings.tmuxPrefix} place={tmuxPlace} />}
     {otherSize && !exited && <div className="pane-size-note" role="status">
-      <span>다른 기기 크기로 표시 중 · 입력하면 이 창 크기로 돌아옵니다</span>
+      <span>다른 기기 크기로 표시 중, 입력하면 이 창 크기로 돌아옵니다</span>
       <button onClick={() => claimSize.current()}>이 창에 맞추기</button></div>}
     {queued.length > 0 && <div className="claude-follow-up">
-      <div className="follow-up-heading" role="status">Follow-up {queued.length}개 · 현재 작업 완료 후 순서대로 전송</div>
+      <div className="follow-up-heading" role="status">Follow-up {queued.length}개, 현재 작업 완료 후 순서대로 전송</div>
       <ol>{queued.map(item => editing?.id === item.id
         ? <li key={item.id}><textarea autoFocus rows={2} aria-label="Follow-up 수정" value={editing.text} onChange={event => setEditing({ id: item.id, text: event.target.value })}
           onKeyDown={event => {
@@ -676,8 +676,8 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
           <IconButton icon="check" label="수정 저장 (Enter)" onClick={() => { if (followUp.current.edit(item.id, editing.text)) { setEditing(null); refreshQueue(); flushQueue.current(); } }} />
           <IconButton icon="x" label="수정 취소 (Esc)" onClick={() => { setEditing(null); flushQueue.current(); }} /></li>
         : <li key={item.id}><span>{item.text}</span>
-          <IconButton icon="edit" label={`Follow-up 수정: ${item.text}`} onClick={() => setEditing({ id: item.id, text: item.text })} />
-          <IconButton icon="x" label={`Follow-up 취소: ${item.text}`} onClick={() => { followUp.current.remove(item.id); if (editing?.id === item.id) setEditing(null); refreshQueue(); }} /></li>)}</ol>
+          <IconButton icon="edit" label="Follow-up 수정" onClick={() => setEditing({ id: item.id, text: item.text })} />
+          <IconButton icon="x" label="Follow-up 취소" onClick={() => { followUp.current.remove(item.id); if (editing?.id === item.id) setEditing(null); refreshQueue(); }} /></li>)}</ol>
     </div>}
     {exited && <div className="pane-exited">프로세스가 종료되었습니다 <button onClick={() => onClose(id)}>pane 닫기</button></div>}
   </section>;

@@ -8,6 +8,15 @@ const flow = (...entries) => entries.map(entry => typeof entry === 'string' ? { 
 const T = id => ({ block: tool(id), sub: false }), SUB = block => ({ block, sub: true });
 const shapeOf = flow => { const { plain, groups } = processGroups(flow); return flow.map((_, at) => { const group = groups.find(item => at >= item.start && at < item.end); return group ? (at === group.start ? 'P' : 'p') : plain[at] ? 'R' : '?'; }).join(''); };
 
+test('message sends stay visible outside folded process and identify the destination', () => {
+  for (const name of ['SendMessage', 'mcp__agent_bus__send_message']) {
+    const input = { to: 'wave-ac', message: '검수를 계속해 주세요.' };
+    const block = { ...tool('send'), name, input };
+    assert.equal(shapeOf(flow(T('t1'), { block, sub: false }, '전달했습니다.')), 'PRR');
+    assert.equal(toolSummary(name, input), 'wave-ac, 검수를 계속해 주세요.');
+  }
+});
+
 test('process groups: each tool stretch folds, every result stays plain in between', () => {
   const question = ['## 사전 조사 결과', '', '| 프로젝트 | 커밋 |', '|---|---|', '| A | 87 |', '', '어느 페이지를 구현할까요?'].join('\n');
   // tools + short remark, [result and question], tools + short remark, [result]
@@ -305,10 +314,10 @@ test('a steering message waits, then becomes an ordinary user message or disappe
 });
 
 test('quick model menu: one top model per provider, all Cursor provider models, and pins', () => {
-  const codex = ['gpt-6.1-astra', 'gpt-5.4-astra', 'gpt-6.1-sol', 'gpt-5.4-sol'].map(id => ({ id, name: id.replace(/-/g, ' '), family: '', window: 0, main: true }));
+  const codex = ['gpt-6.2-sol', 'gpt-5.4-sol', 'gpt-6.2-astra', 'gpt-5.4-astra'].map(id => ({ id, name: id.replace(/-/g, ' '), family: '', window: 0, main: true }));
   const codexRows = modelRows(codex, {});
-  assert.deepEqual(modelQuickDefaults(codexRows, 'codex').map(row => row.id).sort(), ['gpt-6.1-astra', 'gpt-6.1-sol']);
-  assert.deepEqual(modelQuickRows(codexRows, 'codex', ['gpt-5.4-sol']).map(row => row.id), ['gpt-6.1-astra', 'gpt-6.1-sol', 'gpt-5.4-sol']);
+  assert.deepEqual(modelQuickDefaults(codexRows, 'codex').map(row => row.id), ['gpt-6.2-astra', 'gpt-6.2-sol']);
+  assert.deepEqual(modelQuickRows(codexRows, 'codex', ['gpt-5.4-sol']).map(row => row.id), ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-5.4-sol']);
   const cursorRows = modelRows([
     { id: 'composer-2.5', name: 'Composer 2.5', family: '', window: 0, main: true },
     { id: 'auto-smart', name: 'Auto Smart', family: '', window: 0, main: true },
@@ -372,11 +381,11 @@ test('Cursor distinguishes own models from external providers and colors by prov
   for (const [model, id, name] of models) {
     const party = ['cursor', 'xai'].includes(id) ? 'First Party' : 'Third Party';
     assert.deepEqual(modelProvider(model), { id, name, party });
-    assert.deepEqual(modelAppearance(model, 'cursor'), { color: `var(--provider-${party === 'First Party' ? 'cursor' : id})`, hint: `${party} · ${name}` });
+    assert.deepEqual(modelAppearance(model, 'cursor'), { color: `var(--provider-${party === 'First Party' ? 'cursor' : id})`, hint: `${party}, ${name}` });
   }
   assert.equal(modelAppearance('claude-sonnet-5-5', 'cursor').color, modelAppearance('claude-opus-5-5', 'cursor').color);
   assert.equal(modelAppearance('claude-opus-5-5', 'claude').color, 'var(--model-opus)');
-  assert.deepEqual(modelAppearance('auto-smart', 'cursor'), { color: 'var(--provider-cursor)', hint: 'First Party · Cursor' });
+  assert.deepEqual(modelAppearance('auto-smart', 'cursor'), { color: 'var(--provider-cursor)', hint: 'First Party, Cursor' });
   for (const model of [null, 'unknown-model', 'console', 'solaris']) assert.equal(modelProvider(model), undefined);
 });
 
@@ -636,7 +645,7 @@ test('a background job that ends by itself leaves one 알림 rule, since the CLI
   view = reduce(view, { seq: 2, kind: 'task', phase: 'start', toolUseId: 'mon', description: 'Watch hub', background: true, at: 1000 });
   view = reduce(view, { seq: 3, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
   view = reduce(view, { seq: 4, kind: 'task', phase: 'end', toolUseId: 'mon', status: 'completed', at: 2000 });
-  assert.deepEqual(view.items.filter(item => item.kind === 'note').map(item => item.text), ['알림 · Watch hub 끝남']);
+  assert.deepEqual(view.items.filter(item => item.kind === 'note').map(item => item.text), ['알림: Watch hub 끝남']);
   assert.deepEqual(view.items.find(item => item.kind === 'note').tones, [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: 'Watch hub 끝남', color: 'var(--fg)' }]);
 });
 
@@ -674,12 +683,12 @@ test('a plan splits into its ## sections; the # line is its title and fenced cod
 });
 
 test('MCP tools: readable label and summary instead of raw JSON', () => {
-  assert.equal(toolLabel('mcp__claude_ai_Claude_Docs__update'), 'Claude Docs · update');
+  assert.equal(toolLabel('mcp__claude_ai_Claude_Docs__update'), 'Claude Docs: update');
   assert.equal(toolLabel('Bash'), 'Bash');
   assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__guide', { items: ['topic.index', 'topic.editing'] }), 'topic.index, topic.editing');
   assert.equal(toolSummary('mcp__claude_ai_Claude_Docs__batch', { container: { kind: 'project', create: { name: '작업 내용' } } }), '작업 내용');
   assert.equal(toolSummary('mcp__x__update', { ref: { id: 'a' }, payload: { ops: [{ with: { from: { content: '## 개요\n본문' } } }] } }), '개요 본문');
-  assert.equal(toolSummary('mcp__x__ping', { flag: true, n: 2 }), 'flag: true · n: 2');
+  assert.equal(toolSummary('mcp__x__ping', { flag: true, n: 2 }), 'flag: true, n: 2');
 });
 
 test('artifacts: a created doc is found by the claude.ai link in its result', () => {
@@ -838,9 +847,9 @@ test('a mode the agent changed on its own gets a line in the thread; a settings 
 
 test('the thread says when the agent moved into or out of a worktree, a plan limit was warned or hit, and the model switched by itself', () => {
   const line = event => reduce(emptyView(), event).items[0];
-  assert.equal(line({ kind: 'worktree', phase: 'enter', path: '/p/.claude/worktrees/a', branch: 'worktree-a' }).text, 'AI가 워크트리로 이동했습니다 · a (worktree-a)');
-  assert.equal(line({ kind: 'worktree', phase: 'exit', path: '/p', from: '/p/.claude/worktrees/a', removed: false }).text, 'AI가 워크트리에서 나왔습니다 · a 유지됨');
-  assert.match(line({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.99, resetsAt: 1794808800 }).text, /^5시간 한도의 99%를 사용했습니다 · .*초기화$/);
+  assert.equal(line({ kind: 'worktree', phase: 'enter', path: '/p/.claude/worktrees/a', branch: 'worktree-a' }).text, 'AI가 워크트리로 이동했습니다, a (worktree-a)');
+  assert.equal(line({ kind: 'worktree', phase: 'exit', path: '/p', from: '/p/.claude/worktrees/a', removed: false }).text, 'AI가 워크트리에서 나왔습니다, a 유지됨');
+  assert.match(line({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', utilization: 0.99, resetsAt: 1794808800 }).text, /^5시간 한도의 99%를 사용했습니다, .*초기화$/);
   assert.match(line({ kind: 'limit', status: 'rejected', limit: 'seven_day', resetsAt: null }).text, /^주간 한도에 도달했습니다$/);
   assert.match(line({ kind: 'limit', status: 'rejected', limit: 'five_hour', overage: true, resetsAt: null }).text, /추가 사용량으로 이어서 진행합니다$/);
   const limit = { kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1794808800 };
@@ -852,7 +861,7 @@ test('the thread says when the agent moved into or out of a worktree, a plan lim
 test('a plan-limit line follows the CLI\'s latest reading instead of freezing on the first one, and never passes a warning line off as the usage', () => {
   const warn = (extra = {}) => ({ kind: 'limit', status: 'allowed_warning', limit: 'five_hour', threshold: 0.9, resetsAt: 1794808800, ...extra });
   let view = reduce(emptyView(), { ...warn({ utilization: 0.91 }), seq: 1, at: Date.now() });
-  assert.match(view.items[0].text, /^5시간 한도의 91%를 사용했습니다 · .*기준 · .*에 초기화$/);
+  assert.match(view.items[0].text, /^5시간 한도의 91%를 사용했습니다, .*기준, .*에 초기화$/);
   const key = view.items[0].key;
   view = reduce(view, { kind: 'user', text: '계속', seq: 2 });
   view = reduce(view, { ...warn({ utilization: 0.96 }), seq: 3, at: Date.now() });
@@ -864,8 +873,8 @@ test('a plan-limit line follows the CLI\'s latest reading instead of freezing on
   assert.equal(reduce(view, { ...warn({ utilization: 0.97, threshold: 0.9, resetsAt: 1794812400 }), seq: 5 }).items.length, 3, 'the next window is a new line');
   assert.equal(reduce(view, { kind: 'limit', status: 'rejected', limit: 'five_hour', resetsAt: 1794808800, seq: 5 }).items.length, 3, 'reaching the limit is its own line');
   // Without a reading, the warning line is only a lower bound.
-  assert.match(reduce(emptyView(), warn()).items[0].text, /^5시간 한도의 90% 이상 사용했습니다 · /);
-  assert.match(reduce(emptyView(), warn({ threshold: null })).items[0].text, /^5시간 한도의 대부분을 사용했습니다 · /);
+  assert.match(reduce(emptyView(), warn()).items[0].text, /^5시간 한도의 90% 이상 사용했습니다, /);
+  assert.match(reduce(emptyView(), warn({ threshold: null })).items[0].text, /^5시간 한도의 대부분을 사용했습니다, /);
   assert.match(reduce(emptyView(), warn({ limit: 'seven_day_overage_included', utilization: 0.5 })).items[0].text, /^주간 한도의 50%를/);
   assert.match(reduce(emptyView(), warn({ limit: 'unheard_of', utilization: 0.5 })).items[0].text, /^사용 한도의 50%를/);
 });

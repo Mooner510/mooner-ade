@@ -89,7 +89,8 @@ export async function readClaudeCache(configDir, pid, state = null) {
 
 // The same reading for a session the caller already knows ({ sessionId, cwd }): a chat has no sessions/<pid>.json to look up.
 // `idle: false` leaves out the idle-compaction time, which only a Claude Code that stays running does (a chat's child is stopped when idle).
-export async function readSessionCache(configDir, live, state = null, { idle = true } = {}) {
+// `onTranscript` shares the bounded read with chat features that also need newly completed lines.
+export async function readSessionCache(configDir, live, state = null, { idle = true, onTranscript } = {}) {
   if (!uuid.test(String(live?.sessionId))) return null;
   const same = state?.sessionId === live.sessionId;
   const file = same ? state.file : await transcriptOf(configDir, live);
@@ -106,7 +107,11 @@ export async function readSessionCache(configDir, live, state = null, { idle = t
   const requests = resume ? state.requests : new Map();
   const before = resume ? state.value : null;
   let value = before;
-  if (end > from) value = cacheFromText(buffer.subarray(from, end).toString('utf8'), requests, value);
+  if (end > from) {
+    const text = buffer.subarray(from, end).toString('utf8');
+    onTranscript?.(text);
+    value = cacheFromText(text, requests, value);
+  }
   if (idle && value && value !== before && !value.compacted) { const compactAt = await idleCompactAt(configDir, live.cwd, value); if (compactAt) value = { ...value, compactAt }; }
   return { sessionId: live.sessionId, file, offset: start + Math.max(end, from), requests, value };
 }

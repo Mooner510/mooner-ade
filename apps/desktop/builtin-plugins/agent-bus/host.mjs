@@ -91,10 +91,10 @@ function view() {
   const { stats, history } = bus.snapshot();
   const recent = [...history].reverse().slice(0, 12).map(entry => ({
     label: `${clock(entry.at)} ${AGENT_NAMES[entry.from.agent] ?? entry.from.agent} → ${entry.to ? AGENT_NAMES[entry.to.agent] ?? entry.to.agent : '—'}`.slice(0, 60),
-    value: [STATUS[entry.status] ?? entry.status, REASON[entry.reason] ?? entry.reason, entry.length ? `${entry.length}자` : '', entry.hop ? `답장 ${entry.hop}단계` : '', entry.preview].filter(Boolean).join(' · ')
+    value: [STATUS[entry.status] ?? entry.status, REASON[entry.reason] ?? entry.reason, entry.length ? `${entry.length}자` : '', entry.hop ? `답장 ${entry.hop}단계` : '', entry.preview].filter(Boolean).join(', ')
   }));
   return {
-    status: { tone: 'ok', text: `실행 중 · 전달 ${stats.delivered}건 · 대기 ${stats.queued}건 · 실패 ${stats.failed}건 · 거부 ${stats.rejected}건` },
+    status: { tone: 'ok', text: `실행 중, 전달 ${stats.delivered}건, 대기 ${stats.queued}건, 실패 ${stats.failed}건, 거부 ${stats.rejected}건` },
     info: [
       { label: '사용법', value: '채팅의 에이전트에게 "Codex 채팅에 이 내용을 전달해"처럼 말하세요. 받는 쪽은 자기 권한 모드에 따라 바로 하거나 사용자에게 먼저 묻습니다.' },
       ...(recent.length ? recent : [{ label: '최근 메시지', value: '아직 없습니다.' }])

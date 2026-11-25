@@ -425,7 +425,7 @@ export async function runOperation(runtime, input = {}) {
         if (!action) throw fault('INVALID_INPUT', '리베이스 동작이 올바르지 않습니다.');
         return { sha: hash(entry.sha), action, ...(action === 'reword' ? { message: text(entry.message, '커밋 메시지', 64 * 1024) } : {}) };
       });
-      if (['squash', 'fixup'].includes(entries.find(entry => entry.action !== 'drop')?.action)) throw fault('INVALID_INPUT', '첫 커밋은 squash·fixup으로 합칠 대상이 없습니다.');
+      if (['squash', 'fixup'].includes(entries.find(entry => entry.action !== 'drop')?.action)) throw fault('INVALID_INPUT', '첫 커밋은 squash/fixup으로 합칠 대상이 없습니다.');
       const { upstream, commits } = await rangeToHead(runtime, hash(input.base));
       const known = new Set(commits);
       const full = entries.map(entry => ({ ...entry, sha: commits.find(sha => sha.startsWith(entry.sha)) }));

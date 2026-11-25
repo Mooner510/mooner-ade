@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { holdBack, INLINE, parse, stableSplit, tableSpans } from '../apps/web/src/markdown-parse.ts';
 import { fileHref, fileRef } from '../apps/web/src/file-ref.ts';
 import { MEDIA_LANG, parseChatMedia } from '../apps/web/src/chat-media.ts';
+import { swatchColor } from '../apps/web/src/color-chip.ts';
 
 test('a single newline inside a paragraph is kept as a line break', () => {
   assert.deepEqual(parse('첫 줄\n둘째 줄\n\n새 문단'), [{ t: 'p', text: '첫 줄\n둘째 줄' }, { t: 'p', text: '새 문단' }]);
@@ -29,6 +30,36 @@ test('a line that could still change shape waits until it ends', () => {
 });
 
 const spans = text => [...text.matchAll(INLINE)].map(match => match[0]);
+
+test('color chips preserve explicit labels and wait for both closing brackets', () => {
+  const chip = '[[c: Color(1f,0,0) ]]';
+  const [match] = 'plain #123 and 0xFF, then '.concat(chip).matchAll(INLINE);
+  assert.equal(match[9], ' Color(1f,0,0) ');
+  assert.deepEqual(spans('#123 0xFF [[color:red]]'), []);
+  assert.deepEqual(spans('[[c:red]] [[c:invalid]]'), ['[[c:red]]', '[[c:invalid]]']);
+  for (let i = 2; i < chip.length; i++) assert.equal(holdBack('a ' + chip.slice(0, i)), 'a ');
+  assert.equal(holdBack('a ' + chip), 'a ' + chip);
+  const literal = '\x60' + chip + '\x60';
+  assert.equal([...literal.matchAll(INLINE)][0][1], literal);
+  const code = '\x60\x60\x60txt\n[[c:#ff';
+  assert.equal(holdBack(code), code);
+  assert.equal(parse(code)[0].code, '[[c:#ff');
+  assert.equal(holdBack('example \x60[[c:#ff'), 'example \x60[[c:#ff');
+});
+
+test('native color literals convert without mixing alpha-first and alpha-last formats', () => {
+  const fixtures = [
+    [' Color(1f, 0, 0) ', 'rgb(255 0 0 / 1)'],
+    ['new Color(.5F,0,1e0f,.25)', 'rgb(127.5 0 255 / 0.25)'],
+    ['new Color32(252, 8, 99, 255)', 'rgb(252 8 99 / 1)'],
+    ['0x80336699', '#33669980'],
+    ['Color(0x80336699)', '#33669980'],
+  ];
+  for (const [input, color] of fixtures) assert.equal(swatchColor(input), color, input);
+  for (const invalid of ['Color(1,,0)', 'Color(2,0,0)', 'Color32(255,0,0)', 'Color(1,0,0,Infinity)', '0xFF', '빨강']) {
+    assert.equal(swatchColor(invalid), undefined, invalid);
+  }
+});
 
 test('double underscores only make bold at a word edge, so identifiers stay plain', () => {
   assert.deepEqual(spans('mcp__mooner__status'), [], 'a tool name is not bold');

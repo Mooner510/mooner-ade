@@ -50,6 +50,8 @@ import { createWakaTime, PULSE } from './wakatime.js';
 import { createAgentKeys } from './agent-keys.js';
 import { createApiSpend } from './api-spend.js';
 import { createAccountResolver, createUsage } from './usage.js';
+import { createUsageLedger } from './usage-ledger.js';
+import { buildSessionReport } from './usage-report.js';
 import { cursorAuthWithoutKeychain } from './cursor-usage.js';
 import { detectShells, resolveShell, checkAgents } from './shells.js';
 import { chooseFolder } from './folder-dialog.js';
@@ -242,6 +244,7 @@ const apiSpend = createApiSpend({ file: path.join(dataRoot, 'api-key-spend.json'
 await apiSpend.load();
 const accounts = createAccountResolver();
 const usage = createUsage({ version: appVersion, account: accounts });
+const ledger = createUsageLedger({ root: path.join(dataRoot, 'usage-ledger'), deviceId: installationUUID, keyOf: (provider, key) => apiSpend.idOf(provider, key) });
 let activeProjectId = '', wakatimeBackground = true, terminalShell = '', feedbackAgentTool = true, mcpTrust = {}, idleCompactSetting = { enabled: false, minK: DEFAULT_K };
 function applyAppState(state) {
   activeProjectId = state?.activeProjectId || '';
@@ -432,6 +435,7 @@ async function openChat(project, id, { cwd, agent, defaults }) {
     keyAvailable: () => agentKeys.hasKey(agent), trusted: () => mcpTrust[agent] ?? [], idleCompact: () => idleCompactSetting, spend: apiSpend, readUsage: (provider, options) => verifyUsage?.(provider) ?? usage.status(provider, { ...options, project }), cursorModels: agent === 'cursor' ? dir => cursorModels.bind(cursorModels.key(dir, agentKeys.signature('cursor'))) : null,
     onEvent: event => broadcast(project, { type: 'chat/event', id, event }), onState: state => broadcast(project, { type: 'chat/state', id, state }),
     prepare: chatLaunchFiles(dataRoot), recover: () => checkAgents(), defaults, chatText,
+    onLedger: info => { void ledger.ingestFile(info).catch(error => console.warn(`사용 기록을 남기지 못했습니다: ${error.message}`)); },
     // `!command` runs in the shell the terminal tab uses, with the terminal's environment (plugin additions), not the agent's API keys.
     shell: () => resolveShell(terminalShell), shellEnv: () => pluginEnv(),
     account: () => accounts('claude', project).then(found => found.from === 'direnv' ? found.dir : '') });
@@ -663,7 +667,7 @@ async function cachedReadiness(root, force) {
     entry.value.then(() => { entry.done = true; entry.at = Date.now(); }, () => { if (agentReadiness === entry) agentReadiness = null; });
   }
   const result = await agentReadiness.value;
-  return { ...result, pty: { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨 · 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' } };
+  return { ...result, pty: { installed: typeof pty?.spawn === 'function', message: pty ? 'node-pty 로드됨, 실제 PTY 동작은 터미널을 열어 확인' : 'node-pty 설치 및 네이티브 빌드를 확인하세요.' } };
 }
 
 // `git status --short --branch` yields "## main...origin/main"; the UI and the integrate check need the bare name.
@@ -908,7 +912,17 @@ async function route(action, input, project) {
     for (const project of projects.values()) for (const chat of project.chats.values()) if (!input?.agent || chat.agent === input.agent) chat.relaunch?.();
     return status;
   }
-  if (action === 'usage/status') return verifyUsage?.(input.provider) ?? usage.status(input.provider, { force: input.force === true, project });
+  if (action === 'usage/status') {
+    if (verifyUsage) return verifyUsage(input.provider);
+    const reading = await usage.status(input.provider, { force: input.force === true, project });
+    void ledger.observeSnapshot(reading).catch(() => {});
+    return reading;
+  }
+  if (action === 'usage/review') return ledger.review(input);
+  if (action === 'usage/review/session') return ledger.session(input);
+  if (action === 'usage/ledger/pending') return ledger.pending(input.limit);
+  if (action === 'usage/ledger/ack') return ledger.ack(input.n);
+  if (action === 'usage/ledger/import') return ledger.importRemote(input);
   if (action === 'agent/installed') return checkAgents();
   if (action.startsWith('feedback/')) return feedbackRoute(action, input);
   if (action === 'ide/list') return listIdes({ force: input.force === true });
@@ -1121,7 +1135,7 @@ async function route(action, input, project) {
     });
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
-    // Session statistics (Claude only): read from the transcript the CLI keeps, nothing is sent anywhere.
+    // Session statistics prefer Claude's transcript and fall back to ADE's retained events.
     case 'chat/stats': case 'chat/spend': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
@@ -1130,15 +1144,24 @@ async function route(action, input, project) {
       // chat/spend: what this chat consumed from the given times on (each plan window's start).
       // Claude: dollars from its transcript, subagent files included. Codex and Cursor: token weight from the usage events ADE stored.
       if (action === 'chat/spend' && ref.agent !== 'claude') return { spent: await chat.spendSince(since) };
-      if (ref.agent !== 'claude') return chat.stats();
+      if (ref.agent !== 'claude') {
+        const stats = chat.stats();
+        return { ...stats, report: buildSessionReport(stats) };
+      }
       if (!ref.sessionId) throw fault('NOT_FOUND', '아직 시작하지 않은 대화입니다. 메시지를 한 번 보낸 뒤 열어 보세요.', 404);
       const dirs = [...new Set([ref.configDir, ...await cliConfigDirs(project)].filter(Boolean))];
       const files = await sessionFiles({ sessionId: ref.sessionId, configDirs: dirs, cwds: [...new Set([ref.cwd, ref.worktreePath, workspace.root].filter(Boolean))] });
-      if (!files.length) throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      if (!files.length) {
+        if (action === 'chat/stats') {
+          const stats = chat.stats();
+          if (stats.turns || stats.requests) return { ...stats, report: buildSessionReport(stats) };
+        }
+        throw fault('NOT_FOUND', '이 세션의 기록 파일을 찾지 못했습니다. (/clear 했거나 CLI가 기록을 지웠을 수 있습니다)', 404);
+      }
       const base = await readSessionStats(files, action === 'chat/spend' ? since : [], ref.costUsd);
       const stats = withSubagents(base, chat.storedEvents(), chat.tokenPrice(), action === 'chat/spend' ? since : []);
       if (action === 'chat/spend') return { spent: stats.spentSince };
-      return { sessionId: ref.sessionId, ...stats };
+      return { sessionId: ref.sessionId, ...stats, report: buildSessionReport(stats) };
     }
     // Meter per 1%p learned for the Plan Usage share (dollars for Claude, token weight for Codex and Cursor). Kept with the app data: the page's origin changes with every launch's port, so localStorage cannot hold it.
     case 'usage/k': {
@@ -1248,7 +1271,7 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       return 'value' in input ? chat.setIdleCompact(input.value) : chat.setIdleCompact();
     }
-    // /limit: this chat's limit. Without `limit` it is only read; null clears it.
+    // 제한 (status line button): this chat's limit. Without `limit` it is only read; null clears it.
     case 'chat/limit': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
@@ -1886,6 +1909,7 @@ if (verifyPluginsEnabled) {
 }
 await startVite(server);
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(Number(process.env.ADE_PORT) || 0, '127.0.0.1', resolve); });
+void ledger.backfill(dataRoot).catch(error => console.warn(`사용 기록을 소급하지 못했습니다: ${error.message}`));
 refreshCursorModels();
 origin = `http://127.0.0.1:${server.address().port}`;
 void watchFeedback();

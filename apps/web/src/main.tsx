@@ -22,6 +22,9 @@ import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
 import { Changelog, changelogDue, entries as changelogEntries, hasUnreadChangelog, setChangelogDue, syncChangelogVersion } from './Changelog';
+import { UsageReview } from './UsageReview';
+import { bindUsageReview } from './usage-review-open';
+import { syncUsageLedger } from './usage-sync';
 import { LEGACY_CHANGELOG_VERSION } from './changelog-state';
 import { Workspace, showKeys, type Command, type Hub, type AgentAlert, type WorkspaceHandle, type WorkspaceStatus } from './Workspace';
 import { ErrorBoundary } from './error-boundary';
@@ -96,7 +99,7 @@ function useHub(enabled: boolean) {
       else for (const handler of state.current.subs.values()) handler(message);
     }, open => {
       state.current.open = open;
-      if (!open) { setConnection('연결 끊김 · 재연결 중'); return; }
+      if (!open) { setConnection('연결 끊김, 재연결 중'); return; }
       setConnection('연결됨');
       for (const projectId of state.current.subs.keys()) state.current.events?.send({ type: 'subscribe', projectId });
     });
@@ -303,7 +306,7 @@ function Shell() {
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
-  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [remotePcOpen, setRemotePcOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings), [settingsOpen, setSettingsOpen] = useState<false | 'default' | 'plugins' | 'claude' | 'codex' | 'cursor'>(false), [changelogOpen, setChangelogOpen] = useState(false), [usageOpen, setUsageOpen] = useState(false), [remotePcOpen, setRemotePcOpen] = useState(false), [changelogUnread, setChangelogUnread] = useState(hasUnreadChangelog), [animTip, setAnimTip] = useState(false);
   const settingsRef = useRef(settings); settingsRef.current = settings;
   const touringRef = useRef(false);
   const [changelogPending, setChangelogPending] = useState(false);
@@ -450,7 +453,7 @@ function Shell() {
     const wanted = (!alert.looking || settings.notifyLooking) && (alert.kind === 'done' ? settings.notifyDone : settings.notifyApproval);
     if (!wanted && !settings.notifySound) return;
     const project = statusRef.current[root]?.name || shortName(root), agent = agentNames[alert.agent];
-    const title = `${project} · ${agent} ${alert.kind === 'done' ? '작업 멈춤' : '입력 요청'}`;
+    const title = `${project} - ${agent} ${alert.kind === 'done' ? '작업 멈춤' : '입력 요청'}`;
     if (wanted && 'Notification' in window) {
       if (Notification.permission === 'default') void Notification.requestPermission();
       if (Notification.permission === 'granted') {
@@ -560,6 +563,14 @@ function Shell() {
   const canRemotePc = !isRemote && Boolean(remoteBridge());
   const remotePcModal = remotePcOpen && canRemotePc && <RemotePcDialog onClose={() => setRemotePcOpen(false)} />;
   const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
+  const usageModal = usageOpen && <UsageReview onClose={() => setUsageOpen(false)} />;
+  useEffect(() => bindUsageReview(() => setUsageOpen(true)), []);
+  useEffect(() => {
+    const run = () => { void syncUsageLedger().catch(() => {}); };
+    const first = window.setTimeout(run, 5000);
+    const timer = window.setInterval(run, 15 * 60 * 1000);
+    return () => { window.clearTimeout(first); window.clearInterval(timer); };
+  }, []);
   // A replay (book button, palette, settings) or a newer tutorial skips the theme and font screen; only a user who was never onboarded sees it.
   const onboardedOnce = useRef(false); if (settings.onboarded) onboardedOnce.current = true;
   // Ending the tour plays the launch animation over it; the tour is removed once the splash has covered it.
@@ -634,7 +645,7 @@ function Shell() {
               <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name" data-tip-overflow="">{name}</span>
-              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
+              {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문, 승인 대기"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
                 <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
                 <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root, true); }}><Icon name="x" size={14} /></button>
@@ -736,6 +747,7 @@ function Shell() {
       </div>
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
+        <IconButton icon="chart" label="사용 기록" onClick={() => setUsageOpen(true)} />
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
         {canRemotePc && <IconButton icon="laptop" label="다른 PC에 접속" onClick={() => setRemotePcOpen(true)} />}
         {closeRemote && <IconButton icon="arrowLeft" label={remoteClient === 'desktop' ? '창 닫기' : 'PC 목록으로'} onClick={closeRemote} />}
@@ -759,6 +771,7 @@ function Shell() {
     {settingsModal}
     {animTipCard}
     {changelogModal}
+    {usageModal}
     {remotePcModal}
     {picker && <Modal className="project-modal" labelledBy="picker-title" onClose={() => setPicker(false)}><PickerCard {...picking} onClose={() => setPicker(false)} /></Modal>}
   </div>{tutorial}</AppKeysContext.Provider>;

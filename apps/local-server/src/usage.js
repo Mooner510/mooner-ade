@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { cursorRefreshClientID, cursorSessionCookie, cursorUserId, loginKeychainMissing, parseCursorGrokUsage, parseCursorUsage, parseCursorUsageFallback, readCursorLogin } from './cursor-usage.js';
+import { identityFromProfile } from './usage-accounts.js';
 import { fault } from './files.js';
 
 // Plan limits move slowly and both endpoints are rate limited, so a reading is reused for a few minutes.
@@ -271,18 +272,18 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
       const [body, profile] = await Promise.all([getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/usage', headers), getJson(fetchImpl, 'https://api.anthropic.com/api/oauth/profile', headers).catch(() => null)]);
       // The stored subscriptionType is the org type from sign-in (Ultra is a claude_max org); the profile names the plan.
       const plan = profile?.organization?.plan_display_name || login.plan;
-      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), plan), credit: parseClaudeCredit(body), plan, source: 'api', at: now() };
+      return { windows: claudeWindowsForPlan(parseClaudeUsage(body), plan), credit: parseClaudeCredit(body), plan, source: 'api', at: now(), identity: identityFromProfile('claude', profile, env?.CLAUDE_CONFIG_DIR || '') };
     },
     async codex(env) {
       const login = await codexLogin({ env });
       try {
         if (!login) throw new UsageError('Codex ChatGPT 로그인 정보를 찾지 못했습니다.');
         const body = await getJson(fetchImpl, 'https://chatgpt.com/backend-api/wham/usage', { Authorization: `Bearer ${login.token}`, ...(login.account ? { 'ChatGPT-Account-Id': login.account } : {}), 'User-Agent': userAgent });
-        return { windows: parseCodexUsage(body, now()), codexCredits: parseCodexCredits(body), plan: body?.plan_type || '', source: 'api', at: now() };
+        return { windows: parseCodexUsage(body, now()), codexCredits: parseCodexCredits(body), plan: body?.plan_type || '', source: 'api', at: now(), identity: identityFromProfile('codex', { accountId: login.account, plan: body?.plan_type || '' }, env?.CODEX_HOME || '') };
       } catch (error) {
         const log = await codexLog({ env }).catch(() => null);
         if (!log) throw error;
-        return { windows: log.windows, codexCredits: log.codexCredits ?? null, plan: '', source: 'log', at: log.at, note: error.message };
+        return { windows: log.windows, codexCredits: log.codexCredits ?? null, plan: '', source: 'log', at: log.at, note: error.message, identity: identityFromProfile('codex', { plan: '' }, env?.CODEX_HOME || '') };
       }
     },
     async cursor(env) {
@@ -320,7 +321,7 @@ export function createUsage({ version = '0.0.0', fetch: fetchImpl = globalThis.f
         const pools = usageBody?.planUsage ?? {};
         const grok = grokBody ? parseCursorGrokUsage(grokBody, { autoPercent: pools.autoPercentUsed, totalPercent: pools.totalPercentUsed }) : null;
         if (grok) windows.push(grok);
-        return { windows, plan, source: 'api', at: now() };
+        return { windows, plan, source: 'api', at: now(), identity: identityFromProfile('cursor', { userId: cursorUserId(token) || '', plan }, env?.CURSOR_APP_SUPPORT || '') };
       };
       return fetchCursor(login.token);
     }

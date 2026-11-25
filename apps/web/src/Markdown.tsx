@@ -6,6 +6,7 @@ import { Icon } from './Icon';
 import { requestOpen } from './ide-open';
 import { copyText } from './toast';
 import { holdBack, INLINE, parse, stableSplit, tableSpans, type Node } from './markdown-parse';
+import { COLOR_COPY_EVENT, swatchColor, type ColorCopyTarget } from './color-chip';
 import { ChatUiContext, UiFrame } from './UiFrame';
 import { UI_LANG } from './ui-frame-protocol';
 import { NATIVE_LANG, parseUi } from './ui-spec';
@@ -26,6 +27,19 @@ function FileChip({ file }: { file: FileRef }) {
   const fullLabel = file.path + suffix;
   return <button type="button" className="md-file" title={`${fullLabel}\n클릭하여 열기`} aria-label={`${fullLabel} 열기`} onClick={() => requestOpen({ ...file, chatId: chat?.chatId })}><FileIcon name={name} folder={file.folder} /><span>{chat?.fileChipLabel === 'name' ? name + suffix : fullLabel}</span></button>;
 }
+function ColorChip({ label }: { label: string }) {
+  const color = swatchColor(label);
+  const swatch = useRef<HTMLSpanElement>(null);
+  const chooseFormat = () => {
+    const detail: ColorCopyTarget = { label, color: swatch.current ? getComputedStyle(swatch.current).backgroundColor : undefined };
+    window.dispatchEvent(new CustomEvent(COLOR_COPY_EVENT, { detail }));
+  };
+  return <button type="button" className="md-color" aria-haspopup="dialog" title={color ? '색상 복사 형식 선택' : '색을 해석하지 못함 · 원문 복사'} onClick={chooseFormat}>
+    {color && <span className="md-color-swatch" aria-hidden="true"><span ref={swatch} style={{ backgroundColor: color }} /></span>}
+    <span className="md-color-label">{label}</span>
+  </button>;
+}
+
 function link(href: string, label: ReactNode, key: number) {
   const file = /^https?:\/\//i.test(href) ? null : fileHref(href);
   if (file) return <FileChip key={key} file={file} />;
@@ -41,6 +55,7 @@ export function inline(source: string): ReactNode[] {
     else if (match[4] || match[5]) out.push(<em key={key++}>{inline(text.slice(1, -1))}</em>);
     else if (match[6]) { const split = text.indexOf(']('); out.push(link(text.slice(split + 2, -1), inline(text.slice(1, split)), key++)); }
     else if (match[8]) { const file = fileRef(text.slice(7, -2)); out.push(file ? <FileChip key={key++} file={file} /> : text); }
+    else if (match[9]) out.push(<ColorChip key={key++} label={match[9]} />);
     else { const url = text.replace(/[.,;:!?]+$/, ''); out.push(link(url, url, key++)); if (url.length < text.length) out.push(text.slice(url.length)); }
     last = match.index + text.length;
   }

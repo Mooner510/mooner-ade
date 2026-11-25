@@ -11,7 +11,6 @@ import { ChatStatusLine } from './ChatStatus';
 import { tokenWeight, useUsageShare } from './use-usage-share';
 import { ChatStatsModal } from './ChatStats';
 import { McpCard } from './McpCard';
-import { LimitCard } from './LimitCard';
 import { BtwCard, UsageCard } from './ChatCards';
 import { CacheTimer } from './CacheTimer';
 import { CliUpdateNotice } from './ClaudeUpdateNotice';
@@ -72,7 +71,7 @@ const PROVIDER_LABELS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' } a
 const MODES = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
 // Codex's sandbox is its own setting, apart from the approval mode: null follows the mode. Workspace-write has a network switch, shown as its own entry.
 const sandboxOptions = [
-  { value: 'follow', label: '샌드박스: 모드에 따름', icon: 'security', hint: '기본·편집 허용·자동은 작업 폴더 쓰기, Bypass는 전체 접근, 계획은 읽기 전용' },
+  { value: 'follow', label: '샌드박스: 모드에 따름', icon: 'security', hint: '기본/편집 허용/자동은 작업 폴더 쓰기, Bypass는 전체 접근, 계획은 읽기 전용' },
   { value: 'read-only', label: '샌드박스: 읽기 전용', icon: 'visibility', color: 'var(--sandbox-read-only)', hint: '파일을 읽기만 합니다' },
   { value: 'workspace-write', label: '샌드박스: 작업 폴더 쓰기', icon: 'edit_note', color: 'var(--sandbox-workspace)', hint: '작업 폴더와 추가 폴더에만 쓰고 네트워크는 막습니다' },
   { value: 'workspace-write+network', label: '샌드박스: 작업 폴더 쓰기 + 네트워크', icon: 'public', color: 'var(--sandbox-network)', hint: '작업 폴더에만 쓰되 네트워크는 허용합니다' },
@@ -212,9 +211,9 @@ const LOCAL: CommandInfo[] = [
   { name: 'model', description: '모델을 바꿉니다', hint: '[모델]' },
   { name: 'effort', description: 'Effort(추론 노력 수준)를 바꿉니다', hint: '[low|medium|high|max]' },
   { name: 'permissions', description: '권한 모드를 바꿉니다', hint: '[default|acceptEdits|plan|auto]' },
-  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'idlecompact', description: '캐시가 식기 전에 자동으로 Compact할지 이 채팅만 정합니다 (1시간 캐시)', hint: '[on|off|auto]' }, { name: 'usage', description: '컨텍스트·비용·플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
-  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'limit', description: '이 채팅의 비용·사용량 제한을 정합니다 (도달하면 중지)' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
-  { name: 'cost', description: '이 채팅의 비용·토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰·비용·도구·컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
+  { name: 'autocompact', description: 'Auto Compact 창 크기를 바꿉니다 (응답 중에도 바로 적용)', hint: '[auto|토큰 수]' }, { name: 'idlecompact', description: '캐시가 식기 전에 자동으로 Compact할지 이 채팅만 정합니다 (1시간 캐시)', hint: '[on|off|auto]' }, { name: 'usage', description: '컨텍스트, 비용, 플랜 사용 한도를 카드로 바로 보여 줍니다 (응답 중에도 가능)' }, { name: 'btw', description: '대화에 남기지 않는 곁다리 질문을 합니다 (응답 중에도 가능)', hint: '<질문>' },
+  { name: 'rename', description: '이 채팅의 이름을 바꿉니다', hint: '<이름>' }, { name: 'mcp', description: 'MCP 서버를 보고 다시 연결하거나 켜고 끕니다' }, { name: 'tasks', description: '이 채팅의 서브에이전트 작업을 보여 줍니다' },
+  { name: 'cost', description: '이 채팅의 비용/토큰을 보여 줍니다' }, { name: 'stats', description: '이 세션의 상세 통계(토큰, 비용, 도구, 컨텍스트 추이)를 봅니다' }, { name: 'status', description: '세션 상태를 보여 줍니다' }, { name: 'help', description: '사용할 수 있는 명령을 보여 줍니다' },
   { name: 'config', description: 'ADE 설정을 엽니다' }, { name: 'exit', description: '이 채팅을 닫습니다' }
 ];
 // Shell tools show their command as code (coloured in the shell's language), with the model's one-line description above it on approval cards.
@@ -253,7 +252,7 @@ function ToolResult({ label, text, isError, prose = false }: { label: string; te
   useLayoutEffect(() => { const el = pre.current; if (el && !full) setTall(el.scrollHeight > el.clientHeight + 2); }, [text, full]);
   const toggle = () => { capture(); setFull(value => !value); };
   return <div className={`chat-tool-result ${isError ? 'error' : ''}`}>
-    <div className="chat-tool-result-head"><small>{label}{lines > 1 && ` · ${lines.toLocaleString()}줄`}</small>
+    <div className="chat-tool-result-head"><small>{label}{lines > 1 && `, ${lines.toLocaleString()}줄`}</small>
       {body && <button type="button" className="chat-tool-copy" aria-label="결과 복사" onClick={() => copyText(body)}><Icon name="copy" size={13} />복사</button>}</div>
     {prose ? <div ref={pre} className={`chat-tool-prose${full ? ' full' : ''}`}><Markdown text={clip(body)} /></div>
       : <pre ref={pre} className={full ? 'full' : undefined}>{clip(body) || '(출력 없음)'}</pre>}
@@ -298,7 +297,7 @@ function PlanRecord({ input, result }: { input: Record<string, unknown>; result?
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // NotebookEdit's cell: its source as code, headed "code 셀 · 추가" (markdown cells colour as Markdown, code cells as Python).
 const notebookCell = (input: Record<string, unknown>) => typeof input.new_source !== 'string' || input.edit_mode === 'delete' ? null
-  : { code: input.new_source, label: `${input.cell_type === 'markdown' ? 'markdown' : 'code'} 셀 · ${input.edit_mode === 'insert' ? '추가' : '바꾸기'}`, syntax: input.cell_type === 'markdown' ? 'markdown' : 'python' };
+  : { code: input.new_source, label: `${input.cell_type === 'markdown' ? 'markdown' : 'code'} 셀, ${input.edit_mode === 'insert' ? '추가' : '바꾸기'}`, syntax: input.cell_type === 'markdown' ? 'markdown' : 'python' };
 const ToolCard = memo(function ToolCard({ block, result, settings, running }: { block: Extract<Block, { type: 'tool_use' }>; result?: { content: string; isError: boolean }; settings: Settings; running: boolean }) {
   const [open, setOpen] = useState(settings.chatToolsOpen), input = block.input ?? {}, cwd = useContext(CwdContext);
   const edit = block.name === 'Edit' ? [{ from: String(input.old_string ?? ''), to: String(input.new_string ?? '') }] : block.name === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.map((item: any) => ({ from: String(item.old_string ?? ''), to: String(item.new_string ?? '') })) : null;
@@ -328,7 +327,7 @@ const ToolCard = memo(function ToolCard({ block, result, settings, running }: { 
         : patches.length ? null : <ToolInput input={input} cwd={cwd} />}
       {patches.map((patch: any, index: number) => typeof patch.diff === 'string' ? <div className="chat-diff" key={index}><CodeBlock code={`${patch.path}\n${patch.diff}`} lang="diff" /></div> : <ChatDiff key={index} named from={patch.oldText ?? ''} to={patch.newText ?? ''} path={patch.path ?? 'edit'} settings={settings} />)}
       {plan ? null : refused && result ? (result.content.trim() === DENIED_DEFAULT ? null : <ToolResult label="거부하며 보낸 지시" isError={false} text={/the user said:\n([\s\S]*)$/.exec(result.content)?.[1].trim() ?? result.content} prose />)
-      : denial && result ? <div className="chat-tool-result blocked"><small>자동 모드가 차단함{denial.reason && ` · ${denial.reason}`}</small><p>분류기가 이 작업을 위험하다고 판단해 실행하지 않았습니다. 허용하려면 입력창 위의 승인 카드를 쓰거나 직접 다시 요청하세요.</p><details><summary>원문</summary><pre>{clip(result.content)}</pre></details></div>
+      : denial && result ? <div className="chat-tool-result blocked"><small>자동 모드가 차단함{denial.reason && `, ${denial.reason}`}</small><p>분류기가 이 작업을 위험하다고 판단해 실행하지 않았습니다. 허용하려면 입력창 위의 승인 카드를 쓰거나 직접 다시 요청하세요.</p><details><summary>원문</summary><pre>{clip(result.content)}</pre></details></div>
       : result && !result.isError && block.name === 'WebSearch' && webSearchResult(result.content) ? <WebResults raw={result.content} />
       : result && !result.isError && loaded(block, result.content) ? <ToolResult label="불러옴" isError={false} text={loaded(block, result.content)!} />
       : result && !(quietSuccess && !result.isError) && <ToolResult label={result.isError ? block.name === 'AskUserQuestion' ? '건너뜀' : '오류' : block.name === 'AskUserQuestion' ? '답변' : '결과'} isError={result.isError} text={mcpTool(block.name) ? prettyResult(result.content) : result.content} />}
@@ -385,8 +384,8 @@ type AgentsValue = { agents: Map<string, SubAgent>; colors: Map<string, string>;
 // The chat's folder, so tool rows and approvals show paths under it as relative paths.
 const CwdContext = createContext('');
 // What the /usage and /btw cards in the thread need from the pane: where to read the plan limits, how to colour them, and what closing or retrying a question does.
-type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; mcpCall(input: Record<string, unknown>): Promise<any>; limitCall(input: Record<string, unknown>): Promise<any>; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
-const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, mcpCall: async () => ({}), limitCall: async () => ({}), stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
+type LocalCards = { projectId: string; colors: boolean; showSession: boolean; closeBtw(key: string): void; retryBtw(key: string): void; mcpCall(input: Record<string, unknown>): Promise<any>; stopShell(runId: string): void; skipShell(runId: string, on: boolean): void; shellNote: { lastId: string; pending: number } };
+const LocalCardsContext = createContext<LocalCards>({ projectId: '', colors: true, showSession: true, closeBtw() {}, retryBtw() {}, mcpCall: async () => ({}), stopShell() {}, skipShell() {}, shellNote: { lastId: '', pending: 0 } });
 // Tool calls waiting at an approval prompt (awaitingTools): their rows show "승인 대기", not a spinner.
 const AwaitingContext = createContext<ReadonlySet<string>>(new Set());
 // Tool calls the user refused: shown as "거부됨" (muted), not as a red error; an instruction sent with the refusal (다르게 하기) is shown as such.
@@ -403,7 +402,7 @@ function useTick(on: boolean) {
 }
 const agentElapsed = (agent: SubAgent, now: number) => agent.status === 'running' ? (agent.startedAt ? Math.max(0, now - agent.startedAt) : agent.durationMs)
   : agent.durationMs ?? (agent.startedAt && agent.endedAt ? agent.endedAt - agent.startedAt : undefined);
-const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [[agent.model && shortModel(agent.model), agent.effort && effortLabel(agent.effort)].filter(Boolean).join(' '), agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? briefDuration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(' · '); };
+const agentMeta = (agent: SubAgent, now: number) => { const ms = agentElapsed(agent, now); return [[agent.model && shortModel(agent.model), agent.effort && effortLabel(agent.effort)].filter(Boolean).join(' '), agent.toolCount ? `도구 ${agent.toolCount}개` : '', ms != null ? briefDuration(ms) : '', agent.tokens ? `${compact(agent.tokens)} 토큰` : ''].filter(Boolean).join(', '); };
 // ■ beside a running background job's spinner: ends just that task. A span, since it sits inside the row's own button.
 function StopTask({ id }: { id: string }) {
   const { stop } = useContext(AgentsContext);
@@ -460,7 +459,7 @@ function AgentTracker({ list: all, colors, opened, waiting, onOpen, onHide }: { 
   }, [now, all, opened, fading, gone]);
   if (!list.length) return null;
   const done = count('done'), tally = running || done !== list.length
-    ? [asking && `승인 대기 ${asking}`, running - asking && `실행 중 ${running - asking}`, done && `완료 ${done}`, count('error') && `오류 ${count('error')}`, count('stopped') && `중단 ${count('stopped')}`].filter(Boolean).join(' · ')
+    ? [asking && `승인 대기 ${asking}`, running - asking && `실행 중 ${running - asking}`, done && `완료 ${done}`, count('error') && `오류 ${count('error')}`, count('stopped') && `중단 ${count('stopped')}`].filter(Boolean).join(', ')
     : '모두 완료';
   // One row: [state] 서브에이전트 N개 · tally ... [dots when folded] [fold] [close]. Fold and close are separate, same-size buttons on the right edge.
   return <div className="chat-agents" data-running={running > 0 || undefined} data-fading={list.every(agent => fading.has(agent.id)) || undefined} role="region" aria-label="서브에이전트">
@@ -510,7 +509,7 @@ function AgentDrawer({ agent, closing, list, colors, results, settings, docked, 
   return <aside className="chat-agent-drawer" data-docked={docked || undefined} data-closing={closing || undefined} inert={closing || undefined} style={dotStyle(colors.get(agent.id))} aria-label={`서브에이전트 ${agent.description}`} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
     <header>
       <i className="chat-agent-dot" data-status={agent.status} />
-      <div><strong>{agent.description || '서브에이전트'}</strong><small>{agent.type}{agent.background ? ' · 백그라운드' : ''} · {AGENT_STATUS[agent.status]}{meta && ` · ${meta}`}</small></div>
+      <div><strong>{agent.description || '서브에이전트'}</strong><small>{agent.type}{agent.background ? ', 백그라운드' : ''}, {AGENT_STATUS[agent.status]}{meta && `, ${meta}`}</small></div>
       {agent.background && agent.status === 'running' && <IconButton icon="stop" label="이 작업 중단" className="stop-task" size={14} onClick={() => onStop(agent.id)} />}
       <IconButton icon="chevronLeft" label="이전 에이전트" size={14} disabled={at <= 0} onClick={() => onPick(list[at - 1].id)} />
       <small className="chat-agent-pos">{at + 1}/{list.length}</small>
@@ -577,10 +576,10 @@ function ToolBundle({ parts, results, settings, running, plainThinking, flat }: 
     {!flat && <button type="button" className="chat-bundle-head" aria-expanded={expanded} data-inert={inert || undefined} onClick={() => { if (inert) return; capture(); setExpanded(value => !value); }}>
       <span className="chat-bundle-icon" data-outcome={waiting || active ? undefined : outcome}>{waiting ? <Icon name="alert" size={13} /> : active ? <i className="chat-spin" /> : <Icon name={outcome === 'ok' ? 'check' : outcome === 'partial' ? 'alert' : 'x'} size={13} />}</span>
       {waiting
-        ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)} · {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
+        ? <><strong>승인 대기</strong><span className="chat-bundle-now">{toolLabel(waiting.name)}, {toolSummary(waiting.name, waiting.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
         : active
         ? <><strong>{toolLabel(active.name)}</strong><span className="chat-bundle-now">{toolSummary(active.name, active.input ?? {}, cwd)}</span><span className="chat-bundle-count">{finished}/{tools.length}</span></>
-        : <><strong>도구 {tools.length}개 호출 완료</strong><span className="chat-bundle-now">{[failed && `${failed}개 오류`, blocked && `${blocked}개 차단`].filter(Boolean).join(' · ')}</span></>}
+        : <><strong>도구 {tools.length}개 호출 완료</strong><span className="chat-bundle-now">{[failed && `${failed}개 오류`, blocked && `${blocked}개 차단`].filter(Boolean).join(', ')}</span></>}
       {!inert && <><span className="chat-bundle-toggle">{expanded ? '접기' : folded ? '펼치기' : '전체 보기'}</span>
       <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} /></>}
     </button>}
@@ -610,13 +609,14 @@ const shownBlock = (block: Block) => block.type === 'tool_use' || ((block.type =
 const turnsOf = (items: Item[], busy: boolean) => {
   const turns: Item[][] = [];
   let current: Item[] = [];
-  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw' || entry?.kind === 'mcp' || entry?.kind === 'limit') && entry.local === true;
+  const startsTurn = (item: Item) => item.kind === 'user' || item.kind === 'peer_message' || item.kind === 'divider';
+  const isLocal = (entry?: Item) => entry?.kind === 'shell' || (entry?.kind === 'note' || entry?.kind === 'info' || entry?.kind === 'usage' || entry?.kind === 'btw' || entry?.kind === 'mcp') && entry.local === true;
   // An ADE line typed while the answer is still going (a setting, /cost) stays inside that answer: it ends the turn only when the next thing is a new request
   // (a user message, which is also how an applied steer arrives, or a divider) or nothing follows and no turn runs.
-  const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? after.kind !== 'user' && after.kind !== 'divider' : busy; };
+  const insideRunning = (at: number) => { let next = at + 1; while (isLocal(items[next])) next++; const after = items[next]; return after ? !startsTurn(after) : busy; };
   items.forEach((item, at) => {
     // What ADE itself says (a changed setting, /cost) is its own group, so the copy / branch / rewind icons stay with the answer they belong to.
-    if (current.length && (item.kind === 'user' || item.kind === 'divider' || (isLocal(item) && !isLocal(current.at(-1)) && !(current.some(entry => entry.kind === 'user' || entry.kind === 'assistant') && insideRunning(at))))) { turns.push(current); current = []; }
+    if (current.length && (startsTurn(item) || (isLocal(item) && !isLocal(current.at(-1)) && !(current.some(entry => entry.kind === 'user' || entry.kind === 'peer_message' || entry.kind === 'assistant') && insideRunning(at))))) { turns.push(current); current = []; }
     current.push(item);
   });
   if (current.length) turns.push(current);
@@ -669,7 +669,7 @@ function ArtifactCard({ artifact }: { artifact: ReturnType<typeof artifactsOf>[n
 }
 
 const Turn = memo(function Turn({ items, agentIds, settled, working, results, settings, plainThinking, bare, onBranch, onRewind, onRecover, recovering }: TurnProps) {
-  const lead = items[0]?.kind === 'user' || items[0]?.kind === 'divider' ? items[0] : null;
+  const lead = items[0]?.kind === 'user' || items[0]?.kind === 'peer_message' || items[0]?.kind === 'divider' ? items[0] : null;
   const body = lead ? items.slice(1) : items;
   const parts: Part[] = [];
   for (const item of body) {
@@ -769,35 +769,33 @@ export function SystemLine({ text, error, enter, tones, rev }: { text: string; e
 // Everything in the thread that is not an assistant reply. Assistant blocks are rows of their Turn.
 const Message = memo(function Message({ item, onRecover, recovering }: { item: Item; onRecover?(): void; recovering?: boolean }) {
   const enter = item.fresh || undefined;
+  if (item.kind === 'peer_message') return <div className="chat-msg user" data-enter={enter}><UserMessageBubble text={item.text} className="bus">
+    <div className="chat-bus"><div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지: Claude “{item.sender}”</span></div><Markdown text={item.text} /></div>
+  </UserMessageBubble></div>;
   if (item.kind === 'user') {
     const preview = item.text.replace(/\s+/g, ' ').trim() || (item.images > 0 ? `이미지 ${item.images}장` : '');
     const slash = parseChatSlashCommand(item.text);
     if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="command" markdown={false}><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</UserMessageBubble></div>;
     const bus = parseBusMessages(item.text);
     if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus">{bus.map((message, index) => <div className="chat-bus" key={index}>
-      <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지 · {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span>{message.hop > 0 && <small>답장 {message.hop}/{message.maxHops}</small>}</div>
+      <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지: {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span>{message.hop > 0 && <small>답장 {message.hop}/{message.maxHops}</small>}</div>
       <Markdown text={message.text} />
     </div>)}</UserMessageBubble></div>;
     return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}>{item.shells ? <small className="chat-shell-included"><Icon name="terminal" size={12} />콘솔 실행 결과 {item.shells}건을 이 메시지와 함께 에이전트에게 보냈어요</small> : null}<UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
-  if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{compactLabel(item.trigger)}{item.preTokens != null && item.postTokens != null ? ` · ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
+  if (item.kind === 'compact') return <div className="chat-divider compact" role="separator" data-enter={enter}><span>{compactLabel(item.trigger)}{item.preTokens != null && item.postTokens != null ? `, ${compact(item.preTokens)} → ${compact(item.postTokens)} 토큰 (${Math.max(0, Math.round((item.preTokens - item.postTokens) * 100 / Math.max(1, item.preTokens)))}% 감소)` : ' 완료'}</span></div>;
   if (item.kind === 'error') return <ChatErrorAlert message={item.message} recoverable={item.recoverable} recovering={recovering} onRecover={onRecover} enter={enter} />;
   if (item.kind === 'command') return <CommandOutput text={item.text} isError={item.isError} enter={enter} />;
   if (item.kind === 'note') return <SystemLine text={item.text} tones={item.tones} rev={item.rev} enter={enter} />;
   if (item.kind === 'agent_end') return <AgentEnd id={item.toolUseId} enter={enter} />;
   if (item.kind === 'info') return <div className="chat-row info" data-enter={enter || undefined}><div><Markdown text={item.text} /></div></div>;
   if (item.kind === 'mcp') return <McpCardRow enter={enter} />;
-  if (item.kind === 'limit') return <LimitCardRow enter={enter} />;
   if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
   if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
   if (item.kind === 'shell') return <ShellCardRow item={item} enter={enter} />;
   return null;
 });
-function LimitCardRow({ enter }: { enter?: true }) {
-  const { limitCall } = useContext(LocalCardsContext);
-  return <div data-enter={enter}><LimitCard call={limitCall} /></div>;
-}
 function McpCardRow({ enter }: { enter?: true }) {
   const { mcpCall } = useContext(LocalCardsContext);
   return <div data-enter={enter}><McpCard call={mcpCall} /></div>;
@@ -842,7 +840,7 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
     <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…</button>
-    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="파일 편집 자동 허용 · 명령 실행 확인">편집 허용으로 승인</button>
+    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="파일 편집 자동 허용, 명령 실행 확인">편집 허용으로 승인</button>
     {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="CLI 자동 승인 판단">자동 모드로 승인</button>}
   </footer>;
 }
@@ -892,7 +890,7 @@ function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: str
 // A Write preview's header names the file once (relative to the chat folder), whether it is new or replaces one, and its length.
 const writeLabel = (file: string, content: string, exists?: boolean) => {
   const lines = content ? content.replace(/\n+$/, '').split('\n').length : 0;
-  return [file, exists === true ? '덮어쓰기' : exists === false ? '새 파일' : '', `${lines.toLocaleString()}줄`].filter(Boolean).join(' · ');
+  return [file, exists === true ? '덮어쓰기' : exists === false ? '새 파일' : '', `${lines.toLocaleString()}줄`].filter(Boolean).join(', ');
 };
 // What auto mode refused since the user's last message, with the choice the CLI's /permissions "Recently blocked" tab gives: allow for this chat (Enter), or allow and
 // have the agent run it again (r). Rows are picked by checkbox (all by default); the server applies what it recorded for each refusal, the page only names them.
@@ -910,13 +908,13 @@ export function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllo
       <ul className="chat-blocked-list">{shown.map(item => <li key={item.toolUseId}>
         <label><input type="checkbox" checked={!skipped.has(item.toolUseId)} disabled={busy} onChange={() => toggle(item.toolUseId)} />
           <span className="chat-blocked-main"><b>{toolLabel(item.tool)}</b><code title={toolSummary(item.tool, item.input, cwd)}>{toolSummary(item.tool, item.input, cwd)}</code></span></label>
-        <small>{item.reason ? `사유 · ${item.reason}` : '분류기가 사유를 알려 주지 않았습니다'}{item.allowed ? ' · 허용됨, 아직 다시 시도하지 않음' : item.rule ? ` · 허용 규칙 ${item.rule}` : ' · 규칙으로 만들 수 없어 메시지로만 승인합니다'}</small>
+        <small>{item.reason ? `사유: ${item.reason}` : '분류기가 사유를 알려 주지 않았습니다'}{item.allowed ? ', 허용됨, 아직 다시 시도하지 않음' : item.rule ? `, 허용 규칙 ${item.rule}` : ', 규칙으로 만들 수 없어 메시지로만 승인합니다'}</small>
       </li>)}</ul>
       <p className="chat-blocked-note">승인은 이 채팅에서만 적용되고 설정 파일에는 저장되지 않습니다.</p>
     </div>
     <footer>
-      <button type="button" className="secondary approval-explain" disabled={busy} onClick={() => setHidden(current => new Set([...current, ...shown.map(item => item.toolUseId)]))} title="카드 닫기 · 차단 유지">무시</button>
-      <button type="button" disabled={busy || !canRule} onClick={() => void run(false)} title={canRule ? '이 채팅에서만 허용 · 자동 재시도 없음' : '규칙 등록 불가 · 승인 후 재시도 필요'}>승인만</button>
+      <button type="button" className="secondary approval-explain" disabled={busy} onClick={() => setHidden(current => new Set([...current, ...shown.map(item => item.toolUseId)]))} title="카드 닫기, 차단 유지">무시</button>
+      <button type="button" disabled={busy || !canRule} onClick={() => void run(false)} title={canRule ? '이 채팅에서만 허용, 자동 재시도 없음' : '규칙 등록 불가, 승인 후 재시도 필요'}>승인만</button>
       <button type="button" className="primary" disabled={busy || !chosen.length} onClick={() => void run(true)}>승인하고 다시 시도</button>
     </footer>
   </div>;
@@ -1022,9 +1020,9 @@ function playFlip(root: HTMLElement, from: FlipSnapshot): Promise<unknown> {
 
 function sendQueueLabel(queue: { now?: boolean }[]) {
   const now = queue.reduce((count, item) => count + (item.now ? 1 : 0), 0), later = queue.length - now;
-  if (now && later) return `응답을 끊고 보낼 메시지 ${now}개 · 그 뒤 Follow-up ${later}개`;
+  if (now && later) return `응답을 끊고 보낼 메시지 ${now}개, 그 뒤 Follow-up ${later}개`;
   if (now) return now > 1 ? `응답을 끊고 보낼 메시지 ${now}개` : '응답을 끊고 바로 보냅니다';
-  return `Follow-up ${later}개 · 현재 응답이 끝나면 순서대로 전송`;
+  return `Follow-up ${later}개, 현재 응답이 끝나면 순서대로 전송`;
 }
 
 export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom, onSplit }: Props) {
@@ -1523,7 +1521,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
   // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
   const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
-  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), limitCall: input => ctxRef.current.call('chat/limit', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
+  const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
   // The model, Effort and mode pickers (menus, models window, shortcuts) and the /model, /effort, /permissions commands all end here, so each leaves the same 변경 line in the chat.
   async function chooseModel(value: string) {
     if (await setChat({ id, model: value }) === false) return false;
@@ -1561,7 +1559,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       }
       case 'effort': {
         if (!effortOptions.length) { note('이 CLI는 별도의 Effort 선택지를 제공하지 않습니다. 지원되는 모델 변형을 모델 메뉴에서 선택하세요.'); return true; }
-        const value = argument || await ctx.pick('Effort 선택', effortOptions.map(item => ({ id: item, label: `${item} · ${effortLabel(item)}`, icon: 'chart' })));
+        const value = argument || await ctx.pick('Effort 선택', effortOptions.map(item => ({ id: item, label: `${item}, ${effortLabel(item)}`, icon: 'chart' })));
         if (value) { if (!effortOptions.includes(value)) note(`알 수 없는 Effort: ${value} (${effortOptions.join(', ')})`); else await chooseEffort(value); }
         return true;
       }
@@ -1604,7 +1602,6 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         else info(`### MCP 서버\n\n| 서버 | 도구 |\n|---|---|\n${[...servers].map(([server, count]) => `| ${server} | ${count}개 |`).join('\n')}`);
         return true;
       }
-      case 'limit': apply(view => ({ ...view, items: [...view.items, { kind: 'limit', key: `l${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true;
       case 'tasks': {
         const labels: Record<string, string> = { running: '실행 중', done: '완료', error: '오류', stopped: '중단' };
         if (!agentList.length) note('이 채팅에서 실행한 서브에이전트가 없습니다.');
@@ -1620,10 +1617,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             ? ['컨텍스트', state.contextTokens === null ? contextPendingText : '첫 응답 후 CLI가 보고하면 표시됩니다']
             : null;
         const rows: [string, string][] = name === 'cost'
-          ? [['모델', model], ['비용', `${cost} · ${state.turns}턴`],
+          ? [['모델', model], ['비용', `${cost}, ${state.turns}턴`],
             ...(caps?.tokens === false ? [['토큰', 'CLI가 토큰 사용량을 제공하지 않습니다'] as [string, string]] : [['입력 토큰', n(tokens.input)], ['출력 토큰', n(tokens.output)], ['캐시 읽기', n(tokens.cacheRead)], ['캐시 쓰기', n(tokens.cacheCreate)]] as [string, string][])]
           : [['모델', model], ['Effort', effortLabel(state.effort ?? 'medium')], ['권한 모드', permissionLabel(state.permissionMode, agent)],
-            ['비용', `${cost} · ${state.turns}턴`], ...(contextRow ? [contextRow] : []), ['세션', state.sessionId ? `\`${state.sessionId}\`` : '아직 없음']];
+            ['비용', `${cost}, ${state.turns}턴`], ...(contextRow ? [contextRow] : []), ['세션', state.sessionId ? `\`${state.sessionId}\`` : '아직 없음']];
         info(`### ${name === 'cost' ? '비용' : '상태'}\n\n| 항목 | 값 |\n|---|---|\n${rows.map(([label, value]) => `| ${label} | ${value} |`).join('\n')}`);
         return true;
       }
@@ -1781,7 +1778,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
   const runningAgents = agentList.filter(item => item.status === 'running').length, runningJobs = agentList.filter(item => item.job && item.status === 'running').length;
   // "에이전트 2개 · 백그라운드 작업 1개 실행 중…": subagents and jobs counted apart.
-  const runningLabel = `${[runningAgents - runningJobs && `에이전트 ${runningAgents - runningJobs}개`, runningJobs && `백그라운드 작업 ${runningJobs}개`].filter(Boolean).join(' · ')} 실행 중…`;
+  const runningLabel = `${[runningAgents - runningJobs && `에이전트 ${runningAgents - runningJobs}개`, runningJobs && `백그라운드 작업 ${runningJobs}개`].filter(Boolean).join(', ')} 실행 중…`;
   const [agentOpen, setAgentOpen] = useState<string | null>(null), [trackerHidden, setTrackerHidden] = useState('');
   const openedAgent = agentList.find(item => item.id === agentOpen) ?? null;
   // A closed drawer stays mounted for its exit slide (showing the agent it last showed) while the thread widens back under it.
@@ -1866,7 +1863,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? '세션 ID 복사' : undefined} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel} · ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? '세션 ID 복사' : undefined} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel}, ${basename(cwd.replace(/\\/g, '/'))}`}</span>
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인 대기"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
@@ -1888,17 +1885,17 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {hiddenTurns > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>이전 대화 {hiddenTurns}개 더 보기</button>}
         {renderedTurns.map((items, index) => { const current = index === renderedTurns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activityLabel || (state.configuring ? '설정을 적용하는 중' : '')} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링 · 반영 대기 중' : '스티어링 · ↑ 수정 · Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
+        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링, 반영 대기 중' : '스티어링, ↑ 수정, Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
-    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>·<kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelPrev'))}</kbd>로 다음·이전 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
+    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>, <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelPrev'))}</kbd>로 다음/이전 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
     {hint === 'keyeffort' && <Hint title="Effort도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortUp'))}</kbd>로 올리고 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortDown'))}</kbd>로 내려요.</>} onDone={() => hintSeen('keyeffort')} />}
     {hint === 'keymode' && <Hint title="권한 모드도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo('shift+tab')}</kbd>을 누를 때마다 다음 모드로 넘어가요.</>} onDone={() => hintSeen('keymode')} />}
     {hint === 'keystash' && <Hint wide title="쓰던 입력은 보관해 둘 수 있어요" text={<>지우는 대신 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 보관하고, 다른 요청을 보낸 뒤 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 다시 꺼내요.</>} onDone={() => hintSeen('keystash')} />}
     {hint === 'tocli' && <Hint title="언제든 CLI로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 터미널(CLI)에서 그대로 이어가요. 익숙한 CLI 화면이 필요할 때 써 보세요." onDone={() => hintSeen('tocli')} />}
-    {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰·비용·도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
-    {statsOpen && <ChatStatsModal id={id} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
+    {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰, 비용, 도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
+    {statsOpen && <ChatStatsModal id={id} title={title || agentLabel} agent={agent} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
     {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
     {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} id={id} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void chooseModel(value).catch(ctx.fail); }} />}
     <div className="chat-start-slot chat-greeting" inert={!startScreen} aria-hidden={!startScreen}>
@@ -1921,10 +1918,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <IconButton icon="check" label="수정 저장 (Enter)" size={12} disabled={!editingQueue!.text.trim()} onClick={saveQueueEdit} />
             <IconButton icon="x" label="수정 취소 (Esc)" size={12} onClick={() => setEditingQueue(null)} /></li>
           : <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} />
-            <IconButton icon="edit" label={`대기 메시지 수정: ${item.text}`} size={12} onClick={() => setEditingQueue({ item, text: item.text })} />
-            <IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => { setQueue(items => items.filter((_, i) => i !== index)); if (editingQueue?.item === item) setEditingQueue(null); }} /></li>)}</ol></div>}
+            <IconButton icon="edit" label="메시지 수정" size={12} onClick={() => setEditingQueue({ item, text: item.text })} />
+            <IconButton icon="x" label="메시지 취소" size={12} onClick={() => { setQueue(items => items.filter((_, i) => i !== index)); if (editingQueue?.item === item) setEditingQueue(null); }} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
-      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
+      <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} onLimit={limit => ctx.call('chat/limit', { id, limit })} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
       <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-shell={isShellDraft(text) || undefined} data-feedback-region="채팅 입력창">
         {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>
@@ -1946,7 +1943,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
         {commandHead && <div className="chat-input-mirror" aria-hidden ref={inputMirror}><span className="chat-input-command">{commandHead}</span>{`${text.slice(commandHead.length)} `}</div>}
-        <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중 · 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기 · Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기 · Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요 · !명령으로 셸 실행'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+        <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중, 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기, Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기, Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요, !명령으로 셸 실행'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { const next = shellBang(text) + event.target.value; if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(next); setCaret(event.target.selectionStart + shellBang(next).length); }} onSelect={event => setCaret(event.currentTarget.selectionStart + shellBang(text).length)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
@@ -2018,7 +2015,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         </div>
         </div>
       <div className="chat-foot" ref={setFoot} data-fit="0">
-        <button type="button" className="chat-attach" title="이미지 · 파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', icon: 'image', detail: 'PNG·JPEG·GIF·WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', icon: 'file', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
+        <button type="button" className="chat-attach" title="이미지/파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', icon: 'image', detail: 'PNG, JPEG, GIF, WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', icon: 'file', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
@@ -2071,7 +2068,7 @@ function ChatStatusRow({ active, effort, tokens, label }: { active: boolean; eff
   return <div className="chat-status-row" data-active={active || undefined} aria-hidden={!active}>
     <div><div className={`chat-working${deep ? ' deep' : ''}`} role="status" style={deep ? { color: `color-mix(in srgb, var(--error) ${red}%, var(--muted))` } : !label && effort && effortStyle[effortLevel(effort)] ? { color: effortStyle[effortLevel(effort)].color } : undefined}>
       <i className="chat-spin" /><span className="chat-working-label">{label || (deep ? `${effort ? `${effortLabel(effort)} Effort로 ` : ''}깊게 생각하는 중…` : '생각하는 중…')}</span>
-      <small>{duration(seconds * 1000)}{tokens > 0 && ` · 약 ${compact(tokens)} 토큰`}</small></div></div>
+      <small>{duration(seconds * 1000)}{tokens > 0 && `, 약 ${compact(tokens)} 토큰`}</small></div></div>
   </div>;
 }
 
@@ -2090,9 +2087,9 @@ function ContextRing({ state, ctx, active, agent, chatId }: { state: ChatState; 
   const basisLabel = compacting ? `Auto Compact 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`;
   const ringTitle = !supported ? '컨텍스트 사용량 미제공'
     : waiting ? '컨텍스트 집계 대기'
-    : `${compacting ? `Auto Compact ${percent}% · 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`}`;
+    : `${compacting ? `Auto Compact ${percent}%, 창 ${compact(gauge.basis)}` : `컨텍스트 ${percent}%`}`;
   return <>
-    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기 · 상세 보기' : `${basisLabel} · 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
+    <button type="button" className={`chat-ring${compacting ? ' auto-compact' : ''}${waiting ? ' pending' : ''}`} popoverTarget={panel} aria-label={waiting ? '컨텍스트 대기, 상세 보기' : `${basisLabel}, 상세 보기`} title={ringTitle} onClick={() => void load(true)}>
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         <circle cx="14" cy="14" r={radius} className="track" />
         {shown && compacting && gauge.used > 0 && <circle cx="14" cy="14" r={radius} className="max-hint" strokeDasharray={`${Math.max(1.5, length * Math.min(100, Math.round(gauge.used * 100 / gauge.max)) / 100)} ${length}`} transform="rotate(-90 14 14)" />}

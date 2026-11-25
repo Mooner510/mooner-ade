@@ -7,6 +7,8 @@ const cursor = process.argv.includes('cursor'), send = value => process.stdout.w
 const reply = (id, result) => send({ id, result });
 const notify = (method, params) => send({ method, params });
 let sessionId = randomUUID(), turnId, promptId, requestId, count = 0;
+let cursorMode = 'agent', planAccepted = false;
+const cursorPlan = '# 계획\n테스트 파일을 작성합니다.';
 const queuedSteers = [];
 function userMessage(input, clientId) {
   const item = { type: 'userMessage', id: randomUUID(), clientId, content: input };
@@ -48,7 +50,16 @@ function finish(status = 'completed') {
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const raw = JSON.parse(line), p = raw.params ?? {};
   if (process.env.HISTORY_ONLY === '1' && !['initialize', 'initialized', 'thread/read', 'thread/turns/list'].includes(raw.method)) throw new Error('history must not start or resume a writer');
-  if (!raw.method) { if (raw.id === requestId) { if (process.env.EXPECT_REJECT === '1' && raw.result?.decision !== 'decline' && raw.result?.outcome?.optionId !== 'deny') throw new Error('approval was not rejected'); finish(); } return; }
+  if (!raw.method) {
+    if (raw.id !== requestId) return;
+    if (requestId?.startsWith('plan-')) {
+      const decision = raw.result?.outcome?.outcome;
+      if (!['accepted', 'rejected'].includes(decision)) throw new Error('invalid plan decision');
+      planAccepted = decision === 'accepted';
+    } else if (process.env.EXPECT_REJECT === '1' && raw.result?.decision !== 'decline' && raw.result?.outcome?.optionId !== 'deny') throw new Error('approval was not rejected');
+    finish();
+    return;
+  }
   if (cursor && raw.method === 'initialize' && p.clientCapabilities?._meta?.parameterizedModelPicker !== true) throw new Error('parameterized model picker must be advertised');
   if (cursor && raw.method === 'initialize' && p.clientCapabilities?._meta?.subagents !== true) throw new Error('subagents must be advertised');
   if (raw.method === 'initialize') reply(raw.id, cursor ? { agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } } : {});
@@ -67,10 +78,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (p.configId === 'model') { currentModel = p.value; values = {}; } else values[p.configId] = p.value;
     reply(raw.id, { configOptions: configOptions() });
   }
+  else if (raw.method === 'session/set_mode') {
+    if (requestId?.startsWith('plan-')) throw new Error('planning prompt is still running');
+    cursorMode = p.modeId; reply(raw.id, {});
+  }
   else if (raw.method === 'authenticate' || raw.method.startsWith('session/set_')) reply(raw.id, {});
   else if (raw.method === 'model/list') reply(raw.id, { data: [{ model: 'codex-test', displayName: 'Codex test', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
   else if (raw.method === 'config/read') reply(raw.id, { config: { model_provider: process.env.FAKE_PROVIDER ?? null } });
   else if (raw.method === 'thread/start' || raw.method === 'thread/resume' || raw.method === 'thread/fork') {
+    if (process.env.EXPECT_COLOR_CHIPS !== undefined && (p.developerInstructions?.includes('# Color chips') ?? false) !== (process.env.EXPECT_COLOR_CHIPS === 'yes')) throw new Error('unexpected color chip instructions');
     if (process.env.EXPECT_PROVIDER !== undefined && raw.method !== 'thread/start' && p.modelProvider !== process.env.EXPECT_PROVIDER) throw new Error(`resume must use provider ${process.env.EXPECT_PROVIDER}, got ${p.modelProvider}`);
     if (raw.method === 'thread/fork' && !p.lastTurnId) throw new Error('fork must include the exact turn');
     sessionId = raw.method === 'thread/resume' ? p.threadId : randomUUID(); reply(raw.id, { thread: { id: sessionId }, model: p.model ?? 'codex-test', ...(process.env.FAKE_CODEX_EFFORT && { reasoningEffort: p.config?.model_reasoning_effort ?? process.env.FAKE_CODEX_EFFORT }) });
@@ -85,6 +101,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       userMessage(p.input, null);
     }
     if (text === 'hold') return;
+    if (cursor && text === 'plan') {
+      if (cursorMode !== 'plan') throw new Error('planning requires plan mode');
+      requestId = `plan-${count}`;
+      send({ id: requestId, method: 'cursor/create_plan', params: { toolCallId: 'create-plan', plan: cursorPlan, todos: [] } });
+      return;
+    }
+    if (cursor && text.endsWith(cursorPlan)) {
+      if (!planAccepted || cursorMode !== 'agent' || p.sessionId !== sessionId) throw new Error('implementation requires approval in the same session in Agent mode');
+      fs.writeFileSync(path.join(process.cwd(), 'built.txt'), 'done');
+      planAccepted = false;
+    }
     if (!cursor && text === 'async-question') {
       const title = '어느 쪽에서 검증할까요?', options = ['실기기', '에뮬레이터'];
       const text = [title, ...options.map(option => `- ${option}`)].join('\n');

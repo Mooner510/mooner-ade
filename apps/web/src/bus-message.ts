@@ -2,7 +2,7 @@
 // (see formatMessage in apps/desktop/builtin-plugins/agent-bus/bus.mjs). The chat draws it as a card from the other agent instead of the raw header.
 export type BusMessage = { agent: string; title: string; id: string; hop: number; maxHops: number; text: string };
 
-const HEAD = /^\[ADE agent bus\] Message from (?:"([^"\n]*)" \((\w+)\)|(\w+) chat), chat id ([^\s,]+?)(?:, reply depth (\d+)\/(\d+))?\.\n/;
+const HEAD = /^\[ADE agent bus\] Message from (?:"([^"\n]*)" \((\w+)\)|(\w+) chat), chat id ([^\s,]+?)(?: \(session [^\s)]+\))?(?:, reply depth (\d+)\/(\d+))?\.\n/;
 // Messages that waited for a busy chat are delivered together, one turn, separated by a line of `=====`.
 export function parseBusMessages(text: string): BusMessage[] | null {
   if (!text.startsWith('[ADE agent bus] ')) return null;

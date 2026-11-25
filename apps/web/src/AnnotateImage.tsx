@@ -49,7 +49,7 @@ export function AnnotateImage({ src, name, onSave, onClose }: { src: string; nam
   };
   return <Modal className="feedback-annotate" labelledBy="feedback-annotate-title" onClose={() => { if (!saving) onClose(); }}>
     <header className="feedback-annotate-head">
-      <strong id="feedback-annotate-title">이미지에 표시 · {name}</strong>
+      <strong id="feedback-annotate-title">이미지에 표시: {name}</strong>
       <span className="spacer" />
       <div className="feedback-tools" role="group" aria-label="도구">
         <button type="button" aria-pressed={tool === 'rect'} onClick={() => setTool('rect')}><Icon name="shapeRect" size={15} />사각형</button>

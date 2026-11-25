@@ -12,15 +12,17 @@ test('the stop line is a thread note naming the rule, in a replay and live', () 
   assert.equal(reduce({ ...replayed, ready: true }, { kind: 'limit_stop', rule: '비용 $1.00', seq: 3 }).items.at(-1).text, '제한 규칙(비용 $1.00)에 따라 중지되었습니다');
 });
 
-test('the status chip: the rules while running, "제한 도달" with the rule once stopped, nothing without a limit', () => {
+test('the status chip: every rule as now/max while running, "제한 도달" with the rule once stopped, nothing without a limit', () => {
   assert.equal(limitChip(null), null);
   const limit = { cost: 1, usage: { window: 'session', percent: 80 }, share: { window: 'weekly', percent: 5 }, compact: true, stop: null, now: { cost: 0.5, usage: 61, share: 2 } };
   const running = limitChip(limit);
-  assert.equal(running.text, '$1.00 · 5시간 80% · 주간 할당 5%');
+  assert.equal(running.text, '제한 $0.50/$1.00, 5시간 61/80%, 주간 할당 2/5%');
+  assert.equal(limitChip(limit, true).text, '제한 $1.00, 5시간 61/80%, 주간 할당 2/5%', 'the amount already shown beside the chip is not repeated');
   assert.equal(running.stopped, false);
-  assert.equal(running.tip, ['제한', '비용 $0.5000 / $1.00', '5시간 사용량 61% / 80%', '주간 할당(추정) 2% / 5%', '중지되면 자동 압축'].join('\n'));
+  assert.equal(running.ratio, 0.5 / 1 > 61 / 80 ? 0.5 : 61 / 80, 'the closest rule drives the bar');
+  assert.deepEqual(running.rules.map(rule => [rule.name, rule.now, rule.max]), [['비용', '$0.50', '$1.00'], ['5시간 사용량', '61', '80%'], ['주간 할당(추정)', '2', '5%']]);
   const stopped = limitChip({ ...limit, stop: '비용 $1.00', now: {} });
-  assert.deepEqual([stopped.text, stopped.stopped], ['제한 도달', true]);
-  assert.match(stopped.tip, /비용 \$1\.00에 따라 중지됨/);
-  assert.match(stopped.tip, /비용 — \/ \$1\.00/);
+  assert.deepEqual([stopped.text, stopped.stopped, stopped.stop, stopped.ratio], ['제한 도달', true, '비용 $1.00', 1]);
+  assert.deepEqual(stopped.rules.map(rule => rule.now), [null, null, null], 'a rule without a reading shows only its max');
+  assert.equal(limitChip({ cost: 2, compact: false, stop: null, now: {} }).text, '제한 $2.00');
 });

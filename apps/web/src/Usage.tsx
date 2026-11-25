@@ -75,17 +75,17 @@ export function UsageRows({ windows, colors }: { windows: UsageWindow[]; colors:
   return <>{windows.map(item => <div key={item.key} className="usage-row">
     <div><span>{item.label}</span><b className={colors ? 'graded' : ''} style={colors ? usageHueStyle(item.percent) : undefined}>{item.percent}%</b></div>
     <progress className={colors ? 'graded' : ''} style={colors ? usageHueStyle(item.percent) : undefined} value={item.percent} max={100} aria-label={`${item.label} 사용률`} />
-    {item.resetsAt && <small>{untilReset(item.resetsAt)} 후 초기화 · {new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small>}
+    {item.resetsAt && <small>{untilReset(item.resetsAt)} 후 초기화, {new Date(item.resetsAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small>}
   </div>)}</>;
 }
 
 export function CreditRow({ credit, colors }: { credit: UsageCredit; colors: boolean }) {
   const { used, limit, percent, currency } = credit;
-  if (limit === null || percent === null) return <div className="usage-row"><div><span>추가 사용 크레딧</span><b>{money(used, currency)}</b></div><small>월 한도 없음 · 이번 달 사용액</small></div>;
+  if (limit === null || percent === null) return <div className="usage-row"><div><span>추가 사용 크레딧</span><b>{money(used, currency)}</b></div><small>월 한도 없음, 이번 달 사용액</small></div>;
   return <div className="usage-row">
     <div><span>추가 사용 크레딧</span><b className={colors ? 'graded' : ''} style={colors ? usageHueStyle(percent) : undefined}>{percent}%</b></div>
     <progress className={colors ? 'graded' : ''} style={colors ? usageHueStyle(percent) : undefined} value={percent} max={100} aria-label="추가 사용 크레딧 사용률" />
-    <small>{money(used, currency)} / {money(limit, currency)} · 월 한도</small>
+    <small>{money(used, currency)} / {money(limit, currency)}, 월 한도</small>
   </div>;
 }
 
@@ -105,6 +105,6 @@ export function CodexCreditRow({ value, colors }: { value: CodexCredits; colors:
   return <div className="usage-row">
     <div><span>크레딧</span><b className={colors ? 'graded' : ''} style={colors ? usageHueStyle(limit.percent) : undefined}>{limit.percent}%</b></div>
     <progress className={colors ? 'graded' : ''} style={colors ? usageHueStyle(limit.percent) : undefined} value={limit.percent} max={100} aria-label="크레딧 사용률" />
-    <small>{credits(limit.used)} / {credits(limit.limit)} 크레딧 · 남은 {credits(Math.max(0, limit.limit - limit.used))}{limit.resetsAt ? ` · ${untilReset(limit.resetsAt)} 후 초기화` : ''}</small>
+    <small>{credits(limit.used)} / {credits(limit.limit)} 크레딧, 남은 {credits(Math.max(0, limit.limit - limit.used))}{limit.resetsAt ? `, ${untilReset(limit.resetsAt)} 후 초기화` : ''}</small>
   </div>;
 }

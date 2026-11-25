@@ -16,6 +16,6 @@ export function authSendWarning(state: AuthLike, options: { working: boolean }):
 export function authSendWarningText(warning: AuthSendWarning): string {
   const size = warning.tokens >= 1000 ? `(약 ${Math.round(warning.tokens / 1000)}k 토큰)` : '';
   const was = warning.from === 'login' ? '지금까지 CLI 플랜으로' : '지금까지 API 키로';
-  const effect = warning.to === 'key' ? '이 메시지부터 API 요금이 청구됩니다.' : '플랜 한도(5시간·주간)를 쓰게 됩니다.';
+  const effect = warning.to === 'key' ? '이 메시지부터 API 요금이 청구됩니다.' : '플랜 한도(5시간/주간)를 쓰게 됩니다.';
   return `이 채팅은 ${was} 답했습니다\n${authWords[warning.to]} 보내면 프롬프트 캐시를 이어 쓰지 못해 대화 전체${size}를 다시 처리하고, ${effect}`;
 }

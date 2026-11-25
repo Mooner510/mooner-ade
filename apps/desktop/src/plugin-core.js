@@ -1340,7 +1340,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
     const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && isNewer(results[index].value.version, item.manifest.version));
     const failed = results.filter(result => result.status === 'rejected').length;
-    return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => item.manifest.name).join(', ')}` : '모두 최신입니다'}${failed ? ` · ${failed}개는 확인하지 못했습니다` : ''}.` };
+    return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => item.manifest.name).join(', ')}` : '모두 최신입니다'}${failed ? `, ${failed}개는 확인하지 못했습니다` : ''}.` };
   }
   // Automatic updates run new code without a dialog, so turning them on is confirmed natively; manual and notify only take away.
   async function setUpdateMode(mode) {

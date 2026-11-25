@@ -14,7 +14,7 @@ export const guideGroups: GuideGroup[] = [
     { keys: '%', label: '좌우 분할' }, { keys: '"', label: '상하 분할' }, { keys: '방향키', label: 'pane 이동' },
     { keys: 'o', label: '다음 pane' }, { keys: 'z', label: 'pane 확대/복원' }, { keys: 'x', label: 'pane 닫기' }, { keys: 'q', label: 'pane 번호 표시' }
   ] },
-  { title: '세션 · 기타', items: [
+  { title: '세션/기타', items: [
     { keys: 'd', label: '세션에서 분리 (detach)' }, { keys: 's', label: '세션 목록' }, { keys: '$', label: '세션 이름 변경' },
     { keys: '[', label: '스크롤/복사 모드' }, { keys: ':', label: '명령 입력' }, { keys: '?', label: '전체 키 목록' }
   ] }

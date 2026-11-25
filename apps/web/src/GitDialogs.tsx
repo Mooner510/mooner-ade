@@ -62,7 +62,7 @@ export function MessageDialog({ title, initial, submit, note, onSubmit, onClose 
 type RebaseAction = 'pick' | 'reword' | 'edit' | 'squash' | 'fixup' | 'drop';
 const ACTIONS: { id: RebaseAction; label: string; hint: string }[] = [
   { id: 'pick', label: 'Pick', hint: '커밋 유지' }, { id: 'reword', label: 'Reword', hint: '커밋 메시지 편집' }, { id: 'edit', label: 'Edit', hint: '이 커밋에서 일시 정지' },
-  { id: 'squash', label: 'Squash', hint: '이전 커밋에 통합 · 메시지 병합' }, { id: 'fixup', label: 'Fixup', hint: '이전 커밋에 통합 · 현재 메시지 삭제' }, { id: 'drop', label: 'Drop', hint: '현재 커밋 삭제' }
+  { id: 'squash', label: 'Squash', hint: '이전 커밋에 통합, 메시지 병합' }, { id: 'fixup', label: 'Fixup', hint: '이전 커밋에 통합, 현재 메시지 삭제' }, { id: 'drop', label: 'Drop', hint: '현재 커밋 삭제' }
 ];
 export type RebaseRow = { sha: string; subject: string; message: string };
 // Newest on top, like the log; the list is applied bottom-up. Alt+↑/↓ moves the focused row.

@@ -41,7 +41,7 @@ export function validEntry(value) {
 }
 
 // The name this PC has in the account's device list.
-const deviceName = () => `ADE · ${String(os.hostname() || 'PC').replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40).trim() || 'PC'}`;
+const deviceName = () => `ADE - ${String(os.hostname() || 'PC').replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40).trim() || 'PC'}`;
 // The same for this user on this PC every time (a hash of the host and user name, not a secret). The Hub replaces an earlier device of
 // the account that has the same key, so signing in again does not leave another copy in the account's device list.
 const deviceKey = () => {
@@ -231,6 +231,57 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
       const data = await readBody(response, `${found.id}.zip`, MAX_ASSET), actual = sha256(data);
       if (actual !== found.sha256) throw fail(`받은 ${found.id}.zip이 MoonerADE Hub가 알려 준 체크섬과 맞지 않습니다. 설치하지 않았습니다.`, 'CHECKSUM');
       return { data, sha256: actual };
+    },
+    // Usage rows contain counts only. A 400 is one bad row: split until that row can be skipped. A network failure throws, so the desktop does not acknowledge the batch.
+    async pushUsage({ localId, name, platform, records }) {
+      if (!session()) return { signedIn: false, accepted: 0, skipped: [] };
+      const accepted = [];
+      const skipped = [];
+      const send = async batch => {
+        if (!batch.length) return;
+        const response = await authed('/v1/usage/batch', { method: 'POST', body: { localId, name, platform, records: batch }, what: '사용 기록을 보내지' });
+        if (response.status === 400) {
+          await response.body?.cancel().catch(() => {});
+          if (batch.length === 1) { skipped.push(batch[0]?.id || ''); return; }
+          const mid = Math.ceil(batch.length / 2);
+          await send(batch.slice(0, mid));
+          await send(batch.slice(mid));
+          return;
+        }
+        if (!response.ok) throw await statusError(response, '사용 기록을 보내지');
+        await response.body?.cancel().catch(() => {});
+        accepted.push(...batch);
+      };
+      await send(Array.isArray(records) ? records : []);
+      return { signedIn: true, accepted: accepted.length, skipped };
+    },
+    async pullUsage({ localId, since, after }) {
+      if (!session()) return { signedIn: false, batches: [] };
+      const listed = await authed('/v1/usage/devices', { what: '사용 기기 목록을 받지' });
+      if (!listed.ok) throw await statusError(listed, '사용 기기 목록을 받지');
+      const body = await readJson(listed, '사용 기기 목록');
+      const batches = [];
+      for (const device of Array.isArray(body?.devices) ? body.devices : []) {
+        if (!device || typeof device.localId !== 'string' || device.localId === localId) continue;
+        const records = [];
+        let cursor = Number(since?.[device.localId]) || 0;
+        let cursorId = typeof after?.[device.localId] === 'string' ? after[device.localId] : '';
+        for (let page = 0; page < 25; page++) {
+          const response = await authed(`/v1/usage/records?localId=${encodeURIComponent(device.localId)}&since=${cursor}&after=${encodeURIComponent(cursorId)}&limit=200`, { what: '사용 기록을 받지' });
+          if (!response.ok) throw await statusError(response, '사용 기록을 받지');
+          const got = await readJson(response, '사용 기록');
+          const rows = Array.isArray(got?.records) ? got.records : [];
+          records.push(...rows);
+          if (rows.length < 200) break;
+          const last = rows.at(-1);
+          cursor = Number(last?.at) || cursor;
+          cursorId = typeof last?.id === 'string' ? last.id : cursorId;
+        }
+        if (!records.length) continue;
+        const last = records.at(-1);
+        batches.push({ localId: device.localId, name: text(device.name, 80), platform: text(device.platform, 32), records, since: Number(last?.at) || 0, after: typeof last?.id === 'string' ? last.id : '' });
+      }
+      return { signedIn: true, batches };
     }
   };
 }

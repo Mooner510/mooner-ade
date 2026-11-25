@@ -36,10 +36,10 @@ test('a plan file outside the project shows from ~/.claude', () => {
 });
 
 test('scheduling and argument-less tools get readable summaries, never "{}"', () => {
-  assert.equal(toolSummary('CronCreate', { cron: '57 8 * * *', prompt: '테스트 알림', recurring: true }), '57 8 * * * · 테스트 알림 · 반복');
+  assert.equal(toolSummary('CronCreate', { cron: '57 8 * * *', prompt: '테스트 알림', recurring: true }), '57 8 * * *, 테스트 알림, 반복');
   assert.equal(toolSummary('CronDelete', { id: 'd3070457' }), 'd3070457');
   assert.equal(toolSummary('CronList', {}), '');
   assert.equal(toolSummary('ListAgents', {}), '');
   assert.equal(toolSummary('Monitor', { command: 'ping -n 3 127.0.0.1', description: 'ping three times' }), 'ping three times');
-  assert.equal(toolSummary('NotebookEdit', { notebook_path: 'C:/work/repo/notes/a.ipynb', edit_mode: 'insert' }, 'C:/work/repo'), 'notes/a.ipynb · 셀 추가');
+  assert.equal(toolSummary('NotebookEdit', { notebook_path: 'C:/work/repo/notes/a.ipynb', edit_mode: 'insert' }, 'C:/work/repo'), 'notes/a.ipynb, 셀 추가');
 });

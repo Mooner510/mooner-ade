@@ -80,13 +80,17 @@ export function parse(source: string): Node[] {
   return nodes;
 }
 
+function fenceAfter(line: string, fence: string | null): string | null {
+  const mark = /^\s*(\x60{3,}|~~~+)/.exec(line)?.[1];
+  return mark && (!fence || mark.startsWith(fence)) ? (fence ? null : mark) : fence;
+}
+
 // Where a streaming text can be cut so the part before it never changes shape again: the last blank line outside a code fence.
 export function stableSplit(text: string): [string, string] {
   let fence: string | null = null, cut = -1, at = 0;
   for (const line of text.split('\n')) {
-    const mark = /^\s*(```+|~~~+)/.exec(line)?.[1];
-    if (mark && (!fence || mark.startsWith(fence))) fence = fence ? null : mark;
-    else if (!fence && !line.trim() && at > 0) cut = at;
+    fence = fenceAfter(line, fence);
+    if (!fence && !line.trim() && at > 0) cut = at;
     at += line.length + 1;
   }
   return cut < 0 ? ['', text] : [text.slice(0, cut - 1), text.slice(cut + 1)];
@@ -98,11 +102,20 @@ const PENDING_LINE = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)]?|>|[-*_]{2,}|`{1,2}|~{1,2})
 const PATH_BRACKETS = String.raw`\[\[[^\[\]\n]+\]\]|\[[^\[\]\n]+\]`;
 const FILE_PATH_PART = String.raw`(?:${PATH_BRACKETS}|(?!${PATH_BRACKETS})[^\]\n]|\](?!\]))`;
 const PENDING_FILE = new RegExp(String.raw`\[\[(?:f(?:i(?:l(?:e(?::${FILE_PATH_PART}*)?)?)?)?)?\]?$`);
+const COLOR_VALUE_PART = String.raw`(?:[^\[\]\x60\r\n]|\](?!\]))`;
+const PENDING_COLOR = new RegExp(String.raw`\[\[c(?::${COLOR_VALUE_PART}*)?\]?$`);
 export function holdBack(tail: string): string {
   const all = tail.split('\n');
   if (all.length && PENDING_LINE.test(all[all.length - 1])) all.pop();
-  // A file chip still being typed ("[[fi", "[[file:src/a") waits for its closing brackets instead of flashing as text.
-  else if (all.length) all[all.length - 1] = all[all.length - 1].replace(PENDING_FILE, '');
+  else {
+    const index = all.length - 1, line = all[index];
+    const pending = PENDING_FILE.exec(line) ?? PENDING_COLOR.exec(line);
+    // Pending chips wait for their closing brackets, except in literal code.
+    if (pending && !all.reduce<string | null>((fence, text) => fenceAfter(text, fence), null)) {
+      const before = line.slice(0, pending.index);
+      if ((before.match(/\x60/g)?.length ?? 0) % 2 === 0) all[index] = before;
+    }
+  }
   let last = all.length - 1; while (last >= 0 && !all[last].trim()) last -= 1;
   if (last >= 0 && /^\s*\|/.test(all[last]) && !all.some(line => /^\s*\|?\s*:?-{2,}:?\s*\|/.test(line))) all.splice(last, 1);
   return all.join('\n');
@@ -111,4 +124,4 @@ export function holdBack(tail: string): string {
 // Inline spans, one capture group each: code, **bold**, __bold__, *italic*, _italic_, [label](url), bare URL, [[file:path:line]] (file-ref.ts). Like CommonMark, `__` and `_` only open and close
 // at a word edge, so identifiers such as `mcp__server__tool` or `snake_case_name` stay plain text.
 const INLINE_TEXT = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\b__[^_\n]+__\b)|(\*[^*\s][^*\n]*\*)|(\b_[^_\s][^_\n]*_\b)|(\[(?:[^\[\]\n]|\[[^\]\n]*\])+\]\([^)\s]+\))|(https?:\/\/[^\s<>)]+)/;
-export const INLINE = new RegExp(String.raw`${INLINE_TEXT.source}|(\[\[file:${FILE_PATH_PART}+\]\])`, 'g');
+export const INLINE = new RegExp(String.raw`${INLINE_TEXT.source}|(\[\[file:${FILE_PATH_PART}+\]\])|\[\[c:(${COLOR_VALUE_PART}+)\]\]`, 'g');

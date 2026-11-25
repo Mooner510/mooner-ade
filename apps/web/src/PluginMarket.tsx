@@ -8,7 +8,7 @@ import './plugin-market.css';
 type Run = (key: string, step: () => Promise<PluginsState>) => void;
 type Notice = { text: string; error: boolean; step?: string } | null;
 
-const GRANT_LABEL: Record<keyof HubGrants, string> = { terminal: '터미널 명령', mcp: '에이전트 도구', workspace: '프로젝트·터미널 조작', feedback: '피드백 전송', header: '상단 바 버튼' };
+const GRANT_LABEL: Record<keyof HubGrants, string> = { terminal: '터미널 명령', mcp: '에이전트 도구', workspace: '프로젝트/터미널 조작', feedback: '피드백 전송', header: '상단 바 버튼' };
 const sizeText = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 const toneIcon: Record<'error' | 'ok' | 'info', IconName> = { error: 'alert', ok: 'check', info: 'info' };
 

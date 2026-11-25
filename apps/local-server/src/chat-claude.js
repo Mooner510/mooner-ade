@@ -238,6 +238,23 @@ export function resultContextWindow(modelUsage, mainModel) {
   return own ? own[1] : rows.length ? Math.max(...rows.map(([, window]) => window)) : null;
 }
 
+const PEER_PREFIX = /^(?:Another Claude session|A peer session) sent a message(?: while you were working)?:\s*/;
+const PEER_ENVELOPE = /^<cross-session-message\s+(from="[^"\r\n]+"[^<>\r\n]*)>\r?\n([\s\S]*?)\r?\n<\/cross-session-message>(?=\s|$)/;
+export function claudePeerMessage(raw) {
+  if (raw?.type !== 'user' || !validMessageUuid(raw.uuid) || raw.parent_tool_use_id || raw.isSidechain || raw.isCompactSummary) return null;
+  const origin = raw.origin;
+  // Claude also uses peer origin for subagent hand-backs.
+  if (origin && (origin.kind !== 'peer' || origin.handback || origin.senderTaskId)) return null;
+  const content = textOf(raw.message?.content).replace(PEER_PREFIX, '');
+  const envelope = PEER_ENVELOPE.exec(content);
+  const attrs = envelope?.[1] ?? '';
+  const from = origin?.from || /\bfrom="([^"]+)"/.exec(attrs)?.[1];
+  const sender = origin?.name || /\b(?:from-name|name)="([^"]+)"/.exec(attrs)?.[1] || from;
+  const members = Array.isArray(origin?.members) ? origin.members.flatMap(member => typeof member?.body === 'string' ? [member.body] : []) : [];
+  const text = typeof origin?.body === 'string' ? origin.body : members.length ? members.join('\n\n---\n\n') : envelope?.[2];
+  return typeof sender === 'string' && text?.trim() ? { kind: 'peer_message', uuid: raw.uuid, sender, text, receivedAt: Date.parse(raw.timestamp) || undefined } : null;
+}
+
 // raw JSON object from stdout -> list of events. `delta` events are live-only; the rest are stored in the transcript.
 export function normalizeClaude(raw, mainModel = null) {
   if (!raw || typeof raw !== "object") return [];
@@ -397,6 +414,8 @@ export function normalizeClaude(raw, mainModel = null) {
     ];
   }
   if (raw.type === "user") {
+    const peer = claudePeerMessage(raw);
+    if (peer) return [peer];
     // Tool results come back as user messages; plain user text is already recorded by the server when it is sent. A local command's output is kept.
     const content = raw.message?.content;
     return blocks(content)
@@ -493,9 +512,10 @@ export function transcriptEvents(text) {
       events.push(compactEvent(raw.compactMetadata, at));
     else if (raw.type === "assistant")
       for (const event of normalizeClaude(raw)) events.push({ ...event, at });
-    else if (raw.type === "user" && !raw.isMeta && !raw.isCompactSummary) {
+    else if (raw.type === "user") {
       const parts = blocks(raw.message?.content),
         results = normalizeClaude(raw);
+      if ((raw.isMeta || raw.isCompactSummary) && results[0]?.kind !== 'peer_message') continue;
       if (results.length) {
         for (const event of results) events.push({ ...event, at });
         continue;

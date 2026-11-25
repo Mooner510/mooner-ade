@@ -8,5 +8,5 @@ test('trusting adds an entry once, and a whole server replaces its single tools'
   assert.deepEqual(addTrust([tool], tool), [tool]);
   assert.deepEqual(addTrust([tool, { server: 'srv', tool: 'other' }, { server: 'b', tool: 'x' }], { server: 'srv' }), [{ server: 'b', tool: 'x' }, { server: 'srv' }]);
   assert.deepEqual(addTrust([{ server: 'srv' }], tool), [{ server: 'srv' }], 'already covered by the server');
-  assert.equal(trustLabel({ server: 'srv' }), 'srv · 모든 도구'); assert.equal(trustLabel(tool), 'srv · run');
+  assert.equal(trustLabel({ server: 'srv' }), 'srv: 모든 도구'); assert.equal(trustLabel(tool), 'srv: run');
 });

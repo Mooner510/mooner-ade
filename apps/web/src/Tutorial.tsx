@@ -39,7 +39,7 @@ const features: [Parameters<typeof Icon>[0]['name'], string, string][] = [
   ['bot', '대화로 일을 맡겨요', '요청하면 AI가 코드를 고치고 명령을 실행해요. 그 과정이 읽기 쉬운 카드로 보여요'],
   ['layers', '여러 프로젝트를 한 창에서', '프로젝트마다 탭과 화면 배치가 유지되고, 다른 프로젝트를 봐도 AI는 계속 일해요'],
   ['bell', '놓치지 않는 알림', '작업이 끝나거나 승인이 필요하면 바로 알려 줘요'],
-  ['graph', 'Git 커밋 그래프', '브랜치·머지·충돌 해결까지 그래프에서 바로 해요'],
+  ['graph', 'Git 커밋 그래프', '브랜치, 머지, 충돌 해결까지 그래프에서 바로 해요'],
   ['terminal', '터미널 명령도 대화 안에서', '입력창에 !를 붙여 쓰면 명령이 실행되고, 결과를 AI에게 함께 보낼 수 있어요']
 ];
 // Coach text: **word** is emphasised and {token}s draw the app's own markers in their real colours, so a line reads at a glance.
@@ -145,15 +145,15 @@ function TourPane({ leaf, ctx }: { leaf: Leaf; ctx: Ctx }) {
     <div className="pane-tools" role="toolbar" aria-label="터미널 pane">
       {claude && agent === 'claude' && settings.cacheTimer && <CacheTimer cache={{ at: claude.at, ttl: 300, tokens: 18_400, model: 'claude-opus-5-5' }} working={claude.state === 'working'} warn={settings.cacheWarn} />}
       <span className="pane-title"><span className="pane-mark"><Icon name={agent || 'terminal'} size={12} /></span><span className="pane-label">{tour.labels[id]}</span>
-        {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span>}</span>
+        {claude?.state === 'asking' && <span className="question-alert" role="img" aria-label="응답 필요" title="질문, 승인 대기"><Icon name="alert" size={15} /></span>}</span>
       <span className="pane-actions">
         <SplitButton keys={{ row: showAppKey(settings.appKeys, 'splitRight'), column: showAppKey(settings.appKeys, 'splitDown') }} onSplit={dir => dispatch({ type: 'split', dir })} />
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => dispatch({ type: 'zoom' })} />
         <IconButton icon="x" label="터미널 종료" onClick={close} /></span></div>
     <TourTerminal lines={tour.lines[id] ?? []} prompt={ctx.prompt(id)} settings={settings} focused={focused} focusKey={ctx.focusKey} onSubmit={text => ctx.submit(id, text)} onTab={text => ctx.tab(id, text)} />
     {claude && claude.queue.length > 0 && <div className="claude-follow-up">
-      <div className="follow-up-heading" role="status">Follow-up {claude.queue.length}개 · 현재 작업 완료 후 순서대로 전송</div>
-      <ol>{claude.queue.map((text, index) => <li key={index}><span>{text}</span><IconButton icon="x" label={`Follow-up 취소: ${text}`} onClick={() => dispatch({ type: 'unqueue', index })} /></li>)}</ol>
+      <div className="follow-up-heading" role="status">Follow-up {claude.queue.length}개, 현재 작업 완료 후 순서대로 전송</div>
+      <ol>{claude.queue.map((text, index) => <li key={index}><span>{text}</span><IconButton icon="x" label="Follow-up 취소" onClick={() => dispatch({ type: 'unqueue', index })} /></li>)}</ol>
     </div>}
   </section>;
 }
@@ -325,7 +325,7 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
         <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const set = new Set(previous); if (!set.delete(item.id)) set.add(item.id); return set; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
         <span className="folder-icon"><Icon name="folder" size={15} /></span>
         <span className="folder-name" data-tip-overflow="">{name}</span>
-        {states.includes('attention') ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문 · 승인 대기"><Icon name="alert" size={15} /></span> : states.includes('done') && <i className="attn-dot" aria-label="확인 필요" />}
+        {states.includes('attention') ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문, 승인 대기"><Icon name="alert" size={15} /></span> : states.includes('done') && <i className="attn-dot" aria-label="확인 필요" />}
         <span className="folder-actions">
           <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showKeys('mod+shift+t')})`} onClick={event => { event.stopPropagation(); if (!selected) choose(); dispatch({ type: 'newTab' }); }}><Icon name="plus" size={14} /></button>
           <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); note('연습용 프로젝트는 닫을 수 없어요. 실제로는 이 버튼으로 닫습니다.'); }}><Icon name="x" size={14} /></button>

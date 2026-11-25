@@ -614,7 +614,7 @@ function SetupGuide({ steps, complete, adeButton, content }: { steps: GuideStep[
   const required = steps.filter(step => !step.optional), done = required.filter(step => step.status === 'done').length;
   if (complete && !shown) return <div className="plugin-guide-done">
     <span className="plugin-step-mark" data-status="done"><Icon name="check" size={14} /></span>
-    <span><strong>설정을 마쳤습니다</strong><small>{own.length}개 단계 완료 · 아래에서 설정을 바꿀 수 있습니다</small></span>
+    <span><strong>설정을 마쳤습니다</strong><small>{own.length}개 단계 완료, 아래에서 설정을 바꿀 수 있습니다</small></span>
     <button type="button" className="plugin-link" onClick={() => setShown(true)}>단계 보기</button>
   </div>;
   return <section className="plugin-guide" aria-label="시작하기">
@@ -779,8 +779,8 @@ function GithubSection({ github, busy, run, bridge, notice }: { github: GithubAc
   const connect = () => { const value = token.trim(); if (!value) return; run('github:connect', async () => { const next = await bridge.connectGithub!(value); if (next.github?.login) setToken(''); return next; }); };
   const selectedGh = github.ghAvailable && github.accounts?.some(account => account.login === github.ghAccount && account.valid);
   let status: ReactNode;
-  if (github.login) status = <><Icon name="check" size={15} /><span><strong>{github.login}</strong> 계정이 연결되어 있습니다<small>{github.via === 'oauth' ? 'GitHub 로그인' : '개인 액세스 토큰'} · 비공개 저장소의 플러그인 업데이트에 씁니다</small></span></>;
-  else if (selectedGh) status = <><Icon name="check" size={15} /><span><strong>{github.ghAccount}</strong> 계정으로 조회합니다<small>gh에 등록된 계정 · 이 계정이 볼 수 있는 저장소에서 업데이트를 받습니다.</small></span></>;
+  if (github.login) status = <><Icon name="check" size={15} /><span><strong>{github.login}</strong> 계정이 연결되어 있습니다<small>{github.via === 'oauth' ? 'GitHub 로그인' : '개인 액세스 토큰'}, 비공개 저장소의 플러그인 업데이트에 씁니다</small></span></>;
+  else if (selectedGh) status = <><Icon name="check" size={15} /><span><strong>{github.ghAccount}</strong> 계정으로 조회합니다<small>gh에 등록된 계정, 이 계정이 볼 수 있는 저장소에서 업데이트를 받습니다.</small></span></>;
   else if (github.ghAvailable && github.ghAccount) status = <><Icon name="info" size={15} /><span><strong>{github.ghAccount} 계정의 인증을 확인하세요</strong><small>gh에서 다시 로그인하거나 다른 계정을 선택하세요.</small></span></>;
   else if (!github.ghAvailable && github.machine === 'git') status = <><Icon name="check" size={15} /><span><strong>이 PC의 git 로그인</strong>을 씁니다<small>시스템에 등록된 Git 인증으로 업데이트를 받습니다.</small></span></>;
   else if (github.ghAvailable) status = <><Icon name="info" size={15} /><span><strong>조회할 gh 계정을 선택하세요</strong><small>선택 전에는 공개 저장소만 조회합니다.</small></span></>;
@@ -850,7 +850,7 @@ function Provides({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
   if (plugin.workspace) blocks.push(<div key="workspace" className="plugin-cap">
     <span className="plugin-cap-icon"><Icon name="layers" size={16} /></span>
     <div className="plugin-cap-text">
-      <strong>프로젝트·터미널 사용</strong>
+      <strong>프로젝트/터미널 사용</strong>
       <p>{plugin.builtin ? '열린 채팅을 읽고 메시지를 보냅니다.' : '이 PC의 프로젝트와 터미널을 열고 조작합니다.'}</p>
     </div>
   </div>);
@@ -901,7 +901,7 @@ function McpTools({ plugin, busy, run, bridge }: { plugin: PluginInfo; busy: str
           <input type="checkbox" role="switch" aria-label="MCP 서버 사용" checked={serverOn} disabled={working} onChange={event => set({ enabled: event.target.checked }, 'mcp')} />
         </div>
       </div>
-      {serverOn && list && onCount < list.length && <p className="plugin-muted">도구 {list.length}개 중 {onCount}개 사용 · 끈 도구가 있으면 Cursor 채팅에는 이 서버를 주지 않습니다</p>}
+      {serverOn && list && onCount < list.length && <p className="plugin-muted">도구 {list.length}개 중 {onCount}개 사용, 끈 도구가 있으면 Cursor 채팅에는 이 서버를 주지 않습니다</p>}
       {tools?.status === 'error' && <Callout tone="error">{tools.error ?? '도구 목록을 불러오지 못했습니다.'}</Callout>}
       {body}
     </div>

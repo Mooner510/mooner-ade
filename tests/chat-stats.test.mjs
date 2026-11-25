@@ -12,11 +12,12 @@ test('ADE statistics difference cumulative tokens once per response and leave mi
     { kind: 'message', at: 4, blocks: [{ type: 'tool_use', id: 't', name: 'Bash' }] },
     { kind: 'tool_result', at: 5, toolUseId: 't', isError: true },
     { kind: 'usage', at: 6, tokens: { input: 20, output: 4, cacheRead: 200 }, contextTokens: 220 },
-    { kind: 'result', at: 7, durationMs: 50 }, { kind: 'user', at: 8 },
+    { kind: 'result', at: 7, durationMs: 50, status: 'success' }, { kind: 'user', at: 8 },
     { kind: 'usage', at: 9, tokens: { input: 30, output: 10, cacheRead: 300 }, contextTokens: 330 },
-    { kind: 'result', at: 10, durationMs: 100 },
+    { kind: 'result', at: 10, durationMs: 100, status: 'failed' },
   ]);
   assert.equal(stats.turns, 2); assert.equal(stats.requests, 2); assert.equal(stats.activeMs, 150);
+  assert.deepEqual(stats.outcomes, { success: 1, failed: 1, interrupted: 0 });
   assert.deepEqual(stats.turnSeries.map(row => row.output), [4, 6]);
   assert.equal(stats.tokens.input, 30); assert.equal(stats.tokens.read, 300); assert.equal(stats.tokens.output, 10);
   const withSub = chatEventStats([

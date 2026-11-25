@@ -69,8 +69,8 @@ export const unknownReport = detail => ({ busy: true, reasons: [{ project: '', t
 
 const KIND = {
   turn: agent => `${AGENT[agent] ?? '에이전트'}가 작업 중`,
-  background: () => '백그라운드 작업(shell·monitor)이 실행 중이라 끝나면 이어서 작업',
-  waiting: () => '승인·답변을 기다리는 중',
+  background: () => '백그라운드 작업(shell/monitor)이 실행 중이라 끝나면 이어서 작업',
+  waiting: () => '승인/답변을 기다리는 중',
   scheduled: () => '예약된 작업이 곧 실행될 예정',
   command: () => '명령 실행 중',
   plugin: () => '플러그인이 작업 중',
@@ -81,7 +81,7 @@ const AGENT = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' };
 // "• 프로젝트 · 터미널: Claude가 작업 중 (detail)" per reason, at most `limit` lines.
 export function describeReasons(reasons, limit = 6) {
   const lines = reasons.slice(0, limit).map(item => {
-    const place = [item.project, item.terminal].filter(Boolean).join(' · '), what = (KIND[item.kind] ?? KIND.unknown)(item.agent);
+    const place = [item.project, item.terminal].filter(Boolean).join(' / '), what = (KIND[item.kind] ?? KIND.unknown)(item.agent);
     return `• ${place ? `${place}: ` : ''}${what}${item.detail ? ` (${String(item.detail).slice(0, 80)})` : ''}`;
   });
   if (reasons.length > limit) lines.push(`• 그 밖에 ${reasons.length - limit}개`);

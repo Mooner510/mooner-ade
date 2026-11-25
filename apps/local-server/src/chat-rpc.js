@@ -66,6 +66,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   let cursorTokens = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
   let nextId = 0, sessionId, turnId, startedAt = 0, textSerial = 0, said = false, config, capabilities = chatCapabilities(agent), compacting = false, disposed = false, runEverything = false, autoServers = [];
   let promptId = null; // Cursor: the session/prompt request whose answer ends the running turn
+  let cursorPlan = null;
   // cursor-agent prints `Error: RetriableError: ...` and ends the turn when the backend drops the stream (HTTP 503, DNS blips, or the stream closing before turnEnded). It does not retry (enableAgentRetries stays off). ADE keeps the same user turn open and re-prompts until the link is back.
   let transportResumes = 0, transportDropped = false, dropDetail = '', transportResumeTimer = null;
   const pending = new Map(), approvals = new Map(), chunks = new Map(), skills = new Map();
@@ -85,6 +86,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   const publishCapabilities = () => emit({ kind: 'capabilities', capabilities });
   const result = (status = 'success', text = '') => {
     if (disposed) return;
+    cursorPlan = null;
     for (const id of approvals.keys()) emit({ kind: 'approval', phase: 'cancel', requestId: id });
     approvals.clear(); turnId = null;
     emit({ kind: 'result', status, text, costUsd: null, durationMs: Date.now() - startedAt });
@@ -94,6 +96,11 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     const id = String(raw.id); approvals.set(id, raw);
     emit({ kind: 'approval', phase: 'request', requestId: id, tool, input, suggestions: [], ...extra });
   };
+  function cursorModeUpdate(modeId) {
+    const permissionMode = modeId === 'agent' ? 'default' : modeId;
+    if (config) config.permissionMode = permissionMode;
+    emit({ kind: 'settings', permissionMode });
+  }
   function cursorInfo(info) {
     if (info.models) {
       capabilities.catalog = (info.models.availableModels ?? []).map(item => ({ id: item.modelId, name: item.name, family: '', window: 0, main: true }));
@@ -101,7 +108,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     }
     if (info.modes) {
       capabilities.permissionModes = (info.modes.availableModes ?? []).map(item => item.id === 'agent' ? 'default' : item.id);
-      if (info.modes.currentModeId) emit({ kind: 'settings', permissionMode: info.modes.currentModeId === 'agent' ? 'default' : info.modes.currentModeId });
+      if (info.modes.currentModeId) cursorModeUpdate(info.modes.currentModeId);
     }
     if (info.configOptions) {
       capabilities.configOptions = normalizeCursorOptions(info.configOptions);
@@ -266,7 +273,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     }
     else if (type === 'config_option_update') cursorInfo({ configOptions: update.configOptions });
     else if (type === 'current_model_update') emit({ kind: 'session', sessionId, model: update.currentModelId });
-    else if (type === 'current_mode_update') emit({ kind: 'settings', permissionMode: update.currentModeId === 'agent' ? 'default' : update.currentModeId });
+    else if (type === 'current_mode_update' && !child) cursorModeUpdate(update.currentModeId);
     else if (type === 'usage_update') emit({ kind: 'usage', contextTokens: update.used, contextWindow: update.size, contextSource: 'acp',
       ...(update.cost?.currency === 'USD' && Number.isFinite(update.cost.amount) && update.cost.amount >= 0 && { costUsd: update.cost.amount }) });
     else if (type === 'session_info_update') { const event = agentTitle(update.title); if (event) emit(event); }
@@ -299,10 +306,34 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   function clearTransportResumeTimer() {
     if (transportResumeTimer) { clearTimeout(transportResumeTimer); transportResumeTimer = null; }
   }
+  function cursorPrompt(prompt) {
+    promptId = nextId + 1;
+    void request('session/prompt', { sessionId, prompt }, 0).then(promptDone, promptFailed);
+  }
   function resumeCursorTurn() {
     emit({ kind: 'delta', phase: 'reconnecting', active: false });
-    promptId = nextId + 1;
-    void request('session/prompt', { sessionId, prompt: [{ type: 'text', text: CURSOR_TRANSPORT_RESUME }] }, 0).then(promptDone, promptFailed);
+    cursorPrompt([{ type: 'text', text: CURSOR_TRANSPORT_RESUME }]);
+  }
+  async function setCursorMode(permissionMode) {
+    const info = await request('session/set_mode', { sessionId, modeId: modeOf(permissionMode) });
+    config.permissionMode = permissionMode;
+    return info;
+  }
+  async function buildCursorPlan(plan) {
+    plan.starting = true;
+    try {
+      await setCursorMode('default');
+      if (disposed) return;
+      emit({ kind: 'session', sessionId, permissionMode: 'default' });
+      if (cursorPlan !== plan) { result('interrupted'); return; }
+      cursorPlan = null;
+      turnId = `cursor-${randomUUID()}`; textSerial = 0; said = false; chunks.clear();
+      emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
+      cursorPrompt([{ type: 'text', text: `사용자가 아래 계획을 승인했습니다. 이 계획대로 구현을 시작하세요.\n\n${plan.text}` }]);
+    } catch (error) {
+      if (cursorPlan !== plan) result('interrupted');
+      else result('failed', `Cursor 계획 실행을 시작하지 못했습니다. ${error.message}`);
+    }
   }
   function scheduleTransportResume(detail) {
     clearTransportResumeTimer();
@@ -344,6 +375,8 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       for (const key of Object.keys(tokens)) cursorTokens[key] += Math.max(0, tokens[key]);
       emit({ kind: 'usage', tokens: { ...cursorTokens } });
     }
+    // The approval only completes Cursor's plan tool. Start implementation after the planning prompt returns.
+    if (cursorPlan && response.stopReason === 'end_turn') { void buildCursorPlan(cursorPlan); return; }
     result(status, status === 'failed' ? `${hasOutput ? 'Cursor 응답이 완료되지 않았습니다' : 'Cursor가 표시할 응답 없이 종료되었습니다'} (${response.stopReason}). 다시 시도하세요.` : '');
   }
   function promptFailed(error) {
@@ -373,7 +406,10 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     else if (raw.method === 'session/request_permission' && isTrusted(trusted(), cursorMcp(p.toolCall)) && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission') approval(raw, p.toolCall?.title ?? '도구 실행', p.toolCall?.rawInput ?? {}, { suggestions: p.options?.some(o => o.kind === 'allow_always') ? ['session'] : [], ...(cursorMcp(p.toolCall) && { mcp: cursorMcp(p.toolCall) }) });
     else if (raw.method === 'cursor/ask_question') approval(raw, p.title ?? '질문', {}, { questions: p.questions });
-    else if (raw.method === 'cursor/create_plan') approval(raw, '계획 승인', { description: p.overview, plan: p.plan });
+    else if (raw.method === 'cursor/create_plan') {
+      cursorPlan = null;
+      approval(raw, '계획 승인', { description: p.overview, plan: p.plan });
+    }
     else if (raw.method === 'cursor/task' || raw.method === 'cursor/update_todos' || raw.method === 'cursor/generate_image') void send({ id: raw.id, result: {} });
     else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
   }
@@ -414,14 +450,17 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     // What a server that stops hands to the next one, which goes on with the same running agent (chat.js `detach`). Answers to our own
     // requests other than the running Cursor prompt are dropped: the next server never waits for them.
     snapshot: () => ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers,
-      transportResumes, transportDropped, dropDetail,
+      transportResumes, transportDropped, dropDetail, cursorPlan,
       approvals: [...approvals], chunks: [...chunks], skills: [...skills], cursorChildren: [...cursorChildren], cursorTokens, promptId: promptId !== null && pending.has(promptId) ? promptId : null }),
     restore(saved) {
       ({ nextId, sessionId, turnId, startedAt, textSerial, said, config, capabilities, compacting, runEverything, autoServers, transportResumes = 0, transportDropped = false, dropDetail = '' } = saved);
       cursorTokens = saved.cursorTokens ?? cursorTokens;
+      cursorPlan = saved.cursorPlan ?? null;
       for (const [map, entries] of [[approvals, saved.approvals], [chunks, saved.chunks], [skills, saved.skills], [cursorChildren, saved.cursorChildren]]) { map.clear(); for (const [key, value] of entries ?? []) map.set(key, value); }
       promptId = saved.promptId ?? null;
       if (promptId !== null) pending.set(promptId, { resolve: promptDone, reject: promptFailed, timer: null });
+      // The new server attaches the process immediately after restore; reapply the mode once it can write.
+      else if (cursorPlan?.starting) queueMicrotask(() => { if (cursorPlan?.starting && !disposed) void buildCursorPlan(cursorPlan); });
     },
     dispose() { disposed = true; clearTransportResumeTimer(); for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fault('AGENT_UNAVAILABLE', '에이전트 연결이 종료되었습니다.', 503)); } pending.clear(); approvals.clear(); },
     async initialize(meta, cwd, servers = [], instructions) {
@@ -479,7 +518,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         sessionId = response.sessionId ?? meta.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
         let modelApplied = null;
         if (meta.model) { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
-        if (meta.permissionMode !== 'default') await request('session/set_mode', { sessionId, modeId: modeOf(meta.permissionMode) });
+        if (meta.permissionMode !== 'default') await setCursorMode(meta.permissionMode);
         for (const [configId, value] of Object.entries(meta.configValues ?? {})) {
           const option = capabilities.configOptions.find(item => item.id === configId);
           if (option?.options.some(item => item.value === value)) await this.configure({ configOption: { configId, value } });
@@ -518,7 +557,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         if (!option || ['model', 'mode'].includes(option.category) || !option.options.some(item => item.value === configOption.value)) throw fault('INVALID_INPUT', '지원하지 않는 모델 옵션입니다.');
         cursorInfo(await request('session/set_config_option', { sessionId, configId: option.id, value: configOption.value }));
       }
-      if (permissionMode !== undefined) { cursorInfo(await request('session/set_mode', { sessionId, modeId: modeOf(permissionMode) })); emit({ kind: 'settings', permissionMode }); }
+      if (permissionMode !== undefined) { cursorInfo(await setCursorMode(permissionMode)); emit({ kind: 'settings', permissionMode }); }
     },
     async send(text, images, { steer = false, clientUserMessageId } = {}) {
       if (images.length && !capabilities.images) throw fault('CHAT_UNSUPPORTED', '선택한 모델은 이미지 입력을 지원하지 않습니다.', 409);
@@ -534,8 +573,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         if (steer) throw fault('CHAT_UNSUPPORTED', capabilities.limitations.steer, 409);
         clearTransportResumeTimer(); transportResumes = 0; transportDropped = false; dropDetail = '';
         startedAt = Date.now(); turnId = `cursor-${randomUUID()}`; textSerial = 0; said = false; chunks.clear(); emit({ kind: 'delta', phase: 'start', messageId: cursorTextId('text') });
-        promptId = nextId + 1; // the id request() is about to use
-        void request('session/prompt', { sessionId, prompt: [...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }] }, 0).then(promptDone, promptFailed);
+        cursorPrompt([...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data })), { type: 'text', text }]);
       }
     },
     async approve(id, answer) {
@@ -554,12 +592,16 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         response = { outcome: option ? { outcome: 'selected', optionId: option.optionId } : { outcome: 'cancelled' } };
       } else if (raw.method === 'cursor/ask_question') response = { outcome: answer.allow ? { outcome: 'answered', answers: p.questions.map(q => ({ questionId: q.id, selectedOptionIds: answer.answers?.[q.id] ?? [] })) } : { outcome: 'skipped' } };
       else response = { outcome: { outcome: answer.allow ? 'accepted' : 'rejected' } };
-      await send({ id: raw.id, result: response }); approvals.delete(id);
+      const plan = raw.method === 'cursor/create_plan' && answer.allow && config?.permissionMode === 'plan' && typeof p.plan === 'string' && p.plan.trim() ? { text: p.plan } : null;
+      if (plan) cursorPlan = plan;
+      try { await send({ id: raw.id, result: response }); }
+      catch (error) { if (plan && cursorPlan === plan) cursorPlan = null; throw error; }
+      approvals.delete(id);
     },
     async interrupt() {
       clearTransportResumeTimer(); emit({ kind: 'delta', phase: 'reconnecting', active: false });
       if (agent === 'codex') { if (turnId) await request('turn/interrupt', { threadId: sessionId, turnId }); }
-      else await send({ method: 'session/cancel', params: { sessionId } });
+      else { cursorPlan = null; await send({ method: 'session/cancel', params: { sessionId } }); }
     }
   };
 }

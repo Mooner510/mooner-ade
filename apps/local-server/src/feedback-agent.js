@@ -53,7 +53,7 @@ export const FEEDBACK_EFFORTS = ['low', 'medium']; // Effort stops at Medium for
 const ISOLATED = ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', 'user', '--disable-slash-commands', '--no-session-persistence'];
 // Only the AI buttons need a Claude Code login; submitting never does (it goes anonymously when nobody is signed in), so the message says so.
 export const loginProblem = text => /not logged in|please run \/login|invalid api key|authentication_error|oauth token has expired/i.test(String(text ?? ''));
-export const LOGIN_HINT = 'AI로 작성·다듬기는 Claude Code 로그인이 필요합니다. 터미널에서 claude를 실행해 로그인한 뒤 다시 시도하세요. 제출은 로그인 없이도 할 수 있으니, 직접 쓴 내용을 그대로 제출해도 됩니다.';
+export const LOGIN_HINT = 'AI로 작성/다듬기는 Claude Code 로그인이 필요합니다. 터미널에서 claude를 실행해 로그인한 뒤 다시 시도하세요. 제출은 로그인 없이도 할 수 있으니, 직접 쓴 내용을 그대로 제출해도 됩니다.';
 export function runFeedbackDraft({ executable = 'claude', executableArgs = [], model = '', effort = '', cwd, images, title, body, note, context, types, env = {}, spawnProcess = spawn, timeoutMs = 120_000 }) {
   const prompt = feedbackPrompt({ images, title, body, note, context, types });
   return new Promise((resolve, reject) => {

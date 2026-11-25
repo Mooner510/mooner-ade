@@ -545,7 +545,7 @@ test('Cursor: an MCP tool trusted in the settings is allowed once without a card
 // ---- how a chat shows a message from the bus -------------------------------------------------------------------------------------
 import { parseBusMessages } from '../apps/web/src/bus-message.ts';
 test('the chat recognises what the bus delivered, one message or several that waited together', () => {
-  const one = formatMessage({ from: { id: 'codex-1', agent: 'codex', title: 'Re"viewer' }, text: 'line 1\n\n---\nline 2', hop: 2, maxHops: 4 });
+  const one = formatMessage({ from: { id: 'codex-1', sessionId: 'concrete-session', agent: 'codex', title: 'Re"viewer' }, text: 'line 1\n\n---\nline 2', hop: 2, maxHops: 4 });
   assert.deepEqual(parseBusMessages(one), [{ title: "Re'viewer", agent: 'codex', id: 'codex-1', hop: 2, maxHops: 4, text: 'line 1\n\n---\nline 2' }]);
   const untitled = formatMessage({ from: { id: 'c-2', agent: 'cursor', title: '' }, text: 'hi', hop: 0, maxHops: 4 });
   assert.deepEqual(parseBusMessages(untitled), [{ title: '', agent: 'cursor', id: 'c-2', hop: 0, maxHops: 0, text: 'hi' }]);
