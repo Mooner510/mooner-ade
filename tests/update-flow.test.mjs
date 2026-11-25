@@ -99,7 +99,7 @@ async function fakeGithub(t, releases, { delayMs = 0 } = {}) {
 }
 
 // One installed app (its own folder, version and shell key) with a fresh copy of updater.js, which keeps its state (declined versions, a staged update) per copy.
-async function setup(t, { current, beta = false, releases, shell = SHELL, answer = () => 2, getBusy = async () => ({ busy: false, reasons: [] }), delayMs = 0 }) {
+async function setup(t, { current, beta = false, releases, shell = SHELL, answer = () => 2, getBusy = async () => ({ busy: true, reasons: [{ project: 'p', terminal: 't', kind: 'turn', agent: 'claude' }] }), delayMs = 0 }) {
   const id = ++counter, root = path.join(sandbox, `install-${id}`), appPath = path.join(root, 'resources', 'app');
   fs.mkdirSync(appPath, { recursive: true });
   fs.writeFileSync(path.join(appPath, 'package.json'), JSON.stringify({ name: 'mooner-ade', version: current }));
@@ -429,4 +429,22 @@ test('a check that finds nothing new, or a version turned down, does not touch a
   fallback.github.webStatus = 500;
   assert.equal(await fallback.check(), 'declined');
   assert.ok(fallback.github.requests.some(url => url.startsWith('/repos/')), 'the API answers when the web page cannot');
+});
+
+test('with nothing an update would cut off, the prompt says updating now is uninterrupted and does not offer waiting for the quit', { skip }, async t => {
+  const ctx = await setup(t, { current: '0.5.12', releases: [release('v0.6.0')], getBusy: async () => ({ busy: false, reasons: [], keepsTerminals: true, keepsChats: true }), answer: button(PROMPT_LATER) });
+  assert.equal(await ctx.check(), 'declined');
+  const [prompt] = ctx.electron.messages;
+  assert.deepEqual(prompt.buttons, [PROMPT_NOW, PROMPT_LATER]);
+  assert.equal(prompt.defaultId, 1);
+  assert.match(prompt.detail, /무중단/);
+  assert.doesNotMatch(prompt.detail, /종료할 때/);
+});
+
+test('with work an update would cut off, all three buttons stay and the work is listed', { skip }, async t => {
+  const ctx = await setup(t, { current: '0.5.12', releases: [release('v0.6.0')], answer: button(PROMPT_LATER) });
+  assert.equal(await ctx.check(), 'declined');
+  const [prompt] = ctx.electron.messages;
+  assert.deepEqual(prompt.buttons, [PROMPT_ON_QUIT, PROMPT_NOW, PROMPT_LATER]);
+  assert.match(prompt.detail, /중단됩니다[\s\S]*Claude가 작업 중/);
 });

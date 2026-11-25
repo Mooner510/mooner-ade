@@ -273,14 +273,19 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   const { file, kind } = await pickPackage(release, asset, version);
   const report = await readBusy(getBusy), size = `다운로드 크기는 ${mb(file.size || 0)} MB입니다.`, listed = report.busy ? describeReasons(report.reasons) : '';
   // "나중에" is the default: the prompt can appear while typing, and a stray Enter must not end every session.
+  // Nothing an update would cut off (terminals and chats live on through the restart): updating now is safe, so waiting for the quit is not offered.
+  const buttons = report.busy ? ['종료할 때 업데이트', '지금 업데이트', '나중에'] : ['지금 업데이트', '나중에'];
+  const note = report.busy
+    ? `지금 업데이트하면 아래 작업이 중단됩니다.\n${listed}\n\n종료할 때 업데이트는 지금 받아 두고 앱을 끌 때 설치합니다.`
+    : '지금 업데이트해도 터미널과 채팅 작업은 끊기지 않습니다(무중단 업데이트).';
   const prompt = {
-    type: report.busy ? 'warning' : 'info', buttons: ['종료할 때 업데이트', '지금 업데이트', '나중에'], defaultId: 2, cancelId: 2, title: '업데이트',
+    type: report.busy ? 'warning' : 'info', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, title: '업데이트',
     message: `새 ${label} ${version}을 사용할 수 있습니다.`,
-    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n종료할 때 업데이트는 지금 받아 두고, 다음에 앱을 끌 때 설치합니다. 지금 업데이트는 바로 설치하고 다시 실행합니다.${report.keepsChats ? ' 터미널과 채팅, 그 안의 작업은 어느 쪽이든 계속됩니다.' : report.keepsTerminals ? ' 터미널과 그 안의 작업은 어느 쪽이든 계속됩니다.' : ''}${listed ? `\n\n진행 중인 작업:\n${listed}` : ''}`,
+    detail: `현재 버전은 ${app.getVersion()}입니다. ${size}\n\n${note}`,
   };
   const { response: choice } = await ask(window, prompt);
-  if (choice === 2) { declined.add(version); return 'declined'; }
-  const now = choice === 1;
+  if (choice === buttons.length - 1) { declined.add(version); return 'declined'; }
+  const now = buttons[choice] === '지금 업데이트';
   if (now && report.busy && !(await confirmInterrupt(window, report))) return 'declined';
   return install({ version, file, kind, window, getBusy, beforeRestart, onQuit: !now, force: now && report.busy });
 }
