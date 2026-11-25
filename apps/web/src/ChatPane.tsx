@@ -1395,11 +1395,21 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     catch (cause) { ctx.fail(cause); return false; }
   };
   // A message typed while Claude answers waits here and goes out when the turn ends.
+  // The waiting message being edited stays put: nothing is sent while it is open (a cleared queue ends the edit).
+  const [editingQueue, setEditingQueue] = useState<{ item: (typeof queue)[number]; text: string } | null>(null);
+  const editOpen = Boolean(editingQueue && queue.includes(editingQueue.item));
+  const saveQueueEdit = () => {
+    if (!editingQueue) return;
+    const { item, text: next } = editingQueue, edited = next.trim();
+    if (!edited) return;
+    setQueue(items => items.map(entry => entry === item ? { ...entry, text: edited, ...(entry.draft !== undefined && { draft: edited }) } : entry));
+    setEditingQueue(null);
+  };
   useEffect(() => {
-    if (state.status !== 'idle' || !queue.length || !view.ready || queueSending) return;
+    if (state.status !== 'idle' || !queue.length || !view.ready || queueSending || editOpen) return;
     const [next, ...rest] = queue; setQueueSending(true); setQueue(rest);
     void transmit(next.text, next.images).then(sent => { if (!sent) restoreDraft(next.draft ?? next.text, next.images); }).finally(() => setQueueSending(false));
-  }, [state.status, queue, view.ready, queueSending]);
+  }, [state.status, queue, view.ready, queueSending, editOpen]);
   // Interactive UIs in a reply (ade-ui blocks) reach this chat through window events carrying the chat id. `ade.send` goes out like a typed message
   // (queued as a follow-up only while this agent is in a turn, so it never steers a running turn; a subagent running on its own does not count).
   // `ade.prefill` only fills the composer. The ref keeps the listener on fresh state.
@@ -1583,7 +1593,11 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         return true;
       }
       case 'mcp': {
-        if (agent === 'claude') { apply(view => ({ ...view, items: [...view.items, { kind: 'mcp', key: `m${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true; }
+        // One card is enough: asking again brings the one already in the thread into view (its refresh button looks again).
+        if (agent === 'claude') {
+          if (viewRef.current.items.some(item => item.kind === 'mcp')) { release(); scroller.current?.querySelector('.mcp-card')?.scrollIntoView({ behavior: calm() ? 'auto' : 'smooth', block: 'center' }); syncPin(); return true; }
+          apply(view => ({ ...view, items: [...view.items, { kind: 'mcp', key: `m${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true;
+        }
         const servers = new Map<string, number>();
         for (const tool of state.tools) { const match = /^mcp__(.+?)__/.exec(tool); if (match) servers.set(match[1], (servers.get(match[1]) ?? 0) + 1); }
         if (!servers.size) note(state.tools.length ? '이 채팅에 연결된 MCP 서버가 없습니다.' : '첫 응답 후 연결된 MCP 서버가 표시됩니다.');
@@ -1741,20 +1755,6 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const waitingAgents = useMemo(() => new Set(askingAgents.values()), [askingAgents]);
   const shown = useMemo(() => { const from = lastIndexWhere(view.items, item => item.kind === 'divider'); return from < 0 ? view.items : view.items.slice(from + 1); }, [view.items]);
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
-  // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
-  const agentsSeen = useRef<SubAgent[]>([]);
-  // Subagents: Claude's Agent calls, and Cursor's Task calls (only drawn once the protocol reports them).
-  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' || agent === 'cursor' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
-  const agentKey = agentList.map(item => item.id).join(' ');
-  const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
-  const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
-  const runningAgents = agentList.filter(item => item.status === 'running').length, runningJobs = agentList.filter(item => item.job && item.status === 'running').length;
-  // "에이전트 2개 · 백그라운드 작업 1개 실행 중…": subagents and jobs counted apart.
-  const runningLabel = `${[runningAgents - runningJobs && `에이전트 ${runningAgents - runningJobs}개`, runningJobs && `백그라운드 작업 ${runningJobs}개`].filter(Boolean).join(' · ')} 실행 중…`;
-  const [agentOpen, setAgentOpen] = useState<string | null>(null), [trackerHidden, setTrackerHidden] = useState('');
-  const openedAgent = agentList.find(item => item.id === agentOpen) ?? null;
-  // A closed drawer stays mounted for its exit slide (showing the agent it last showed) while the thread widens back under it.
-  const [leaving, setLeaving] = useState<SubAgent | null>(null), shownAgentRef = useRef<SubAgent | null>(null);
   // Only the newest turns are in the DOM; the rest load as the reader scrolls up (a long chat was thousands of elements per pane, laid out and kept in memory for every open tab).
   const [turnLimit, setTurnLimit] = useState(TURN_PAGE);
   const hiddenTurns = Math.max(0, turns.length - turnLimit), renderedTurns = hiddenTurns ? turns.slice(hiddenTurns) : turns;
@@ -1772,6 +1772,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }, [turnLimit]);
   // Scrolling within reach of the top (onScroll) loads the next page; following the bottom (opening the chat) must not.
   const hiddenRef = useRef(0); hiddenRef.current = hiddenTurns;
+  // Subagents (Claude's Agent calls). Their steps leave the thread for their own card, tracker row and drawer.
+  const agentsSeen = useRef<SubAgent[]>([]);
+  // Subagents: Claude's Agent calls, and Cursor's Task calls (only drawn once the protocol reports them).
+  const agentList = useMemo(() => agentsSeen.current = keepAgents(agentsSeen.current, agent === 'claude' || agent === 'cursor' ? agentsOf(shown, view.results, view.tasks, busy, state.liveTasks, state.effort) : []), [agent, shown, view.results, view.tasks, busy, state.liveTasks, state.effort]);
+  const agentKey = agentList.map(item => item.id).join(' ');
+  const agentIds = useMemo(() => new Set(agentKey ? agentKey.split(' ') : []), [agentKey]);
+  const agentColors = useMemo(() => new Map(agentKey ? agentKey.split(' ').map((key, index) => [key, agentColor(index)] as const) : []), [agentKey]);
+  const runningAgents = agentList.filter(item => item.status === 'running').length, runningJobs = agentList.filter(item => item.job && item.status === 'running').length;
+  // "에이전트 2개 · 백그라운드 작업 1개 실행 중…": subagents and jobs counted apart.
+  const runningLabel = `${[runningAgents - runningJobs && `에이전트 ${runningAgents - runningJobs}개`, runningJobs && `백그라운드 작업 ${runningJobs}개`].filter(Boolean).join(' · ')} 실행 중…`;
+  const [agentOpen, setAgentOpen] = useState<string | null>(null), [trackerHidden, setTrackerHidden] = useState('');
+  const openedAgent = agentList.find(item => item.id === agentOpen) ?? null;
+  // A closed drawer stays mounted for its exit slide (showing the agent it last showed) while the thread widens back under it.
+  const [leaving, setLeaving] = useState<SubAgent | null>(null), shownAgentRef = useRef<SubAgent | null>(null);
   useEffect(() => {
     if (openedAgent) { shownAgentRef.current = openedAgent; setLeaving(null); return; }
     const last = shownAgentRef.current; shownAgentRef.current = null;
