@@ -1,6 +1,9 @@
 // Windows: the whole self-update of a packaged build, isolated. Needs `pnpm package` first (apps/desktop/dist/MoonerADE-win32-x64).
 //   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update-win.mjs [--installed-from <packaged folder>] [--next-from <packaged folder>] [--full]
 //     [--installed-version <x.y.z>] [--next-version <x.y.z>] [--drive [--throttle <MB/s>] | --on-quit | --quit-dialog]
+// For the release check, update from the previous stable build (`--installed-from <its packaged folder> --installed-version <old> --next-version <new>`): the default 0.0.1 -> 9.9.9 treats
+// every older note in changelog.json as new, so "no red dot after reading the notes" fails by design; with the real versions only the new note is fresh. A copy of the *same* build renamed
+// to the old version also fails (it already knows the new note), so build the old release from its tag (a git worktree + `pnpm install` + `pnpm package`).
 // --quit-dialog is --on-quit with a terminal running when the window is closed: the native "종료할까요?" question (worded after the waiting update) is read through UI Automation
 // (dialog-tool.ps1, only windows of the app's own process) and answered with its update button; the terminal has to come back in the new app. The wording is that of the
 // *installed* app, so it needs a build that has it as the installed one (--installed-from = the candidate, versions 0.6.0 → 0.6.1, with --no-startup-checks).
