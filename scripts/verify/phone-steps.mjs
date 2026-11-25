@@ -142,6 +142,22 @@ async function debugPage({ argv }) {
   page.close();
 }
 
+// Cleanup, while the local Hub still runs: signs the debug app out (which also clears the pairing and the key made for this rig), leaving its SSH servers and settings alone.
+export async function signOutApp(m, say = log) {
+  const adb = adbTool(m.phone?.serial);
+  if (!adb.pidOf(PKG)) return say('디버그 앱이 실행 중이 아니라 로그아웃을 건너뜁니다.');
+  adb.start();
+  const page = await mainPage(adb, 20000);
+  await page.waitFor('document.querySelector("#root")?.children.length > 0', 20000);
+  if (!await signedIn(page)) { say('폰 앱은 이미 로그아웃 상태입니다.'); return page.close(); }
+  await tabTo(page, '설정');
+  await page.tap('button', '로그아웃'); await sleep(400);
+  await page.tap('button', '한 번 더 눌러 로그아웃');
+  await page.waitFor(`![...document.querySelectorAll('nav.bottom-nav button')].some(b => b.textContent.trim() === 'PC')`, 20000, '로그아웃 완료');
+  say('폰 앱 로그아웃 완료(Hub에서 이 폰 삭제, 키·페어링 삭제).');
+  page.close();
+}
+
 async function shot({ argv }) {
   const name = argv[argv.indexOf('shot') + 1] ?? `shot-${Date.now()}`;
   console.log(adbTool().screencap(name));

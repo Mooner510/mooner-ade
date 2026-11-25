@@ -89,3 +89,67 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
 
 - 단위: `tests/remote-link.test.mjs`(가짜 Hub와 가짜 상대 PC), `tests/remote-ui-proxy.test.mjs`(실제 `remote-ui.js`가 호스트), `tests/remote-bridge.test.mjs`, `tests/noise.test.mjs`.
 - 실제 앱: `node scripts/verify/t-remote-pc.mjs --plugins <mooner-ade-plugins>`. 격리된 Electron(별도 `ADE_USER_DATA_DIR`·`ADE_DATA_DIR`·`HOME`, Chromium mock keychain, 브라우저 없음)이 이 PC, 일회용 ADE 서버와 가짜 Hub가 다른 PC 역할이다. 로그인, 페어링, 창, 초록 테두리(모달 포함), 네트워크 차단, 프로젝트·터미널 열기, 닫기, 연결 해제를 확인한다. `apps/web/dist`가 필요하다(`pnpm --filter @mooner/ade-web build`).
+
+## 폰 종단 테스트 (실제 폰, 지문·실제 Hub 로그인·AI 사용 없이)
+
+USB로 연결한 실제 폰의 debug 앱(`com.roufin.ade.dev`)이 일회용 테스트 ADE에 로그인·페어링하고, `RemoteUiActivity`에 그 ADE의 화면을 띄워 가짜 `claude`와 채팅하는 전체 사슬을 사람 없이 반복해서 돌린다. 사용자의 설치 앱(`com.roufin.ade`), 실제 Hub(`ade-hub.mooner510.kr`), 공용 세션 `tmp/main`, 진짜 AI는 쓰지 않는다.
+
+```text
+node scripts/verify/t-phone-e2e.mjs all [--hub <mooner-ade-hub>] [--plugins <mooner-ade-plugins>] [--webapps <mooner-webapps>]
+```
+
+`all`은 아래를 차례로 한다. 단계마다 따로도 실행한다(`up`, `link`, `apk`, `login`, `pair`, `open`, `scenarios [이름…]`, `shot <이름>`, `describe [--remote|--any] [--eval <js>]`, `status`, `down`). 오래 걸리는 `all`과 `apk`(첫 빌드)는 백그라운드로 로그 파일에 받아 확인한다.
+
+### 준비물
+
+- 폰 1대(`adb devices`에 하나. 여럿이면 `ANDROID_SERIAL`)와 화면이 켜져 있고 잠금이 풀린 상태. 폰 설정은 바꾸지 않는다.
+- `apps/web/dist`: 폰은 PC의 이 빌드를 `ui/manifest`로 받는다(`pnpm --filter @mooner/ade-web build`, 웹을 고친 뒤에는 다시). 개발 서버(Vite)만 쓰면 `ui/manifest`가 `UI_UNAVAILABLE`이라 폰이 옛 화면으로 돌아간다.
+- Windows에서는 `scripts/verify/bin/claude.exe`(`powershell.exe -File scripts/verify/bin/build-claude-exe.ps1`), Go, JDK 21(`JAVA_HOME`, 기본 `C:\Program Files\Java\jdk-21`), Android SDK(`ANDROID_HOME`, 기본 `%LOCALAPPDATA%\Android\Sdk`), Chrome.
+- 같은 층의 체크아웃: `mooner-ade-hub`, `mooner-ade-plugins`, `mooner-webapps`(`wt/hub-e2e`, `wt/plugins-e2e`, `wt/webapps-e2e` 같은 worktree가 있으면 그쪽을 먼저 찾고, 아니면 `--hub`/`--plugins`/`--webapps`나 `PHONE_E2E_HUB`/`PHONE_E2E_PLUGINS`/`PHONE_E2E_WEBAPPS`). 시험하려는 브랜치를 체크아웃해 둔다.
+
+### 구성
+
+| 조각 | 무엇 | 파일 |
+| --- | --- | --- |
+| 로컬 Hub | `mooner-ade-hub`를 `go build`해 `DEV_LOGIN=1`(메모리 저장소, 이름만으로 로그인)로 loopback에 띄운다. 깨끗한 환경(OIDC·DB·GitHub 토큰 없음) | `phone-rig.mjs` |
+| 중계 | Hub 앞의 TCP 프록시(고정 기본 포트 47213, 바쁘면 빈 포트). 폰(`adb reverse`)과 플러그인이 둘 다 이 주소로 온다. `cut(ms)`로 모든 연결을 끊고 잠시 받지 않는다 | `phone-rig.mjs` |
+| 테스트 ADE | `lib.mjs boot`의 서버(`ADE_DEV=1`, `ADE_VERIFY_PLUGINS=1`)가 실제 플러그인 관리자와 플러그인 호스트 프로세스(게이트웨이, Noise 링크 포함)를 돌린다. 확인 창은 하네스 큐에 쌓이고 스크립트가 승인한다. 가짜 `claude` | `t-phone-e2e.mjs` |
+| 플러그인 | `mooner-ade-plugins/remote`를 릴리스 zip과 같은 모양으로 꾸린 사본(`// @shared` 대체). `plugin.json`의 `source`만 뺀다(플러그인 업데이트 확인이 GitHub에 가지 않게) | `phone-rig.mjs` |
+| 폰 | `adb`(설치, `reverse`, 스크린샷, 입력 키)와 debug 앱의 WebView DevTools(`adb forward`로 `webview_devtools_remote_<pid>`). DOM 읽기·터치 | `phone-adb.mjs`, `phone-steps.mjs` |
+| 시나리오 | 아래 6개 | `phone-scenarios.mjs` |
+
+세션 폴더는 `tmp/ade-phone-e2e`(`rig.json`에 포트·PID·폰에 더한 `adb reverse`/`forward`를 적는다). 소유 프로세스(`owner`)가 Hub·중계·ADE 서버를 들고 있고, 제어용 loopback HTTP(`/cut`, `/relay`, `/stop`)가 있다.
+
+### 로그인·페어링을 자동으로 하는 방법
+
+- 로그인: 앱의 설정 → "계정으로 로그인"을 누르면 폰에 8자리 코드가 뜬다. 스크립트가 그 코드를 DOM에서 읽고, Hub의 dev-login 폼(`GET /enroll?code=…`, `POST /enroll/dev-login`, `POST /enroll/decide`)을 일반 HTTP로 눌러 승인한다. 사용자가 브라우저에서 하는 일과 같다.
+- PC 쪽: 같은 방식으로 플러그인의 "계정 연결"을 승인하고, 플러그인 켜기·승인·원격 접속 켜기의 확인 창은 하네스 큐에서 승인한다.
+- 페어링: 플러그인의 "기기 추가 (제어)"가 만든 링크(`moonerade://pair?…`)를 `adb shell am start -a android.intent.action.VIEW -p com.roufin.ade.dev -d '…'`로 앱에 넘긴다(QR 스캔과 같은 경로, 릴리스 앱이 아닌 debug 앱만 지정). 앱의 "페어링 요청"을 누르고, PC의 승인 창을 승인한다. 앱이 보여 준 PC 키 지문이 플러그인의 것과 같은지 로그에 남긴다.
+- PC 열기: 앱의 PC 목록 카드를 눌러 `RemoteUiActivity`가 뜨는 것을 확인한다.
+- 지문 확인 생략: debug 빌드이면서 Hub 주소가 로컬 http(127.0.0.1, localhost, 10.0.2.2)일 때만 제어 PC를 열기 전의 화면 잠금 확인을 건너뛴다(`ScreenLockPolicy`, mooner-webapps). 릴리스 빌드와 https Hub를 쓰는 debug 빌드는 그대로 묻는다. debug 빌드의 `network_security_config`는 127.0.0.1 http를 허용한다.
+
+### 시나리오 (`scenarios`)
+
+| 이름 | 확인하는 것 |
+| --- | --- |
+| `s1-phone-roundtrip` | 폰에서(실제 키 입력 `adb input text`) 친 메시지가 테스트 ADE의 fake claude에 닿고 답이 폰에 나타난다 |
+| `s2-live-stream` | fake claude의 답(`e2e-stream <n> [표식]`)이 폰에 한 줄씩 이어서 나타난다(중간 상태를 여럿 본다) |
+| `s3-desktop-to-phone` | 우리 헤드리스 Chrome(데스크톱 폭, 자기 프로필, 인터넷 차단)에서 보낸 메시지와 답이 폰에 나타난다 |
+| `s4-autoscroll` | 맨 아래에 있는 동안 새 줄이 올 때 폰의 채팅 스크롤이 따라간다(대화가 화면보다 길어져야 인정) |
+| `s5-reconnect` | 중계를 9초 끊었다 되살려도 폰이 다시 붙고, 끊긴 동안 PC에서 나온 줄까지 빠짐·중복 없이 따라잡는다 |
+| `s6-offline-safety` | rig의 모든 프로세스(소유 프로세스 아래 전부와 Chrome)가 loopback 밖으로 연결하지 않았다 |
+
+스크린샷은 `C:\AI\claude-temp\phone-e2e`(저장소 밖)에, 결과는 세션 폴더의 `results.json`에 남는다.
+
+### 안전장치
+
+- Hub 주소는 모든 곳에 명시한다(`MOONER_REMOTE_HUB_URL`은 중계 주소, 앱은 `-PhubUrl`, `ADE_HUB_URL`은 닫힌 포트). 실제 Hub로는 가지 않는다.
+- `scripts/verify/loopback-only.cjs`를 rig의 모든 Node 프로세스(소유 프로세스, ADE 서버, 플러그인 호스트)에 `NODE_OPTIONS --require`로 미리 올린다. 소켓은 loopback으로만 연결할 수 있고, 나머지(예: Claude Code 업데이트 알림이 부르는 npm 레지스트리)는 DNS·TCP 전에 거부하고 `blocked-connections.log`에 남긴다. Hub는 Go 바이너리이며 loopback에만 열고 바깥 설정이 없다. Chrome은 죽은 프록시와 `--host-resolver-rules`로 막는다. `s6`은 `Get-NetTCPConnection`으로 한 번 더 확인한다.
+- 프로세스는 기록한 PID와 명령줄이 맞을 때만 끝낸다(이름으로 죽이지 않는다). `down`은 앱을 로그아웃(Hub에서 폰 삭제, 키·페어링 삭제)하고, 이 rig가 더한 `adb reverse`/`forward`만 지운 뒤 owner를 멈춘다. 앱의 SSH 서버·설정과 `com.roufin.ade`는 건드리지 않는다.
+- 앱 `singleTask` 때문에 `RemoteUiActivity`가 떠 있을 때 `MainActivity`를 다시 시작하면 PC 화면이 닫힌다. 스크립트는 이미 PC 화면이면 그대로 쓴다.
+
+### 못 하는 것
+
+- 실제 AI 응답과 사용량, 실제 Authentik 로그인(권한 있는 계정 확인), 지문 프롬프트 자체, 사용자의 릴리스 앱 경로, 실제 네트워크 단절(모바일↔Wi-Fi 전환). 중계 끊기는 같은 PC의 TCP 연결을 끊는 것이라 라우팅이 바뀌는 경우는 시험하지 못한다.
+- Hub를 재시작하는 시험은 하지 않는다. DEV_LOGIN Hub는 메모리 저장소라 재시작하면 토큰이 모두 사라져 로그아웃 상태가 된다.
+- 폰이 USB로 연결되어 화면이 켜져 있는 동안의 동작이다(백그라운드, 절전, 알림은 확인하지 않는다).

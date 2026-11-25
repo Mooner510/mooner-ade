@@ -11,9 +11,10 @@ import { execFileSync, spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { dirname, join, resolve } from 'node:path';
+import { freePort, pickPort, relayProxy } from './phone-relay.mjs';
 import { commandLines, ensureSession, mainCheckout, norm, real, sessionDir, tmpRoot, HERE, ROOT } from './session-dirs.mjs';
 
-export { HERE, ROOT };
+export { HERE, ROOT, freePort, pickPort, relayProxy };
 export const RIG = 'ade-phone-e2e';
 export const dir = sessionDir(RIG);
 // lib.mjs makes <VERIFY_OUT>/shots on import and falls back to the shared tmp/main without it: it must never be that one.
@@ -34,9 +35,6 @@ export const needRig = () => { const m = readManifest(); if (!m?.ready) throw ne
 export const shotsDir = process.env.PHONE_E2E_SHOTS ?? 'C:\\AI\\claude-temp\\phone-e2e';
 
 // ---- small helpers ---------------------------------------------------------------------------------------------------------------
-export const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.once('error', rej); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); }); });
-// The relay's port is baked into the debug APK (BuildConfig.HUB_URL), so it is the same every run (the APK is only rebuilt when it changes); a busy one falls back to a free port.
-export const pickPort = preferred => new Promise(res => { const s = net.createServer(); s.once('error', () => freePort().then(res)); s.listen(preferred, '127.0.0.1', () => s.close(() => res(preferred))); });
 export const hex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
 export const log = (...a) => console.log(`[${new Date().toLocaleTimeString('ko-KR', { hour12: false })}]`, ...a);
 export const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -58,31 +56,6 @@ export function startHub(bin, port) {
   const out = openSync(join(dir, 'hub.log'), 'a');
   const child = spawn(bin, [], { env, stdio: ['ignore', out, out], windowsHide: true });
   return child;
-}
-
-// A transparent TCP relay in front of the Hub: what the phone (through `adb reverse`) and the plugin both reach. `cut(ms)` drops every connection
-// and refuses new ones for a while, the way a real network break does, while the Hub keeps its accounts (it is in memory: restarting it would sign everything out).
-export function relayProxy({ port, targetPort }) {
-  const sockets = new Set(), events = [];
-  let server = null, accepted = 0;
-  const note = what => events.push({ at: Date.now(), what });
-  const listen = () => new Promise((res, rej) => {
-    const s = net.createServer(client => {
-      accepted++;
-      const upstream = net.connect(targetPort, '127.0.0.1');
-      for (const sock of [client, upstream]) { sockets.add(sock); sock.on('close', () => sockets.delete(sock)); sock.on('error', () => sock.destroy()); }
-      client.pipe(upstream); upstream.pipe(client);
-    });
-    s.once('error', rej); s.listen(port, '127.0.0.1', () => { server = s; res(); });
-  });
-  const stop = () => new Promise(res => { const s = server; server = null; for (const sock of [...sockets]) sock.destroy(); if (!s) return res(); s.close(() => res()); });
-  return {
-    start: async () => { await listen(); note('listening'); },
-    stop,
-    // Down for `ms`, then listening again on the same port (the clients' retries find it there).
-    async cut(ms) { note(`cut ${ms}ms`); await stop(); await sleep(ms); await listen(); note('listening again'); },
-    get open() { return sockets.size; }, get accepted() { return accepted; }, events
-  };
 }
 
 // ---- driving the Hub's dev-login pages with plain HTTP ---------------------------------------------------------------------------------
@@ -164,7 +137,7 @@ export function adeClient(m) {
 
 // ---- processes ---------------------------------------------------------------------------------------------------------------------------
 // What each recorded process must still be running for its PID to be ours (PIDs are reused).
-export const EXPECT = { hub: 'hub-e2e.exe', ade: 'local-server/src/index.js', owner: 't-phone-e2e.mjs' };
+export const EXPECT = { hub: 'hub-e2e.exe', ade: 'local-server/src/index.js', owner: 't-phone-e2e.mjs', chrome: 'chrome-desktop' };
 export function stopRecorded(m, log = console.log) {
   const pids = Object.entries(m?.pids ?? {}).filter(([, pid]) => pid && alive(pid));
   const lines = commandLines(pids.map(([, pid]) => pid));

@@ -101,8 +101,8 @@ if (!stream) {
     // Phone end-to-end rig (scripts/verify/t-phone-e2e.mjs): `e2e-echo <text>` answers `echo: <text>`; `e2e-stream <n> [tag]` streams n answers one line each (`스트림 [tag ]i/n번째 줄입니다.`), 600 ms apart
     // (a long live answer to scroll with), then ends the turn.
     if (text.includes('e2e-stream')) {
-      const n = Math.min(Number(/e2e-stream\s+(\d+)/.exec(text)?.[1] ?? 12), 60);
-      for (let i = 1; i <= n; i++) { say(`스트림 ${i}/${n}번째 줄입니다.`); await wait(600); }
+      const [, count, tag] = /e2e-stream\s+(\d+)(?:\s+(\w+))?/.exec(text) ?? [], n = Math.min(Number(count ?? 12), 60);
+      for (let i = 1; i <= n; i++) { say(`스트림 ${tag ? tag + ' ' : ''}${i}/${n}번째 줄입니다.`); await wait(600); }
       result(`stream ${n}`); return;
     }
     if (text.includes('e2e-echo')) { say('echo: ' + text); result(); return; }

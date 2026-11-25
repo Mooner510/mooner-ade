@@ -9,7 +9,9 @@ const local = host => !host || host === 'localhost' || host === '::1' || host ==
 const record = text => { try { if (process.env.PHONE_E2E_GUARD_LOG) fs.appendFileSync(process.env.PHONE_E2E_GUARD_LOG, `${new Date().toISOString()} pid ${process.pid} ${text}\n`); } catch { /* the refusal is what matters */ } };
 net.Socket.prototype.connect = function connect(...args) {
   let options;
-  try { [options] = net._normalizeArgs(args); } catch { return original.apply(this, args); }
+  // Node's own callers (net.connect, tls.connect) hand over an already normalized [options, callback] array; a direct socket.connect(port, host) does not.
+  try { [options] = Array.isArray(args[0]) ? args[0] : net._normalizeArgs(args); } catch { return original.apply(this, args); }
+  if (!options || typeof options !== 'object') return original.apply(this, args);
   if (options.path || local(options.host)) return original.apply(this, args);
   const target = `${options.host}:${options.port}`;
   record(`blocked ${target}`);

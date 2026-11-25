@@ -141,6 +141,7 @@ async function status() {
 async function down() {
   const m = readManifest();
   if (!m) return log('rig 기록이 없습니다.');
+  if (m.phone?.serial) await (await import('./phone-steps.mjs')).signOutApp(m, log).catch(error => log(`폰 앱 로그아웃 실패: ${error.message}`));
   const phone = await import('./phone-adb.mjs');
   await phone.cleanupPhone(m, log).catch(error => log(`폰 정리 실패: ${error.message}`));
   if (m.ready && alive(m.pids?.owner)) { await control('/stop').catch(() => {}); await until(() => !alive(m.pids.owner), 15000, 300).catch(() => {}); }

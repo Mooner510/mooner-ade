@@ -70,12 +70,19 @@ const composerValue = page => page.ev(`return document.querySelector(${JSON.stri
 // Types into the composer like a user and presses send. On the phone: a touch on the field, then real key events (adb input text); if the keys do not land
 // (the keyboard is slow to come up), once more, then DevTools text input. In the desktop browser: DevTools text input.
 export async function sendChat(page, text, adb = null) {
+  // The previous turn is over (the send button is not the stop square) and the composer is usable.
+  await page.waitFor(`!document.querySelector('.chat-send.stop') && document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector(${JSON.stringify(COMPOSER)}).disabled`, 60000, '이전 응답이 끝나고 입력창이 열림');
   const typed = async () => (await composerValue(page)).includes(text);
   if (adb) {
     for (let attempt = 0; attempt < 2 && !await typed(); attempt++) { await page.tap(COMPOSER); await sleep(700); adb.typeText(text); await sleep(500); }
     if (!await typed()) { await page.ev(`document.querySelector(${JSON.stringify(COMPOSER)}).focus()`); await page.insertText(text); await sleep(300); }
-  } else { await page.ev(`const t = document.querySelector(${JSON.stringify(COMPOSER)}); t.focus(); t.select?.();`); await page.insertText(text); await sleep(250); }
-  await page.waitFor(`document.querySelector(${JSON.stringify(COMPOSER)}).value.includes(${JSON.stringify(text)})`, 5000, '입력창에 글자가 들어감');
+  } else {
+    // The composer re-renders when the previous turn ends and can lose focus right after: focus again and retry until the text is in.
+    for (let attempt = 0; attempt < 4 && !await typed(); attempt++) { await page.ev(`const t = document.querySelector(${JSON.stringify(COMPOSER)}); t.focus(); t.select?.();`); await sleep(200); await page.insertText(text); await sleep(300); }
+  }
+  await page.waitFor(`document.querySelector(${JSON.stringify(COMPOSER)}).value.includes(${JSON.stringify(text)})`, 5000, '입력창에 글자가 들어감').catch(async error => {
+    throw new Error(`${error.message}; 입력창 상태: ${JSON.stringify(await page.ev(`const t = document.querySelector(${JSON.stringify(COMPOSER)}); return { value: t?.value, disabled: t?.disabled, focused: document.activeElement === t, stop: Boolean(document.querySelector('.chat-send.stop')) }`).catch(e => e.message))}`);
+  });
   await page.tap('button.chat-send');
 }
 const fakeLog = m => { try { return readFileSync(join(dir, 'fake-claude.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } };
@@ -156,6 +163,7 @@ export async function scenarios({ argv }) {
       if (!grew) throw new Error(`대화가 화면보다 길어지지 않아 스크롤을 확인할 수 없습니다(scrollHeight ${before.scrollHeight}→${maxScrollHeight})`);
       shot('s4-autoscroll-end');
       const during = gaps.slice(2); const worst = Math.max(...during.slice(0, -1), 0);
+      if (last.lines < 24) throw new Error(`24줄이 모두 나타나지 않았습니다(${last.lines}줄)`);
       if (last.gap > 4) throw new Error(`끝났는데 맨 아래가 아닙니다(gap ${last.gap})`);
       if (worst > last.client) throw new Error(`스트리밍 중 맨 아래를 놓쳤습니다(최대 gap ${worst}px)`);
       return `스트림 24줄, scrollHeight ${before.scrollHeight}→${last.scrollHeight}, 최대 gap ${worst}px, 끝 gap ${last.gap}px`;

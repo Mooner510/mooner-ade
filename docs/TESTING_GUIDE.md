@@ -108,3 +108,7 @@ node scripts/verify/session.mjs prune --legacy --dry-run   # OS 임시 폴더에
 - 서버 재시작(자동 또는 `session.mjs restart`)은 Chrome을 유지하고 서버의 플러그인을 종료한 뒤 다시 연결합니다. 설치·승인·저장 설정은 같은 세션 폴더에서 유지됩니다. 세션 시작 시 자동 업데이트나 모델 호출은 하지 않습니다. 업데이트 확인은 화면에서 직접 실행합니다.
 - 기본 모드 A의 Claude는 여전히 가짜입니다. 실제 API 작업은 `session.mjs new <목적> --real --reason "…"`의 격리 세션에서 합니다. A/B의 GitHub CLI도 임시 HOME을 사용하므로 별도 로그인이 필요합니다. 기존 GitHub Keychain 로그인이 필요한 검증은 사전점검 후 `--agent-dirs`(C′) 격리 세션을 사용합니다. HOME은 실제 값으로 두고 AI 설정 폴더만 격리하며, GitHub 활성 계정은 바꾸지 않습니다. `GH_CONFIG_DIR`만 지정해서는 Keychain 인증이 되지 않을 수 있습니다.
 - OS 알림과 Finder/Explorer 폴더 열기는 검증 대상이 아닙니다. 폴더 열기 버튼은 임시 플러그인 폴더 경로를 표시하고, zip은 브라우저 파일 선택기를 사용합니다. 해당 네이티브 동작과 Keychain 자체는 데스크톱 검증이 별도로 필요합니다.
+
+## 8. 폰 종단 테스트
+
+실제 폰의 debug 앱과 일회용 테스트 ADE(실제 원격 접속 플러그인, 로컬 Hub, 가짜 claude)를 지문·실제 Hub 로그인·AI 사용 없이 이어 로그인, 페어링, PC 화면, 채팅, 재연결까지 돌린다: `node scripts/verify/t-phone-e2e.mjs all`. 쓰는 법, 구성, 안전장치, 한계는 [REMOTE_UI](REMOTE_UI.md#폰-종단-테스트-실제-폰-지문실제-hub-로그인ai-사용-없이)에 있다. 공용 세션 `tmp/main`과 사용자의 설치 앱은 건드리지 않고 자기 세션 폴더 `tmp/ade-phone-e2e`만 쓴다. 끝나면 `down`으로 정리한다(앱 로그아웃, 이 rig가 더한 `adb reverse`/`forward` 제거, 기록한 PID만 종료).
