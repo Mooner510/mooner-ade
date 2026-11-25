@@ -750,8 +750,10 @@ export function withSettingChange(items: Item[], change: SettingsChange, key: st
     return [...list, { kind: 'note', key: id, local: true, change: next, ...settingsLine(next), fresh: true }];
   };
   let result = items;
-  if (rest.model || rest.effort) result = upsert(result, rest, key);
-  if (mode) result = upsert(result, { mode }, `${key}m`);
+  // Before anything was said there is nothing to announce: a model, Effort or mode picked on an empty chat is simply what the first message uses.
+  const started = items.some(item => item.kind === 'user' || item.kind === 'assistant' || item.kind === 'compact');
+  if ((rest.model || rest.effort) && started) result = upsert(result, rest, key);
+  if (mode && started) result = upsert(result, { mode }, `${key}m`);
   if (compact) result = upsert(result, { compact }, `${key}c`);
   if (title) result = upsert(result, { title }, `${key}t`);
   return result;

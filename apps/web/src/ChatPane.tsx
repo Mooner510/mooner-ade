@@ -1507,7 +1507,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
   const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
   const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), limitCall: input => ctxRef.current.call('chat/limit', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
-  // The model and Effort pickers (menus, models window) and the /model, /effort commands all end here, so each leaves the same 변경 line in the chat.
+  // The model, Effort and mode pickers (menus, models window, shortcuts) and the /model, /effort, /permissions commands all end here, so each leaves the same 변경 line in the chat.
   async function chooseModel(value: string) {
     if (await setChat({ id, model: value }) === false) return false;
     const row = modelRows(catalog, aliases).find(item => item.value === value), label = row?.label ?? displayModel(value, agent);
@@ -1517,6 +1517,11 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   async function chooseEffort(value: string) {
     if (await setChat({ id, effort: value || null }) === false) return false;
     if (value) { const style = effortStyle[effortLevel(value)] ?? effortStyle.medium; changed({ effort: { value: effortLabel(value), color: style.color, icon: style.icon, bars: style.bars } }); }
+    return true;
+  }
+  async function chooseMode(value: string) {
+    if (await setChat({ id, permissionMode: value }) === false) return false;
+    changed({ mode: { value: `${permissionLabel(value, agent)} 모드`, color: permissionModeColor(value), icon: MODE_ICONS[value] ?? 'tune' } });
     return true;
   }
   async function runLocal(name: string, argument: string): Promise<boolean> {
@@ -1545,7 +1550,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       }
       case 'permissions': {
         const value = argument || await ctx.pick('권한 모드', modes.map(mode => ({ id: mode, label: permissionLabel(mode, agent), icon: 'shield' })));
-        if (value) { if (!modes.includes(value)) note(`알 수 없는 권한 모드: ${value}`); else { await setChat({ id, permissionMode: value }); changed({ mode: { value: `${permissionLabel(value, agent)} 모드`, color: permissionModeColor(value), icon: MODE_ICONS[value] ?? 'tune' } }); } }
+        if (value) { if (!modes.includes(value)) note(`알 수 없는 권한 모드: ${value}`); else await chooseMode(value); }
         return true;
       }
       case 'autocompact': {
@@ -1789,7 +1794,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const otherCursorOptions = agent === 'cursor' ? cursorOptions.filter(option => !isCursorEffort(option)) : [];
   // Cursor models can come with many options: from two on (besides model and Effort) they all live behind one settings button.
   const forcePanel = otherCursorOptions.length >= 2;
-  const modeDd = <Dropdown labelOnlyTip locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabel(mode, agent), icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void setChat({ id, permissionMode: mode }).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
+  const modeDd = <Dropdown labelOnlyTip locked={locked} label="권한 모드" className={`chat-mode${hint === 'keymode' ? ' hint-anchor' : ''}`} value={state.permissionMode} options={modes.map(mode => ({ value: mode, label: permissionLabel(mode, agent), icon: MODE_ICONS[mode] ?? 'tune', color: permissionModeColor(mode) }))} onChange={mode => { void chooseMode(mode).then(pickedBy('keymode'), ctx.fail); if (agent === 'codex' && mode === 'auto' && busy) note('자동 승인은 진행 중인 응답이 끝난 뒤 다음 응답부터 적용됩니다. (Bypass는 바로 적용됩니다)'); }} />;
   const sandboxDd = <>{agent === 'codex' && caps?.sandboxes?.length ? <Dropdown labelOnlyTip locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={sandboxKey(state.sandbox, state.network)} options={sandboxOptions} onChange={key => { const [sandbox, network] = sandboxFromKey(key); void setChat({ id, sandbox, network }).catch(ctx.fail); }} /> : null}{agent === 'cursor' && caps?.sandboxes?.length ? <Dropdown labelOnlyTip locked={locked} label="샌드박스" className="chat-mode chat-sandbox" value={state.sandbox ?? 'follow'} options={cursorSandboxOptions} onChange={key => { void setChat({ id, sandbox: key === 'follow' ? null : key }).catch(ctx.fail); }} /> : null}</>;
   const bypassBtn = agent === 'cursor' && caps?.runEverything ? <button type="button" className="chat-switch run-everything" aria-pressed={state.runEverything === true} aria-label="Run Everything" disabled={Boolean(locked)} title={locked || '명령 실행 확인 생략'} onClick={() => { void setChat({ id, runEverything: !state.runEverything }).catch(ctx.fail); }}>Bypass</button> : null;
   const noteItems = <>{agent === 'cursor' && state.restartPending && <span className="chat-foot-note locked" role="status">샌드박스: 다음 응답부터 적용</span>}{!empty && state.addDirs.length > 0 && <span className="chat-foot-note" title={state.addDirs.join('\n')}>폴더 +{state.addDirs.length}</span>}</>;
@@ -1894,8 +1899,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             const combo = comboOf(event.nativeEvent), keyOf = (id: Parameters<typeof chatKey>[1]) => combo === chatKey(ctx.settings.chatKeys, id);
             // Shell mode with nothing after the `!`: one more `!` or one Backspace takes the `!` back and leaves shell mode.
             if (shellBang(text) && !shownDraft(text) && (event.key === 'Backspace' || (event.key === '!' && !event.ctrlKey && !event.metaKey && !event.altKey))) { event.preventDefault(); setText(''); return; }
-            if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; hintSeen('keyeffort'); const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void setChat({ id, effort }).catch(ctx.fail); return; }
-            if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); hintSeen('keymodel'); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void setChat({ id, model: next }).catch(ctx.fail); return; }
+            if (keyOf('effortUp') || keyOf('effortDown')) { event.preventDefault(); if (!effortOptions.length) return; hintSeen('keyeffort'); const step = keyOf('effortUp') ? 1 : -1, at = effortOptions.indexOf(state.effort ?? 'medium'); const effort = effortOptions[Math.max(0, Math.min(effortOptions.length - 1, at + step))]; if (effort !== state.effort) void chooseEffort(effort).catch(ctx.fail); return; }
+            if (keyOf('modelNext') || keyOf('modelPrev')) { event.preventDefault(); hintSeen('keymodel'); const values = optionsForModel(selectedModel).map(option => option.value).filter(value => value !== MORE_MODELS), current = modelValue(selectedModel, aliases), next = values[(values.indexOf(current) + (keyOf('modelNext') ? 1 : values.length - 1)) % values.length]; if (next) void chooseModel(next).catch(ctx.fail); return; }
             if (keyOf('stash')) { event.preventDefault(); hintSeen('keystash'); if (text.trim()) { setStash(text); setText(''); setRecall(null); } else if (stash) { setText(stash); setStash(''); } return; }
             // One Esc does every composer role at once: close slash and @ menus, stop a running turn, then leave the field.
             if (event.key === 'Escape' && plain) {
@@ -1907,7 +1912,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
               event.currentTarget.blur();
               return;
             }
-            if (event.key === 'Tab' && event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); hintSeen('keymode'); void setChat({ id, permissionMode: agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode) }).catch(ctx.fail); return; }
+            if (event.key === 'Tab' && event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); hintSeen('keymode'); void chooseMode(agent === 'claude' ? nextMode(state.permissionMode) : cycleMode(modes, state.permissionMode)).catch(ctx.fail); return; }
             if (matches.length) {
               if (plain && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setMenuAt(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length); return; }
               // Enter on a command typed out in full that takes no argument (/usage, /cost…) runs it at once instead of only completing it.

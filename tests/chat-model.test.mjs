@@ -541,6 +541,18 @@ test('switching settings edits the line above when it is the same kind, otherwis
   assert.equal(settingsLine({ model: { value: 'M', color: 'x' }, effort: { value: '최대', color: 'x' } }).text, '이제부터 M, 최대로 작업합니다.', 'the particle follows the Effort');
 });
 
+test('a model, Effort or mode switched before the first message leaves no line', () => {
+  const model = { model: { value: 'Haiku 5.5', color: 'red' } }, effort = { effort: { value: '높음', color: 'blue' } }, mode = { mode: { value: '계획 모드', color: 'green' } };
+  let items = withSettingChange([], model, 'a');
+  items = withSettingChange(items, effort, 'b');
+  assert.equal(items.length, 0, 'an empty chat announces nothing');
+  assert.equal(withSettingChange(items, { ...model, ...mode }, 'c').length, 0, 'a mode is no different');
+  assert.equal(withSettingChange(items, { title: { value: '작업', color: 'x' } }, 'e').length, 1, 'a rename still leaves its line');
+  const said = [{ kind: 'user', key: 'u', text: 'hi', images: 0, fresh: false }];
+  assert.equal(withSettingChange(said, model, 'd').length, 2, 'after a message the line comes back');
+  assert.equal(withSettingChange(said, mode, 'f').length, 2, 'for a mode too');
+});
+
 test('tool runs: 3+ consecutive tools bundle, thoughts between tools stay inside, any text ends the run', () => {
   const think = { block: { type: 'thinking', text: 'hm' }, sub: false };
   const runsOf = turn => { const { groups } = processGroups(turn); return toolRuns(turn, groups).map(run => [run.start, run.end, run.tools]); };
@@ -712,7 +724,7 @@ test('artifacts: a temporary or wrong url is not a durable link, and an expired 
 });
 
 test('repeating /autocompact or /rename edits the line above instead of adding another', () => {
-  let items = [];
+  let items = [{ kind: 'user', key: 'u', text: 'hi', images: 0, fresh: false }];
   const go = change => { items = withSettingChange(items, change, `k${items.length}`); return items.filter(item => item.kind === 'note').map(item => item.text); };
   assert.deepEqual(go({ compact: { value: '350k 토큰', color: 'x' } }), ['Auto Compact 창을 350k 토큰으로 설정했습니다.']);
   assert.deepEqual(go({ compact: { value: 'auto', color: 'x' } }).length, 1);
