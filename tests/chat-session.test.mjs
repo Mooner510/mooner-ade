@@ -1042,6 +1042,19 @@ test('an interrupted Claude turn stays open until its own result, so that result
   assert.equal(events.filter(event => event.kind === 'result').at(-1).status, 'success');
 });
 
+test('Esc interrupts the turn only: the interrupt asks the CLI to spare background tasks', async t => {
+  const log = path.join(await mkdtemp(path.join(os.tmpdir(), 'ade-interrupt-log-')), 'interrupts.jsonl');
+  t.after(() => rm(path.dirname(log), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  const { session } = await controlSession(t, { env: { ADE_TEST_INTERRUPT_LOG: log } });
+  await session.send('slow');
+  await session.interrupt();
+  await until(() => session.state().status === 'idle');
+  const requests = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].subtype, 'interrupt');
+  assert.equal(requests[0].spare_background_tasks, true);
+});
+
 test('an approval left open when the child dies is withdrawn on the screen, and an answered request is not retried', async t => {
   const { session, events } = await controlSession(t);
   await session.send('hello');

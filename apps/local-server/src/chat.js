@@ -1302,7 +1302,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         if (response?.response?.cancelled === true && steers.delete(uuid)) { held.push(item); emit({ kind: 'steer', phase: 'cancelled', uuid, text: item.text, resent: true }); }
       }
       clearApprovals(); dropSteers();
-      const proc = child, turn = turnSeq, response = await control({ subtype: 'interrupt' }, 3000);
+      // Esc ends this turn only: spare_background_tasks keeps background subagents/shells running (the CLI's own Esc does the same; each task has its own stop,
+      // see stopTask). A CLI that does not know the field treats it as a plain interrupt.
+      const proc = child, turn = turnSeq, response = await control({ subtype: 'interrupt', spare_background_tasks: true }, 3000);
       // The turn closes with the `result` the CLI sends for the interrupt; closing it here let that late result end the *next* turn instead.
       // No answer, or no result soon after: end the child; the close handler ends the turn and the next message resumes the session.
       if (!response) { if (child === proc) proc.kill('SIGTERM'); }

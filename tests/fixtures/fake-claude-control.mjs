@@ -10,6 +10,7 @@ let running = false, askx = 0, allow = [], mcpAnswer = 'grants'; // allow: the p
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
   if (message.type === 'control_request' && message.request?.subtype === 'interrupt') {
+    if (process.env.ADE_TEST_INTERRUPT_LOG) appendFileSync(process.env.ADE_TEST_INTERRUPT_LOG, JSON.stringify(message.request) + '\n');
     send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id } });
     setTimeout(() => { running = false; result({ is_error: true, terminal_reason: 'aborted_streaming', result: '' }); }, 150);
     return;
