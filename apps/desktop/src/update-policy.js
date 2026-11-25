@@ -2,8 +2,8 @@
 // versions the user already turned down, and how a busy report is worded. A downloaded update installs on the next quit;
 // nothing here waits for the app to look idle.
 
-// Background checks: shortly after start and then every 10 minutes. A check without a new release is one small API call
-// (about 7 KB, unauthenticated: 6 of the 60 requests an IP gets per hour) and writes nothing to disk.
+// Background checks: shortly after start and then every 10 minutes. A check without a new release reads github.com's release redirect
+// (or the atom feed for betas), not api.github.com (60 unauthenticated requests per hour and IP), and writes nothing to disk.
 export const UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 // Versions are 1.2.3 (stable) or 1.2.3-beta1 (a prerelease, offered only to users who turned beta updates on).

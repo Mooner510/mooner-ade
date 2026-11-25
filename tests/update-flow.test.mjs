@@ -62,11 +62,19 @@ const release = (tag, { shell = SHELL, files, ...extra } = {}) => ({
 });
 
 async function fakeGithub(t, releases, { delayMs = 0 } = {}) {
-  const state = { releases, requests: [], apiStatus: 0, apiBody: null, delayMs };
+  const state = { releases, requests: [], apiStatus: 0, apiBody: null, webStatus: 0, delayMs };
   const json = (res, status, value) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(typeof value === 'string' ? value : JSON.stringify(value)); };
   const server = http.createServer(async (req, res) => {
     state.requests.push(req.url);
     const url = new URL(req.url, 'http://x');
+    // github.com's own pages: the redirect of /releases/latest and the atom feed (neither counts against the API's rate limit).
+    if (url.pathname === '/Mooner510/mooner-ade/releases/latest' || url.pathname === '/Mooner510/mooner-ade/releases.atom') {
+      if (state.webStatus) { res.writeHead(state.webStatus); res.end(); return; }
+      const published = state.releases.filter(item => !item.draft);
+      if (url.pathname.endsWith('.atom')) { res.writeHead(200, { 'content-type': 'application/atom+xml' }); res.end(`<feed>${published.map(item => `<entry><link rel="alternate" type="text/html" href="https://github.com/Mooner510/mooner-ade/releases/tag/${item.tag}"/></entry>`).join('')}</feed>`); return; }
+      const latest = published.find(item => !item.prerelease);
+      res.writeHead(latest ? 302 : 200, latest ? { location: `https://github.com/Mooner510/mooner-ade/releases/tag/${latest.tag}` } : {}); res.end(); return;
+    }
     if (url.pathname.startsWith('/repos/Mooner510/mooner-ade/releases')) {
       if (state.delayMs) await new Promise(resolve => setTimeout(resolve, state.delayMs));
       if (state.apiStatus) return json(res, state.apiStatus, { message: 'API rate limit exceeded' });
@@ -404,4 +412,21 @@ test('an update that keeps failing is asked about less and less, then left alone
   assert.equal(await ctx.check({ manual: true }), 'declined');
   assert.equal(ctx.updater.stagedUpdateVersion(), null);
   assert.deepEqual(updateDirs(), []);
+});
+
+test('a check that finds nothing new, or a version turned down, does not touch api.github.com; an unreadable web page falls back to the API', { skip }, async t => {
+  for (const beta of [false, true]) {
+    const ctx = await setup(t, { current: '0.6.0', beta, releases: [release('v0.6.0')] });
+    assert.equal(await ctx.check(), 'latest');
+    assert.ok(!ctx.github.requests.some(url => url.startsWith('/repos/')), `no API request (beta ${beta})`);
+  }
+  const later = await setup(t, { current: '0.5.12', releases: [release('v0.6.0')], answer: button(PROMPT_LATER) });
+  assert.equal(await later.check(), 'declined');
+  const apiCalls = later.github.requests.filter(url => url.startsWith('/repos/')).length;
+  assert.equal(await later.check(), 'declined');
+  assert.equal(later.github.requests.filter(url => url.startsWith('/repos/')).length, apiCalls, 'the second timer check never reaches the API');
+  const fallback = await setup(t, { current: '0.5.12', releases: [release('v0.6.0')], answer: button(PROMPT_LATER) });
+  fallback.github.webStatus = 500;
+  assert.equal(await fallback.check(), 'declined');
+  assert.ok(fallback.github.requests.some(url => url.startsWith('/repos/')), 'the API answers when the web page cannot');
 });
