@@ -1,9 +1,9 @@
 // Sign an already verified local release directory on the operator's offline machine.
-import { createHash, createPrivateKey, sign } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { statement } from '../apps/desktop/src/release-signature.js';
+import { signatureStatus, statement } from '../apps/desktop/src/release-signature.js';
 
 const [tag, dir, keyFile] = process.argv.slice(2);
 if (!/^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(tag ?? '') || !dir || !keyFile)
@@ -20,6 +20,8 @@ for (const line of (await readFile(path.join(dir, 'SHA256SUMS'), 'utf8')).trim()
 }
 const versions = names.includes('versions.json') ? JSON.parse(await readFile(path.join(dir, 'versions.json'), 'utf8')) : {};
 const pluginAssets = { 'mooner-ade-remote-plugin.zip': 'mooner-remote', 'mooner-ade-server-shell-plugin.zip': 'server-shell' };
+if (names.some(name => Object.hasOwn(pluginAssets, name)) && !sums.has('versions.json')) throw new Error('versions.json 체크섬이 필요합니다.');
+const publicKey = createPublicKey(key).export({ type: 'spki', format: 'pem' });
 const signatures = [];
 for (const name of names.filter(name => name.endsWith('.zip') || name === 'SHA256SUMS' || sums.has(name))) {
   const hash = createHash('sha256');
@@ -37,8 +39,18 @@ for (const name of names.filter(name => name.endsWith('.zip') || name === 'SHA25
   else if (name.endsWith('.zip')) throw new Error('릴리스 목록에서 식별할 수 없는 파일: ' + name);
   else continue;
   const issued = Math.floor(Date.now() / 1000);
-  const signature = sign(null, statement({ ...metadata, sha256, size, issued }), key).toString('base64');
-  signatures.push([name, JSON.stringify({ issued, signature }) + '\n']);
+  const expected = { ...metadata, sha256, size };
+  const signature = sign(null, statement({ ...expected, issued }), key).toString('base64');
+  signatures.push({ name, expected, contents: JSON.stringify({ issued, signature }) + '\n' });
 }
-if (sums.size || !signatures.length) throw new Error('릴리스 파일 목록을 확인하세요.');
-for (const [name, contents] of signatures) await writeFile(path.join(dir, name + '.sig'), contents, { flag: 'wx' });
+if (sums.size || !signatures.some(item => item.name.endsWith('.zip'))) throw new Error('릴리스 파일 목록을 확인하세요.');
+for (const { name, expected, contents } of signatures) {
+  const target = path.join(dir, name + '.sig');
+  try { await writeFile(target, contents, { flag: 'wx' }); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (signatureStatus(await readFile(target, 'utf8'), expected, [publicKey]) !== '서명 확인됨') {
+      throw new Error(name + '의 기존 서명을 확인하세요.');
+    }
+  }
+}
