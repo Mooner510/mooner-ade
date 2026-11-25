@@ -34,7 +34,7 @@ export function validEntry(value) {
   if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) return null;
   const grants = Object.fromEntries(GRANTS.map(key => [key, value.grants?.[key] === true]));
   return {
-    id: value.id, version, sha256: value.sha256, name: text(value.name, 60) || value.id, description: text(value.description, 300),
+    id: value.id, version, ...(value.sig === true && { sig: true }), sha256: value.sha256, name: text(value.name, 60) || value.id, description: text(value.description, 300),
     size: Number.isSafeInteger(value.size) && value.size >= 0 ? value.size : 0, grants,
     publishedAt: Number.isFinite(value.publishedAt) ? value.publishedAt : null
   };
@@ -230,7 +230,15 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
       }
       const data = await readBody(response, `${found.id}.zip`, MAX_ASSET), actual = sha256(data);
       if (actual !== found.sha256) throw fail(`받은 ${found.id}.zip이 MoonerADE Hub가 알려 준 체크섬과 맞지 않습니다. 설치하지 않았습니다.`, 'CHECKSUM');
-      return { data, sha256: actual };
+      let signature;
+      if (found.sig) {
+        try {
+          const res = await authed(`/v1/plugins/${found.id}/signature`, { what: '서명을 받지' });
+          if (res.ok) signature = (await readBody(res, 'signature', 4096)).toString('utf8');
+          else { await res.body?.cancel(); signature = ''; }
+        } catch { signature = ''; }
+      }
+      return { data, sha256: actual, ...(signature !== undefined && { signature }) };
     },
     // Usage rows contain counts only. A 400 is one bad row: split until that row can be skipped. A network failure throws, so the desktop does not acknowledge the batch.
     async pushUsage({ localId, name, platform, records }) {

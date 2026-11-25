@@ -72,3 +72,28 @@ test('the store is sealed, read once, and an unreadable file means signed out', 
     assert.throws(() => createRemoteStore({ file, crypto: { encryptString: () => { throw new Error('none'); } } }).write({}), { code: 'NO_SECURE_STORAGE' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the page loads resources from its window origin', async () => {
+  const { remoteRequestAllowed } = await import('../apps/desktop/src/remote-bridge.js');
+  const origin = 'ade-remote://h123';
+  for (const url of [origin + '/index.html', 'data:text/plain,x', 'blob:null/123']) assert.ok(remoteRequestAllowed(url, origin));
+  for (const url of ['ade-remote://other/file', 'https://example.test', 'file:///local', 'bad url']) assert.equal(remoteRequestAllowed(url, origin), false);
+});
+
+test('copy requires a current user activation in the preload', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const activation = { isActive: false }, sent = [];
+  let bridge;
+  const electron = {
+    ipcRenderer: { on() {}, send: (...args) => sent.push(args) },
+    contextBridge: { exposeInMainWorld(_name, api) { bridge = api; } }
+  };
+  runInNewContext(readFileSync(new URL('../apps/desktop/src/remote-preload.cjs', import.meta.url), 'utf8'),
+    { require: () => electron, navigator: { userActivation: activation } });
+  const copy = JSON.stringify({ k: 'copy', text: 'sample' });
+  bridge.postMessage(copy);
+  assert.equal(sent.length, 0);
+  activation.isActive = true;
+  bridge.postMessage(copy);
+  assert.deepEqual(sent, [['ade:remote-bridge:post', copy]]);
+});

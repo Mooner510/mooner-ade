@@ -15,7 +15,7 @@ const CERT_ERRORS = /^(SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|UNA
 const PROBE_URLS = ['https://ade-hub.mooner510.kr', 'https://api.github.com'];
 const SCRIPT = 'fetch(process.argv[1],{signal:AbortSignal.timeout(8000)}).then(()=>console.log("ok"),e=>console.log(e.cause?.code||"fail"))';
 
-export function setupSystemCa({ userData, nodeBinary, getWindow }) {
+export function setupSystemCa({ userData, nodeBinary, getWindow, trusted }) {
   const file = path.join(userData, 'system-ca.json');
   const enabled = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).enabled === true; } catch { return false; } };
   try {
@@ -46,14 +46,27 @@ export function setupSystemCa({ userData, nodeBinary, getWindow }) {
     return enabled();
   }
   let offered = false;
-  ipcMain.handle('ade:system-ca:get', () => enabled());
-  ipcMain.handle('ade:system-ca:set', async (_event, on) => {
-    const before = enabled(), now = set(on);
+  function handle(name, fn) {
+    ipcMain.handle(`ade:system-ca:${name}`, (event, ...args) => {
+      const window = getWindow();
+      if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || !trusted(event)) throw new Error('허용되지 않은 요청입니다.');
+      return fn(...args);
+    });
+  }
+  handle('get', () => enabled());
+  handle('set', async on => {
+    const before = enabled();
+    if (on === true && !before) {
+      const { response } = await dialog.showMessageBox(getWindow(), { type: 'question', buttons: ['취소', '켜기'], defaultId: 0, cancelId: 0,
+        message: '시스템 인증서를 신뢰할까요?', detail: '다시 시작하면 앱과 하위 프로세스의 HTTPS 연결에 운영체제 인증서를 사용합니다.' });
+      if (response !== 1) return enabled();
+    }
+    const now = set(on);
     if (before !== now) await restartPrompt('Hub 연결에 적용하려면 앱을 다시 시작해야 합니다.', '재시작하기 전까지는 이전 설정으로 동작합니다.');
     return now;
   });
   // Called when a plugin reports it cannot connect. Returns whether it asked.
-  ipcMain.handle('ade:system-ca:offer', async () => {
+  handle('offer', async () => {
     if (offered || enabled()) return false;
     offered = true;
     if (!await certBlocked()) return false;

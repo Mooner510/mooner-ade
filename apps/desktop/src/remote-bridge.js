@@ -34,3 +34,10 @@ export function createBridge({ link, post, copy, close }) {
     }
   };
 }
+
+export function remoteRequestAllowed(raw, origin) {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'data:' || url.protocol === 'blob:' || (url.protocol === 'ade-remote:' && `${url.protocol}//${url.host}` === origin);
+  } catch { return false; }
+}

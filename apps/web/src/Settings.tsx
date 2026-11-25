@@ -20,7 +20,7 @@ import { usageMeterCatalog, type UsageProvider } from './usage-meters';
 import { accentChoices } from './Setup';
 import { trustLabel } from './mcp-trust';
 
-type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
+type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean; lastSignature?: string }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
 
 // Whether feedback can be sent right now: the remote-access plugin reports the login it would submit with.
@@ -37,11 +37,13 @@ function FeedbackAvailabilityRow() {
 
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null), [systemCa, setSystemCa] = useState<boolean | null>(null);
+  const [signature, setSignature] = useState('');
   const hubState = usePluginsState();
-  useEffect(() => { void desktop()?.appInfo?.().then(info => setVersion(info.dev ? `${info.version} (dev)` : info.version), () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); void desktop()?.getSystemCa?.().then(setSystemCa, () => {}); }, []);
+  useEffect(() => { void desktop()?.appInfo?.().then(info => { setVersion(info.dev ? `${info.version} (dev)` : info.version); setSignature(info.lastSignature ?? ''); }, () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); void desktop()?.getSystemCa?.().then(setSystemCa, () => {}); }, []);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
     <Row title="현재 버전" hint="새 버전은 자동으로 확인하며, 찾으면 종료할 때 또는 바로 설치할 수 있습니다."><span>{version || '—'}</span></Row>
+    {signature && <Row title="최근 다운로드 서명"><span>{signature}</span></Row>}
     {beta !== null && <Row title="베타 업데이트 받기" hint="정식 버전이 아닌 개발 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다.">
       <input type="checkbox" role="switch" aria-label="베타 업데이트 받기" checked={beta} onChange={event => { const next = event.target.checked; setBeta(next); void desktop()!.setBetaUpdates!(next).then(setBeta, () => setBeta(!next)); }} />
     </Row>}
@@ -49,7 +51,7 @@ function AboutSettings() {
       <input type="checkbox" role="switch" aria-label="시스템 인증서 신뢰" checked={systemCa} onChange={event => { const next = event.target.checked; setSystemCa(next); void desktop()!.setSystemCa!(next).then(setSystemCa, () => setSystemCa(!next)); }} />
     </Row>}
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교하고, 새 버전이 있으면 설치 여부를 묻습니다.">
-      <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => setChecking(false)); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
+      <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => { setChecking(false); void desktop()?.appInfo?.().then(info => setSignature(info.lastSignature ?? ''), () => {}); }); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
     <HubSignIn hub={hubState?.hub} bridge={pluginsBridge()} />
   </>;

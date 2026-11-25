@@ -7,7 +7,7 @@
 import { BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, session, shell } from 'electron';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { createBridge } from './remote-bridge.js';
+import { createBridge, remoteRequestAllowed } from './remote-bridge.js';
 import { createRemoteClient } from './remote-link.js';
 import { createRemoteStore } from './remote-store.js';
 import { createUiProxy } from './remote-ui-proxy.js';
@@ -92,22 +92,33 @@ export function setupRemote({ userData, getWindow, trusted, iconPath, background
         return new Response(answer.body, { status: answer.status, headers: answer.headers });
       });
       partition.setPermissionRequestHandler((_contents, _permission, done) => done(false));
-      partition.webRequest.onBeforeRequest((details, done) => done({ cancel: /^(https?|wss?|ftp):/i.test(details.url) }));
+      partition.webRequest.onBeforeRequest((details, done) => done({ cancel: !remoteRequestAllowed(details.url, origin) }));
 
       const title = `${host.name} — Remote`;
       window = new BrowserWindow({
         width: 1440, height: 900, minWidth: 720, minHeight: 480, backgroundColor: background, title, show: false, icon: iconPath,
         webPreferences: { preload: path.resolve(import.meta.dirname, 'remote-preload.cjs'), partition: `persist:ade-remote-${label}`, contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false }
       });
+      window.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
       const contentsId = window.webContents.id;
-      bridge = createBridge({ link, post, copy: value => clipboard.writeText(value), close: () => window.close() });
+      bridge = createBridge({ link, post, copy: value => { clipboard.writeText(value); window.webContents.send('ade:remote-bridge:copied'); }, close: () => window.close() });
       byContents.set(contentsId, bridge);
       windows.set(hostId, { window, link });
       window.once('ready-to-show', () => window.show());
       // The page is the other PC's: its title would say "무너에이드"; this window says whose it is.
       window.on('page-title-updated', event => { event.preventDefault(); window.setTitle(title); });
       const inPage = target => { try { const url = new URL(target); return url.protocol === `${SCHEME}:` && url.host === label; } catch { return false; } };
-      window.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
+      let confirming = false;
+      window.webContents.setWindowOpenHandler(({ url }) => {
+        if (!confirming && /^https:\/\//.test(url)) {
+          confirming = true;
+          void dialog.showMessageBox(window, { type: 'question', message: '기본 브라우저에서 열까요?', detail: url,
+            buttons: ['취소', '열기'], defaultId: 0, cancelId: 0 }).then(({ response }) => {
+              if (response === 1 && !window.isDestroyed()) return shell.openExternal(url);
+            }).catch(() => {}).finally(() => { confirming = false; });
+        }
+        return { action: 'deny' };
+      });
       const guard = (event, target) => { if (!inPage(target)) event.preventDefault(); };
       window.webContents.on('will-navigate', guard);
       window.webContents.on('will-redirect', guard);

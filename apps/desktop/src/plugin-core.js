@@ -4,6 +4,7 @@
 // Each approved plugin runs as its own Node process and talks to the main process over IPC only.
 // A plugin .zip is installed only after one native dialog that shows what approving it shows (installZip).
 // Kept free of Electron so it can be tested: `crypto` is safeStorage or a stand-in, `spawnHost`, `ask` and `extractZip` are injected.
+import { observeSignature } from './release-signature.js';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1240,7 +1241,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     let zip = null;
     try {
       now.status = 'downloading'; changed();
-      const { data } = await clientFor(source).download(found);
+      const { data, signature, sha256 } = await clientFor(source).download(found);
+      observeSignature(signature, { kind: 'plugin', id, version: found.version, platform: 'any', variant: 'zip', sha256, size: data.length });
       zip = writeStagingZip(data);
       now.status = 'installing'; changed();
       const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
@@ -1486,7 +1488,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       found = await hub.latest(null, id);
       const installed = list.find(item => !item.builtin && !item.error && item.manifest?.id === id)?.manifest;
       if (installed && !isNewer(found.version, installed.version)) return { ...snapshot(), message: `“${installed.name}” 플러그인은 이미 최신(${installed.version})입니다.` };
-      const { data } = await hub.download(found);
+      const { data, signature, sha256 } = await hub.download(found);
+      observeSignature(signature, { kind: 'plugin', id, version: found.version, platform: 'any', variant: 'zip', sha256, size: data.length });
       zip = writeStagingZip(data);
       return await installZip(zip, { picked: true, update: { id, version: found.version }, origin: 'hub' });
     } catch (error) { noteHubError(error); changed(); throw error; }

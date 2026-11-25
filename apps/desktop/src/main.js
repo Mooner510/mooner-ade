@@ -14,6 +14,7 @@ import { localServerEnv } from './server-env.js';
 import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { QUIT_CANCEL, QUIT_KEEP, quitPrompt } from './update-policy.js';
+import { lastSignature, loadSignatureStatus } from './release-signature.js';
 import { applyStagedUpdate, checkForUpdate, stagedUpdateVersion, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
@@ -381,7 +382,7 @@ ipcMain.on('ade:changelog-set', (event, key, value) => {
 const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
 const readBeta = () => { try { return JSON.parse(fs.readFileSync(channelFile, 'utf8')).beta === true; } catch { return false; } };
 const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, beta: readBeta(), getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
-ipcMain.handle('ade:app-info', () => ({ version: appVersion, dev }));
+ipcMain.handle('ade:app-info', () => ({ version: appVersion, dev, lastSignature }));
 ipcMain.handle('ade:get-beta-updates', () => readBeta());
 ipcMain.handle('ade:set-beta-updates', (_event, beta) => { fs.writeFileSync(channelFile, JSON.stringify({ beta: beta === true })); return readBeta(); });
 ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
@@ -403,6 +404,7 @@ if (leavingConsole) {
 } else {
   app.on('second-instance', () => { const window = mainWindow ?? BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
+    loadSignatureStatus(app.getPath('userData'));
     installMenu();
     if (process.platform === 'darwin') app.dock?.setIcon(iconPath);
     try {
@@ -410,7 +412,7 @@ if (leavingConsole) {
       // used to be: nothing is kept through a restart then.
       await ensurePtyHost().catch(error => console.warn(`pty-host 없이 시작합니다: ${error.message}`));
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
-      const systemCa = setupSystemCa({ userData: app.getPath('userData'), nodeBinary, getWindow: () => mainWindow });
+      const systemCa = setupSystemCa({ trusted: event => sameOrigin(event.senderFrame?.url ?? ''), userData: app.getPath('userData'), nodeBinary, getWindow: () => mainWindow });
       systemCaEnabled = systemCa.enabled;
       try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }

@@ -39,12 +39,15 @@ function copyAs(dest, version, patch) {
   run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', bundle]);
   return bundle;
 }
-const installed = copyAs(dirs.install, '0.0.1', oldWindow ? (app => {
+const installed = copyAs(dirs.install, '0.0.1', app => {
   const file = join(app, 'apps/desktop/src/updater.js'), code = readFileSync(file, 'utf8');
   const line = "const inline = process.platform === 'darwin' && main();";
-  if (!code.includes(line)) throw new Error('updater.js에서 진행률 분기를 찾지 못했습니다.');
-  writeFileSync(file, code.replace(line, 'const inline = false;'));
-}) : undefined);
+  const guard = 'const developmentOptions = !app.isPackaged;';
+  if (!code.includes(guard)) throw new Error('테스트용 업데이트 설정 위치를 찾지 못했습니다.');
+  const fixture = code.replace(guard, 'const developmentOptions = true;');
+  if (oldWindow && !code.includes(line)) throw new Error('updater.js에서 진행률 분기를 찾지 못했습니다.');
+  writeFileSync(file, oldWindow ? fixture.replace(line, 'const inline = false;') : fixture);
+});
 const next = copyAs(dirs.next, '9.9.9');
 const asset = `MoonerADE-darwin-${process.arch}`;
 run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', next, join(dirs.release, `${asset}.zip`)]);
