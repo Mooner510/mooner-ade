@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useExit, useTipNotice } from './use-notice';
 import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsState } from './PluginSettings';
-import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
+import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, headlinePercent, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
 import { showCombo, type Block, type ChatState } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -128,7 +128,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
   const detailCodex = provider === 'codex' ? usage?.codexCredits : null;
   if (!usage || (!compact.length && !credit && !codexCredits)) return null;
   const gone = missingMeters(provider, allWindows, chosen.filter(id => id !== 'session' || sessionOn));
-  const peak = Math.max(0, ...compact.map(item => item.percent), credit?.percent ?? 0, codexCredits?.limit?.percent ?? 0);
+  const peak = headlinePercent(compact, true, [credit?.percent, codexCredits?.limit?.percent]) ?? 0;
   const from = usage.source === 'log' ? `마지막 Codex 세션 기록 기준 (${new Date(usage.at).toLocaleString()})` : usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : '';
   const account = `${usage.account?.dir || defaultAccountDir[provider]} (${accountSources[usage.account?.from] ?? '앱 환경'} 기준)`;
   const level = colors ? '' : peak >= 95 ? 'full' : peak >= 80 ? 'warn' : '';
@@ -157,11 +157,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
 // ---- phone status strip (mobile.css): the desktop bar's small items are hard to read on a phone, so it shows each agent's highest
 // reading large and opens a sheet with every limit, its reset time and the account. ----
 type UsageProvider = Usage['provider'];
-function peakOf(usage: Usage | null, sessionOn: boolean) {
-  if (!usage) return null;
-  const values = [...usage.windows.filter(item => item.key !== 'session' || sessionOn).map(item => item.percent), usage.credit?.percent ?? -1, usage.codexCredits?.limit?.percent ?? -1].filter(value => value >= 0);
-  return values.length ? Math.max(...values) : null;
-}
+const peakOf = (usage: Usage | null, sessionOn: boolean) => usage ? headlinePercent(usage.windows, sessionOn, [usage.credit?.percent, usage.codexCredits?.limit?.percent]) : null;
 const MobileUsageChip = memo(function MobileUsageChip({ provider, projectId, active, refresh, sessionOn, colors }: { provider: UsageProvider; projectId: string; active: boolean; refresh: number; sessionOn: boolean; colors: boolean }) {
   const { usage } = useUsage(provider, projectId, active, refresh), peak = peakOf(usage, sessionOn);
   // Read but nothing to show (not installed, not signed in here): no chip, as on the desktop.
