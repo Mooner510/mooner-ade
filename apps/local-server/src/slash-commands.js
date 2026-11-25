@@ -243,7 +243,7 @@ export function mergeCursorCommands(commands = []) {
   return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-const builtinCommandNames = agent => (agent === 'cursor' ? CURSOR_BUILTIN_COMMANDS : agent === 'codex' ? [{ name: 'compact', description: '대화 컨텍스트를 압축합니다', hint: '[지침]' }] : []).map(item => item.name);
+const builtinCommandNames = agent => (agent === 'cursor' ? CURSOR_BUILTIN_COMMANDS : agent === 'codex' ? [{ name: 'compact', description: '대화 컨텍스트를 압축합니다' }] : []).map(item => item.name);
 
 // The CLI's init event is the authoritative slash-command list for cwd + login + enabled plugins, and names the model it resolved for that folder.
 // A local slash command (`/cost`) makes `claude -p` print the init event and finish with no model call; the child is stopped at init. This is the only
@@ -282,7 +282,7 @@ export const probeSlashCommands = async options => (await probeInit(options))?.s
 
 export async function listCommands(cwd, home = os.homedir(), { env = {}, probe = true, names, spawnProcess = spawn, agent = 'claude' } = {}) {
   const metadata = await collectCommandMetadata(cwd, home, env, agent);
-  if (agent === 'codex') putMeta(metadata, 'compact', { description: '대화 컨텍스트를 압축합니다', hint: '[지침]' });
+  if (agent === 'codex') putMeta(metadata, 'compact', { description: '대화 컨텍스트를 압축합니다' });
   if (agent === 'cursor') for (const item of CURSOR_BUILTIN_COMMANDS) putMeta(metadata, item.name, item);
   const probed = agent === 'claude' && probe ? await probeSlashCommands({ env, cwd, spawnProcess }) : [];
   const extra = Array.isArray(names) ? names : [];

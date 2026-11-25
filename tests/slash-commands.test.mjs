@@ -99,7 +99,7 @@ argument-hint: [path]
   await writeFile(path.join(cwd, '.cursor', 'commands', 'ship.toml'), 'description = "Ship the branch"\nprompt = "Ship {{args}}"\n');
   const codex = await listCommands(cwd, home, { probe: false, agent: 'codex', env: { CODEX_HOME: codexHome } });
   assert.equal(codex.find(item => item.name === 'review-agent')?.hint, '[path]');
-  assert.equal(codex.find(item => item.name === 'compact')?.hint, '[지침]');
+  assert.equal(codex.find(item => item.name === 'compact')?.hint, undefined);
   const cursor = await listCommands(cwd, home, { probe: false, agent: 'cursor' });
   const ship = cursor.find(item => item.name === 'ship');
   assert.equal(ship?.description, 'Ship the branch');
