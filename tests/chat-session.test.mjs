@@ -12,10 +12,87 @@ import { createCursorModelCache, cursorSurface } from '../apps/local-server/src/
 import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
 import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
+import { chatLaunchFiles } from '../apps/local-server/src/chat-launch-files.js';
 import { contextGauge, contextReported, fromReplay, pendingAsyncQuestions } from '../apps/web/src/chat-model.ts';
+
+test('Claude peer input is shown before its reply from either stream or transcript, once after reopen', { timeout: 20_000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-peer-'));
+  const sessionId = 'f0000000-0000-4000-8000-000000000001';
+  const configDir = path.join(directory, 'claude'), projectDir = path.join(configDir, 'projects', directory.replace(/[^a-zA-Z0-9]/g, '-'));
+  await mkdir(projectDir, { recursive: true });
+  const transcript = path.join(projectDir, `${sessionId}.jsonl`);
+  let received = 0;
+  const ready = Promise.withResolvers();
+  const options = { directory, id: 'peer', cwd: directory, executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))], env: { CLAUDE_CONFIG_DIR: configDir, ADE_TEST_CLAUDE_SESSION: sessionId, ADE_TEST_PEER_TRANSCRIPT: transcript }, onEvent: event => { if (event.kind === 'peer_message' && ++received === 2) ready.resolve(); } };
+  let session = await openChatSession(options);
+  t.after(async () => { await session.close(); await rm(directory, { recursive: true, force: true }); });
+  await session.send('peer-messages');
+  await ready.promise;
+  const check = () => {
+    const replay = session.replay(), items = fromReplay(replay).items;
+    assert.deepEqual(items.map(item => item.kind), ['user', 'peer_message', 'peer_message', 'assistant']);
+    assert.deepEqual(items.filter(item => item.kind === 'peer_message').map(item => [item.sender, item.text]), [['wave-3e', '테스트를 재실행했어요.'], ['wave-ac', '남은 검수를 이어서 실행했어요.']]);
+    assert.equal(session.lastUserInstruction().text, 'peer-messages');
+  };
+  check();
+  await session.close();
+  session = await openChatSession(options);
+  check();
+  const snapshot = session.branchSnapshot('a0000000-0000-4000-8000-000000000003');
+  assert.deepEqual(fromReplay(snapshot).items.map(item => item.kind), ['user', 'peer_message', 'peer_message', 'assistant']);
+
+  // An existing ADE log from before the fix has the answer, but no received messages.
+  const legacy = { ...options, id: 'legacy-peer' };
+  await seedChat({ directory, id: legacy.id, events: session.replay().events.filter(event => event.kind !== 'peer_message'), meta: { sessionId, configDir } });
+  await session.close();
+  session = await openChatSession(legacy);
+  check();
+});
 
 const fixture = fileURLToPath(new URL('./fixtures/fake-chat-rpc.mjs', import.meta.url));
 const until = async predicate => { for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('chat did not settle'); };
+
+for (const agent of ['claude', 'codex']) {
+  test(agent + ' adds color chip instructions at start and pins them across resume', async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-color-'));
+    const executableArgs = agent === 'claude' ? [fileURLToPath(new URL('./fixtures/fake-claude-control.mjs', import.meta.url))] : [fixture, agent];
+    const prepareLaunch = chatLaunchFiles(directory);
+    let session, prompt;
+    const open = options => openChatSession({ directory, cwd: directory, agent, executable: process.execPath, executableArgs,
+      async prepare(root, context) {
+        const launch = await prepareLaunch(root, context);
+        prompt = launch.promptFile ? await readFile(launch.promptFile, 'utf8') : '';
+        return launch;
+      }, ...options });
+    t.after(async () => { await session?.close(); await rm(directory, { recursive: true, force: true }); });
+
+    const options = { id: 'fresh', env: { EXPECT_COLOR_CHIPS: 'yes', CLAUDE_CONFIG_DIR: path.join(directory, 'claude') } };
+    session = await open(options);
+    await session.send('hello');
+    await until(() => session.state().status === 'idle');
+    const id = session.state().sessionId;
+    assert.ok(id);
+    if (agent === 'claude') assert.match(prompt, /# Color chips/);
+    const metaFile = path.join(chatFolder(directory, options.id), 'meta.json');
+    assert.equal(JSON.parse(await readFile(metaFile, 'utf8')).colorChips, true);
+    await session.close();
+    session = await open(options);
+    await session.send('again');
+    await until(() => session.state().status === 'idle');
+    assert.equal(session.state().sessionId, id);
+    if (agent === 'claude') assert.match(prompt, /# Color chips/);
+    await session.close();
+
+    const legacy = { id: 'legacy', env: { ...options.env, EXPECT_COLOR_CHIPS: 'no' } };
+    await seedChat({ directory, id: legacy.id, events: [], meta: { agent, sessionId: id, mediaBlocks: true } });
+    session = await open(legacy);
+    await session.send('legacy');
+    await until(() => session.state().status === 'idle');
+    assert.equal(session.state().sessionId, id);
+    if (agent === 'claude') assert.doesNotMatch(prompt, /# Color chips/);
+  });
+}
+
 async function setup(t, agent) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ade-chat-test-'));
   const events = [], options = { directory, id: 'chat', cwd: directory, agent, executable: process.execPath, executableArgs: [fixture, agent], onEvent: event => events.push(event) };
@@ -763,6 +840,28 @@ test('Cursor advertises agent/plan/ask and switches between them', async t => {
   session.loadCatalog(info.catalog, info.models[''], info.configOptions);
   assert.deepEqual(session.state().capabilities.permissionModes, ['default', 'plan', 'ask']);
   for (const permissionMode of ['plan', 'ask', 'default']) { await session.set({ permissionMode }); assert.equal(session.state().permissionMode, permissionMode); }
+});
+
+test('Cursor starts implementation in the same session only after the user approves the plan', async t => {
+  const { session, directory, events, reopen } = await setup(t, 'cursor');
+  const built = path.join(directory, 'built.txt');
+  await session.set({ permissionMode: 'plan' });
+  const { sessionId } = session.state();
+
+  for (const allow of [false, true]) {
+    await session.send('plan');
+    await until(() => session.state().status === 'attention');
+    const [approval] = session.replay().approvals;
+    assert.equal(approval.tool, '계획 승인');
+    assert.equal(existsSync(built), false);
+    await session.approve(approval.requestId, { allow });
+    await until(() => session.state().status === 'idle');
+    assert.equal(session.state().sessionId, sessionId);
+    assert.equal(session.state().permissionMode, allow ? 'default' : 'plan');
+    assert.equal(existsSync(built), allow);
+  }
+  assert.deepEqual(events.filter(event => event.kind === 'result').map(event => event.status), ['success', 'success']);
+  assert.equal((await reopen()).state().permissionMode, 'default');
 });
 
 test('Cursor Run Everything applies at once (permission requests are accepted by the app); Sandbox is a launch flag applied by a restart', async t => {

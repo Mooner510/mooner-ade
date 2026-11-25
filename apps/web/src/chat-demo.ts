@@ -52,7 +52,7 @@ export const SCENARIOS: Scenario[] = [
     { say: `**7.1GB**를 비웠어요.${ui(['chart', 'pie', '디스크 사용량 (GB)', ['앱', 'DB', '로그', '여유'], ['GB', 38, 24, 4, 34]])}` }] }] },
   { title: '회원가입 페이지', turns: [{ send: '회원가입 페이지 만들어 줘', reply: [
     { think: '가입 방식에 따라 폼과 API가 달라진다. 먼저 물어보자.' },
-    { ask: [{ question: '어떤 방식으로 가입하게 할까요?', header: '가입 방식', options: [['이메일 + 비밀번호', '가장 익숙한 방식'], ['소셜 로그인', 'Google · GitHub 계정으로'], ['매직 링크', '비밀번호 없이 메일 링크로']] }] },
+    { ask: [{ question: '어떤 방식으로 가입하게 할까요?', header: '가입 방식', options: [['이메일 + 비밀번호', '가장 익숙한 방식'], ['소셜 로그인', 'Google, GitHub 계정으로'], ['매직 링크', '비밀번호 없이 메일 링크로']] }] },
     { say: '**$1** 방식으로 만들게요.' },
     write('src/pages/Signup.tsx', 'export function Signup() {\n  return (\n    <form className="signup" onSubmit={register}>\n      <h1>회원가입</h1>\n      <EmailField />\n      <button className="primary">가입하기</button>\n    </form>\n  );\n}\n'),
     bash('npm run typecheck', '타입 검사', 'Found 0 errors.'),
@@ -67,7 +67,7 @@ export const SCENARIOS: Scenario[] = [
       bash('npm test -- orders', 'orders 테스트', 'Tests: 18 passed, 18 total'),
       { say: 'orders 커버리지가 **62% → 84%**로 올랐어요.' }] }] },
   { title: '날짜 라이브러리 비교', turns: [{ send: '날짜 라이브러리 뭐 쓸지 비교해 줘', reply: [
-    { tool: 'WebSearch', input: { query: 'date-fns vs dayjs vs luxon bundle size' }, result: 'Web search results for query: "date-fns vs dayjs vs luxon bundle size"\n\nLinks: [{"title":"date-fns - modern JavaScript date utility library","url":"https://date-fns.org"},{"title":"Day.js · 2kB JavaScript date utility library","url":"https://day.js.org"},{"title":"Luxon - immutable date wrapper","url":"https://moment.github.io/luxon"}]' },
+    { tool: 'WebSearch', input: { query: 'date-fns vs dayjs vs luxon bundle size' }, result: 'Web search results for query: "date-fns vs dayjs vs luxon bundle size"\n\nLinks: [{"title":"date-fns - modern JavaScript date utility library","url":"https://date-fns.org"},{"title":"Day.js, 2kB JavaScript date utility library","url":"https://day.js.org"},{"title":"Luxon - immutable date wrapper","url":"https://moment.github.io/luxon"}]' },
     { say: `| | date-fns | Day.js | Luxon |\n|---|---|---|---|\n| 가져오는 방식 | 함수 단위 | 플러그인 | 통째로 |\n| 타임존 | 별도 패키지 | 플러그인 | 기본 내장 |${ui(['chart', 'bar', '번들 크기 (kB, gzip)', ['date-fns', 'Day.js', 'Luxon'], ['크기', 6.9, 2.9, 23]])}\n\n가볍게 쓰려면 **Day.js**, 타임존을 많이 다루면 **Luxon**을 추천해요.` }] }] },
   { title: '유틸 함수 이름 정리', turns: [{ send: '유틸 함수 이름이 제각각이네. 정리해 줘', reply: [
     { tool: 'Glob', input: { pattern: 'src/utils/*.ts' }, result: 'src/utils/format.ts\nsrc/utils/money.ts\nsrc/utils/time.ts' },
@@ -82,7 +82,7 @@ export const SCENARIOS: Scenario[] = [
     bash('npm run build', '다시 빌드', '✓ built in 3.2s'),
     { say: '가격이 **문자열**로 들어와 타입 오류가 났어요. 숫자로 바꿔 더하도록 고쳤고 빌드가 통과해요.' }] }] },
   { title: '버튼 색 비교', turns: [{ send: '버튼 색 후보를 바로 눌러 볼 수 있게 보여 줘', reply: [
-    { say: 'Interactive UI로 만들었어요. 색을 눌러 보세요.\n\n```ade-ui\n<div class="row" id="s"></div><p class="muted" id="n"></p>\n<style>#s button{width:64px;height:40px;border-radius:8px;border:2px solid transparent;padding:0}#s button.on{border-color:var(--fg)}</style>\n<script>\nconst c=[["#3b82f6","Blue"],["#8b5cf6","Violet"],["#10b981","Green"],["#f59e0b","Amber"]];let i=0;\nconst s=document.getElementById("s"),n=document.getElementById("n");\nconst draw=()=>{[...s.children].forEach((b,k)=>b.classList.toggle("on",k===i));n.textContent=c[i][1]+" · "+c[i][0];};\nc.forEach(([v,l],k)=>{const b=document.createElement("button");b.style.background=v;b.title=l;b.onclick=()=>{i=k;draw();};s.append(b);});\ndraw();setInterval(()=>{i=(i+1)%c.length;draw();},1500);\n</script>\n```' }] }] },
+    { say: 'Interactive UI로 만들었어요. 색을 눌러 보세요.\n\n```ade-ui\n<div class="row" id="s"></div><p class="muted" id="n"></p>\n<style>#s button{width:64px;height:40px;border-radius:8px;border:2px solid transparent;padding:0}#s button.on{border-color:var(--fg)}</style>\n<script>\nconst c=[["#3b82f6","Blue"],["#8b5cf6","Violet"],["#10b981","Green"],["#f59e0b","Amber"]];let i=0;\nconst s=document.getElementById("s"),n=document.getElementById("n");\nconst draw=()=>{[...s.children].forEach((b,k)=>b.classList.toggle("on",k===i));n.textContent=c[i][1]+", "+c[i][0];};\nc.forEach(([v,l],k)=>{const b=document.createElement("button");b.style.background=v;b.title=l;b.onclick=()=>{i=k;draw();};s.append(b);});\ndraw();setInterval(()=>{i=(i+1)%c.length;draw();},1500);\n</script>\n```' }] }] },
   { title: '닉네임 컬럼 추가', turns: [{ send: 'users 테이블에 닉네임 컬럼 추가해 줘', reply: [
     { say: ui(['steps', ['마이그레이션 작성', 'active'], ['모델 수정', 'todo'], ['테스트', 'todo']]).trim() },
     write('migrations/20261113_add_nickname.sql', 'ALTER TABLE users ADD COLUMN nickname varchar(32);\n'),
@@ -113,7 +113,7 @@ export const SCENARIOS: Scenario[] = [
     { say: '예상 시간이 **17분 → 9분**으로 줄어요. e2e를 4개로 나누면 6분까지 줄일 수 있어요.' }] }] },
   { title: '알림 설정 화면', turns: [{ send: '알림 설정 화면 만들 건데, 몇 가지 정해 줘', reply: [
     { ask: [{ question: '알림은 어디로 보낼까요?', header: '채널', options: [['앱 안에서만', '배지와 목록'], ['이메일', '하루 한 번 모아서'], ['푸시', '모바일 알림']] },
-      { question: '기본값은 어떻게 할까요?', header: '기본값', options: [['모두 켜기', '나중에 끌 수 있어요'], ['중요한 것만', '결제·보안 알림']] }] },
+      { question: '기본값은 어떻게 할까요?', header: '기본값', options: [['모두 켜기', '나중에 끌 수 있어요'], ['중요한 것만', '결제/보안 알림']] }] },
     { say: '**$1** 기준으로 설정 화면을 만들게요.' },
     write('src/pages/NotificationSettings.tsx', 'export function NotificationSettings() {\n  return <section className="settings">…</section>;\n}\n'),
     { say: `만들었어요.${ui(['stats', ['새 화면', '1'], ['설정 항목', '6'], ['타입 검사', '통과', 'ok']])}` }] }] }

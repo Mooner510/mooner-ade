@@ -83,9 +83,9 @@ export const statusLabels: Record<string, string> = {
   claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태'
 };
 const statusHints: Record<string, string> = {
-  claudeusage: '5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.',
-  codexusage: '5시간·주간 한도 사용률. Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.',
-  cursorusage: '청구 주기·모델 풀·Grok Bot 한도. cursor-agent 또는 Cursor 앱 로그인 정보로 조회합니다.'
+  claudeusage: '5시간/주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.',
+  codexusage: '5시간/주간 한도 사용률. Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.',
+  cursorusage: '청구 주기/모델 풀/Grok Bot 한도. cursor-agent 또는 Cursor 앱 로그인 정보로 조회합니다.'
 };
 // Words that find an item through the settings search even though the row itself no longer spells them out.
 const statusKeywords: Record<string, string> = {
@@ -153,7 +153,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { s
     <StatusOpt title="사용률 색" hint="초록 → 노랑 → 빨강으로 바꿉니다. 끄면 80% 이상만 경고색입니다. 모든 사용량에 같이 적용됩니다.">{sw('usageColors', '사용률 색')}</StatusOpt>
     <StatusOpt title="갱신 주기 (초)" hint="60–600초. 조회 결과는 3분간 재사용됩니다. 모든 사용량에 같이 적용됩니다.">{num('usageRefresh', 60, 600, 10, '사용량 갱신 주기')}</StatusOpt>
   </>;
-  const systemPanel = <StatusOpt title="갱신 주기 (초)" hint="2–60초. 창이 보일 때만 조회합니다. CPU와 메모리에 같이 적용됩니다.">{num('systemRefresh', 2, 60, 1, 'CPU·메모리 갱신 주기')}</StatusOpt>;
+  const systemPanel = <StatusOpt title="갱신 주기 (초)" hint="2–60초. 창이 보일 때만 조회합니다. CPU와 메모리에 같이 적용됩니다.">{num('systemRefresh', 2, 60, 1, 'CPU/메모리 갱신 주기')}</StatusOpt>;
   const panels: Record<string, ReactNode> = {
     claudeusage: usagePanel('claude'), codexusage: usagePanel('codex'), cursorusage: usagePanel('cursor'), cpu: systemPanel, memory: systemPanel,
     clock: <>
@@ -164,7 +164,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { s
       <StatusOpt title="작업 시간 기록" hint="끄면 WakaTime에 기록하지 않아 이 항목도 나타나지 않습니다.">
         <input type="checkbox" role="switch" aria-label="작업 시간 기록" checked={settings.wakatime} onChange={event => onChange({ ...settings, wakatime: event.target.checked, statusItems: event.target.checked && !settings.statusItems.includes('wakatime') ? [...settings.statusItems, 'wakatime'] : settings.statusItems })} />
       </StatusOpt>
-      {onSection && <StatusOpt title="API 키·백그라운드 기록" hint="WakaTime 설정에서 정합니다."><button type="button" onClick={() => onSection('wakatime')}>WakaTime 설정 열기</button></StatusOpt>}
+      {onSection && <StatusOpt title="API 키/백그라운드 기록" hint="WakaTime 설정에서 정합니다."><button type="button" onClick={() => onSection('wakatime')}>WakaTime 설정 열기</button></StatusOpt>}
     </>
   };
   const options = (id: string) => panels[id] ?? null;
@@ -207,7 +207,7 @@ function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { s
           <Icon name="grip" size={14} />
           <span className="status-name"><strong>{name}</strong><span className="statusbar status-sample" aria-hidden="true">{sample(id)}</span>{hint && <small>{hint}</small>}</span>
           {panel && <button type="button" className="status-gear" aria-label={`${name} 설정`} title="설정" aria-expanded={expanded} aria-controls={`status-options-${id}`} onClick={() => setOpenId(expanded ? '' : id)}><Icon name="settings" size={14} /></button>}
-          <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${name} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '플랜 · API 키 구분 상시 표시' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
+          <span className="setting-control"><input type="checkbox" role="switch" aria-label={`${name} 표시`} checked={shown.has(id) || (chat && id === 'share')} disabled={chat && id === 'share'} title={chat && id === 'share' ? '플랜/API 키 구분 상시 표시' : undefined} onChange={event => toggle(id, event.target.checked)} /></span>
         </div>
         {expanded && <div className="status-options" id={`status-options-${id}`} role="group" aria-label={`${name} 설정`}>{panel}</div>}
       </li>;
@@ -217,13 +217,13 @@ function StatusLayoutEditor({ settings, onChange, chat = false, onSection }: { s
   const isDefault = JSON.stringify([layout, [...items].sort()]) === JSON.stringify([defaults, [...defaultSettings[keys_.items]].sort()]) && (!chat || !settings.chatStatusSeparator);
   return <div className="setting-block">
     <div className="status-intro">
-      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. {!chat && <>톱니바퀴(<Icon name="settings" size={12} />)가 있는 항목은 표시 방식을 따로 정할 수 있습니다. </>}키보드는 Alt+화살표.{!chat && ' 창이 좁으면 CPU·메모리 → 시계·WakaTime → Codex·Cursor 사용량 순으로 접혀 하단 상태바 오른쪽 끝의 …(더 보기) 메뉴로 들어갑니다. 경로·브랜치·Claude 사용량은 끝까지 남습니다.'}</p>
+      <p className="setting-note">항목을 끌어 위치와 순서를 정하고, 스위치로 켜고 끕니다. {!chat && <>톱니바퀴(<Icon name="settings" size={12} />)가 있는 항목은 표시 방식을 따로 정할 수 있습니다. </>}키보드는 Alt+화살표.{!chat && ' 창이 좁으면 CPU/메모리 → 시계/WakaTime → Codex/Cursor 사용량 순으로 접혀 하단 상태바 오른쪽 끝의 …(더 보기) 메뉴로 들어갑니다. 경로, 브랜치, Claude 사용량은 끝까지 남습니다.'}</p>
       <button disabled={isDefault} onClick={() => onChange({ ...settings, [keys_.left]: defaultSettings[keys_.left], [keys_.right]: defaultSettings[keys_.right], [keys_.items]: defaultSettings[keys_.items], ...(chat && { chatStatusSeparator: '' }) })}><Icon name="refresh" size={13} />기본값으로</button>
     </div>
     {chat && <Row title="항목 구분자" hint="항목 사이에 넣을 문자입니다 (최대 8자, 비우면 간격만).">
       <input type="text" maxLength={8} value={settings.chatStatusSeparator} aria-label="항목 구분자" onChange={event => onChange({ ...settings, chatStatusSeparator: event.target.value })} /></Row>}
     <div className="status-layout">{column('left')}{column('right')}</div>
-    {chat && <p className="setting-note">모델은 계열마다, 컨텍스트는 사용률에 따라 색이 달라집니다. 브랜치·사용량·시계는 ‘하단 상태바’ 탭에서 설정합니다.</p>}
+    {chat && <p className="setting-note">모델은 계열마다, 컨텍스트는 사용률에 따라 색이 달라집니다. 브랜치, 사용량, 시계는 ‘하단 상태바’ 탭에서 설정합니다.</p>}
   </div>;
 }
 
@@ -290,7 +290,7 @@ function ChatAuthSettings({ agent }: { agent: KeyAgent }) {
         options={[{ value: 'login', label: 'CLI 로그인' }, { value: 'key', label: 'API 키', ...(!entry?.key && { hint: '먼저 키를 저장하세요' }) }]}
         onChange={value => void save({ use: value === 'key' }, value === 'key' ? 'API 키로 실행합니다.' : 'CLI 로그인으로 실행합니다.')} />}
     </Row>
-    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ' · 새 채팅에 사용' : ' · 저장만 됨'} · 이 컴퓨터에만 저장되고 끝 4자리만 표시합니다. 플러그인과 채팅 상태바도 이 키를 씁니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
+    <Row title={`${agentNames[agent]} API 키`} hint={entry?.key ? `현재 ${entry.key}${entry.use ? ', 새 채팅에 사용' : ', 저장만 됨'}, 이 컴퓨터에만 저장되고 끝 4자리만 표시합니다. 플러그인과 채팅 상태바도 이 키를 씁니다.` : `${source.where}에서 발급받으세요. 저장하면 바로 이 키를 씁니다.`}>
       <input type="password" value={key} placeholder={source.placeholder} autoComplete="off" spellCheck={false} aria-label={`${agentNames[agent]} API 키`}
         onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && key.trim()) void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.'); }} />
       <button disabled={!key.trim()} onClick={() => void save({ key }, '저장했습니다. 다음에 시작하는 채팅부터 이 키를 씁니다.')}>저장</button>
@@ -399,7 +399,7 @@ function GitSettings({ settings, set }: { settings: Settings; set<K extends keyo
     <Group title="표시">
       <Row title="참조 간결하게 보기" hint="로컬 브랜치와 추적하는 원격 브랜치를 한 라벨로 묶어 첫 이름만 보여 줍니다.">{flag('gitCompactRefs', '참조 간결하게 보기')}</Row>
       <Row title="태그 이름" hint="끄면 태그를 아이콘으로만 보여 줍니다.">{flag('gitTagNames', '태그 이름')}</Row>
-      <Row title="참조를 왼쪽에" hint="브랜치·태그 라벨을 커밋 메시지 앞에 둡니다.">{flag('gitRefsLeft', '참조를 왼쪽에')}</Row>
+      <Row title="참조를 왼쪽에" hint="브랜치/태그 라벨을 커밋 메시지 앞에 둡니다.">{flag('gitRefsLeft', '참조를 왼쪽에')}</Row>
       <Row title="커밋 시각 표시" hint="작성 시각 대신 커밋 시각을 보여 줍니다.">{flag('gitCommitTime', '커밋 시각 표시')}</Row>
       <Row title="날짜를 짧게" hint="‘10분 전’, ‘오늘 14:20’, ‘어제 09:05’처럼 보여 줍니다. 끄면 항상 날짜와 시각을 씁니다.">{flag('gitPrettyDate', '날짜를 짧게')}</Row>
       <Row title="열" hint="커밋 메시지 열은 항상 보입니다.">
@@ -424,7 +424,7 @@ function GitSettings({ settings, set }: { settings: Settings; set<K extends keyo
       <Row title="업데이트 방식" hint="현재 브랜치를 업데이트할 때 원격 변경을 머지할지 리베이스할지 정합니다.">
         <Dropdown label="업데이트 방식" value={settings.gitUpdateMethod} options={[{ value: 'merge', label: '머지' }, { value: 'rebase', label: '리베이스' }]} onChange={value => set('gitUpdateMethod', value as Settings['gitUpdateMethod'])} /></Row>
       <Row title="Fetch할 때 사라진 원격 브랜치 정리 (--prune)">{flag('gitFetchPrune', 'Fetch할 때 정리')}</Row>
-      <Row title="보호된 브랜치" hint="이 브랜치들에 push된 커밋은 메시지 편집·삭제·스쿼시·대화형 리베이스를 막습니다. 쉼표로 구분합니다.">
+      <Row title="보호된 브랜치" hint="이 브랜치들에 push된 커밋은 메시지 편집, 삭제, 스쿼시, 대화형 리베이스를 막습니다. 쉼표로 구분합니다.">
         <input type="text" value={settings.gitProtected} maxLength={500} aria-label="보호된 브랜치" onChange={event => set('gitProtected', event.target.value)} /></Row>
       <Row title="즐겨찾기 브랜치" hint="브랜치 패널에서 별표로 표시하고 위쪽에 둡니다. 브랜치 메뉴에서도 바꿀 수 있습니다. 쉼표로 구분합니다.">
         <input type="text" key={settings.gitFavorites.join(',')} defaultValue={settings.gitFavorites.join(', ')} aria-label="즐겨찾기 브랜치" onBlur={event => set('gitFavorites', event.target.value.split(',').map(item => item.trim()).filter(Boolean).slice(0, 64))} /></Row>
@@ -501,20 +501,20 @@ export function LookPreview({ id, settings, previewTheme = '' }: { id: string; s
     {id === 'theme' && <pre className="look-theme-term" style={{ background: paint['--term-bg'], color: paint['--term-fg'], borderColor: paint['--border'] }}>
       <span style={{ color: paint['--term-green'] }}>$</span> claude{'\n'}
       <span style={{ color: paint['--term-blue'] }}>ready</span>
-      <span style={{ color: paint['--faint'] }}> · </span>
+      <span style={{ color: paint['--faint'] }}>, </span>
       <span style={{ color: paint['--term-yellow'] }}>waiting</span>
     </pre>}
     {family === 'term' && <pre className="look-term" style={{ fontFamily: mono(settings.terminalFont), fontSize: settings.terminalFontSize, fontWeight: settings.terminalFontWeight, lineHeight: settings.lineHeight, letterSpacing: settings.letterSpacing }}>
       <span className="dim">~/my-app $ </span>claude{'\n'}
       <span className={settings.boldBright ? 'bright' : ''} style={{ fontWeight: 700 }}>Claude</span> 포트를 환경 변수로 바꿉니다.{'\n'}
-      <span style={{ color: settings.minimumContrast > 1 ? 'var(--fg)' : 'var(--faint)' }}>주석 · 낮은 대비</span>
+      <span style={{ color: settings.minimumContrast > 1 ? 'var(--fg)' : 'var(--faint)' }}>주석, 낮은 대비</span>
       <span className={`look-caret ${settings.cursorStyle}${settings.cursorBlink ? ' blink' : ''}`} />
     </pre>}
     {family === 'chat' && <div className="look-chat" style={{ fontSize: settings.chatFontSize, width: ({ narrow: '78%', default: '88%', wide: '96%', full: '100%' } as const)[settings.chatWidth] }}>
       {settings.chatThinkingOpen !== 'never' && <p className="look-think">{settings.chatThinkingOpen === 'live' ? '생각 중…' : '포트를 상수에서 찾았습니다.'}</p>}
       <p className={settings.chatSmoothStream ? 'look-stream' : ''}>알겠어, 환경 변수로 바꿀게.</p>
       {id === 'chatToolMode' && <div className="look-tools">{settings.chatToolDisplay === 'summary'
-        ? <div className="look-bundle"><div className="look-bundle-head"><i />도구 4개 · 실행 중</div><div className="look-bundle-rows">{TOOL_PREVIEW.map(row => <div key={row}>{row}</div>)}</div></div>
+        ? <div className="look-bundle"><div className="look-bundle-head"><i />도구 4개, 실행 중</div><div className="look-bundle-rows">{TOOL_PREVIEW.map(row => <div key={row}>{row}</div>)}</div></div>
         : TOOL_PREVIEW.map(row => <div key={row} className="look-tool">{row}</div>)}</div>}
       <div className={`look-tool${settings.chatToolsOpen ? ' open' : ''}`}><b>Edit</b> src/server.ts{settings.chatToolsOpen && <small>PORT = process.env.PORT</small>}</div>
       <div className="look-compose" style={{ maxHeight: Math.round(settings.chatComposerMax / 4) }}>긴 글을 쓰면 이 높이에서 멈춥니다.</div>
@@ -580,7 +580,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const terminalFontOptions = useMemo(() => monoFontDropdownOptions(settings.terminalFont, installedFonts, '시스템 기본'), [installedFonts, settings.terminalFont]);
   const diffFontOptions = useMemo(() => monoFontDropdownOptions(settings.diffFont, installedFonts, '터미널과 같음'), [installedFonts, settings.diffFont]);
   const argsRow = (agent: 'claude' | 'codex' | 'cursor', key: 'claudeArgs' | 'codexArgs' | 'cursorArgs', example: string) =>
-    <Row title={`${agentNames[agent]} 추가 실행 인자`} hint={`실행 명령 뒤에 붙는 인자입니다. 예: ${example} · 새로 열거나 복원하는 터미널부터 적용됩니다.`}>
+    <Row title={`${agentNames[agent]} 추가 실행 인자`} hint={`실행 명령 뒤에 붙는 인자입니다. 예: ${example}, 새로 열거나 복원하는 터미널부터 적용됩니다.`}>
       <input type="text" value={settings[key]} maxLength={512} placeholder={example} aria-label={`${agentNames[agent]} 추가 실행 인자`}
         onChange={event => set(key, event.target.value.replace(/[\x00-\x1f\x7f]/g, ''))} /></Row>;
   const soundPicker = (title: string, hint: string, key: 'soundDone' | 'soundAttention') =>
@@ -615,7 +615,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     {tab !== 'cursor' && <>
       <h4 className="setting-group">사용량 (상태바)</h4>
       {tab === 'claude' && <>
-        <Row title="사용량 표시" hint="5시간·주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.">{statusSwitch('claudeusage', 'Claude Code 사용량 표시')}</Row>
+        <Row title="사용량 표시" hint="5시간/주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.">{statusSwitch('claudeusage', 'Claude Code 사용량 표시')}</Row>
         <Row title="Claude 5시간 한도 표시" hint="5시간 한도가 없는 플랜(Ultra 등)이면 끄세요. 이 설정을 끄면 사용량 상세에서도 5시간 한도가 숨겨집니다.">{toggle('claudeSession')}</Row>
       </>}
       {tab === 'codex' && <Row title="사용량 표시" hint="Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.">{statusSwitch('codexusage', 'Codex 사용량 표시')}</Row>}
@@ -624,13 +624,13 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     </>}
     {tab === 'cursor' && <>
       <h4 className="setting-group">사용량 (상태바)</h4>
-      <Row title="사용량 표시" hint="청구 주기·모델 풀·Grok Bot 한도를 표시합니다. 터미널에서 cursor-agent login을 해 두면 조회됩니다.">{statusSwitch('cursorusage', 'Cursor 사용량 표시')}</Row>
+      <Row title="사용량 표시" hint="청구 주기/모델 풀/Grok Bot 한도를 표시합니다. 터미널에서 cursor-agent login을 해 두면 조회됩니다.">{statusSwitch('cursorusage', 'Cursor 사용량 표시')}</Row>
       <UsageMeters provider={tab} settings={settings} onChange={onChange} />
       <p className="setting-note">색과 모양은 ‘외관’에서, 갱신 주기는 ‘공용’에서 정합니다.</p>
     </>}
     {tab === 'claude' && <>
-      <h4 className="setting-group">프롬프트 캐시·입력</h4>
-      <Row title="프롬프트 캐시 타이머" hint="터미널·채팅 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
+      <h4 className="setting-group">프롬프트 캐시/입력</h4>
+      <Row title="프롬프트 캐시 타이머" hint="터미널/채팅 헤더와 사이드바에 캐시가 식기까지 남은 시간을 표시합니다.">{toggle('cacheTimer')}</Row>
       {settings.cacheTimer && <Row title="식기 전 경고 시점" hint="남은 시간이 이 비율 이하이면 노란색(곧 식음)으로 바뀝니다. (5–50%)">{number('cacheWarn', 5, 50)}</Row>}
       <Row title="캐시 만료 시 전송 경고" hint="캐시가 식었거나 곧 식을 때 메시지를 보내려 하면 먼저 확인합니다. 후속 대기열의 자동 전송에도 적용됩니다.">{toggle('cacheSendWarn')}</Row>
       {settings.cacheSendWarn && <Row title="경고 기준 남은 시간(분)" hint="1시간 캐시의 남은 시간이 이 값 이하이면 경고합니다. 5분 캐시는 식은 뒤에만 경고합니다. (1–60분)">{number('cacheSendWarnMinutes', 1, 60)}</Row>}
@@ -638,8 +638,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
       {settings.idleCompact && <Row title="자동 Compact 기준(k 토큰)" hint="컨텍스트가 이 크기 이상일 때만 합니다. 기본 200k, 최소 100k. (100–1000)">{number('idleCompactMinK', 100, 1000)}</Row>}
       <Row title="팁 표시" hint="기능과 단축키를 소개하는 팁을 한 번씩 표시합니다.">{toggle('tips')}</Row>
       <Row title="Follow-up 대기열 (Tab)" hint="Claude가 작업 중일 때 입력창에서 Tab을 누르면 메시지를 대기열에 넣고 작업이 끝나면 보냅니다. 끄면 Tab은 항상 Claude Code로 전달됩니다.">{toggle('followUpQueue')}</Row>
-      <Row title="인터랙티브 UI" hint="계산기·폼·미리보기처럼 UI가 더 나은 답변을 채팅 안에서 직접 조작할 수 있게 보여 줍니다. 격리된 샌드박스에서 실행되며, 끄면 코드 블록으로 표시됩니다. 새 채팅부터 적용됩니다.">{toggle('interactiveUi')}</Row>
-      <Row title="Artifact 항상 켜기" hint="기본은 메시지에 ‘artifact’·‘아티팩트’가 들어갈 때만 그 채팅에서 Artifact 도구를 켭니다. 이 옵션을 켜면 모든 채팅이 처음부터 켜지지만 요청마다 컨텍스트가 약 1.3만 토큰 늘어납니다.">{toggle('artifactAlways')}</Row>
+      <Row title="인터랙티브 UI" hint="계산기, 폼, 미리보기처럼 UI가 더 나은 답변을 채팅 안에서 직접 조작할 수 있게 보여 줍니다. 격리된 샌드박스에서 실행되며, 끄면 코드 블록으로 표시됩니다. 새 채팅부터 적용됩니다.">{toggle('interactiveUi')}</Row>
+      <Row title="Artifact 항상 켜기" hint="기본은 메시지에 ‘artifact’, ‘아티팩트’가 들어갈 때만 그 채팅에서 Artifact 도구를 켭니다. 이 옵션을 켜면 모든 채팅이 처음부터 켜지지만 요청마다 컨텍스트가 약 1.3만 토큰 늘어납니다.">{toggle('artifactAlways')}</Row>
     </>}
   </>;
   return <Modal className={`settings-modal${barLive ? ' bar-live' : ''}`} labelledBy="settings-title" region="설정" onClose={onClose}>
@@ -680,7 +680,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
             {typeof desktop()?.setZoom === 'function' && <Row title="화면 배율" hint="앱 전체 크기를 바꿉니다. (80–150%) 터미널 글꼴 크기는 아래 터미널에서 정합니다." preview="zoom">{number('uiZoom', 80, 150, 5)}</Row>}
             <Row title="사이드바 접기" hint="프로젝트 사이드바를 아이콘만 보이는 좁은 막대로 줄입니다. 단축키로도 바꿀 수 있습니다." preview="sidebar">{toggle('sidebarCompact')}</Row>
-            <Row title="백그라운드에서도 애니메이션 유지" hint="끄면 창이 포커스를 잃었을 때 반복 애니메이션(로딩 표시 등)을 멈춰 CPU·GPU 사용을 줄입니다. 켜면 다른 앱을 보는 동안에도 계속 움직입니다.">{toggle('animateInBackground')}</Row>
+            <Row title="백그라운드에서도 애니메이션 유지" hint="끄면 창이 포커스를 잃었을 때 반복 애니메이션(로딩 표시 등)을 멈춰 CPU/GPU 사용을 줄입니다. 켜면 다른 앱을 보는 동안에도 계속 움직입니다.">{toggle('animateInBackground')}</Row>
             <Advanced>
               <Row title="프로젝트 사이드바 너비" hint="사이드바 경계를 끌어서도 바꿀 수 있습니다. (160–480px)" preview="sidebarWidth">{number('sidebarWidth', 160, 480)}</Row>
             </Advanced>
@@ -714,7 +714,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               <Dropdown label="도구 호출 표시" value={settings.chatToolDisplay} options={[{ value: 'summary', label: '요약 (묶어서 스크롤)' }, { value: 'detail', label: '상세 (하나씩 나열)' }]} onChange={value => set('chatToolDisplay', value as Settings['chatToolDisplay'])} /></Row>
             <Advanced>
               <Row title="입력창 최대 높이" hint="긴 글을 쓸 때 입력창이 늘어나는 한계입니다. (120–600px)" preview="chatComposer">{number('chatComposerMax', 120, 600, 10)}</Row>
-              <Row title="도구 호출 펼쳐 보기" hint="Bash·Edit 같은 도구 카드를 처음부터 펼쳐 둡니다. 끄면 눌러서 엽니다." preview="chatTools">{toggle('chatToolsOpen')}</Row>
+              <Row title="도구 호출 펼쳐 보기" hint="Bash/Edit 같은 도구 카드를 처음부터 펼쳐 둡니다. 끄면 눌러서 엽니다." preview="chatTools">{toggle('chatToolsOpen')}</Row>
               <Row title="부드러운 스트리밍" hint="응답을 글자 단위로 이어서 보여 줍니다. 끄면 받는 대로 바로 표시합니다. 시스템의 ‘동작 줄이기’가 켜져 있으면 적용되지 않습니다." preview="chatStream">{toggle('chatSmoothStream')}</Row>
             </Advanced>
           </Group>
@@ -729,7 +729,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
                 <input type="text" value={settings.diffFont} maxLength={200} placeholder={settings.terminalFont || 'JetBrains Mono'} aria-label="diff 글꼴 직접 입력" onChange={event => set('diffFont', event.target.value)} /></Row>
               <Row title="변경 없는 구간 접기" hint="채팅의 코드 변경 카드에서 바뀌지 않은 줄을 접어 둡니다." preview="diffFold">{toggle('diffFoldUnchanged')}</Row>
               {settings.diffFoldUnchanged && <Row title="변경 주변 표시 줄 수" hint="접힌 구간 둘레에 남기는 줄 수입니다. (1–20)" preview="diffContext">{number('diffContextLines', 1, 20)}</Row>}
-              <Row title="오른쪽 패널 너비" hint="오류·피드백·플러그인 패널의 너비입니다. 왼쪽 경계를 끌어서도 바꿀 수 있고, 더블클릭하면 전체 너비로 넓힙니다. (320–1600px)" preview="diffWidth">{number('reviewWidth', 320, 1600, 10)}</Row>
+              <Row title="오른쪽 패널 너비" hint="오류, 피드백, 플러그인 패널의 너비입니다. 왼쪽 경계를 끌어서도 바꿀 수 있고, 더블클릭하면 전체 너비로 넓힙니다. (320–1600px)" preview="diffWidth">{number('reviewWidth', 320, 1600, 10)}</Row>
             </Advanced>
           </Group>
           <Group title="상태 표시">
@@ -745,10 +745,10 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Group title="동작">
             <Row title="새 탭 기본 모드" hint="새 탭 메뉴와 런처에서 AI 에이전트를 채팅으로 열지 터미널(CLI)로 열지 정합니다." preview={false}>
               <Dropdown label="새 탭 기본 모드" value={settings.defaultMode} options={[{ value: 'chat', label: '채팅' }, { value: 'cli', label: '터미널 (CLI)' }]} onChange={value => set('defaultMode', value as Settings['defaultMode'])} /></Row>
-            <p className="setting-note">사이드바의 X는 프로젝트·탭·pane을 닫기 전에 항상 확인합니다. 아래 설정은 단축키와 pane 안의 닫기에 적용됩니다.</p>
+            <p className="setting-note">사이드바의 X는 프로젝트, 탭, pane을 닫기 전에 항상 확인합니다. 아래 설정은 단축키와 pane 안의 닫기에 적용됩니다.</p>
             <Row title="실행 중인 터미널 닫기 확인" hint="단축키나 pane에서 실행 중인 터미널, 또는 그 터미널이 있는 탭을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmClose')}</Row>
             <Row title="채팅 닫기 확인" hint="단축키로 채팅이 있는 탭을 닫기 전과, pane에서 응답 중인 채팅을 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseChat')}</Row>
-            <Row title="프로젝트 닫기 확인" hint="단축키로 실행 중인 터미널·채팅이 있는 프로젝트를 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseProject')}</Row>
+            <Row title="프로젝트 닫기 확인" hint="단축키로 실행 중인 터미널/채팅이 있는 프로젝트를 닫기 전에 한 번 더 묻습니다." preview={false}>{toggle('confirmCloseProject')}</Row>
           </Group>
         </SectionFrame>}
         {(searching || section === 'terminal') && <SectionFrame label="터미널" searching={searching}>
@@ -770,7 +770,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           </Group>
           <Advanced>
             <Row title="스크롤백 줄 수" hint="터미널이 보관하는 이전 출력 줄 수입니다. (500–100,000)">{number('scrollback', 500, 100000)}</Row>
-            <Row title="스크롤 속도" hint="마우스 휠·트랙패드 스크롤 배율입니다. (0.5–5)">{number('scrollSensitivity', 0.5, 5, 0.5)}</Row>
+            <Row title="스크롤 속도" hint="마우스 휠/트랙패드 스크롤 배율입니다. (0.5–5)">{number('scrollSensitivity', 0.5, 5, 0.5)}</Row>
             <Row title="더블클릭 단어 구분 문자" hint="더블클릭으로 단어를 선택할 때 경계로 보는 문자입니다.">
               <input type="text" value={settings.wordSeparator} maxLength={64} aria-label="단어 구분 문자" onChange={event => set('wordSeparator', event.target.value)} />
               <button disabled={settings.wordSeparator === defaultSettings.wordSeparator} onClick={() => set('wordSeparator', defaultSettings.wordSeparator)}>기본</button>
@@ -798,7 +798,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <h4 className="setting-group">알림</h4>
             <p className="setting-note">모든 에이전트에 공통입니다. 에이전트마다 끄려면 해당 탭의 ‘알림’을 사용하세요.</p>
             <Row title="에이전트 작업 완료" hint="터미널의 AI 에이전트가 5초 넘게 출력을 멈추면(완료 또는 입력 대기) 알립니다.">{toggle('notifyDone')}</Row>
-            <Row title="승인·입력 요청" hint="CLI가 벨(BEL)로 승인·입력을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
+            <Row title="승인/입력 요청" hint="CLI가 벨(BEL)로 승인/입력을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
             <Row title="보고 있는 터미널도 알림" hint="끄면 지금 보고 있는 터미널은 알리지 않습니다.">{toggle('notifyLooking')}</Row>
             <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
             {settings.notifySound && <>
@@ -821,14 +821,14 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               <Dropdown label="메시지 전송 키" value={settings.chatSendKey} options={[{ value: 'enter', label: 'Enter' }, { value: 'mod-enter', label: 'Cmd/Ctrl+Enter' }]} onChange={value => set('chatSendKey', value as Settings['chatSendKey'])} /></Row>
           </Group>
           <Group title="새 채팅 기본값">
-            <p className="setting-note">새 채팅에 적용됩니다. 단, 프로젝트에서 마지막으로 고른 권한 모드·모델·Effort가 있으면 그 값이 우선합니다(Cursor의 모델·Effort 제외). 에이전트가 지원하는 권한 모드와 Effort만 반영되며(Cursor는 자동 모드가 없어 에이전트 모드로 시작), 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
+            <p className="setting-note">새 채팅에 적용됩니다. 단, 프로젝트에서 마지막으로 고른 권한 모드, 모델, Effort가 있으면 그 값이 우선합니다(Cursor의 모델/Effort 제외). 에이전트가 지원하는 권한 모드와 Effort만 반영되며(Cursor는 자동 모드가 없어 에이전트 모드로 시작), 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>
             <Row title="권한 모드" hint="모든 권한 건너뛰기(bypassPermissions)는 위험해서 기본값으로 고를 수 없습니다.">
               <Dropdown label="새 채팅 권한 모드" value={settings.chatDefaultPermission} options={[{ value: 'cli', label: 'CLI 설정 따름' }, { value: 'default', label: '기본 (매번 확인)' }, { value: 'acceptEdits', label: '편집 자동 승인' }, { value: 'plan', label: '계획 모드' }, { value: 'auto', label: '자동' }]} onChange={value => set('chatDefaultPermission', value as Settings['chatDefaultPermission'])} /></Row>
             <Row title="Effort" hint="자동은 에이전트의 기본값을 따릅니다. 높을수록 오래 생각하고 비용이 늘어납니다.">
               <Dropdown label="새 채팅 Effort" value={settings.chatDefaultEffort} options={[{ value: 'auto', label: 'CLI 설정 따름' }, { value: 'low', label: 'low' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }, { value: 'xhigh', label: 'xhigh' }, { value: 'max', label: 'max' }]} onChange={value => set('chatDefaultEffort', value as Settings['chatDefaultEffort'])} /></Row>
           </Group>
           <Group title="대화">
-            <p className="setting-note">글꼴·너비·도구 표시 등은 ‘외관’에서 바꿉니다.</p>
+            <p className="setting-note">글꼴, 너비, 도구 표시 등은 ‘외관’에서 바꿉니다.</p>
             <Row title="새 출력 따라가기" hint="맨 아래에 있을 때 새 출력을 따라 내려갑니다. 메시지를 보낼 때는 항상 맨 아래로 이동합니다.">{toggle('chatAutoScroll')}</Row>
           </Group>
         </SectionFrame>}
@@ -848,8 +848,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         {(searching || section === 'feedback') && <SectionFrame label="피드백" searching={searching}>
           <FeedbackAvailabilityRow />
           <Row title="에이전트 피드백 초안" hint="채팅 에이전트가 피드백 초안을 넣을 수 있게 합니다. 넣은 초안은 직접 열어 검토해야 제출할 수 있습니다.">{toggle('feedbackAgentTool')}</Row>
-          <Row title="AI 작성에 화면 정보 포함" hint="'AI로 작성'·'AI로 다듬기'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
-          <Row title="AI 작성 모델" hint="'AI로 작성'·'AI로 다듬기'에 쓸 Claude 모델입니다. 피드백 화면에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 작성 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
+          <Row title="AI 작성에 화면 정보 포함" hint="'AI로 작성', 'AI로 다듬기'를 누를 때 앱 버전, 열린 pane 종류, 프로젝트 이름, 최근 오류 몇 개를 함께 보냅니다.">{toggle('feedbackAiContext')}</Row>
+          <Row title="AI 작성 모델" hint="'AI로 작성', 'AI로 다듬기'에 쓸 Claude 모델입니다. 피드백 화면에서도 바꿀 수 있고, 기본은 Haiku 5.5입니다."><Dropdown label="AI 작성 모델" className="chat-model" value={feedbackModelId(settings.feedbackAiModel)} options={AI_MODELS} onChange={value => set('feedbackAiModel', value as Settings['feedbackAiModel'])} /></Row>
           <Row title="AI 작성 Effort" hint="높을수록 정교하지만 느립니다. 보통(Medium)까지만 고를 수 있습니다. (기본 Low)"><Dropdown label="AI 작성 Effort" className={`chat-effort effort-${feedbackEffort(settings.feedbackAiEffort)}`} value={feedbackEffort(settings.feedbackAiEffort)} options={AI_EFFORTS} onChange={value => set('feedbackAiEffort', value as Settings['feedbackAiEffort'])} /></Row>
         </SectionFrame>}
         {(searching || section === 'about') && <SectionFrame label="정보" searching={searching}><AboutSettings /></SectionFrame>}
@@ -892,7 +892,7 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
     event.preventDefault(); event.stopPropagation();
     if (event.key === 'Escape') { setEditing(''); setNote(''); return; }
     const combo = comboOf(event.nativeEvent); if (!combo) return;
-    if (!validCombo(combo) && !(def.scope === 'appKeys' && /^f(?:[1-9]|1[0-9]|2[0-4])$/.test(combo))) { setNote('Ctrl·Alt·⌘ 중 하나와 함께 누르세요 (Shift는 방향키 같은 키와 함께).'); return; }
+    if (!validCombo(combo) && !(def.scope === 'appKeys' && /^f(?:[1-9]|1[0-9]|2[0-4])$/.test(combo))) { setNote('Ctrl/Alt, ⌘ 중 하나와 함께 누르세요 (Shift는 방향키 같은 키와 함께).'); return; }
     bind(def, combo);
   };
   return <>

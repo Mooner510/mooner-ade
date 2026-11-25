@@ -10,7 +10,7 @@ import { Spotlight } from './Spotlight';
 import { PluginBadges, PluginIcon, PluginPanel, pluginUpdateCount, usePluginsState } from './PluginSettings';
 import { accountSources, barWindows, CodexCreditRow, codexCreditsLabel, CreditRow, defaultAccountDir, defaultUsageMeters, missingMeters, money, placeAbove, UsageRows, usageHueStyle, usageStatusShort, useUsage, type Usage, type UsageStyle } from './Usage';
 import type { ChatCtx } from './ChatPane';
-import { showCombo, type ChatState } from './chat-model';
+import { showCombo, type Block, type ChatState } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
 import { useHiddenAgents } from './installed-agents';
 import { chatAgent, Launchers, markSplit, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
@@ -28,6 +28,7 @@ import { FileBuffer, type FileLocation } from './file-buffer';
 import { loadSpec } from './git-graph';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
 import { copyText } from './toast';
+import { COLOR_COPY_EVENT, colorCopyFormats, type ColorCopyTarget } from './color-chip';
 import { byLastUsed, FILE_EVENT, ideIcon, ideList, lastIde, rememberIde, type IdeInfo, type OpenTarget } from './ide-open';
 import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
@@ -36,6 +37,7 @@ import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
 import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { can, isRemote, readOnly } from './transport';
+import { openUsageReview } from './usage-review-open';
 import { setDrawer, useMobile } from './mobile';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
 
@@ -91,7 +93,7 @@ function subscribeSystem(listener: () => void) {
 const SystemStat = memo(function SystemStat({ kind }: { kind: 'cpu' | 'memory' }) {
   const system = useSyncExternalStore(subscribeSystem, () => systemInfo);
   if (!system) return null;
-  return kind === 'cpu' ? <span className="stat" title={`CPU 사용률 · ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>
+  return kind === 'cpu' ? <span className="stat" title={`CPU 사용률, ${system.cores}코어`}><Icon name="cpu" size={13} />{system.cpu}%</span>
     : <span className="stat" title={`메모리 전체 ${formatBytes(system.memory.total)}`}><Icon name="memory" size={13} />{formatBytes(system.memory.used)}</span>;
 });
 // "1 hr 29 mins" → "1h 29m".
@@ -148,6 +150,7 @@ const UsageStat = memo(function UsageStat({ provider, colors, projectId, active,
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
       {usage.note && <p className="usage-note">{usage.note}</p>}
       {!usage.error && gone.length > 0 && <p className="usage-note">{gone.join(', ')} 한도는 이 계정에 없어 표시하지 않습니다.</p>}
+      <button type="button" className="usage-more" onClick={() => { document.getElementById(panel)?.hidePopover(); openUsageReview(); }}>기록 보기</button>
     </div>
   </>;
 });
@@ -167,7 +170,7 @@ const MobileUsageChip = memo(function MobileUsageChip({ provider, projectId, act
     <Icon name={provider} size={14} /><b>{peak === null ? '…' : `${peak}%`}</b>
   </span>;
 });
-function MobileUsageSection({ provider, projectId, sessionOn, colors }: { provider: UsageProvider; projectId: string; sessionOn: boolean; colors: boolean }) {
+function MobileUsageSection({ provider, projectId, sessionOn, colors, onReview }: { provider: UsageProvider; projectId: string; sessionOn: boolean; colors: boolean; onReview(): void }) {
   const { usage, loading, load } = useUsage(provider, projectId, true, 60);
   const windows = usage?.windows.filter(item => item.key !== 'session' || sessionOn) ?? [];
   return <section className="m-usage-section" aria-label={`${usageNames[provider]} 사용량`}>
@@ -178,7 +181,8 @@ function MobileUsageSection({ provider, projectId, sessionOn, colors }: { provid
       {provider === 'claude' && usage.credit && <CreditRow credit={usage.credit} colors={colors} />}
       {provider === 'codex' && usage.codexCredits && <CodexCreditRow value={usage.codexCredits} colors={colors} />}
       {usage.error && <p className="usage-note warn">{usage.error}</p>}
-      <p className="usage-note">{usage.account?.dir || defaultAccountDir[provider]} · {usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : ''}</p>
+      <p className="usage-note">{usage.account?.dir || defaultAccountDir[provider]}, {usage.at ? `갱신 ${new Date(usage.at).toLocaleTimeString()}` : ''}</p>
+      <button type="button" className="usage-more" onClick={onReview}>기록 보기</button>
     </>}
   </section>;
 }
@@ -188,13 +192,13 @@ function MobileStatus({ settings, projectId, active, connection, branch, onBranc
   const sessionOn = (provider: UsageProvider) => provider === 'cursor' || provider === 'codex' || settings.claudeSession;
   return <footer className="statusbar m-status" data-feedback-region="상태바">
     {connection !== '연결됨' && <span className="conn" role="status"><Icon name="wifi" size={13} />{connection}</span>}
-    <button className="m-branch" onClick={onBranch} aria-label={`브랜치 ${branch || '없음'} · 전환`}><Icon name="branch" size={14} /><span>{branch || '브랜치 없음'}</span></button>
+    <button className="m-branch" onClick={onBranch} aria-label={`브랜치 ${branch || '없음'}, 전환`}><Icon name="branch" size={14} /><span>{branch || '브랜치 없음'}</span></button>
     {providers.length > 0 && <button className="m-usage" aria-label="사용량 자세히 보기" onClick={() => setOpen(true)}>
       {providers.map(provider => <MobileUsageChip key={provider} provider={provider} projectId={projectId} active={active} refresh={settings.usageRefresh} sessionOn={sessionOn(provider)} colors={settings.usageColors} />)}
     </button>}
     {open && <Modal className="m-usage-sheet" labelledBy="m-usage-title" onClose={() => setOpen(false)}>
       <header className="m-sheet-head"><h2 id="m-usage-title">사용량</h2><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></header>
-      <div className="m-sheet-body">{providers.map(provider => <MobileUsageSection key={provider} provider={provider} projectId={projectId} sessionOn={sessionOn(provider)} colors={settings.usageColors} />)}</div>
+      <div className="m-sheet-body">{providers.map(provider => <MobileUsageSection key={provider} provider={provider} projectId={projectId} sessionOn={sessionOn(provider)} colors={settings.usageColors} onReview={() => { setOpen(false); openUsageReview(); }} />)}</div>
     </Modal>}
   </footer>;
 }
@@ -307,7 +311,25 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
       });
     };
     window.addEventListener('ade:link', onLink);
-    return () => window.removeEventListener('ade:link', onLink);
+    const onColor = (event: Event) => {
+      const detail = (event as CustomEvent<ColorCopyTarget>).detail;
+      if (!refs.active.current || typeof detail?.label !== 'string') return;
+      const formats = detail.color ? colorCopyFormats(detail.color) : undefined;
+      const options = [{ id: 'original', label: '원문', detail: detail.label, icon: 'copy' as const }];
+      if (formats) options.push(
+        { id: 'hex', label: 'HEX', detail: formats.hex, icon: 'copy' },
+        { id: 'rgb', label: 'RGB (CSS)', detail: formats.rgb, icon: 'copy' },
+      );
+      void pick('어떤 형식으로 복사할까요?', [...options, { id: 'cancel', label: '취소' }]).then(choice => {
+        const format = options.find(option => option.id === choice);
+        if (format) copyText(format.detail);
+      });
+    };
+    window.addEventListener(COLOR_COPY_EVENT, onColor);
+    return () => {
+      window.removeEventListener('ade:link', onLink);
+      window.removeEventListener(COLOR_COPY_EVENT, onColor);
+    };
   }, []);
 
   // Chat chips, the sidebar picker and the project tree share the same open menu.
@@ -682,7 +704,14 @@ ${where}`, [
             // After a dropped link the layout may have changed meanwhile; the first snapshot of a project is the one loadProject already used.
             if (refs.snapshotSeen.current && !restoring && Array.isArray(message.snapshot?.ui?.paneTabs)) applyLayout(message.snapshot.ui.paneTabs); else refs.snapshotSeen.current = true;
             setProject(message.snapshot); for (const listener of chatBus.current.values()) listener({ type: 'reconnect' }); for (const listener of fileListeners.current) listener([]); }
-          else if (message.type === 'chat/event' || message.type === 'chat/state') chatBus.current.get(message.id)?.(message);
+          else if (message.type === 'chat/event' || message.type === 'chat/state') {
+            chatBus.current.get(message.id)?.(message);
+            // Codex delivers async questions as live messages while its turn keeps working.
+            const event = message.event;
+            if (message.type === 'chat/event' && event?.kind === 'message' && event.blocks?.some((block: Block) => block.type === 'text' && block.questions?.length)) {
+              onAgentEvent(message.id, 'asyncQuestion');
+            }
+          }
           // A plugin started a chat in this project (a header plugin's work): it shows up as a tab.
           else if (message.type === 'plugin/chat') { if (!tabOf(message.id)) void takeOver(undefined, { ...chatLeaf(message.cwd, message.agent), id: message.id }); }
           // A stream of file events (an agent at work) refreshes Git at most twice a second; a hidden window catches up when it shows (visibilitychange).
@@ -983,6 +1012,16 @@ ${where}`, [
     chatBus.current.delete(id); chatPrev.current.delete(id);
     removeTerminalPane(id);
   }
+  function onAgentEvent(id: string, event: AgentEventKind | 'asyncQuestion') {
+    const owner = tabOf(id), leaf = findLeaf(owner?.pane ?? null, id);
+    const agent = leaf?.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(id);
+    if (!agent || !owner) return;
+    const kind = event === 'asyncQuestion' ? 'attention' : event;
+    const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
+    if (kind === 'done' && looking) return;
+    if (event !== 'asyncQuestion') setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
+    onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
+  }
   // Status of a chat for the sidebar: working while it answers, attention while it waits for an approval, done (once) when it finishes.
   function onChatState(id: string, state: ChatState) {
     const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
@@ -992,9 +1031,9 @@ ${where}`, [
     const cache = state.cache;
     if (!cache) dropCache(id);
     else setCaches(previous => { const old = previous[id]; return old && old.at === cache.at && old.ttl === cache.ttl && old.tokens === cache.tokens && old.compactAt === cache.compactAt && old.compacted?.at === cache.compacted?.at ? previous : { ...previous, [id]: cache }; });
-    if (state.status === 'attention' && before !== 'attention') paneProps.onAgentEvent(id, 'attention');
+    if (state.status === 'attention' && before !== 'attention') onAgentEvent(id, 'attention');
     else if (before === 'attention' && state.status !== 'attention') clearAttention(id);
-    if (state.status === 'idle' && before === 'working') paneProps.onAgentEvent(id, 'done');
+    if (state.status === 'idle' && before === 'working') onAgentEvent(id, 'done');
   }
   async function closeTerminal(id: string, forceAsk = false) {
     const leaf = findLeaf(treeOf(id), id);
@@ -1215,14 +1254,7 @@ ${where}`, [
     send, bus: bus.current, live, cwds, titles, agentOf, onAgent: (id: string, agent: Agent) => setLaunched(previous => previous[id] === agent ? previous : { ...previous, [id]: agent }),
     onAgentResolved: clearAttention,
     ssh: sshSet, working, attention, caches, onAgentWorking: (id: string, on: boolean) => setWorking(previous => previous.has(id) === on ? previous : on ? new Set(previous).add(id) : new Set([...previous].filter(item => item !== id))),
-    onAgentEvent: (id: string, kind: AgentEventKind) => {
-      const owner = refs.paneTabs.current.find(tab => leaves(tab.pane).includes(id)), agent = findLeaf(owner?.pane ?? null, id)?.kind === 'chat' ? findLeaf(owner?.pane ?? null, id)?.agent ?? 'claude' : agentOf(id); if (!agent || !owner) return;
-      const looking = refs.active.current && document.hasFocus() && refs.focus.current === id && refs.activeTab.current === owner.id;
-      if (kind === 'done' && looking) return;
-      setAttention(previous => previous[id] === kind || previous[id] === 'attention' ? previous : { ...previous, [id]: kind });
-      // Needing an answer is worth a sound even while you watch the pane; the popup is only for when you are away.
-      if (!looking || kind === 'attention') onAgentAlert(root, { kind, agent, tabId: owner.id, paneId: id, name: tabLabel(owner), looking: Boolean(looking) });
-    }, focus, zoom, onFocus: (id: string) => { setFocusLeaf(id); if (attention[id] === 'done') clearAttention(id); }, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
+    onAgentEvent, focus, zoom, onFocus: (id: string) => { setFocusLeaf(id); if (attention[id] === 'done') clearAttention(id); }, onZoom: (id: string) => setZoom(value => value === id ? '' : id),
     onSplit: (id: string, direction: 'row' | 'column') => splitTerminal(id, direction), onLaunch: (id: string, command: string) => run(() => fillLauncher(id, command)), onClose: (id: string) => run(() => closeTerminal(id)), onToChat: (id: string) => run(() => terminalToChat(id)),
     onTitle: (id: string, title: string) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), editor: editorCtx
   };
@@ -1279,7 +1311,7 @@ ${where}`, [
     // Only the project on screen: every open project keeps its status bar mounted (hidden), and each would otherwise poll and tick.
     wakatime: settings.wakatime && active && <WakaTimeStat />,
     clock: active && <Clock hour12={settings.clock12h} seconds={settings.clockSeconds} />,
-    readiness: <details className="readiness"><summary title="에이전트·셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>
+    readiness: <details className="readiness"><summary title="에이전트/셸 준비 상태"><Icon name="info" size={13} /></summary><div>{Object.entries(health).map(([name, value]) => <p key={name}><b>{name}</b> {value.version} {value.message}</p>)}<button onClick={() => run(async () => setHealth(await call('readiness', { force: true })))}>다시 확인</button></div></details>
   };
   const chatCtx: ChatCtx = {
     call, settings, root: project.root, projectId: project.id, onState: onChatState, onTitle: (id, title) => setTitles(previous => previous[id] === title ? previous : { ...previous, [id]: title }), onClose: id => run(() => closeTerminal(id)), toTerminal: (id, fresh) => run(() => chatToTerminal(id, fresh)), onOpenSettings, onSettingsChange: setSettings, pick, fail: report, branchChat, resumeChat, importCliChat, switchAgent: (id, agent, forget) => switchChatAgent(id, agent, forget).catch(cause => { report(cause); return false; }),
@@ -1310,16 +1342,16 @@ ${where}`, [
       <span className="drag-space" />
       {mobile
         // A phone has no room for a search field and no title bar: the project's name, branch and folder sit here, and tapping them searches.
-        ? <button className="palette-button m-title" onClick={() => run(openPalette)} aria-label={`${basename(project.root.replace(/\\/g, '/'))} · 명령 팔레트`}>
+        ? <button className="palette-button m-title" onClick={() => run(openPalette)} aria-label={`${basename(project.root.replace(/\\/g, '/'))}, 명령 팔레트`}>
           <span className="m-title-name">{basename(project.root.replace(/\\/g, '/'))}</span>
-          <span className="m-title-sub"><Icon name="branch" size={11} />{git.branch || '브랜치 없음'}<i aria-hidden="true">·</i>{shortPath(project.root)}</span>
+          <span className="m-title-sub"><Icon name="branch" size={11} />{git.branch || '브랜치 없음'}<i aria-hidden="true">, </i>{shortPath(project.root)}</span>
         </button>
         : <button className="palette-button" onClick={() => run(openPalette)} aria-label="명령 팔레트"><Icon name="search" /><span>{basename(project.root.replace(/\\/g, '/'))}</span><kbd>{showAppKey(settings.appKeys, 'palette')}</kbd></button>}
       {/* One joined group like the split button on the left: each tool reads as its own button, with no loose gaps between them. */}
       <div className="bar-tools" role="group" aria-label="패널과 설정">
       <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (noGit) setGitNote(true); else toggleGit(); }}>
         <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>{gitNote && noGit && <span className="bar-note" role="status">Git 저장소가 없는 폴더예요. 터미널에서 git init 을 하면 커밋 그래프를 쓸 수 있어요.</span>}
-      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ' · 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
+      <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ', 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
       <IconButton icon="settings" tip="header" label={pluginUpdates ? `설정 (플러그인 업데이트 ${pluginUpdates}개)` : '설정'} dot={pluginUpdates > 0} keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
@@ -1335,7 +1367,7 @@ ${where}`, [
 {mobile ? <MobileStatus settings={settings} projectId={project.id} active={active} connection={connection} branch={git.branch} onBranch={() => run(switchBranch)} />
       : <footer className="statusbar" data-feedback-region="상태바" ref={statusBar}>
       <div className="status-left">{layout.left.filter(shown).map(id => <Fragment key={id}>{statusNodes[id]}</Fragment>)}</div>
-      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안 · 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
+      <div className="status-right">{reviewCount > 0 && <button className="feedback-badge" title="검토할 피드백 초안, 피드백 요청 열기" aria-label={`검토할 피드백 초안 ${reviewCount}개`} onClick={showFeedback}><Icon name="feedback" size={13} />{reviewCount}</button>}<PluginBadges onOpen={onOpenPlugins} />{layout.right.filter(shown).map(id => <StatusSlot key={id} id={id}>{statusNodes[id]}</StatusSlot>)}<StatusMore ids={foldedStatus} labels={statusLabels} nodes={statusNodes} /></div>
     </footer>}
     {/* Until Chat was opened once: a low, compact card beside the focused agent CLI. Opening a chat (ChatPane) or "괜찮아요" ends it for good. */}
     {chatCard.mounted && <Spotlight target=".terminal-pane.focused" closing={chatCard.closing} />}
@@ -1368,7 +1400,7 @@ ${where}`, [
       </svg>
       <div className="chat-mode-tip-body">
         <strong>변경사항 패널이 Git 그래프로 바뀌었어요</strong>
-        <p>상단 Git 버튼에는 커밋하지 않은 <span className="diffstat"><ins>+</ins><del>−</del></span> 줄 수만 보여요. 누르면 아래에서 커밋 그래프가 올라와 브랜치·체크아웃·머지·리베이스·체리픽을 IntelliJ처럼 바로 할 수 있어요. ({showAppKey(settings.appKeys, 'gitLog')})</p>
+        <p>상단 Git 버튼에는 커밋하지 않은 <span className="diffstat"><ins>+</ins><del>−</del></span> 줄 수만 보여요. 누르면 아래에서 커밋 그래프가 올라와 브랜치, 체크아웃, 머지, 리베이스, 체리픽을 IntelliJ처럼 바로 할 수 있어요. ({showAppKey(settings.appKeys, 'gitLog')})</p>
         <div className="chat-mode-tip-actions">
           <button className="primary" onClick={() => { setGitOpen(true); setSettings(previous => ({ ...previous, gitTipPending: false })); }}>Git 그래프 열기<Icon name="arrowRight" size={14} /></button>
           <button onClick={() => setSettings(previous => ({ ...previous, gitTipPending: false }))}>확인</button>

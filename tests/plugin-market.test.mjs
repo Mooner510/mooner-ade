@@ -74,7 +74,7 @@ test('signed in: each plugin shows what it asks for, and installing, updating, i
   assert.match(out.html, /시험 계정/);
   assert.match(out.html, /ade-hub\.example/);
   assert.equal(out.html.match(/plugin-market-row/g).length, 4);
-  assert.match(out.html, /프로젝트·터미널 조작/);
+  assert.match(out.html, /프로젝트\/터미널 조작/);
   assert.match(out.html, /터미널 명령/);
   assert.match(out.html, /업데이트 v2\.0\.0/);
   assert.match(out.html, /지금 v1\.0\.0/);

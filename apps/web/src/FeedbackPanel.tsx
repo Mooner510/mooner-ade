@@ -17,7 +17,7 @@ const sourceIcons: Record<FeedbackSource, IconName> = { human: 'person', ai: 'sp
 export function FeedbackProgressBadge({ progress, stamp }: { progress: FeedbackProgress | undefined; stamp: number }) {
   const badge = progressBadge(progress);
   if (!badge) return null;
-  return <span className={`feedback-status status-submitted progress-${badge.tone}`} title={`제출됨 · 처리 상태는 Hub가 알려 준 값입니다${progress?.checkedAt ? ` (${ago(progress.checkedAt, stamp)} 확인)` : ''}`}>{badge.text}</span>;
+  return <span className={`feedback-status status-submitted progress-${badge.tone}`} title={`제출됨, 처리 상태는 Hub가 알려 준 값입니다${progress?.checkedAt ? ` (${ago(progress.checkedAt, stamp)} 확인)` : ''}`}>{badge.text}</span>;
 }
 const feedbackTypeOptions = feedbackTypes.filter(({ id }) => id !== 'question' && id !== 'praise');
 
@@ -42,9 +42,9 @@ async function imagePayload(file: File): Promise<{ data: string; mime: 'image/pn
 type PanelProps = { ask: Ask; fail(cause: unknown): void; wide: boolean; toggleWide(): void; onClose(): void; aiContext(): Promise<string | undefined>; aiModel?: string; aiEffort?: string; onAiChange(patch: { feedbackAiModel?: AiModel; feedbackAiEffort?: AiEffort }): void };
 type AiModel = '' | 'claude-haiku-5-5' | 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'sonnet' | 'opus'; type AiEffort = '' | 'low' | 'medium' | 'high';
 // The footer picks from these only: Haiku 5.5 + low is the default, and Effort stops at Medium. A saved Claude Code default ('') or 'high' shows as the default.
-export const AI_MODELS = [{ value: 'claude-haiku-5-5', label: 'Haiku 5.5', hint: '빠르고 가벼움 · 기본' }, { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', hint: '균형' }, { value: 'claude-opus-5-5', label: 'Opus 5.5', hint: '가장 정교하지만 느림' }]
+export const AI_MODELS = [{ value: 'claude-haiku-5-5', label: 'Haiku 5.5', hint: '빠르고 가벼움, 기본' }, { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5', hint: '균형' }, { value: 'claude-opus-5-5', label: 'Opus 5.5', hint: '가장 정교하지만 느림' }]
   .map(model => ({ ...model, color: modelColor(model.value) }));
-export const AI_EFFORTS = [{ value: 'low', hint: '빠르게 · 기본' }, { value: 'medium', hint: '더 꼼꼼하게' }].map(item => ({ ...item, label: effortLabel(item.value), ...effortStyle[item.value] }));
+export const AI_EFFORTS = [{ value: 'low', hint: '빠르게, 기본' }, { value: 'medium', hint: '더 꼼꼼하게' }].map(item => ({ ...item, label: effortLabel(item.value), ...effortStyle[item.value] }));
 
 export function FeedbackPanel(props: PanelProps) {
   const { items, available, queue, loaded, error, currentId } = useFeedback();
@@ -146,7 +146,7 @@ function FeedbackAi({ hidden, items, available, onDone, fail, aiContext, aiModel
       {busy ? <DraftProgress since={since} label="AI가 작성하는 중…" /> : <div className="feedback-empty">
         <span className="feedback-empty-mark"><Icon name="sparkles" size={26} /></span>
         <h3>대충 적어도 괜찮아요</h3>
-        <p>AI가 제목·유형·내용으로 정리해 줘요.</p>
+        <p>AI가 제목, 유형, 내용으로 정리해 줘요.</p>
       </div>}
     </div>
     <div className="chat-composer feedback-compose" data-feedback-region="피드백 AI 입력창">
@@ -180,8 +180,8 @@ function ProgressLine({ items, info, now }: { items: Feedback[]; info: FeedbackP
   const [busy, setBusy] = useState(false), [note, setNote] = useState(''), waiting = items.some(item => item.status === 'submitted' && item.progress?.state !== 'released' && item.progress?.state !== 'declined');
   if (!waiting || info.off || info.unsupported) return null;
   return <p className="feedback-progress-line" role="status">
-    <span>{info.checkedAt ? `처리 상태 확인 · ${ago(info.checkedAt, now)}` : '처리 상태를 아직 확인하지 못했어요'}</span>
-    <button type="button" disabled={busy} onClick={() => { setBusy(true); setNote(''); void refreshProgress().then(result => { setNote(result.skipped ? '방금 확인했어요 · 20초 뒤에 다시 확인할 수 있어요' : '확인했어요'); setTimeout(() => setNote(''), 4000); }).finally(() => setBusy(false)); }}><Icon name="refresh" size={12} />{busy ? '확인 중…' : '지금 확인'}</button>
+    <span>{info.checkedAt ? `처리 상태 확인, ${ago(info.checkedAt, now)}` : '처리 상태를 아직 확인하지 못했어요'}</span>
+    <button type="button" disabled={busy} onClick={() => { setBusy(true); setNote(''); void refreshProgress().then(result => { setNote(result.skipped ? '방금 확인했어요, 20초 뒤에 다시 확인할 수 있어요' : '확인했어요'); setTimeout(() => setNote(''), 4000); }).finally(() => setBusy(false)); }}><Icon name="refresh" size={12} />{busy ? '확인 중…' : '지금 확인'}</button>
     {note && <small className="feedback-progress-note">{note}</small>}
   </p>;
 }
@@ -356,12 +356,12 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
       </div>}
       {(item.status === 'queued' || item.status === 'submitting') && <div className="feedback-note queued" role="status">
         <Icon name={item.status === 'submitting' ? 'send' : 'clock'} size={14} />
-        <span>{item.status === 'submitting' ? '전송 중…' : `전송 대기 · ${queueEta(item, queue, now)}`}{item.attempts ? <small> · {item.attempts}번 시도함</small> : null}</span>
+        <span>{item.status === 'submitting' ? '전송 중…' : `전송 대기, ${queueEta(item, queue, now)}`}{item.attempts ? <small>, {item.attempts}번 시도함</small> : null}</span>
         {item.status === 'queued' && <button type="button" disabled={!!busy} onClick={() => run('unqueue', () => feedbackCall('feedback/unqueue', { id }))}><Icon name="x" size={13} />대기 취소</button>}
         {item.status === 'queued' && item.error && <small className="feedback-last-error">마지막 시도: {item.error}</small>}
       </div>}
       {item.status === 'submitted' && <div className="feedback-note ok">
-        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? ` · #${item.issueNumber}` : ''}{progressBadge(item.progress) && <> · <b className={`feedback-progress-word progress-${progressBadge(item.progress)!.tone}`}>{progressBadge(item.progress)!.text}</b></>}</span>
+        <span className="feedback-done-mark"><Icon name="check" size={14} /></span><span>{item.via === 'anonymous' ? '로그인 없이 제출됨' : '제출했습니다'}{item.issueNumber ? `, #${item.issueNumber}` : ''}{progressBadge(item.progress) && <>, <b className={`feedback-progress-word progress-${progressBadge(item.progress)!.tone}`}>{progressBadge(item.progress)!.text}</b></>}</span>
         {progressInApp(item.progress) && <small className="feedback-inapp-note">{progressInApp(item.progress)}</small>}
       </div>}
       {item.status === 'failed' && item.error && <p className="feedback-note warn" role="alert"><Icon name="alert" size={14} />{item.error}</p>}
@@ -399,7 +399,7 @@ function FeedbackDetail({ item, available, queue, now, ask, fail, aiContext, aiM
             </>}
             <IconButton icon="image" label="이미지 파일 추가" onClick={() => file.current?.click()} disabled={item.images.length >= MAX_IMAGES || busy === 'image'} />
           </span>}
-          <small className="feedback-count-hint">{item.images.length ? `이미지 ${item.images.length}/${MAX_IMAGES}` : editable ? '붙여넣기·끌어다 놓기로 추가' : '이미지 없음'}</small>
+          <small className="feedback-count-hint">{item.images.length ? `이미지 ${item.images.length}/${MAX_IMAGES}` : editable ? '붙여넣기/끌어다 놓기로 추가' : '이미지 없음'}</small>
           <span className="spacer" />
           {editable && <div className="feedback-tabs" role="tablist" aria-label="본문 보기" data-tab={tab}>
             <button type="button" role="tab" aria-selected={tab === 'edit'} onClick={() => setTab('edit')}>편집</button>

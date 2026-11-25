@@ -1,4 +1,4 @@
-// Per-chat limits (/limit): when a chat reaches one, its running turn is interrupted and further sends are refused until the limit is raised, cleared or the window resets.
+// Per-chat limits (the status line's 제한 button): when a chat reaches one, its running turn is interrupted and further sends are refused until the limit is raised, cleared or the window resets.
 // A limit is { cost?, share?, usage?, compact, base?, stop? }, stored in the chat's meta (every setting is per chat):
 //   cost   dollars: stop when this chat's own cost reaches it (checked at every state publish, so mid-turn too).
 //   share  { window, percent }: "사용량 할당". This chat may use only that much of the provider's 5-hour or weekly window. The usage API has no per-chat number,

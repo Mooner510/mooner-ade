@@ -62,7 +62,7 @@ await clearBox(); await sleep(100);
 await idle(); await clearBox();
 await send('slow one'); await c.waitFor(`!!document.querySelector('button.chat-send.stop')`, 8000);
 await send('steer A'); await c.waitFor(`!!document.querySelector('.chat-bubble.steer')`, 8000);
-check('S1 a steering message waits under the running reply, with the new hint', (await steers()).map(text => text.replace(/steer A$/, '')), ['스티어링 · ↑ 수정 · Esc 바로 보내기']);
+check('S1 a steering message waits under the running reply, with the new hint', (await steers()).map(text => text.replace(/steer A$/, '')), ['스티어링, ↑ 수정, Esc 바로 보내기']);
 await focus(); await press('ArrowUp'); await sleep(800);
 check('S1 ↑ takes the last steering message back into the box', await value(), 'steer A');
 check('S1 and it is gone from the thread, while the turn keeps running', [await steers(), await busy()], [[], true]);

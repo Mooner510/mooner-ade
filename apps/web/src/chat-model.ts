@@ -7,7 +7,7 @@ export type ChatCapabilities = { configOptions?: ModelConfigOption[]; images: bo
 export type IdleCompactInfo = { chat: boolean | null; on: boolean };
 export type AutoCompact = { window: number; maxWindow: number; auto: boolean; source?: string };
 export type ChatSegmentTitles = { custom?: string; ai?: string; agent?: string };
-/** This chat's limit (/limit, server chat-limit.js): the rules, the rule that stopped the chat (null: not stopped) and the last numbers. */
+/** This chat's limit (the status line's 제한 button, server chat-limit.js): the rules, the rule that stopped the chat (null: not stopped) and the last numbers. */
 export type LimitWindow = 'session' | 'weekly';
 export type ChatLimit = { cost?: number; share?: { window: LimitWindow; percent: number }; usage?: { window: LimitWindow; percent: number }; compact: boolean; stop: string | null; now: { cost?: number; share?: number; usage?: number } };
 export type ChatState = {
@@ -52,6 +52,7 @@ const previewsOf = (event: { previews?: unknown }) => Array.isArray(event.previe
 export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd?: number };
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
+  | { kind: 'peer_message'; sender: string; text: string }
   | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual' | 'idle'; preTokens: number | null; postTokens: number | null }
@@ -60,7 +61,6 @@ export type Item = ItemBase & (
   | { kind: 'note'; text: string; tones?: Tone[]; change?: SettingsChange; rev?: number; local?: boolean } // client-only system line (settings changes, /help): never stored
   | { kind: 'agent_end'; toolUseId: string; run?: number } // a background subagent/job ended: marks that point in the thread, so its report is not mistaken for a plain message
   | { kind: 'btw'; question: string; status: 'pending' | 'done' | 'error'; answer?: string; error?: string; costUsd?: number | null; tokens?: Tokens; local?: boolean } // /btw: a side question and its answer, client-only (never enters the agent's context)
-  | { kind: 'limit'; local?: boolean } // /limit: the limit card (rules, auto compact), client-only
   | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
@@ -122,7 +122,7 @@ export function processGroups(blocks: { block: Block; sub: boolean }[]): { plain
   while (cut > 0 && blocks[cut - 1].block.type === 'text' && !blocks[cut - 1].sub) cut -= 1; // the closing text
   const isStep = (entry: { block: Block; sub: boolean }) => entry.block.type !== 'text' || entry.sub; // a sub-agent's text is process by nature
   // An Agent call is a card of its own (its subagent is tracked apart), so it never folds away under "과정".
-  const plain = blocks.map((entry, at) => at >= cut || (entry.block.type === 'text' && !entry.sub && isResultText(entry.block.text)) || (entry.block.type === 'tool_use' && isAgentTool(entry.block.name)));
+  const plain = blocks.map((entry, at) => at >= cut || (entry.block.type === 'text' && !entry.sub && isResultText(entry.block.text)) || (entry.block.type === 'tool_use' && (isAgentTool(entry.block.name) || isMessageTool(entry.block.name, entry.block.input))));
   const groups: ProcessGroup[] = [];
   for (let at = 0; at < blocks.length;) {
     if (plain[at]) { at += 1; continue; }
@@ -336,6 +336,13 @@ export function reduce(view: ChatView, event: any): ChatView {
   const key = `e${event.seq ?? Math.random()}`, fresh = view.ready;
   switch (event.kind) {
     case 'user': return refreshViewTitle(append({ ...view, thinkingTokens: 0, blocked: {} }, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), view.state.segmentTitles ?? {});
+    case 'peer_message': {
+      const item: Item = { kind: 'peer_message', key, sender: String(event.sender), text: String(event.text), fresh };
+      const at = event.beforeMessageId ? findAssistant(view.items, event.beforeMessageId) : event.beforeSeq ? view.items.findIndex(item => item.key === `e${event.beforeSeq}`) : -1;
+      if (at < 0) return append(view, item);
+      const items = view.items.slice(); items.splice(at, 0, item);
+      return { ...view, items: items.slice(-MAX_ITEMS) };
+    }
     case 'title': {
       const source = event.source === 'custom' || event.source === 'ai' ? event.source : 'agent';
       const text = cleanChatTitle(String(event.text ?? ''));
@@ -375,7 +382,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (phase === 'end' && mainJob && next.status !== 'stopped' && !view.items.some(item => item.kind === 'note' && item.key === `job-end-${id}`)) {
         const status = next.status === 'failed' || next.status === 'error' ? '실패' : '끝남';
         const message = `${next.description || '백그라운드 작업'} ${status}`;
-        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림 · ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });
+        return append({ ...view, tasks }, { kind: 'note', key: `job-end-${id}`, text: `알림: ${message}`, tones: [{ value: '알림', color: 'var(--accent)', icon: 'notifications' }, { value: message, color: 'var(--fg)' }], fresh });
       }
       if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id && item.run === next.startedAt)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, run: next.startedAt, fresh }); // one marker per run: a resumed agent ends again
       return { ...view, tasks };
@@ -448,7 +455,7 @@ export function reduce(view: ChatView, event: any): ChatView {
     case 'settings': {
       if (event.by !== 'agent') return view;
       if (typeof event.model === 'string') {
-        const name = shortModel(event.model), why = event.reason === 'highRiskCyberActivity' ? ' · 보안 정책' : '';
+        const name = shortModel(event.model), why = event.reason === 'highRiskCyberActivity' ? ', 보안 정책' : '';
         return append(view, { kind: 'note', key, text: `${name} 모델로 자동 전환되었습니다.${why}`, tones: [{ value: name, color: modelColor(event.model) ?? 'var(--fg)' }], fresh });
       }
       if (typeof event.permissionMode !== 'string') return view;
@@ -460,7 +467,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       const folder = (path: unknown) => typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '' : '';
       const enter = event.phase === 'enter', name = folder(enter ? event.path : event.from);
       const tail = enter ? (event.branch && event.branch !== name ? ` (${event.branch})` : '') : name ? ` ${event.removed ? '삭제됨' : '유지됨'}` : '';
-      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? ` · ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
+      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? `, ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
     }
     case 'limit': {
       // The CLI reports again whenever the rounded share moves, so one window keeps one line that follows the latest reading (not a new line per percent, and not the first reading for good).
@@ -562,7 +569,7 @@ export function modelProvider(model: string | null | undefined) {
 export function modelAppearance(model: string | null | undefined, agent?: string) {
   const provider = modelProvider(model);
   return agent === 'cursor' ? { color: provider ? provider.party === 'First Party' ? 'var(--provider-cursor)' : `var(--provider-${provider.id})` : undefined,
-    hint: provider ? `${provider.party} · ${provider.name}` : 'Provider 미확인' }
+    hint: provider ? `${provider.party}, ${provider.name}` : 'Provider 미확인' }
     : { color: modelColor(model), hint: undefined };
 }
 // Keep parameterized IDs for requests; names are only for display.
@@ -596,6 +603,9 @@ const ALIASES = ['opus', 'sonnet', 'haiku'], FAMILY_ORDER = ['fable', 'opus', 's
 export const modelVersion = (name: string) => (/(\d+(?:\.\d+)*)/.exec(name)?.[1] ?? '0').split('.').map(Number);
 const compareVersion = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const diff = (b[i] ?? 0) - (a[i] ?? 0); if (diff) return diff; } return 0; };
 const familyRank = (family: string) => { const at = FAMILY_ORDER.indexOf(family); return at < 0 ? FAMILY_ORDER.length : at; };
+const CODEX_FAMILY_ORDER = ['astra', 'sol', 'terra', 'luna', 'other'];
+const codexFamily = (row: ModelRow) => /(?:^|[^a-z])(astra|sol|terra|luna)(?![a-z])/i.exec(`${row.id} ${row.label}`)?.[1].toLowerCase() ?? 'other';
+const codexFamilyRank = (row: ModelRow) => CODEX_FAMILY_ORDER.indexOf(codexFamily(row));
 const versionAtLeast = (version: number[], min: number[]) => compareVersion(min, version) >= 0;
 const versionBelow = (version: number[], max: number[]) => compareVersion(version, max) > 0;
 // Opus 4.6 / Sonnet 4.x (before 5) still need `--model …[1m]` for 1M; newer lines default to 1M (Fable 5+, Opus 4.7+, Sonnet 5+, Haiku 5.5). Older families do not support 1M.
@@ -614,10 +624,9 @@ export function modelRows(catalog: CatalogModel[], aliases: Record<string, strin
     const base: ModelRow = { value, label, family: model.family, id: model.id, oneM: false, main: model.main, version };
     return needsExplicit1mRow(model.family, version) ? [base, { ...base, value: `${value}[1m]`, label: `${label} (1M)`, oneM: true }] : [base];
   });
-  return rows.sort((a, b) => Number(b.family === 'fable') - Number(a.family === 'fable') || compareVersion(a.version, b.version) || familyRank(a.family) - familyRank(b.family) || a.family.localeCompare(b.family) || Number(a.oneM) - Number(b.oneM));
+  return rows.sort((a, b) => Number(b.family === 'fable') - Number(a.family === 'fable') || compareVersion(a.version, b.version) || familyRank(a.family) - familyRank(b.family) || codexFamilyRank(a) - codexFamilyRank(b) || a.family.localeCompare(b.family) || Number(a.oneM) - Number(b.oneM));
 }
 const rowNewestFirst = (a: ModelRow, b: ModelRow) => compareVersion(a.version, b.version) || familyRank(a.family) - familyRank(b.family) || Number(a.oneM) - Number(b.oneM) || a.label.localeCompare(b.label);
-const codexFamily = (row: ModelRow) => /(?:^|[^a-z])(astra|sol|terra|luna)(?![a-z])/i.exec(`${row.id} ${row.label}`)?.[1].toLowerCase() ?? 'other';
 const pickTopPerGroup = (rows: ModelRow[], group: (row: ModelRow) => string, keepAll?: (row: ModelRow) => boolean) => {
   const fixed: ModelRow[] = [], groups = new Map<string, ModelRow[]>();
   for (const row of rows) {
@@ -708,9 +717,9 @@ const dayClock = (at: Date) => `${at.toDateString() === new Date().toDateString(
 export function limitLine(event: { status?: string; limit?: string | null; utilization?: number | null; threshold?: number | null; resetsAt?: number | null; overage?: boolean; at?: number | null }): { text: string; tones: Tone[] } {
   const name = `${limitNames[event.limit ?? ''] ?? '사용'} 한도`, hit = event.status === 'rejected';
   const reading = typeof event.utilization === 'number' && Number.isFinite(event.utilization) ? `${Math.round(event.utilization * 100)}%를 사용했습니다` : typeof event.threshold === 'number' && Number.isFinite(event.threshold) ? `${Math.round(event.threshold * 100)}% 이상 사용했습니다` : '대부분을 사용했습니다';
-  const seen = !hit && typeof event.at === 'number' && event.at > 0 && typeof event.utilization === 'number' ? ` · ${dayClock(new Date(event.at))} 기준` : '';
-  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null, when = at ? ` · ${dayClock(at)}에 초기화` : '';
-  const text = hit ? `${name}에 도달했습니다${event.overage ? ' · 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${reading}${seen}${when}`;
+  const seen = !hit && typeof event.at === 'number' && event.at > 0 && typeof event.utilization === 'number' ? `, ${dayClock(new Date(event.at))} 기준` : '';
+  const at = event.resetsAt ? new Date(event.resetsAt * 1000) : null, when = at ? `, ${dayClock(at)}에 초기화` : '';
+  const text = hit ? `${name}에 도달했습니다${event.overage ? ', 추가 사용량으로 이어서 진행합니다' : ''}${when}` : `${name}의 ${reading}${seen}${when}`;
   return { text, tones: [{ value: name, color: hit ? 'var(--del)' : 'var(--warn)', icon: 'speed' }] };
 }
 export const permissionLabels: Record<string, string> = { default: '기본', acceptEdits: '편집 허용', plan: '계획', auto: '자동', bypassPermissions: 'Bypass', ask: '질문' };
@@ -856,20 +865,24 @@ const parentOf = (event: any): { parent?: string } => typeof event.parentToolUse
 // A session's cost: under $0.1 five decimals (small turns still show), from $0.1 two.
 // Enough digits to see a cheap turn move (a Haiku reply is a fraction of a cent), without five zeros for nothing.
 const limitWindowName = { session: '5시간', weekly: '주간' };
-/** The status line's limit chip: what is set and how far the chat is from it; `stopped` once a rule has stopped the chat. null when no limit is set. */
-export function limitChip(limit?: ChatLimit | null): { text: string; tip: string; stopped: boolean } | null {
+/** One rule of the limit as the chip and the panel say it: `now` and `max` in the rule's own unit ("$0.50" / "$1.00", "61" / "80%"), `ratio` how close the chat is (0..1). */
+export type LimitRule = { name: string; label: string; now: string | null; max: string; ratio: number };
+/** The status line's limit chip: every rule as "now/max" (how far the chat is from it; the cost rule says only its max when the cost item beside the chip already shows the amount, `costShown`) and `ratio`, the closest rule's share of its max; `stopped` once a rule has stopped the chat. null when no limit is set. */
+export function limitChip(limit?: ChatLimit | null, costShown = false): { text: string; stop: string | null; stopped: boolean; ratio: number; rules: LimitRule[] } | null {
   if (!limit) return null;
-  const rules: { short: string; now: string; name: string; max: string }[] = [];
-  if (limit.cost !== undefined) rules.push({ short: `$${limit.cost.toFixed(2)}`, now: limit.now.cost !== undefined ? `$${dollars(limit.now.cost)}` : '—', name: '비용', max: `$${limit.cost.toFixed(2)}` });
-  if (limit.usage) rules.push({ short: `${limitWindowName[limit.usage.window]} ${limit.usage.percent}%`, now: limit.now.usage !== undefined ? `${limit.now.usage}%` : '—', name: `${limitWindowName[limit.usage.window]} 사용량`, max: `${limit.usage.percent}%` });
-  if (limit.share) rules.push({ short: `${limitWindowName[limit.share.window]} 할당 ${limit.share.percent}%`, now: limit.now.share !== undefined ? `${limit.now.share}%` : '—', name: `${limitWindowName[limit.share.window]} 할당(추정)`, max: `${limit.share.percent}%` });
-  const lines = rules.map(rule => `${rule.name} ${rule.now} / ${rule.max}`);
-  return { text: limit.stop ? '제한 도달' : rules.map(rule => rule.short).join(' · '), tip: ['제한', ...(limit.stop ? [`${limit.stop}에 따라 중지됨`] : []), ...lines, ...(limit.compact ? ['중지되면 자동 압축'] : [])].join('\n'), stopped: Boolean(limit.stop) };
+  const rules: LimitRule[] = [];
+  const add = (name: string, label: string, now: number | undefined, max: number, nowText: string, maxText: string) => rules.push({ name, label, now: now !== undefined ? nowText : null, max: maxText, ratio: now !== undefined ? Math.min(1, now / max) : 0 });
+  if (limit.cost !== undefined) add('비용', '', limit.now.cost, limit.cost, `$${(limit.now.cost ?? 0).toFixed(2)}`, `$${limit.cost.toFixed(2)}`);
+  if (limit.usage) add(`${limitWindowName[limit.usage.window]} 사용량`, `${limitWindowName[limit.usage.window]} `, limit.now.usage, limit.usage.percent, String(limit.now.usage), `${limit.usage.percent}%`);
+  if (limit.share) add(`${limitWindowName[limit.share.window]} 할당(추정)`, `${limitWindowName[limit.share.window]} 할당 `, limit.now.share, limit.share.percent, String(limit.now.share), `${limit.share.percent}%`);
+  const said = (rule: LimitRule) => `${rule.label}${rule.now !== null && !(costShown && rule.name === '비용') ? `${rule.now}/` : ''}${rule.max}`;
+  return { text: limit.stop ? '제한 도달' : `제한 ${rules.map(said).join(', ')}`, stop: limit.stop, stopped: Boolean(limit.stop), ratio: limit.stop ? 1 : Math.max(0, ...rules.map(rule => rule.ratio)), rules };
 }
 export const dollars = (value: number) => value === 0 ? '0.00' : value < 1 ? value.toFixed(4) : value.toFixed(2);
 
 // One name for what a tool is called in the UI (internal ones read as what they do).
-export const toolLabel = (name: string) => name === 'SubagentHandback' ? '보고' : mcpTool(name) ? `${mcpTool(name)!.server} · ${mcpTool(name)!.tool}` : name;
+const isMessageTool = (name: string, input: any) => (name === 'SendMessage' || name === 'mcp__agent_bus__send_message') && typeof input?.message === 'string' && (typeof input.to === 'string' || Array.isArray(input.to));
+export const toolLabel = (name: string) => name === 'SendMessage' || name === 'mcp__agent_bus__send_message' ? '메시지 전송' : name === 'SubagentHandback' ? '보고' : mcpTool(name) ? `${mcpTool(name)!.server}: ${mcpTool(name)!.tool}` : name;
 
 // An MCP tool is called `mcp__<server>__<tool>`: shown as the server ("Claude Docs") and the tool ("update"), not the raw id.
 export function mcpTool(name: string): { server: string; tool: string } | null {
@@ -892,7 +905,7 @@ export function mcpSummary(input: any): string {
   };
   for (const key of MCP_KEYS) { const hit = find(input, key, 0); if (hit) return hit; }
   const pairs = Object.entries(input ?? {}).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).slice(0, 3).map(([key, value]) => `${key}: ${value}`);
-  return pairs.length ? clean(pairs.join(' · ')) : '';
+  return pairs.length ? clean(pairs.join(', ')) : '';
 }
 
 // A document / page the agent published on claude.ai (the Artifact tool, or the Claude Docs connector): the link comes back in the tool's result.
@@ -1092,6 +1105,7 @@ export function relativePath(file: string, root = ''): string {
   return planFile(file);
 }
 export function toolSummary(name: string, input: any, root = ''): string {
+  if (isMessageTool(name, input)) return `${Array.isArray(input.to) ? input.to.join(', ') : input.to}, ${input.message.replace(/\s+/g, ' ').trim()}`.slice(0, 140);
   const text = (value: unknown) => typeof value === 'string' ? value : '';
   const line = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 140);
   switch (name) {
@@ -1108,9 +1122,9 @@ export function toolSummary(name: string, input: any, root = ''): string {
     case 'SubagentHandback': return line(text(input?.message));
     case 'TodoWrite': return `${Array.isArray(input?.todos) ? input.todos.length : 0}개 항목`;
     // Scheduling: the cron line and what it will say ("57 8 * * * · 테스트 알림 · 반복"); a job is named by its id.
-    case 'CronCreate': return line([text(input?.cron), text(input?.prompt), input?.recurring ? '반복' : ''].filter(Boolean).join(' · '));
+    case 'CronCreate': return line([text(input?.cron), text(input?.prompt), input?.recurring ? '반복' : ''].filter(Boolean).join(', '));
     case 'CronDelete': case 'TaskStop': return line(text(input?.id) || text(input?.task_id) || text(input?.shell_id));
-    case 'NotebookEdit': return line([relativePath(text(input?.notebook_path), root), text(input?.edit_mode) === 'insert' ? '셀 추가' : text(input?.edit_mode) === 'delete' ? '셀 삭제' : ''].filter(Boolean).join(' · '));
+    case 'NotebookEdit': return line([relativePath(text(input?.notebook_path), root), text(input?.edit_mode) === 'insert' ? '셀 추가' : text(input?.edit_mode) === 'delete' ? '셀 삭제' : ''].filter(Boolean).join(', '));
     default: if (mcpTool(name)) return mcpSummary(input);
       // A tool called with no input (CronList, ListAgents, EnterPlanMode) has nothing to summarize: no "{}".
       return line(text(input?.description) || text(input?.command) || text(input?.path) || text(input?.query) || (input && Object.keys(input).length ? JSON.stringify(input) : ''));
@@ -1336,4 +1350,4 @@ export function pickGreeting(user = '', now = new Date(), random = Math.random):
 export const compactLabel = (trigger: 'auto' | 'manual' | 'idle') => trigger === 'idle' ? '캐시 만료 전 자동 압축' : trigger === 'auto' ? '자동 압축' : '컨텍스트 압축';
 /** What /idlecompact prints without an argument. */
 export const idleCompactNote = (info: IdleCompactInfo | undefined, minK: number) =>
-  `캐시 만료 전 자동 Compact: ${info?.on ? '켜짐' : '꺼짐'} (${info && info.chat !== null ? '이 채팅 설정' : '앱 설정을 따름'}) · 1시간 캐시, 컨텍스트 ${minK}K 이상일 때만. 변경: /idlecompact on|off|auto`;
+  `캐시 만료 전 자동 Compact: ${info?.on ? '켜짐' : '꺼짐'} (${info && info.chat !== null ? '이 채팅 설정' : '앱 설정을 따름'}), 1시간 캐시, 컨텍스트 ${minK}K 이상일 때만. 변경: /idlecompact on|off|auto`;

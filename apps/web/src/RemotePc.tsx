@@ -82,7 +82,7 @@ export function RemotePcDialog({ onClose }: { onClose(): void }) {
           </div>
           {offer && <div className="remote-pc-offer">
             <p><strong>{offer.name}</strong>에 연결합니다. 그 PC에 뜬 확인 창의 지문이 아래 이 PC 지문과 같은지 확인하세요.</p>
-            <p>이 PC <code>{offer.myFingerprint}</code> · 그 PC <code>{offer.hostFingerprint}</code></p>
+            <p>이 PC <code>{offer.myFingerprint}</code>, 그 PC <code>{offer.hostFingerprint}</code></p>
             <button type="button" className="primary" disabled={Boolean(busy)} onClick={pair}>{busy === 'pair' ? '그 PC에서 승인하세요…' : '연결 요청'}</button>
           </div>}
         </section>

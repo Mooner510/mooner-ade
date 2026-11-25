@@ -198,7 +198,7 @@ export function createLink({ connect, hostId, hostKey, key, backoff = { baseMs: 
 }
 
 // ---- the Hub session and this PC's pairings ---------------------------------------------------------------------------------
-const deviceName = () => `ADE · ${String(os.hostname() || 'PC').replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40).trim() || 'PC'}`;
+const deviceName = () => `ADE - ${String(os.hostname() || 'PC').replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40).trim() || 'PC'}`;
 const emptyState = () => ({ account: null, deviceId: null, tokens: null, key: null, hosts: [] });
 
 // `store`: { read() → state | null, write(state) }. The state holds secrets (Hub tokens, this PC's Noise key): the caller seals it.

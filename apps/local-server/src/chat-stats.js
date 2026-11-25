@@ -47,6 +47,7 @@ export function chatEventStats(events) {
   const start = events.findLastIndex(event => event.kind === 'divider');
   const kept = events.slice(start + 1), tools = new Map(), calls = new Map(), failed = new Set(), models = new Map(), timeline = [], turnSeries = [], compactionAt = [];
   let previous = {}, current = {}, context = 0, model = 'unknown', turn = 0, tokensAvailable = false, cost = null;
+  const outcomes = { success: 0, failed: 0, interrupted: 0 };
   const tokens = { input: 0, output: 0, thinking: 0, read: 0, write5m: 0, write1h: 0 };
   for (const event of kept) {
     if (event.model) model = event.model;
@@ -68,6 +69,7 @@ export function chatEventStats(events) {
       failed.add(event.toolUseId);
     }
     if (event.kind !== 'result') continue;
+    if (Object.hasOwn(outcomes, event.status)) outcomes[event.status]++;
     const delta = key => Math.max(0, num(current[key]) - num(previous[key]));
     const input = delta('input'), output = delta('output'), read = delta('cacheRead'), write = delta('cacheCreate'), thinking = delta('thinking');
     tokens.input += input; tokens.output += output; tokens.read += read; tokens.write5m += write; tokens.thinking += thinking;
@@ -85,7 +87,7 @@ export function chatEventStats(events) {
   for (const event of kept) if (event.kind === 'message' && event.parentToolUseId && event.usage && event.id) subs.set(event.id, event.usage);
   for (const usage of subs.values()) { tokens.input += num(usage.input); tokens.output += num(usage.output); tokens.read += num(usage.cacheRead); tokens.write5m += num(usage.cacheCreate); tokensAvailable = true; }
   const input = tokens.input + tokens.read + tokens.write5m;
-  return { source: 'ade', tokensAvailable, contextAvailable: kept.some(event => event.kind === 'usage' && Number.isFinite(event.contextTokens)), requests: turnSeries.length, subRequests: subs.size, turns: turn, compactions: compactionAt.length, compactionAt,
+  return { source: 'ade', tokensAvailable, contextAvailable: kept.some(event => event.kind === 'usage' && Number.isFinite(event.contextTokens)), requests: turnSeries.length, subRequests: subs.size, turns: turn, outcomes, compactions: compactionAt.length, compactionAt,
     startedAt: kept[0]?.at ?? null, endedAt: kept.at(-1)?.at ?? null, activeMs: turnSeries.reduce((sum, row) => sum + row.ms, 0), tokens,
     cacheHitRate: tokensAvailable && input > 0 ? tokens.read / input : null, peakContext: Math.max(0, ...timeline.map(row => row.ctx)),
     cost: cost === null ? null : { totalUsd: cost, toolMs: 0, linesAdded: 0, linesRemoved: 0 }, models: [...models.values()],

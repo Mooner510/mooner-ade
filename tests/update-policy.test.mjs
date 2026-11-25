@@ -34,9 +34,9 @@ test('reasons are worded per kind and cut off after a few', () => {
     { project: 'x', terminal: 'y', agent: 'claude', kind: 'scheduled', detail: '오후 3:20:00에 실행될 예정입니다' },
     { project: '', terminal: '', kind: 'unknown', detail: '서버가 응답하지 않습니다' },
   ]);
-  assert.match(text, /^• mooner-ade · web: Claude가 작업 중$/m);
-  assert.match(text, /^• mooner-ade · api: 백그라운드 작업\(shell·monitor\)이 실행 중/m);
-  assert.match(text, /^• tts · train: 명령 실행 중 \(python\)$/m);
+  assert.match(text, /^• mooner-ade \/ web: Claude가 작업 중$/m);
+  assert.match(text, /^• mooner-ade \/ api: 백그라운드 작업\(shell\/monitor\)이 실행 중/m);
+  assert.match(text, /^• tts \/ train: 명령 실행 중 \(python\)$/m);
   assert.match(text, /^• 상태를 확인할 수 없음 \(서버가 응답하지 않습니다\)$/m);
   const many = describeReasons(Array.from({ length: 9 }, (_, index) => ({ project: 'p', terminal: String(index), kind: 'command' })), 6);
   assert.equal(many.split('\n').length, 7);

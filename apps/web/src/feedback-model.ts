@@ -91,7 +91,7 @@ export function progressNewsText(items: Pick<Feedback, 'issueNumber' | 'progress
   const [item] = items, badge = progressBadge(item.progress), name = item.issueNumber ? `피드백 #${item.issueNumber}` : '제출한 피드백';
   if (item.progress?.commentNews && !item.progress.stateNews) return `${name}에 답변이 달렸어요`;
   const state = badge ? `${name}: ${badge.text}` : `${name}의 처리 상태가 바뀌었어요`;
-  return item.progress?.commentNews ? `${state} · 답변도 달렸어요` : state;
+  return item.progress?.commentNews ? `${state}, 답변도 달렸어요` : state;
 }
 /**
  * News is told once per change: a function that is given the list each time it loads and returns the toast text for what it has not told yet ('' if nothing).

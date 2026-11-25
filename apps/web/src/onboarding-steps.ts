@@ -34,9 +34,9 @@ const c = { dim: '\x1b[2m', bold: '\x1b[1m', red: '\x1b[31m', green: '\x1b[32m',
 export const shellPrompt = `${c.cyan}~/my-app${c.off} ${c.green}$${c.off} `;
 export const agentPrompt = (agent: Agent) => `${agent === 'claude' ? c.orange : c.cyan}>${c.off} `;
 const banner: Record<Agent, string[]> = {
-  claude: [`${c.orange}✻${c.off} ${c.bold}Claude Code${c.off} ${c.dim}· ~/my-app${c.off}`, `${c.dim}  무엇을 도와드릴까요? 요청을 입력하고 Enter를 누르세요.${c.off}`, ''],
-  codex: [`${c.cyan}>_${c.off} ${c.bold}Codex${c.off} ${c.dim}· ~/my-app${c.off}`, `${c.dim}  요청을 입력하세요.${c.off}`, ''],
-  cursor: [`${c.bold}⬡ Cursor CLI${c.off} ${c.dim}· ~/my-app${c.off}`, `${c.dim}  요청을 입력하세요.${c.off}`, '']
+  claude: [`${c.orange}✻${c.off} ${c.bold}Claude Code${c.off} ${c.dim},  ~/my-app${c.off}`, `${c.dim}  무엇을 도와드릴까요? 요청을 입력하고 Enter를 누르세요.${c.off}`, ''],
+  codex: [`${c.cyan}>_${c.off} ${c.bold}Codex${c.off} ${c.dim},  ~/my-app${c.off}`, `${c.dim}  요청을 입력하세요.${c.off}`, ''],
+  cursor: [`${c.bold}⬡ Cursor CLI${c.off} ${c.dim},  ~/my-app${c.off}`, `${c.dim}  요청을 입력하세요.${c.off}`, '']
 };
 export const agentLabels: Record<Agent, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' };
 // Only what the tutorial itself created may be closed; the starting tabs and the Claude terminal are needed by later steps.
@@ -68,7 +68,7 @@ export const steps = (keys: (binding: string) => string): Step[] => [
     tasks: [{ flag: 'projectVisit', label: 'api-server 프로젝트 열어 보기', hint: '사이드바에서 클릭', target: '.tour [data-project="api-server"] .folder-head' }, { flag: 'projectBack', label: 'my-app 으로 돌아오기', hint: `클릭 또는 ${keys('mod+alt+1')}`, target: '.tour [data-project="my-app"] .folder-head' }] },
   // Once a chat is open it plays scripted conversations by itself (chat-demo.ts): the step is watching what Chat mode looks like at work.
   { id: 'chat', title: 'Chat 모드, ADE만의 강점', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane', keys: [['새 탭', 'mod+shift+t']],
-    body: ['{chat} 에이전트의 일을 **읽기 쉬운 대화**로 보여 줘요.', '코드 변경은 **diff**로, 명령과 결과는 **접히는 카드**로 정리돼요.', '**Interactive UI**: 차트·표·선택지가 답에 나오고, **눌러서** 바로 답해요.', '승인과 질문도 **버튼 한 번**이면 끝나요.'],
+    body: ['{chat} 에이전트의 일을 **읽기 쉬운 대화**로 보여 줘요.', '코드 변경은 **diff**로, 명령과 결과는 **접히는 카드**로 정리돼요.', '**Interactive UI**: 차트, 표, 선택지가 답에 나오고, **눌러서** 바로 답해요.', '승인과 질문도 **버튼 한 번**이면 끝나요.'],
     after: '자동으로 흘러가는 대화를 둘러보고 ‘다음’을 누르세요.',
     tasks: [{ flag: 'newTab', label: '새 탭 열기', hint: `‘새 탭’ 버튼 또는 ${keys('mod+shift+t')}`, target: '.tour .app:not([hidden]) .new-tab' },
       { flag: 'chat', label: 'Chat 모드로 에이전트 열기', hint: '어떤 AI 에이전트든', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .empty-tab .launchers button:not(:first-child)' }] },
@@ -76,10 +76,10 @@ export const steps = (keys: (binding: string) => string): Step[] => [
     body: ['{chat} 대화 화면과 {cli} 터미널을 **같은 대화**로 오가요.', '익숙한 **CLI 화면**이 필요할 때 바로 전환하세요.'],
     tasks: [{ flag: 'toCli', label: 'CLI로 전환해 보기', hint: 'Chat 위쪽의 터미널 버튼', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .chat-pane .pane-actions [aria-label^="터미널로 전환"]' }] },
   { id: 'alert', title: '부르면 바로 알 수 있어요', target: '.tour .folder.active .folder-tabs',
-    body: ['에이전트가 **승인을 기다리면** 사이드바에 {alert}', '**작업을 마치면** {done}', '소리·OS 알림도 오고, 누르면 **그 자리로 이동**해요.'],
+    body: ['에이전트가 **승인을 기다리면** 사이드바에 {alert}', '**작업을 마치면** {done}', '소리/OS 알림도 오고, 누르면 **그 자리로 이동**해요.'],
     tasks: [{ flag: 'away', label: '다른 탭으로 가서 기다리기', hint: 'web 탭 클릭', target: '.tour [data-tab="web"]' }, { flag: 'back', label: '{alert} 가 뜬 에이전트 탭으로 돌아가기', target: '.tour .folder-tabs [data-agent-state="attention"]' }, { flag: 'answer', label: '요청 승인하기', hint: 'Enter, 아무거나 입력해도 돼요', target: '.tour .app:not([hidden]) .tab-page:not([hidden]) .terminal-pane[data-agent]' }] },
   { id: 'diff', title: 'Git 그래프로 기록 확인', target: '.tour .app:not([hidden]) .tabbar [aria-label="Git 커밋 그래프"]', keys: [['Git 커밋 그래프', 'mod+shift+g']],
-    body: ['아직 커밋하지 않은 줄 수가 **Git 버튼**에 {diff} 로 보여요.', '열면 아래에서 **커밋 그래프**가 올라와요. 우클릭으로 **체크아웃·머지·리베이스·체리픽**을 바로 해요.'],
+    body: ['아직 커밋하지 않은 줄 수가 **Git 버튼**에 {diff} 로 보여요.', '열면 아래에서 **커밋 그래프**가 올라와요. 우클릭으로 **체크아웃, 머지, 리베이스, 체리픽**을 바로 해요.'],
     tasks: [{ flag: 'diffOpen', label: 'Git 그래프 열기', hint: `상단 Git 버튼 또는 ${keys('mod+shift+g')}` }, { flag: 'diffClose', label: '다시 닫기', hint: '같은 버튼이나 패널의 X' }] },
   { id: 'split', title: '한 탭에 여러 칸', target: '.tour .app:not([hidden]) .tab-page:not([hidden])', keys: [['좌우 분할', 'ctrl+d'], ['상하 분할', 'ctrl+shift+d'], ['한 칸 최대화', 'mod+shift+enter']],
     body: ['칸을 나눠 **서버 로그와 에이전트**를 한 화면에 두세요.', '새 칸에서도 **Chat이나 CLI**를 골라 띄워요.'],

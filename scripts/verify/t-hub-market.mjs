@@ -62,7 +62,7 @@ await check('hub.sign-in', '로그인: 코드가 보이고, 승인하면 계정 
   await c.waitFor(`document.querySelectorAll('.plugin-market-row').length===2`, 15000);
   const account = await text('.plugin-market-account'); ok(/시험 계정/.test(account), account);
   const list = await rows(); eq(list.map(r => r.name), ['Hub 데모', '다른 플러그인']);
-  ok(list[0].buttons.some(label => label.endsWith('설치')) && /프로젝트·터미널 조작/.test(list[0].text), JSON.stringify(list[0]));
+  ok(list[0].buttons.some(label => label.endsWith('설치')) && /프로젝트/터미널 조작/.test(list[0].text), JSON.stringify(list[0]));
   ok(/터미널 명령/.test(list[1].text) && /에이전트 도구/.test(list[1].text), JSON.stringify(list[1]));
   await c.shot('hub-3-list');
 });

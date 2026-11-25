@@ -116,7 +116,7 @@ const demos: Record<string, Demo> = {
   'cache-ttl': { render: () => <div className="usage-panel changelog-popover"><CacheTtlPicker value={'1h' satisfies CacheTtl} onChange={noop} /></div>, min: 130 },
   'image-shrink': { render: () => <AttachmentStrip images={[{ url: SCREENSHOT, reduced: true }, { url: PHOTO }]} onOpen={noop} onRemove={noop} />, min: 90 },
   diagram: { render: () => <MermaidBlock code={GRAPH} />, frame: 'chat', min: 120 },
-  'file-open': { render: () => <Markdown text={'수정한 파일은 경로를 눌러 바로 열어요.\n\n[[file:apps/web/src/ChatPane.tsx:1240]] · [[file:docs/TESTING_GUIDE.md]] · [[file:scripts/verify/]]'} />, frame: 'chat', min: 80 },
+  'file-open': { render: () => <Markdown text={'수정한 파일은 경로를 눌러 바로 열어요.\n\n[[file:apps/web/src/ChatPane.tsx:1240]], [[file:docs/TESTING_GUIDE.md]], [[file:scripts/verify/]]'} />, frame: 'chat', min: 80 },
   'table-merge': { render: () => <Markdown text={TABLE} />, frame: 'chat', min: 190 },
   'quick-send': { render: () => <UiSpecView chatId="changelog-demo" specs={FORM} />, frame: 'chat', min: 130 },
   'changelog-dot': { render: () => <div className="changelog-dot"><IconButton icon="sparkles" label="변경 내역 (읽지 않은 버전 있음)" dot /><IconButton icon="sparkles" label="변경 내역" /></div>, min: 40 },

@@ -5,7 +5,7 @@ import { captureRect, dragRect, type Box, type Point } from './feedback-model';
 import { canCapture, desktopCapture, openBrowserShare, type BrowserShare, type CaptureMode } from './feedback-store';
 
 const modes: { id: CaptureMode; label: string; icon: IconName; hint: string }[] = [
-  { id: 'element', label: '요소', icon: 'captureElement', hint: '클릭해서 캡쳐 · ↑ ↓ 또는 휠로 부모·자식 선택 · Alt: 가장 안쪽' },
+  { id: 'element', label: '요소', icon: 'captureElement', hint: '클릭해서 캡쳐, ↑ ↓ 또는 휠로 부모/자식 선택, Alt: 가장 안쪽' },
   { id: 'window', label: '창 전체', icon: 'captureWindow', hint: '창 전체를 캡쳐합니다' },
   { id: 'range', label: '범위', icon: 'captureRange', hint: '끌어서 범위를 정하세요' }
 ];
@@ -156,10 +156,10 @@ export function FeedbackCapture({ mode: initial, fallbackZoom, onCaptured, onCan
       {mode === 'range' && <span>{Math.round(shown.width)} × {Math.round(shown.height)}</span>}
     </div>}
     {picked && pick && shown && <div className={`feedback-capture-tip${flipX ? ' flip-x' : ''}${flipY ? ' flip-y' : ''}`} style={{ left: pick.x + (flipX ? -16 : 16), top: pick.y + (flipY ? -16 : 20) }} aria-hidden="true">
-      <b>{elementLabel(picked)}<small>{Math.round(shown.width)} × {Math.round(shown.height)} · {pick.chain.length - pick.depth}/{pick.chain.length}</small></b>
+      <b>{elementLabel(picked)}<small>{Math.round(shown.width)} × {Math.round(shown.height)}, {pick.chain.length - pick.depth}/{pick.chain.length}</small></b>
       <span className={parent ? '' : 'off'}><kbd>↑</kbd>부모<em>{parent ? elementLabel(parent) : '없음'}</em></span>
       <span className={child ? '' : 'off'}><kbd>↓</kbd>자식<em>{child ? elementLabel(child) : '없음'}</em></span>
-      <small className="keys"><kbd>Alt</kbd>가장 안쪽 · 클릭 캡쳐</small>
+      <small className="keys"><kbd>Alt</kbd>가장 안쪽, 클릭 캡쳐</small>
     </div>}
     <div className="feedback-capture-bar" role="toolbar" aria-label="캡쳐 방식">
       {modes.map(item => <button key={item.id} type="button" aria-pressed={mode === item.id} onClick={() => { setPick(null); setDrag(null); setMode(item.id); }}><Icon name={item.icon} size={15} />{item.label}</button>)}

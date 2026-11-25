@@ -1,9 +1,11 @@
 // Fake `claude -p` for interrupts and approvals: 'slow' runs until interrupted (the interrupt's result comes a moment after its control answer, like the
 // real CLI), 'approve' asks for a tool and then crashes while the approval is open, anything else is answered at once.
 import readline from 'node:readline';
+import { appendFileSync } from 'node:fs';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
-const result = (extra = {}) => send({ type: 'result', is_error: false, result: 'ok', session_id: 'control-session', total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, ...extra });
-send({ type: 'system', subtype: 'init', session_id: 'control-session', model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'] });
+const sessionId = process.env.ADE_TEST_CLAUDE_SESSION ?? 'control-session';
+const result = (extra = {}) => send({ type: 'result', is_error: false, result: 'ok', session_id: sessionId, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, ...extra });
+send({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'] });
 let running = false, askx = 0, allow = [], mcpAnswer = 'grants'; // allow: the permissions.allow the host put into the flag settings
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
@@ -46,6 +48,16 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (message.uuid && running) return; // a steering line is held behind the running turn
   if (message.uuid) send({ type: 'user', uuid: message.uuid, isReplay: true, message: message.message });
   const text = message.message?.content?.find?.(part => part.type === 'text')?.text ?? '';
+  if (text === 'peer-messages' && process.env.ADE_TEST_PEER_TRANSCRIPT) {
+    const timestamp = new Date().toISOString();
+    const live = { type: 'user', uuid: 'a0000000-0000-4000-8000-000000000001', timestamp, origin: { kind: 'peer', from: 'uds:/tmp/live.sock', name: 'wave-3e', body: '테스트를 재실행했어요.' }, message: { role: 'user', content: 'wrapped message' } };
+    const fileOnly = { type: 'user', uuid: 'a0000000-0000-4000-8000-000000000002', timestamp, message: { role: 'user', content: 'Another Claude session sent a message while you were working:\n<cross-session-message from="uds:/tmp/file.sock" from-name="wave-ac">\n남은 검수를 이어서 실행했어요.\n</cross-session-message>' } };
+    send({ ...live, isReplay: true });
+    appendFileSync(process.env.ADE_TEST_PEER_TRANSCRIPT, [live, fileOnly].map(row => JSON.stringify(row) + '\n').join(''));
+    send({ type: 'assistant', uuid: 'a0000000-0000-4000-8000-000000000003', message: { id: 'peer-reply', content: [{ type: 'text', text: '두 세션의 답을 받았습니다.' }] } });
+    result();
+    return;
+  }
   if (text === 'slow') { running = true; return; }
   if (text === 'bgtask') { // a background subagent that outlives its turn: it ends only by stop_task (or with the child)
     send({ type: 'system', subtype: 'task_started', tool_use_id: 'toolu_bg', task_id: 'task-bg', description: 'long', subagent_type: 'general-purpose', is_backgrounded: true, session_id: 'control-session' });

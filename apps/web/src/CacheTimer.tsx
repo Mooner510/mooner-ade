@@ -23,13 +23,13 @@ export const CacheTimer = memo(function CacheTimer({ cache, warn = 20 }: { cache
   const { state, left, total } = cacheTimerState(cache, now, warn);
   const seconds = Math.ceil(left / 1000), ttl = cache.ttl >= 3600 ? '1시간' : `${Math.round(cache.ttl / 60)}분`;
   const write = cache.ttl >= 3600 ? 2 : 1.25, read = cacheReadShare(cache.model), ratio = Math.round(write / read), tokens = formatTokens(cache.tokens);
-  const compactLine = done ? `${done.trigger === 'manual' ? '수동' : '자동'} Compact · ${clockTime(done.at)}${done.before && done.after ? ` · ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}` : '';
+  const compactLine = done ? `${done.trigger === 'manual' ? '수동' : '자동'} Compact, ${clockTime(done.at)}${done.before && done.after ? `, ${formatTokens(done.before)} → ${formatTokens(done.after)} 토큰` : ''}` : '';
   const title = (state === 'compacted' ? [compactLine] : state === 'cold' ? [
-    `프롬프트 캐시 만료 · ${clockTime(expires)}`,
-    `다음 요청: ${tokens} 토큰 다시 기록 · 비용·사용량 약 ${ratio}배`
+    `프롬프트 캐시 만료, ${clockTime(expires)}`,
+    `다음 요청: ${tokens} 토큰 다시 기록, 비용/사용량 약 ${ratio}배`
   ] : [
-    `프롬프트 캐시 · 요청마다 ${ttl} 갱신 · ${tokens} 토큰`,
-    `마지막 요청 ${clockTime(cache.at)} · ${compacts ? '자동 Compact 예정' : '만료 예정'} ${clockTime(expires)}`
+    `프롬프트 캐시, 요청마다 ${ttl} 갱신, ${tokens} 토큰`,
+    `마지막 요청 ${clockTime(cache.at)}, ${compacts ? '자동 Compact 예정' : '만료 예정'} ${clockTime(expires)}`
   ]).join('\n');
   return <span className={`cache-timer ${state}`} title={title} aria-label={title} style={state === 'compacted' ? undefined : { '--left': left / total } as CSSProperties}>
     {state === 'hot' && <Icon name="flame" size={12} />}

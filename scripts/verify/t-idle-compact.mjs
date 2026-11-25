@@ -65,15 +65,15 @@ try {
   // 4. A message: the chip announces the compact (1h cache, 250K context), and ADE sends /compact itself near the end of the window.
   await send('hello'); await idle();
   await c.waitFor(`${chipTitle}.includes('자동 Compact 예정')`, 15000);
-  const announced = await text(chipTitle); assert.match(announced, /1시간 갱신 · 250K 토큰/);
+  const announced = await text(chipTitle); assert.match(announced, /1시간 갱신, 250K 토큰/);
   await c.shot('idle-chip-announced');
   const waited = Date.now();
   await c.waitFor(`${all('.chat-divider.compact')}.length === 1`, 90000);
   console.log(`compact after ${Math.round((Date.now() - waited) / 1000)} s of waiting`);
-  assert.match(await text(`${all('.chat-divider.compact')}[0].textContent`), /^캐시 만료 전 자동 압축 · 231k → 14\.6k 토큰/, 'the divider says ADE compacted it');
+  assert.match(await text(`${all('.chat-divider.compact')}[0].textContent`), /^캐시 만료 전 자동 압축, 231k → 14\.6k 토큰/, 'the divider says ADE compacted it');
   await idle();
   assert.equal(await text(`${all('.chat-msg.user')}.filter(e => e.textContent.trim() === '/compact').length`), 1, 'one /compact, sent by ADE');
-  await c.waitFor(`${chipTitle}.includes('자동 Compact · ') && !${chipTitle}.includes('자동 Compact 예정')`, 10000);
+  await c.waitFor(`${chipTitle}.includes('자동 Compact, ') && !${chipTitle}.includes('자동 Compact 예정')`, 10000);
   await c.shot('idle-compacted');
 
   // 5. Never twice for the same cache window.

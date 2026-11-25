@@ -6,7 +6,7 @@ export function BgAnimTip({ onOpenSettings, onDone, closing }: { onOpenSettings(
     </div>
     <div className="chat-mode-tip-body">
       <strong>다른 앱을 보는 동안 애니메이션이 멈춥니다</strong>
-      <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU·GPU를 더 씁니다.</p>
+      <p>설정 › 외관의 ‘백그라운드에서도 애니메이션 유지’를 켜면 다른 앱을 보는 동안에도 로딩 표시가 계속 움직입니다. 켜 두면 CPU/GPU를 더 씁니다.</p>
       <div className="chat-mode-tip-actions">
         <button type="button" className="primary" onClick={onOpenSettings}>설정 열기</button>
         <button type="button" onClick={onDone}>확인</button>

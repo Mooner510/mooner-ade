@@ -46,7 +46,7 @@ export function McpCard({ call }: { call: McpCall }) {
         <div className="mc-row">
           <button type="button" className="mc-name" aria-expanded={tools.length ? expanded : undefined} onClick={() => tools.length && setOpen(expanded ? '' : server.name)}>
             <span className="mc-chev">{tools.length > 0 && <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} />}</span><i className={working ? 'mc-spin' : tone} /><b>{server.name}</b>
-            <span className="mc-sub">{working ? BUSY[busy!.action] ?? '처리 중…' : signing && server.status === 'needs-auth' ? '브라우저에서 로그인을 마치면 자동으로 반영돼요…' : server.status === 'connected' ? `도구 ${tools.length}개` : server.status === 'failed' && server.error ? `${label} · ${server.error}` : label}</span>
+            <span className="mc-sub">{working ? BUSY[busy!.action] ?? '처리 중…' : signing && server.status === 'needs-auth' ? '브라우저에서 로그인을 마치면 자동으로 반영돼요…' : server.status === 'connected' ? `도구 ${tools.length}개` : server.status === 'failed' && server.error ? `${label}: ${server.error}` : label}</span>
           </button>
           {main}
           <button type="button" disabled={working} onClick={() => void run(server.name, { action: 'toggle', enabled: server.status === 'disabled' })}>{server.status === 'disabled' ? '켜기' : '끄기'}</button>

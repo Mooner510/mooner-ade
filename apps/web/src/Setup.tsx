@@ -54,7 +54,7 @@ export function Setup({ settings, onSettings, onNext, onSkip }: { settings: Sett
         <div className="setup-size"><span>크기</span><input type="range" min={10} max={20} aria-label="터미널 글꼴 크기" value={settings.terminalFontSize} onChange={event => set('terminalFontSize', Number(event.target.value))} /><output>{settings.terminalFontSize}px</output></div>
       </div>
       <pre className="setup-preview" style={{ fontFamily: font, fontSize: settings.terminalFontSize }}>
-        <span className="p">~/my-app</span> <span className="g">$</span> claude{'\n'}<span className="o">✻</span> <b>Claude Code</b> <span className="d">· ~/my-app</span>{'\n'}<span className="o">&gt;</span> 포트를 환경 변수로 바꿔 줘{'\n'}<span className="o">⏺</span> Update(<b>src/server.ts</b>) <span className="g">+1</span> <span className="r">−1</span>{'\n'}<span className="d">0Oo 1lI =&gt; != ===</span>
+        <span className="p">~/my-app</span> <span className="g">$</span> claude{'\n'}<span className="o">✻</span> <b>Claude Code</b> <span className="d">,  ~/my-app</span>{'\n'}<span className="o">&gt;</span> 포트를 환경 변수로 바꿔 줘{'\n'}<span className="o">⏺</span> Update(<b>src/server.ts</b>) <span className="g">+1</span> <span className="r">−1</span>{'\n'}<span className="d">0Oo 1lI =&gt; != ===</span>
       </pre>
     </div>
 

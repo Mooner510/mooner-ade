@@ -71,7 +71,7 @@ export function MermaidViewerModal({ svg, onClose }: { svg: string; onClose(): v
     <header className="mermaid-modal-head">
       <h2 id={titleId}>다이어그램</h2>
       <div className="mermaid-modal-actions">
-        <div className="mermaid-viewer-tools" role="group" aria-label="확대·축소">
+        <div className="mermaid-viewer-tools" role="group" aria-label="확대/축소">
           <button type="button" aria-label="축소" onClick={() => zoomBy(1 / 1.15)}>−</button>
           <button type="button" onClick={() => setTransform(null)}>맞춤</button>
           <button type="button" aria-label="확대" onClick={() => zoomBy(1.15)}>+</button>
@@ -79,7 +79,7 @@ export function MermaidViewerModal({ svg, onClose }: { svg: string; onClose(): v
         <IconButton icon="x" label="닫기" onClick={onClose} />
       </div>
     </header>
-    <div ref={viewport} className="mermaid-viewer-viewport" tabIndex={0} role="group" aria-label="다이어그램 (화살표: 이동, + −: 확대·축소, 0: 맞춤)" onKeyDown={keyView} onPointerDown={startDrag} onPointerMove={moveDrag}
+    <div ref={viewport} className="mermaid-viewer-viewport" tabIndex={0} role="group" aria-label="다이어그램 (화살표: 이동, + −: 확대/축소, 0: 맞춤)" onKeyDown={keyView} onPointerDown={startDrag} onPointerMove={moveDrag}
       onLostPointerCapture={event => { if (drag.current?.pointerId === event.pointerId) drag.current = null; }}>
       <div ref={canvas} className="mermaid-viewer-canvas" style={w ? { transform: canvasTransform(w, h, { w: svgW, h: svgH }, current) } : undefined} dangerouslySetInnerHTML={{ __html: svg }} />
     </div>

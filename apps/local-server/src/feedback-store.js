@@ -54,7 +54,7 @@ export function checkImage(bytes, mime) {
 // the help text is what the AI draft is told each one means. The web UI has the same ids and tags (feedback-model.ts; a test keeps them equal).
 export const FEEDBACK_TYPES = {
   bug: ['버그', '동작이 잘못되거나 오류가 남'], feature: ['제안', '없는 기능이나 새 동작을 바람'], pain: ['불편', '쓰기 불편하거나 헷갈림'],
-  perf: ['성능', '느리거나 버벅이거나 자원을 많이 씀'], design: ['디자인', '화면 모양·배치·문구'], question: ['질문', '사용법이나 동작이 궁금함'], praise: ['칭찬', '좋았던 점']
+  perf: ['성능', '느리거나 버벅이거나 자원을 많이 씀'], design: ['디자인', '화면 모양, 배치, 문구'], question: ['질문', '사용법이나 동작이 궁금함'], praise: ['칭찬', '좋았던 점']
 };
 // Known ids only, each once, in the table's order (the title prefix and the labels come out the same whatever order they were picked in).
 export const cleanTypes = value => { const picked = new Set(Array.isArray(value) ? value : []); return Object.keys(FEEDBACK_TYPES).filter(id => picked.has(id)); };

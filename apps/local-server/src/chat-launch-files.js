@@ -18,7 +18,7 @@ export function chatLaunchFiles(dataRoot) {
     // Copies older versions left in the chat's own folder are no longer read.
     await Promise.all(['ade-ui-prompt.md', 'claude-settings.json'].map(name => fs.rm(path.join(root, name), { force: true }).catch(() => {})));
     // The chat instructions travel as a file so the argv stays short and a resumed session gets the same text.
-    const prompt = chatPrompt(context.interactiveUi, context.fileLinks, context.agent, context.mediaBlocks);
+    const prompt = chatPrompt(context.interactiveUi, context.fileLinks, context.agent, context.mediaBlocks, context.colorChips);
     const promptFile = prompt ? await writeShared(shared, 'ade-ui-prompt', '.md', prompt) : undefined;
     // The settings file always exists: it also tells Claude not to sign the user's commits and PRs (see agent-signature.js).
     const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);

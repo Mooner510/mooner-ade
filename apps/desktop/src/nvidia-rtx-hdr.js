@@ -62,7 +62,7 @@ const readState = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8'
 
 const DETAIL = [
   'NVIDIA App의 RTX HDR이 무너에이드 화면의 프레임마다 끼어들어, 애니메이션과 마우스 반응이 초당 20프레임으로 끊기고 CPU를 계속 씁니다.',
-  '"해결"을 누르면 관리자 권한을 한 번 확인한 뒤 NVIDIA 드라이버에 무너에이드 전용 설정(RTX HDR 끔)을 추가합니다. Chrome·Edge·Slack에 NVIDIA가 기본으로 넣어 둔 것과 같은 설정이며, 다른 게임과 앱의 RTX HDR은 그대로입니다.',
+  '"해결"을 누르면 관리자 권한을 한 번 확인한 뒤 NVIDIA 드라이버에 무너에이드 전용 설정(RTX HDR 끔)을 추가합니다. Chrome, Edge, Slack에 NVIDIA가 기본으로 넣어 둔 것과 같은 설정이며, 다른 게임과 앱의 RTX HDR은 그대로입니다.',
 ].join('\n\n');
 const MANUAL = 'NVIDIA App › 그래픽 › 프로그램 설정에서 MoonerADE를 추가해 RTX HDR을 끄면 같은 효과입니다.';
 

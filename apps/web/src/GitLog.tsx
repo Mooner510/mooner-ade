@@ -287,7 +287,7 @@ export function GitLog(props: GitLogProps) {
     const index = fullGraph.index.get(commit.h) ?? -1;
     if (!current) return 'Detached HEAD';
     if (!inHead[index]) return '현재 브랜치 밖의 커밋';
-    if (commit.p.length > 1) return `머지 커밋 · 부모 ${commit.p.length}개`;
+    if (commit.p.length > 1) return `머지 커밋, 부모 ${commit.p.length}개`;
     if (remoteReach.guarded?.[index]) return '보호 브랜치에 Push된 커밋';
     if (many) return '';
     return '';
@@ -441,7 +441,7 @@ export function GitLog(props: GitLogProps) {
     } }];
   const graphMenu = (): MenuEntry[] => [
     { header: '정렬' },
-    { label: '커밋 날짜순', radio: true, checked: settings.gitSort === 'date', hint: '위상 · 커밋 날짜 기준', run: () => set('gitSort', 'date') },
+    { label: '커밋 날짜순', radio: true, checked: settings.gitSort === 'date', hint: '위상, 커밋 날짜 기준', run: () => set('gitSort', 'date') },
     { label: '위상 정렬', radio: true, checked: settings.gitSort === 'topo', hint: '머지 커밋 아래에 병합된 커밋 우선 표시', run: () => set('gitSort', 'topo') },
     { header: '옵션' },
     { label: '머지 선형화', checked: settings.gitLinear, hint: '메인 브랜치 위에 병합된 커밋 표시', keep: true, run: () => set('gitLinear', !settings.gitLinear) },
@@ -599,11 +599,11 @@ export function GitLog(props: GitLogProps) {
     <button className={`git-filter ${filters.since !== null || filters.until !== null ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'date', '날짜 필터')}>{filters.since !== null || filters.until !== null ? `날짜: ${filters.since ? absoluteDate(filters.since).slice(0, 10) : '…'} ~ ${filters.until ? absoluteDate(filters.until).slice(0, 10) : '…'}` : '날짜'}<Icon name="chevronDown" size={12} /></button>
     <button className={`git-filter ${filters.paths.length ? 'on' : ''}`} onClick={event => openMenu(...under(event), 'path', '경로 필터')}>{filterLabel('경로', filters.paths)}<Icon name="chevronDown" size={12} /></button>
     <span className="git-sep" />
-    <IconButton icon="graph" label="그래프 정렬·표시 옵션" dot={settings.gitSort !== 'date' || settings.gitLinear || settings.gitFirstParent || settings.gitNoMerges} onClick={event => openMenu(...under(event), 'graph', '그래프 옵션')} />
+    <IconButton icon="graph" label="그래프 정렬/표시 옵션" dot={settings.gitSort !== 'date' || settings.gitLinear || settings.gitFirstParent || settings.gitNoMerges} onClick={event => openMenu(...under(event), 'graph', '그래프 옵션')} />
     <IconButton icon="refresh" label="기록 새로고침" onClick={() => void load(true)} />
     <IconButton icon="cherry" label="선택한 커밋 체리픽" disabled={!selection.length} onClick={() => { const list = [...selection].reverse(); if (list.some(commit => (data?.commits[fullGraph!.index.get(commit.h)!]?.p.length ?? 0) > 1)) { notify('머지 커밋은 체리픽할 수 없습니다.', 'warn'); return; } void op({ op: 'cherry-pick', shas: list.map(commit => commit.h) }, '체리픽', `커밋 ${list.length}개를 체리픽했습니다.`); }} />
-    <IconButton icon="eye" label="열·표시 옵션" onClick={event => openMenu(...under(event), 'view', '보기 옵션')} />
-    <IconButton icon="target" label="해시·브랜치·태그로 이동" onClick={async () => {
+    <IconButton icon="eye" label="열/표시 옵션" onClick={event => openMenu(...under(event), 'view', '보기 옵션')} />
+    <IconButton icon="target" label="해시, 브랜치, 태그로 이동" onClick={async () => {
       const value = (await ask.input('해시, 브랜치 또는 태그로 이동', ''))?.trim(); if (!value || !data) return;
       const ref = data.refs.find(item => item.name === value) ?? data.refs.find(item => item.name.endsWith(`/${value}`));
       const hash = ref?.sha ?? data.commits.find(commit => commit.h.startsWith(value.toLowerCase()))?.h;
@@ -770,7 +770,7 @@ function RefLabels({ refs, detached, compact, tagNames }: { refs: Ref[]; detache
       if (main.kind === 'tag' && !tagNames) return <span key={main.ref} className="git-ref icon-only" title={tooltip}><TagGlyph color={REF_COLORS.tag} /></span>;
       return <span key={main.ref} className={`git-ref ${main.kind} ${main.kind === 'local' && main.current ? 'current' : ''}`} title={tooltip}>
         <span className="git-ref-icons">{group.map(ref => <TagGlyph key={ref.ref} color={colorOf(ref)} />)}</span>
-        {shown.map(ref => clip(ref.name)).join(' · ')}
+        {shown.map(ref => clip(ref.name)).join(', ')}
       </span>;
     })}
   </span>;

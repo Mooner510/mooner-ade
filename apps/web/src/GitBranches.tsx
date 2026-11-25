@@ -55,7 +55,7 @@ export function BranchesPane({ refs, headBranch, detached, favorites, dirs, tags
     <span className={`git-branch-icon ${ref.kind}`}>{ref.kind === 'tag' ? <TagGlyph /> : <Icon name="branch" size={12} />}</span>
     <span className="git-branch-name">{label}</span>
     {favorite(ref) && <Icon name="star" size={12} />}
-    {(ref.ahead || ref.behind) ? <span className="git-track" title={`보낼 커밋 ${ref.ahead ?? 0}개 · 받을 커밋 ${ref.behind ?? 0}개`}>{ref.behind ? <span className="in">↓{ref.behind}</span> : null}{ref.ahead ? <span className="out">↑{ref.ahead}</span> : null}</span> : null}
+    {(ref.ahead || ref.behind) ? <span className="git-track" title={`보낼 커밋 ${ref.ahead ?? 0}개, 받을 커밋 ${ref.behind ?? 0}개`}>{ref.behind ? <span className="in">↓{ref.behind}</span> : null}{ref.ahead ? <span className="out">↑{ref.ahead}</span> : null}</span> : null}
   </div>;
   const render = (nodes: Node[], depth: number): ReactNode[] => nodes.flatMap(node => node.kind === 'leaf' ? [row(node.ref, node.label, depth, node.ref.ref)]
     : [<div key={node.key} role="treeitem" aria-expanded={searching || !closed.has(node.key)} className="git-branch-group" style={{ paddingLeft: 4 + depth * 14 }} onClick={() => toggle(node.key)}>

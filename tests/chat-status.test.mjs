@@ -35,7 +35,7 @@ test('the chat status line shows usage for every agent and offers auth switching
   assert.equal(api.match(/\$0\.4231/g)?.length, 1);
   assert.match(plan, /role="radio" aria-checked="true" class="usage-option plan"/); assert.match(plan, /role="radio" aria-checked="false" class="usage-option api"/);
   assert.match(api, /role="radio" aria-checked="true" class="usage-option api"/);
-  assert.match(plan, /구독 플랜<small>5시간·주간 한도<\/small>/);
+  assert.match(plan, /구독 플랜<small>5시간\/주간 한도<\/small>/);
   assert.match(plan, /API 키<small>토큰 사용량에 따라 과금<\/small>/);
   assert.equal(plan.match(/usage-check/g)?.length, 1);
   assert.equal(api.match(/usage-check/g)?.length, 1);

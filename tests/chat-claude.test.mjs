@@ -8,6 +8,13 @@ const askInput = { questions: [
 ] };
 const askRequest = { type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: askInput } };
 
+test('a joined Claude peer delivery keeps each body and ignores subagent hand-backs', () => {
+  const row = { type: 'user', uuid: 'fa000000-0000-4000-8000-000000000001', origin: { kind: 'peer', from: 'uds:/tmp/peer.sock', name: 'Reviewer', members: [{ body: '첫 메시지' }, { body: '다음 메시지' }] }, message: { content: 'combined envelope' } };
+  const [event] = normalizeClaude(row);
+  assert.deepEqual([event.kind, event.sender, event.text], ['peer_message', 'Reviewer', '첫 메시지\n\n---\n\n다음 메시지']);
+  assert.deepEqual(normalizeClaude({ ...row, origin: { ...row.origin, handback: true } }), []);
+});
+
 test('AskUserQuestion becomes questions with headers, descriptions, multi-select and a free-text row', () => {
   const [event] = normalizeClaude(askRequest);
   assert.equal(event.kind, 'approval');

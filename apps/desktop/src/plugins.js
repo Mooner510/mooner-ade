@@ -129,6 +129,16 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     signOutHub: () => manager.signOutHub(),
     hubCatalog: options => manager.hubCatalog({ force: options?.force === true }),
     hubInstall: id => manager.installFromHub(String(id)),
+    usageSync: async body => {
+      try {
+        const localId = typeof body?.localId === 'string' ? body.localId : '';
+        if (body?.op === 'pull') return await hub.pullUsage({ localId, since: body?.since && typeof body.since === 'object' ? body.since : {}, after: body?.after && typeof body.after === 'object' ? body.after : {} });
+        return await hub.pushUsage({ localId, name: typeof body?.name === 'string' ? body.name : '', platform: typeof body?.platform === 'string' ? body.platform : '', records: Array.isArray(body?.records) ? body.records : [] });
+      } catch (failure) {
+        if (failure?.code === 'NOT_SIGNED_IN') return { signedIn: false, batches: [] };
+        return { signedIn: true, failed: true };
+      }
+    },
     // Where a personal access token is made (read-only access to chosen repositories).
     openTokenPage: async () => { openExternal('https://github.com/settings/personal-access-tokens/new'); return manager.snapshot(); },
     pickZip: async () => {
