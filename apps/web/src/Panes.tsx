@@ -787,7 +787,11 @@ function useCloseGhost(pane: Pane, visible: boolean, zoom: string) {
   };
   // Only a pane count that dropped inside one tab and one zoom state counts as a close (a launcher turning into a terminal, a tab switch and zooming all change ids without closing anything).
   // The ids come from the tree, not the DOM: the last pane left of a split sits in no slot at all.
+  // Only when the layout, visibility or zoom changed: this ran after every render (focus moves, titles) and each run measured every pane, forcing a layout. The timer below keeps the stored rects fresh.
+  const seen = useRef<{ pane?: Pane; visible?: boolean; zoom?: string }>({});
   useLayoutEffect(() => {
+    if (seen.current.pane === pane && seen.current.visible === visible && seen.current.zoom === zoom) return;
+    seen.current = { pane, visible, zoom };
     const ids = leafList(pane).map(leaf => leaf.id), before = last.current;
     if (visible && zoom === lastZoom.current && ids.length < lastIds.current.length && ids.some(id => lastIds.current.includes(id)) && !matchMedia('(prefers-reduced-motion: reduce)').matches) for (const [id, ghost] of before) if (!ids.includes(id)) playGhost(ghost);
     last.current = capture(); lastIds.current = ids; lastZoom.current = zoom;
