@@ -587,6 +587,8 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
     <Row title={title} hint={hint}><Dropdown label={title} value={settings[key]} options={soundIds.map(id => ({ value: id, label: sounds[id].label }))} onChange={value => { set(key, value); playSound(value, settings.soundVolume); }} />
       <IconButton icon="bell" label={`${title} 미리 듣기`} onClick={() => playSound(settings[key], settings.soundVolume)} /></Row>;
   const root = useRef<HTMLDivElement>(null);
+  // The section tabs are one scrolling row on a phone: keep the open one in view, whichever way it was opened (a link, the search, a tap).
+  useEffect(() => { root.current?.querySelector<HTMLElement>('.settings-nav button[aria-pressed=true]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }); }, [section, searching]);
   const appearance = !searching && section === 'appearance';
   const barLive = !searching && section === 'status' && statusTab === 'bar';
   const lookApi = useMemo(() => ({ id: look, set: (id: string, theme = '') => { setLook(id); setLookTheme(theme); } }), [look]);
