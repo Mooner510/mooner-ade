@@ -98,6 +98,14 @@ if (!stream) {
       send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
+    // Phone end-to-end rig (scripts/verify/t-phone-e2e.mjs): `e2e-echo <text>` answers `echo: <text>`; `e2e-stream <n>` streams n answers one line each, 600 ms apart
+    // (a long live answer to scroll with), then ends the turn.
+    if (text.includes('e2e-stream')) {
+      const n = Math.min(Number(/e2e-stream\s+(\d+)/.exec(text)?.[1] ?? 12), 60);
+      for (let i = 1; i <= n; i++) { say(`스트림 ${i}/${n}번째 줄입니다.`); await wait(600); }
+      result(`stream ${n}`); return;
+    }
+    if (text.includes('e2e-echo')) { say('echo: ' + text); result(); return; }
     // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
     // Feedback checks: a ```ui form (the next-step choice), plan-limit reports whose rounded share keeps moving, and a reply with unbreakable tokens. ctl.json {"slowms":N} makes a `slow` turn last.
     if (text.includes('uiformslow')) { say('느린 선택지입니다.' + '\n\n' + '```ui' + '\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', 'slow 느리게 처리', '메뉴로 이동']]) + '\n' + '```'); result(); return; } // the chosen answer contains `slow`: a turn that lasts (ctl.json slowms)
