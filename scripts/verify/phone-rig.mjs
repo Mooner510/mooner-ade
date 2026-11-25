@@ -36,7 +36,7 @@ export const shotsDir = process.env.PHONE_E2E_SHOTS ?? 'C:\\AI\\claude-temp\\pho
 
 // ---- small helpers ---------------------------------------------------------------------------------------------------------------
 export const hex = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join('');
-export const log = (...a) => console.log(`[${new Date().toLocaleTimeString('ko-KR', { hour12: false })}]`, ...a);
+export const log = (...a) => console.log('[%s]', new Date().toLocaleTimeString('ko-KR', { hour12: false }), ...a); // constant format string
 export const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 // ---- the local Hub -------------------------------------------------------------------------------------------------------------------
@@ -64,7 +64,8 @@ class Jar {
   absorb(res) { for (const line of res.headers.getSetCookie?.() ?? []) { const [pair] = line.split(';'), i = pair.indexOf('='); const name = pair.slice(0, i).trim(), value = pair.slice(i + 1); if (/max-age=0|expires=thu, 01 jan 1970/i.test(line) || value === '') this.cookies.delete(name); else this.cookies.set(name, value); } }
   header() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '); }
 }
-const field = (html, name) => new RegExp(`<input[^>]*name="${name}"[^>]*value="([^"]*)"`).exec(html)?.[1] ?? new RegExp(`<input[^>]*value="([^"]*)"[^>]*name="${name}"`).exec(html)?.[1];
+// The value of the <input name=...> in the Hub's own page. Only hard-coded patterns run on the HTML (the name is compared, never put in a RegExp).
+const field = (html, name) => { for (const [tag] of html.matchAll(/<input[^>]*>/g)) if (/name="([^"]*)"/.exec(tag)?.[1] === name) return /value="([^"]*)"/.exec(tag)?.[1]; };
 // Approves a pending device enrollment as the Hub account `name` (the dev login makes it on first use): what the user does in the browser. `verifyUrl` is the
 // Hub's own /enroll?request=<id> page the device showed or opened; `userCode` is the 8-character code the device displays.
 export async function hubApprove(hubUrl, { verifyUrl, userCode, name = 'e2e' }) {

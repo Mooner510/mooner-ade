@@ -24,7 +24,9 @@ async function apk({ argv, where }) {
     const logFile = join(dir, 'gradle.log');
     log(`APK 빌드: gradlew ${args.join(' ')}  (로그: ${logFile})`);
     const code = await new Promise(res => {
-      const child = spawn(join(gradleDir, 'gradlew.bat'), args, { cwd: gradleDir, shell: true, windowsHide: true, env: { ...process.env, JAVA_HOME: process.env.JAVA_HOME ?? 'C:\\Program Files\\Java\\jdk-21', ANDROID_HOME: process.env.ANDROID_HOME ?? join(process.env.LOCALAPPDATA, 'Android', 'Sdk') } });
+      // The wrapper's jar is run with java directly (what scripts/release-apk.mjs of mooner-webapps does): no shell, so no .bat quoting.
+      const javaHome = process.env.JAVA_HOME ?? 'C:\\Program Files\\Java\\jdk-21';
+      const child = spawn(join(javaHome, 'bin', 'java'), ['-classpath', join(gradleDir, 'gradle', 'wrapper', 'gradle-wrapper.jar'), 'org.gradle.wrapper.GradleWrapperMain', ...args], { cwd: gradleDir, windowsHide: true, env: { ...process.env, JAVA_HOME: javaHome, ANDROID_HOME: process.env.ANDROID_HOME ?? join(process.env.LOCALAPPDATA, 'Android', 'Sdk') } });
       let text = ''; child.stdout.on('data', c => { text += c; }); child.stderr.on('data', c => { text += c; });
       child.on('exit', c => { writeFileSync(logFile, text); res(c); });
     });
@@ -38,7 +40,8 @@ async function apk({ argv, where }) {
 // ---- phone plumbing: adb reverse, the app, its WebView pages ---------------------------------------------------------------------------------
 function ensureReverse(m, adb) {
   const port = m.relayPort, phone = readManifest().phone ?? {};
-  if (!new RegExp(`tcp:${port}\\s+tcp:${port}`).test(adb.reverseList())) {
+  // `adb reverse --list` lines end with "tcp:<phone port> tcp:<pc port>": compared as text, the port never goes into a RegExp.
+  if (!adb.reverseList().split(/\r?\n/).some(line => line.trim().split(/\s+/).slice(-2).join(' ') === `tcp:${port} tcp:${port}`)) {
     adb.reverse(port);
     writeManifest({ phone: { ...phone, serial: adb.serial, pkg: PKG, reverses: [...new Set([...(phone.reverses ?? []), port])] } });
     log(`adb reverse tcp:${port} 추가`);
