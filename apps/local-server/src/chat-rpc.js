@@ -1,8 +1,20 @@
 import { fault } from './files.js';
 import { cursorMcp, isTrusted } from './mcp-trust.js';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { cleanChatTitle } from './chat-title.js';
 import { mergeCursorCommands } from './slash-commands.js';
+
+const mcpFilter = fileURLToPath(new URL('./mcp-filter.js', import.meta.url));
+// ACP session/new takes a whole server. A server with tools turned off is started through mcp-filter.js, which hides those names.
+export function cursorMcpServers(servers) {
+  return servers.map(server => {
+    const env = Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value: String(value) }));
+    if (!server.disabledTools?.length) return { name: server.name, command: server.command, args: server.args, env };
+    return { name: server.name, command: process.execPath, args: [mcpFilter, server.command, ...server.args], env: [...env, { name: 'ADE_MCP_HIDE', value: server.disabledTools.join('\n') }] };
+  });
+}
+const finiteCount = value => Number.isFinite(value) && value >= 0 ? value : null;
 
 export const chatAgents = ['claude', 'codex', 'cursor'];
 export function chatCapabilities(agent) {
@@ -60,6 +72,43 @@ export const codexPermissions = (mode, cwd, addDirs = [], sandbox = null, networ
       : { type: 'workspaceWrite', writableRoots: [cwd, ...addDirs], networkAccess: network === true, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
   };
 };
+
+// An approval-tagged elicitation is a permission prompt. A server's own form is a question the user answers.
+export const mcpApprovalElicitation = raw => raw.method === 'mcpServer/elicitation/request' && Object.keys(raw.params?._meta ?? {}).some(key => /approval/i.test(key));
+const elicitationSchema = params => params?.requestedSchema ?? params?.request?.requestedSchema ?? {};
+export function elicitationQuestions(params) {
+  const schema = elicitationSchema(params);
+  const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+  const message = typeof params?.message === 'string' ? params.message : typeof params?.request?.message === 'string' ? params.request.message : '';
+  const questions = [];
+  for (const [id, spec] of Object.entries(properties)) {
+    if (!spec || typeof spec !== 'object' || spec.type === 'object' || spec.type === 'array') continue;
+    const prompt = [spec.title || id, spec.description].filter(value => typeof value === 'string' && value).join('\n');
+    if (spec.type === 'boolean') questions.push({ id, prompt, options: [{ id: 'true', label: '예' }, { id: 'false', label: '아니오' }] });
+    else if (Array.isArray(spec.enum) && spec.enum.every(item => ['string', 'number', 'boolean'].includes(typeof item))) questions.push({ id, prompt, options: spec.enum.map(item => ({ id: String(item), label: String(item) })) });
+    else if (spec.type === 'number' || spec.type === 'integer' || spec.type === 'string' || spec.type === undefined) questions.push({ id, prompt, allowOther: true, ...(spec.format === 'password' && { secret: true }) });
+  }
+  if (!questions.length && message) questions.push({ id: 'answer', prompt: message, allowOther: true });
+  else if (message && questions.length && !questions[0].prompt.startsWith(message)) questions[0] = { ...questions[0], prompt: `${message}\n\n${questions[0].prompt}` };
+  return questions;
+}
+export function elicitationContent(params, answers) {
+  const properties = elicitationSchema(params).properties;
+  if (!properties || typeof properties !== 'object' || !Object.keys(properties).length) {
+    const text = answers?.answer?.[0] ?? '';
+    return text ? { answer: text } : {};
+  }
+  const content = {};
+  for (const [id, spec] of Object.entries(properties)) {
+    const raw = answers?.[id]?.[0];
+    if (raw == null || raw === '') continue;
+    if (spec?.type === 'boolean') content[id] = raw === 'true';
+    else if (spec?.type === 'number' || spec?.type === 'integer') { const number = Number(raw); content[id] = Number.isFinite(number) ? number : raw; }
+    else if (Array.isArray(spec?.enum)) { const match = spec.enum.find(item => String(item) === raw); content[id] = match === undefined ? raw : match; }
+    else content[id] = raw;
+  }
+  return content;
+}
 
 // JSON-RPC transport is shared; the agents retain ownership of authentication, tools and model calls.
 export function createChatProtocol(agent, { write, emit, fail, transportResumeDelay = defaultTransportResumeDelay, trusted = () => [] } = {}) {
@@ -137,7 +186,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       if (completed) message(item.id, [{ type: 'text', text: item.text ?? '', ...(questions?.length && { questions }) }], extra);
     }
     else if (item.type === 'reasoning') { if (completed) message(item.id, [{ type: 'thinking', text: [...(item.summary ?? []), ...(item.content ?? [])].join('\n') }]); }
-    else if (item.type === 'contextCompaction') { if (completed) emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: null, postTokens: null }); }
+    else if (item.type === 'contextCompaction') { if (completed) emit({ kind: 'compact', trigger: compacting ? 'manual' : 'auto', preTokens: finiteCount(item.preTokens), postTokens: finiteCount(item.postTokens) }); }
     else if (item.type === 'userMessage') {
       if (completed) emit({ kind: 'codex_user_echo', clientId: item.clientId,
         text: (item.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('\n'),
@@ -260,8 +309,11 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       const shown = JSON.stringify(block);
       if (shown !== old.shown) message(update.toolCallId, [block], parent);
       const finished = item.status === 'completed' || item.status === 'failed';
-      if (finished && !old.finished) emit({ kind: 'tool_result', toolUseId: update.toolCallId, isError: item.status === 'failed', ...parent,
-        content: (item.content ?? []).map(part => part.type === 'content' ? part.content?.text ?? `[${part.content?.type}]` : part.type === 'diff' ? `${part.path}\n${part.newText}` : JSON.stringify(part)).join('\n') });
+      if (finished && !old.finished) {
+        const parts = Array.isArray(item.content) ? item.content : [];
+        emit({ kind: 'tool_result', toolUseId: update.toolCallId, isError: item.status === 'failed', ...parent,
+          content: typeof item.content === 'string' ? item.content : parts.map(part => part.type === 'content' ? part.content?.text ?? `[${part.content?.type}]` : part.type === 'diff' ? `${part.path}\n${part.newText}` : JSON.stringify(part)).join('\n') });
+      }
       chunks.set(update.toolCallId, { ...item, shown, finished: finished || old.finished });
     } else if (type === 'available_commands_update') {
       const commands = mergeCursorCommands((update.availableCommands ?? []).flatMap(item => {
@@ -398,7 +450,11 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
           { suggestions: !choices || choices.includes('acceptForSession') ? ['session'] : [], toolUseId: p.itemId });
       } else if (raw.method === 'item/tool/requestUserInput') approval(raw, '질문', {}, { questions: p.questions.map(q => ({ id: q.id, prompt: q.question, ...(q.header && { header: q.header }), allowOther: q.isOther === true, secret: q.isSecret, options: (q.options ?? []).map(o => ({ id: o.label, label: o.label, description: o.description })) })) });
       else if (raw.method === 'item/permissions/requestApproval') approval(raw, '추가 권한', p.permissions, { suggestions: ['session'] });
-      else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
+      else if (raw.method === 'mcpServer/elicitation/request' && !mcpApprovalElicitation(raw)) {
+        const questions = elicitationQuestions(p);
+        if (questions.length) approval(raw, '질문', {}, { questions });
+        else void send({ id: raw.id, error: { code: -32602, message: '이 입력 요청은 채팅에서 답할 수 없습니다.' } });
+      } else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
     } else if (p.sessionId && p.sessionId !== sessionId && !cursorChildren.has(p.sessionId)) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
     else if (raw.method === 'session/request_permission' && runEverything && autoAllowCursor(raw)) return;
     else if (raw.method === 'session/request_permission' && autoApprovedTool(p.toolCall) && autoAllowCursor(raw)) return;
@@ -503,8 +559,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         capabilities.resume = init.agentCapabilities?.loadSession === true;
         if (meta.sessionId && !capabilities.resume) throw fault('CHAT_UNSUPPORTED', '이 Cursor 버전은 세션 복원을 지원하지 않습니다.', 409);
         await request('authenticate', { methodId: 'cursor_login' });
-        // ACP cannot leave single tools out, so a plugin server with tools turned off is not given to Cursor at all.
-        const mcpServers = servers.filter(s => !s.disabledTools?.length).map(s => ({ name: s.name, command: s.command, args: s.args, env: Object.entries(s.env ?? {}).map(([name, value]) => ({ name, value })) }));
+        const mcpServers = cursorMcpServers(servers);
         const opened = method => request(method, { cwd, ...(method === 'session/load' && { sessionId: meta.sessionId }), mcpServers });
         let response;
         try { response = await opened(meta.sessionId ? 'session/load' : 'session/new'); }
@@ -514,7 +569,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
           if (!meta.sessionId || !/not found/i.test(String(error.data?.message ?? ''))) throw error;
           response = await opened('session/new');
         }
-        autoServers = servers.filter(s => s.autoApprove && !s.disabledTools?.length).map(s => s.name);
+        autoServers = servers.filter(s => s.autoApprove).map(s => s.name);
         sessionId = response.sessionId ?? meta.sessionId; cursorInfo(response); runEverything = meta.runEverything === true;
         let modelApplied = null;
         if (meta.model) { modelApplied = meta.model; await this.configure({ model: modelApplied }); }
@@ -580,7 +635,8 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
       const raw = approvals.get(id); if (!raw) throw fault('NOT_FOUND', '이미 처리된 승인입니다.', 404);
       const p = raw.params ?? {}; let response;
       if (agent === 'codex') {
-        if (raw.method === 'item/tool/requestUserInput') response = { answers: Object.fromEntries(p.questions.map(q => [q.id, { answers: answer.allow ? answer.answers?.[q.id] ?? [] : [] }])) };
+        if (raw.method === 'mcpServer/elicitation/request') response = answer.allow ? { action: 'accept', content: elicitationContent(p, answer.answers) } : { action: 'decline', content: null };
+        else if (raw.method === 'item/tool/requestUserInput') response = { answers: Object.fromEntries(p.questions.map(q => [q.id, { answers: answer.allow ? answer.answers?.[q.id] ?? [] : [] }])) };
         else if (raw.method === 'item/permissions/requestApproval') response = { permissions: answer.allow ? p.permissions : {}, scope: answer.always ? 'session' : 'turn' };
         else { const decision = answer.allow ? answer.always ? 'acceptForSession' : 'accept' : 'decline'; if (p.availableDecisions && !p.availableDecisions.includes(decision)) throw fault('INVALID_INPUT', '이 요청은 해당 승인 선택지를 지원하지 않습니다.'); response = { decision }; }
       } else if (p.sessionId && p.sessionId !== sessionId) {

@@ -527,6 +527,17 @@ test('Cursor gets the bus with its chat identity, and approves only the bus tool
   assert.deepEqual(emitted.filter(event => event.kind === 'approval').map(event => event.requestId), ['102', '103']);
 });
 
+test('Cursor starts a server with a disabled tool through the stdio filter', async () => {
+  const hidden = { ...PLAIN, name: 'partial', disabledTools: ['danger'] };
+  const { protocol, written } = driven('cursor', { initialize: { agentCapabilities: { promptCapabilities: { image: true }, loadSession: true } }, 'session/new': { sessionId: 's1' } });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [], configValues: {} }, 'C:\\w', [hidden]);
+  const server = written.find(message => message.method === 'session/new').params.mcpServers[0];
+  assert.equal(server.command, process.execPath);
+  assert.match(server.args[0], /mcp-filter\.js$/);
+  assert.deepEqual(server.args.slice(1), [hidden.command, ...hidden.args]);
+  assert.equal(server.env.find(item => item.name === 'ADE_MCP_HIDE').value, 'danger');
+});
+
 test('Cursor: an MCP tool trusted in the settings is allowed once without a card, any other request waits and an MCP card names its server', async () => {
   let list = [{ server: 'plain_tools', tool: 'run' }];
   const { protocol, written, emitted } = driven('cursor', { initialize: { agentCapabilities: { promptCapabilities: { image: true }, loadSession: true } }, 'session/new': { sessionId: 's1' } }, { trusted: () => list });

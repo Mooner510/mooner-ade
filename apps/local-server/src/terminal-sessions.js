@@ -89,6 +89,7 @@ export async function terminalAgentCommand(directory, id, agent, restoreId, shel
   if (!['claude', 'codex', 'cursor'].includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
   // shortcut: Cursor CLI has no per-run hook or log option to learn its chat ID, so a restore opens its picker.
   if (agent === 'cursor') {
+    // cursor-agent has no --mcp-config. A terminal keeps the user's own .cursor/mcp.json; chat attaches ADE's servers on the ACP session.
     const sessionId = restoreId === undefined ? undefined : await readTerminalSession(directory, restoreId, agent);
     return restoreId === undefined ? 'cursor-agent' : `cursor-agent --resume${sessionId ? ` ${sessionId}` : ''}`;
   }

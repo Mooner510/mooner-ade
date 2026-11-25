@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { importCursorCliSession } from '../apps/local-server/src/cli-conversations.js';
 import { backupCursorStore, exportCursorSession, forkCursorSession, listCursorSessions, readCursorBilledUsage, snapshotCursorSession } from '../apps/local-server/src/cursor-sessions.js';
 import { openChatSession, seedChat } from '../apps/local-server/src/chat.js';
 
@@ -84,4 +86,25 @@ test('Cursor chat Branch, Rewind and terminal export use independent native sess
   assert.equal(handoff.agent, 'cursor'); assert.notEqual(handoff.sessionId, originalId);
   assert.equal((await listCursorSessions({ configDir, cwd: root }))[0].sessionId, handoff.sessionId);
   assert.equal(metaOf(source.file).agentId, originalId);
+});
+
+test('importing a Cursor CLI session copies it and refuses one that is still running', async t => {
+  const root = await directory(t), configDir = path.join(root, 'cursor'), cwd = path.join(root, 'proj');
+  await mkdir(cwd);
+  const hash = createHash('md5').update(path.resolve(cwd)).digest('hex');
+  const file = path.join(configDir, 'chats', hash, id, 'store.db');
+  await mkdir(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)');
+  db.prepare('INSERT INTO meta VALUES (?,?)').run('0', Buffer.from(JSON.stringify({ agentId: id, latestRootBlobId: 'aa', name: 'CLI chat' })).toString('hex'));
+  db.prepare('INSERT INTO blobs VALUES (?,?)').run('aa', Buffer.from('x'));
+  db.close();
+  await assert.rejects(importCursorCliSession({ directory: root, id: 'imported', sessionId: id, cwd, configDir, running: true, readEvents: async () => [] }), /실행 중/);
+  const imported = await importCursorCliSession({ directory: root, id: 'imported', sessionId: id, cwd, configDir, running: false, readEvents: async () => [{ kind: 'user', text: 'hi', seq: 1, at: 1 }] });
+  const meta = JSON.parse(await readFile(path.join(root, 'chat/imported/meta.json'), 'utf8'));
+  assert.equal(meta.agent, 'cursor');
+  assert.equal(imported.sessionId, meta.sessionId);
+  assert.notEqual(meta.sessionId, id);
+  assert.equal(metaOf(path.join(configDir, 'acp-sessions', meta.sessionId, 'store.db')).agentId, meta.sessionId);
+  assert.equal(metaOf(file).agentId, id);
 });

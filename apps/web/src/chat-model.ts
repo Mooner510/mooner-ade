@@ -21,6 +21,7 @@ export type ChatState = {
   idleCompact?: IdleCompactInfo; // Claude: whether ADE compacts this chat before its 1h prompt cache goes cold (chat: this chat's own choice, null = follows the setting)
   apiKey?: boolean; // the CLI runs on an API key, not its login: usage is billed to the API, so there is no plan share to show
   auth?: 'login' | 'key'; // the login this chat starts on: kept by /clear, switched from the usage button (Claude)
+  mcpServers?: { name: string; disabledTools: string[]; autoApprove: boolean }[]; // ADE-attached servers, including tools the user turned off
   lastAuth?: 'login' | 'key' | null; // the login its last turn ran on: a message that would change it asks first
   apiCostUsd?: number; // what the turns that ran on the API key cost: real money (a plan's turns are not)
   // Claude: the prompt cache clock read from the session's transcript (same shape as the terminal's ClaudeCache); null before the first reply.
