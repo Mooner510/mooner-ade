@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type DiffLayoutChoice, type McpTrust, type Settings } from './Editor';
 import { addTrust } from './mcp-trust';
@@ -1356,6 +1356,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     if (hiddenRef.current > 0 && !stick.current && element.scrollTop < TURN_REACH) showEarlier();
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(() => { pinFrame.current = 0; syncPin(); });
   };
+  // Touch: only a finger drawn down (the thread moves toward older messages) lets go. A finger drawn up, or one that only rests, does not: at the bottom there is
+  // nothing left to scroll, so no scroll event would ever pin it again. Lifting the finger at the bottom pins it again for the same reason.
+  const touchFrom = useRef<number | null>(null);
+  const onTouchMove = (event: ReactTouchEvent) => {
+    readingTool.current = false;
+    const from = touchFrom.current, y = event.touches[0]?.clientY;
+    if (from == null || y == null) { release(); return; }
+    if (y - from > 8) release();
+  };
+  const settleAtBottom = () => {
+    touchFrom.current = null;
+    const element = scroller.current; if (!element) return;
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < 4 && !readingTool.current) { stick.current = true; setAway(false); followBottom(); }
+  };
   const jumpToUser = (key: string) => {
     const node = scroller.current?.querySelector<HTMLElement>(`[data-user-key="${CSS.escape(key)}"]`);
     if (!node) return;
@@ -1888,9 +1902,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <IconButton icon="x" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
     {/* 둘러보기(projectId 'tour')는 연습 화면이라 실제 CLI 업데이트 안내·실행 버튼을 띄우지 않는다. */}
     {(agent === 'claude' || agent === 'codex') && ctx.projectId !== 'tour' && <CliUpdateNotice agent={agent} />}
-    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchMove={() => { readingTool.current = false; release(); }}
+    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchStart={event => { touchFrom.current = event.touches[0]?.clientY ?? null; }} onTouchMove={onTouchMove} onTouchEnd={settleAtBottom} onTouchCancel={settleAtBottom}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
-      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
+      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.pointerType === 'mouse' && event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
       {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
