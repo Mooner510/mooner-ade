@@ -375,7 +375,11 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (phase === 'end' && prev.background && !isJob && !view.items.some(item => item.kind === 'agent_end' && item.toolUseId === id)) return append({ ...view, tasks }, { kind: 'agent_end', key, toolUseId: id, fresh });
       return { ...view, tasks };
     }
-    case 'tool_result': return { ...view, results: { ...view.results, [event.toolUseId]: { content: String(event.content ?? ''), isError: event.isError === true } } };
+    case 'tool_result': {
+      const value = { content: String(event.content ?? ''), isError: event.isError === true };
+      if (replayOwned.has(view.results)) { view.results[event.toolUseId] = value; return { ...view }; }
+      return { ...view, results: { ...view.results, [event.toolUseId]: value } };
+    }
     case 'shell': return reduceShell(view, event, key, fresh);
     case 'command_output': {
       const text = String(event.text ?? ''), isError = event.isError === true;
@@ -421,7 +425,7 @@ export function reduce(view: ChatView, event: any): ChatView {
       let results = view.results;
       if (event.status === 'interrupted' || event.status === 'failed') {
         const text = event.status === 'interrupted' ? '응답을 중단했습니다.' : '응답에 실패했습니다.';
-        for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results) results = { ...results }; results[block.id] = { content: text, isError: true }; }
+        for (const item of view.items) if (item.kind === 'assistant') for (const block of item.blocks) if (block.type === 'tool_use' && !results[block.id]) { if (results === view.results && !replayOwned.has(results)) results = { ...results }; results[block.id] = { content: text, isError: true }; }
       }
       view = { ...view, items: settleItems(view.items), results, compacting: false, reconnecting: false, live: {}, liveId: null, thinkingTokens: 0 };
       view = stampDone(view, event);
@@ -482,9 +486,13 @@ export function reduce(view: ChatView, event: any): ChatView {
 }
 
 // Rebuilds a view from `chat/open`'s replay: stored events in order, then the server's current state and pending approvals.
+// While a replay runs, its results map belongs to the replay alone and is filled in place: copying it for every result made opening a long chat quadratic.
+const replayOwned = new WeakSet<object>();
 export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatState; approvals?: any[] }): ChatView {
   let view = emptyView();
+  replayOwned.add(view.results);
   for (const event of replay.events ?? []) view = reduce(view, event);
+  view = { ...view, results: { ...view.results } };
   // A request the log still holds as waiting that the server no longer has: the app (or its server) ended while the agent waited, and the agent's process with it.
   // Without a line the thread just stops after the request, with no card to answer.
   for (const lost of view.approvals.filter(item => !(replay.approvals ?? []).some(live => live.requestId === item.requestId)))

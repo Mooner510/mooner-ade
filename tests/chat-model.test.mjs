@@ -918,3 +918,14 @@ test('a request still waiting in the log when the app ended says so in the threa
   assert.deepEqual(notes(fromReplay({ events: cancelled, seq: 3, approvals: [] })), [], 'a request the server cancelled itself is not reported twice');
   assert.match(notes(fromReplay({ events: [{ ...asked[1], requestId: 'b-1', tool: 'Bash', input: { command: 'npm test' } }], approvals: [] }))[0], /^Bash 실행 승인을 기다리던 중/);
 });
+
+test('fromReplay fills results in place but ends with the same view as reducing event by event, and hands back a map nothing else mutates', () => {
+  const events = [];
+  for (let i = 0; i < 40; i++) events.push({ seq: i * 4 + 1, kind: 'user', text: `q${i}` }, { seq: i * 4 + 2, kind: 'message', id: `m${i}`, blocks: [{ type: 'tool_use', id: `t${i}`, name: 'Bash', input: {} }] }, { seq: i * 4 + 3, kind: 'tool_result', toolUseId: `t${i}`, content: `out${i}`, isError: i % 7 === 0 }, { seq: i * 4 + 4, kind: 'result', status: i === 39 ? 'interrupted' : 'success' });
+  events.push({ seq: 500, kind: 'message', id: 'late', blocks: [{ type: 'tool_use', id: 'tl', name: 'Bash', input: {} }] });
+  let slow = emptyView(); for (const event of events) slow = reduce(slow, event);
+  const fast = fromReplay({ events, seq: 500 });
+  assert.deepEqual(fast.results, slow.results); assert.equal(Object.keys(fast.results).length, 40);
+  const next = reduce(fast, { seq: 501, kind: 'tool_result', toolUseId: 'tl', content: 'x' });
+  assert.notEqual(next.results, fast.results); assert.equal(fast.results.tl, undefined);
+});

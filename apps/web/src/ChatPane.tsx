@@ -220,6 +220,7 @@ const LOCAL: CommandInfo[] = [
 // Shell tools show their command as code (coloured in the shell's language), with the model's one-line description above it on approval cards.
 const SHELLS: Record<string, string> = { Bash: 'bash', PowerShell: 'powershell', Monitor: 'shell' };
 const TOOL_ICONS: Record<string, string> = { Monitor: 'monitor_heart', CronCreate: 'schedule', CronList: 'schedule', CronDelete: 'schedule', ListAgents: 'groups', NotebookEdit: 'edit_note', TaskStop: 'stop_circle', SendMessage: 'send', Skill: 'bolt', EnterPlanMode: 'assignment', ExitPlanMode: 'assignment', ToolSearch: 'manage_search', EnterWorktree: 'account_tree', ExitWorktree: 'account_tree', AskUserQuestion: 'help', Bash: 'terminal', PowerShell: 'terminal', Read: 'description', Write: 'edit_document', Edit: 'edit', MultiEdit: 'edit', Glob: 'search', Grep: 'search', WebFetch: 'language', WebSearch: 'travel_explore', webSearch: 'travel_explore', Task: 'account_tree', Agent: 'account_tree', TodoWrite: 'checklist', SubagentHandback: 'flag' };
+const DRAWER_DOCK = 760, TURN_PAGE = 30, TURN_REACH = 1200;
 const chatWidths = { narrow: '680px', default: '780px', wide: '1000px', full: '100%' };
 // An MCP tool answers with JSON text on one line: shown indented. Anything else is left as it came.
 const prettyResult = (value: string) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : value; } catch { return value; } };
@@ -1285,7 +1286,12 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const el = foot; if (!el || flipping.current) return;
     const sig = `${el.textContent}|${el.clientWidth}|${el.childElementCount}`;
     if (sig === fitSig.current) return;
-    for (let level = 0; level <= 4; level++) { el.dataset.fit = String(level); if (el.scrollWidth <= el.clientWidth + 1) break; }
+    // The smallest level that fits, searched from the level that fit last time (it is usually still the one): one forced layout when it holds and the level below does not, instead of
+    // up to five from level 0 on every frame of a pane that is being resized.
+    const over = () => el.scrollWidth > el.clientWidth + 1;
+    let level = Math.min(4, Number(el.dataset.fit) || 0);
+    if (over()) { while (level < 4) { el.dataset.fit = String(++level); if (!over()) break; } }
+    else while (level > 0) { el.dataset.fit = String(level - 1); if (over()) { el.dataset.fit = String(level); break; } level--; }
     fitSig.current = sig;
   }, [foot]);
   // The composer rests as one line (+ · mode · input … model · Effort · context · send, icons only except the model) and opens to the full two rows while you write.
@@ -1347,6 +1353,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     // Opening a tool can emit a bottom scroll before its animation grows; that must not resume following while it is being read.
     if (gap < 4 && !readingTool.current) stick.current = true;
     setAway(!stick.current && gap > 240);
+    if (hiddenRef.current > 0 && !stick.current && element.scrollTop < TURN_REACH) showEarlier();
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(() => { pinFrame.current = 0; syncPin(); });
   };
   const jumpToUser = (key: string) => {
@@ -1748,6 +1755,23 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const openedAgent = agentList.find(item => item.id === agentOpen) ?? null;
   // A closed drawer stays mounted for its exit slide (showing the agent it last showed) while the thread widens back under it.
   const [leaving, setLeaving] = useState<SubAgent | null>(null), shownAgentRef = useRef<SubAgent | null>(null);
+  // Only the newest turns are in the DOM; the rest load as the reader scrolls up (a long chat was thousands of elements per pane, laid out and kept in memory for every open tab).
+  const [turnLimit, setTurnLimit] = useState(TURN_PAGE);
+  const hiddenTurns = Math.max(0, turns.length - turnLimit), renderedTurns = hiddenTurns ? turns.slice(hiddenTurns) : turns;
+  // The view stays on what the reader was looking at: the browser's scroll anchoring does not apply at scrollTop 0 (Home, a dragged scrollbar), and a page added above would leave the reader at its top.
+  const pageAnchor = useRef<{ height: number; top: number } | null>(null);
+  const showEarlier = useCallback(() => {
+    const element = scroller.current; if (pageAnchor.current || !element) return;
+    pageAnchor.current = { height: element.scrollHeight, top: element.scrollTop }; setTurnLimit(limit => limit + TURN_PAGE);
+  }, []);
+  useLayoutEffect(() => {
+    const anchor = pageAnchor.current, element = scroller.current; if (!anchor || !element) return;
+    pageAnchor.current = null;
+    const want = anchor.top + element.scrollHeight - anchor.height;
+    if (Math.abs(element.scrollTop - want) > 1) element.scrollTop = want;
+  }, [turnLimit]);
+  // Scrolling within reach of the top (onScroll) loads the next page; following the bottom (opening the chat) must not.
+  const hiddenRef = useRef(0); hiddenRef.current = hiddenTurns;
   useEffect(() => {
     if (openedAgent) { shownAgentRef.current = openedAgent; setLeaving(null); return; }
     const last = shownAgentRef.current; shownAgentRef.current = null;
@@ -1760,11 +1784,19 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const lastTurnKey = lastTurn?.[0]?.key ?? '';
   const tracked = useMemo(() => { const own = new Set(toolIds(lastTurn ?? [])); return agentList.filter(item => item.status === 'running' || own.has(item.id)); }, [agentList, lastTurn]);
   const showTracker = tracked.length > 0 && (runningAgents > 0 || trackerHidden !== lastTurnKey);
-  const [paneWidth, setPaneWidth] = useState(0), paneRef = useRef<HTMLElement>(null);
-  useEffect(() => { const el = paneRef.current; if (!el || typeof ResizeObserver !== 'function') return; const observer = new ResizeObserver(([entry]) => setPaneWidth(Math.round(entry.borderBoxSize[0].inlineSize))); observer.observe(el); return () => observer.disconnect(); }, []);
+  // The width only matters while the drawer is open (dock or overlay) or when it crosses the dock threshold. Following every frame of a resizing pane (a split growing in) re-rendered the
+  // pane and changed `--drawer-w` on its root, so the style of the whole thread was recalculated each frame.
+  const [paneWidth, setPaneWidth] = useState(0), paneRef = useRef<HTMLElement>(null), drawerOpen = useRef(false); drawerOpen.current = Boolean(drawerAgent);
+  useEffect(() => {
+    const el = paneRef.current; if (!el || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(([entry]) => { const width = Math.round(entry.borderBoxSize[0].inlineSize); setPaneWidth(previous => drawerOpen.current || previous === 0 || (previous >= DRAWER_DOCK) !== (width >= DRAWER_DOCK) ? width : previous); });
+    observer.observe(el); return () => observer.disconnect();
+  }, []);
+  // A drawer opening now needs the real width, not the one from the last threshold crossing.
+  useLayoutEffect(() => { if (drawerAgent && paneRef.current) setPaneWidth(Math.round(paneRef.current.getBoundingClientRect().width)); }, [Boolean(drawerAgent)]);
   // Border box, not contentRect: the docked drawer's padding-right shrinks the content box, which would flip it back to "over" and loop.
   // Wide enough: the drawer sits beside the thread; narrower, it covers the thread's right side.
-  const drawerDocked = paneWidth >= 760, drawerWidth = drawerDocked ? Math.round(Math.min(460, paneWidth * 0.42)) : Math.min(440, Math.max(0, paneWidth - 24));
+  const drawerDocked = paneWidth >= DRAWER_DOCK, drawerWidth = drawerDocked ? Math.round(Math.min(460, paneWidth * 0.42)) : Math.min(440, Math.max(0, paneWidth - 24));
   // What the running turn is doing right now, for the status row under it ('' = thinking).
   const activityLabel = useMemo(() => {
     if (!busy || !lastTurn) return '';
@@ -1812,7 +1844,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   </span>;
   const chatTheme = themeById(ctx.settings.theme);
   const chatDark = ctx.settings.chatDarker && chatTheme.scheme === 'dark' && chatTheme.id !== 'dark' ? chatDarkVars(chatTheme.vars) : undefined;
-  return <ChatUiContext.Provider value={uiBlocks}><SetDiffLayoutContext.Provider value={setDiffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><LocalCardsContext.Provider value={localCards}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-chat-dark={chatDark ? '' : undefined} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], '--drawer-w': `${drawerWidth}px`, ...chatDark } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
+  return <ChatUiContext.Provider value={uiBlocks}><SetDiffLayoutContext.Provider value={setDiffLayout}><CwdContext.Provider value={state.cwd ?? ''}><AwaitingContext.Provider value={awaiting}><DeniedContext.Provider value={view.denied ?? NO_DENIED}><AgentsContext.Provider value={agentsValue}><LocalCardsContext.Provider value={localCards}><section ref={paneRef} className={`terminal-pane chat-pane ${focused ? 'focused' : ''}`} data-chat-dark={chatDark ? '' : undefined} data-drawer={openedAgent ? (drawerDocked ? 'dock' : 'over') : undefined} data-feedback-region="채팅 pane" data-kind="chat" data-empty={startScreen || undefined} data-swap={providerSwap || undefined} data-agent={agent} data-agent-state={agentState} style={{ '--chat-font': `${ctx.settings.chatFontSize}px`, '--chat-width': chatWidths[ctx.settings.chatWidth], ...(drawerAgent && { '--drawer-w': `${drawerWidth}px` }), ...chatDark } as CSSProperties} onMouseDownCapture={() => onFocus(id)} onFocus={() => onFocus(id)}
     onDragEnter={event => { if (isFileDrag(event)) { event.preventDefault(); dragDepth.current++; setDropping(true); } }}
     onDragOver={event => { if (isFileDrag(event)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); } }}
     onDragLeave={event => { if (isFileDrag(event) && --dragDepth.current <= 0) { dragDepth.current = 0; setDropping(false); } }}
@@ -1839,7 +1871,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
-        {turns.map((items, index) => { const current = index === turns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
+        {hiddenTurns > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>이전 대화 {hiddenTurns}개 더 보기</button>}
+        {renderedTurns.map((items, index) => { const current = index === renderedTurns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activityLabel || (state.configuring ? '설정을 적용하는 중' : '')} />}
         {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링 · 반영 대기 중' : '스티어링 · ↑ 수정 · Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}

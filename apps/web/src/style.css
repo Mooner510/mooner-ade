@@ -3516,3 +3516,6 @@ dialog.remote-pc[open] { display: flex; }
 .remote-pc-row { display: flex; gap: 8px; }
 .remote-pc-row input { flex: 1; min-width: 0; }
 .remote-pc-offer { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+/* Older turns of a long chat load as the reader scrolls up; the button is the fallback for keyboard and no-IntersectionObserver use. */
+.chat-earlier { align-self: center; flex: none; padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.chat-earlier:hover, .chat-earlier:focus-visible { color: var(--fg); border-color: var(--border-strong); }
