@@ -261,7 +261,8 @@ export function createGithub({ api = GITHUB_API, web = GITHUB_WEB, credential = 
         const expected = sums.get(asset.name) ?? null, digest = digestOf(asset);
         if (!expected && !digest) throw fail(`${repo}의 릴리스 ${tag}에 ${asset.name}의 체크섬(SHA256SUMS)이 없어 받지 않습니다.`, 'NO_CHECKSUM');
         if (expected && digest && expected !== digest) throw fail(`${asset.name}의 SHA256SUMS와 GitHub의 체크섬이 다릅니다. 받지 않습니다.`, 'CHECKSUM');
-        return { repo, tag, version, asset, sha256: expected ?? digest, via };
+        const sidecar = assets.find(item => item.name === asset.name + '.sig');
+        return { repo, tag, version, asset, sha256: expected ?? digest, via, ...(sidecar && { sidecar }) };
       }
       throw fail(`${repo}의 릴리스에서 ${source.asset}을(를) 찾지 못했습니다.`, 'MISSING');
     },
@@ -271,7 +272,12 @@ export function createGithub({ api = GITHUB_API, web = GITHUB_WEB, credential = 
       const data = await fetchAsset(found.repo, found.asset, credentialNow?.token ?? null, credentialNow?.via ?? null);
       const actual = sha256(data);
       if (actual !== found.sha256 || (digestOf(found.asset) && digestOf(found.asset) !== actual)) throw fail(`받은 ${found.asset.name}이(가) 릴리스의 체크섬과 맞지 않습니다. 설치하지 않았습니다.`, 'CHECKSUM');
-      return { data, sha256: actual };
+      let signature;
+      if (found.sidecar) {
+        try { signature = (await fetchAsset(found.repo, found.sidecar, credentialNow?.token ?? null, credentialNow?.via ?? null, 4096)).toString('utf8'); }
+        catch { signature = ''; }
+      }
+      return { data, sha256: actual, ...(signature !== undefined && { signature }) };
     },
     // The account a token belongs to: { login }.
     async whoami(token) {

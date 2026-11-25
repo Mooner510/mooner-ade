@@ -127,6 +127,11 @@ const setVersion = (root, version) => { const file = join(root, 'resources/app/p
 const installed = join(dirs.install, 'MoonerADE-win32-x64'), next = join(dirs.next, 'MoonerADE-win32-x64'), startsLog = join(temp, 'next-starts.log');
 robocopy(installedFrom, installed); setVersion(installed, installedVersion);
 robocopy(nextFrom, next); setVersion(next, nextVersion);
+for (const root of [installed, next]) {
+  const updater = join(root, 'resources/app/apps/desktop/src/updater.js');
+  const code = readFileSync(updater, 'utf8'), guard = 'const developmentOptions = !app.isPackaged;';
+  if (code.includes(guard)) writeFileSync(updater, code.replace(guard, 'const developmentOptions = true;'));
+}
 const freePort = () => new Promise(done => { const probe = net.createServer(); probe.listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => done(port)); }); });
 const cdpPort = drive ? await freePort() : 0, nextPort = drive ? await freePort() : 0; // the restarted app gets a port of its own: the old app's children may still hold the first one
 const isolated = { ADE_USER_DATA_DIR: dirs.user, ADE_DATA_DIR: dirs.data, ADE_NVIDIA_CHECK: '0', USERPROFILE: dirs.home, HOME: dirs.home, TEMP: dirs.tmp, TMP: dirs.tmp, CLAUDE_CONFIG_DIR: join(dirs.home, '.claude'), CODEX_HOME: join(dirs.home, '.codex') };

@@ -1,3 +1,5 @@
+import { readBody } from './plugin-updates.js';
+import { observeSignature } from './release-signature.js';
 import { app, dialog } from 'electron';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -150,7 +152,8 @@ async function manageStaged(window) {
 // ADE_UPDATE_ANSWER ('지금 업데이트|확인', button labels) answers the updater's prompts: native dialogs cannot be clicked by a test
 // driver. The prompt is still shown for a second (a sheet on the main window, as for a user) and then closed. Only for isolated test
 // runs (scripts/verify/t-update.mjs).
-const answers = process.env.ADE_UPDATE_ANSWER?.split('|') ?? [];
+const developmentOptions = !app.isPackaged;
+const answers = developmentOptions ? process.env.ADE_UPDATE_ANSWER?.split('|') ?? [] : [];
 const ask = async (window, options) => {
   const auto = options.buttons?.findIndex(label => answers.includes(label)) ?? -1;
   if (auto < 0) return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
@@ -174,9 +177,10 @@ async function confirmInterrupt(window, report) {
 const REQUEST_TIMEOUT_MS = 30_000;
 // ADE_UPDATE_URL points the release lookup at a stand-in for api.github.com (a local fake release in scripts/verify/t-update.mjs).
 // The assets it names are checked against their sha256 digest and the code signature exactly as GitHub's are.
-const UPDATE_API = (process.env.ADE_UPDATE_URL || 'https://api.github.com').replace(/\/+$/, '');
+const updateOrigin = developmentOptions ? process.env.ADE_UPDATE_URL : undefined;
+const UPDATE_API = (updateOrigin || 'https://api.github.com').replace(/\/+$/, '');
 // The same stand-in also serves github.com's own pages (the release redirect and the atom feed) in tests.
-const UPDATE_WEB = (process.env.ADE_UPDATE_URL || 'https://github.com').replace(/\/+$/, '');
+const UPDATE_WEB = (updateOrigin || 'https://github.com').replace(/\/+$/, '');
 
 // The installed bundle's shell key, written by package.mjs; null for builds that predate app-only updates.
 const installedShell = () => {
@@ -287,7 +291,7 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   if (choice === buttons.length - 1) { declined.add(version); return 'declined'; }
   const now = buttons[choice] === '지금 업데이트';
   if (now && report.busy && !(await confirmInterrupt(window, report))) return 'declined';
-  return install({ version, file, kind, window, getBusy, beforeRestart, onQuit: !now, force: now && report.busy });
+  return install({ version, file, signature: release.assets.find(asset => asset.name === file.name + '.sig'), kind, window, getBusy, beforeRestart, onQuit: !now, force: now && report.busy });
 }
 
 function holdForQuit({ version, work, staged }) {
@@ -295,7 +299,7 @@ function holdForQuit({ version, work, staged }) {
   stagedUpdate = { version, discard() { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); }, launch: () => staged.launch({ work }) };
 }
 
-async function install({ version, file, kind, window, getBusy, beforeRestart, onQuit, force }) {
+async function install({ version, file, signature, kind, window, getBusy, beforeRestart, onQuit, force }) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
   let progress = progressWindow(window), staged = null, held = false;
   try {
@@ -306,6 +310,16 @@ async function install({ version, file, kind, window, getBusy, beforeRestart, on
       dest: zip,
       onProgress: (received, total) => progress.set(total ? `v${version} 다운로드 중… ${mb(received)} / ${mb(total)} MB` : `v${version} 다운로드 중… ${mb(received)} MB`, total ? Math.min(1, received / total) : null, false),
     });
+    let raw;
+    if (signature) {
+      try {
+        const response = await fetch(signature.browser_download_url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        if (!response.ok) throw new Error('서명을 받을 수 없습니다.');
+        raw = (await readBody(response, 'signature', 4096)).toString('utf8');
+      } catch { raw = ''; }
+    }
+    observeSignature(raw, { kind: 'app', id: 'mooner-ade', version, platform: `${process.platform}-${process.arch}`, variant: kind,
+      sha256: file.digest.slice(7), size: fs.statSync(zip).size });
     progress.set('압축 푸는 중…');
     staged = process.platform === 'darwin' ? await stageMac({ zip, progress }) : await stageWindows({ zip, work, kind });
     if (onQuit) {
