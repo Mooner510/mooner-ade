@@ -58,7 +58,7 @@ function aesDecrypt(key, n, ad, ciphertext) {
   const decipher = createDecipheriv('aes-256-gcm', key, nonceBytes(n));
   decipher.setAAD(ad); decipher.setAuthTag(ciphertext.subarray(ciphertext.length - TAGLEN));
   try { return Buffer.concat([decipher.update(ciphertext.subarray(0, ciphertext.length - TAGLEN)), decipher.final()]); }
-  catch { throw noiseError('메시지 인증에 실패했습니다.'); }
+  catch { throw Object.assign(noiseError('메시지 인증에 실패했습니다.'), { authenticationFailed: true }); }
 }
 
 export class CipherState {
@@ -189,6 +189,7 @@ export function createChannel({ send, receive }, { maxMessage = 32 * 1024 * 1024
       const record = receive.decrypt(EMPTY, noiseMessage);
       if (!record.length || record[0] & ~(FINAL | REKEY)) throw noiseError('잘못된 메시지입니다.');
       const flags = record[0];
+      if (!(flags & FINAL) && record.length !== MAX_CHUNK + 1) throw noiseError('조각 길이가 올바르지 않습니다.');
       if (flags & REKEY) receive.rekey();
       partsSize += record.length - 1;
       if (partsSize > maxMessage) throw noiseError('메시지가 너무 큽니다.', 'MESSAGE_TOO_LARGE');

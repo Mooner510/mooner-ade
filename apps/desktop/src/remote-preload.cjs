@@ -8,6 +8,24 @@ ipcRenderer.on('ade:remote-bridge:message', (_event, data) => { for (const liste
 contextBridge.exposeInMainWorld('AdeRemoteNative', {
   // Tells the page it runs in a desktop window, not a phone's: it draws the green frame and keeps its fonts.
   client: 'desktop',
-  postMessage: text => ipcRenderer.send('ade:remote-bridge:post', String(text)),
+  postMessage: text => {
+    if (typeof text !== 'string') return;
+    let message;
+    try { message = JSON.parse(text); } catch { return; }
+    if (message?.k === 'copy' && !navigator.userActivation?.isActive) return;
+    ipcRenderer.send('ade:remote-bridge:post', text);
+  },
   addEventListener: (type, listener) => { if (type === 'message' && typeof listener === 'function') listeners.add(listener); }
+});
+
+let notice;
+ipcRenderer.on('ade:remote-bridge:copied', () => {
+  notice?.remove();
+  const item = document.createElement('div');
+  item.textContent = '클립보드에 복사했습니다.';
+  item.setAttribute('role', 'status');
+  item.style.cssText = 'position:fixed;bottom:16px;right:16px;padding:8px 12px;border-radius:6px;background:#222;color:white;z-index:2147483647;pointer-events:none';
+  document.body?.append(item);
+  notice = item;
+  setTimeout(() => item.remove(), 1800);
 });
