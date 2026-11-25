@@ -1358,7 +1358,15 @@ async function route(action, input, project) {
       const roots = [...new Set([chat?.state().cwd, chat?.cwd, workspace.root].filter(Boolean))];
       const requested = text(input.path ?? '.', '경로', 4096);
       const { root, target } = await resolveIdeTarget(requested, roots);
-      if (action === 'ide/resolve') return { path: target };
+      if (action === 'ide/resolve') {
+        if (input.editor !== true) return { path: target };
+        const relative = path.relative(workspace.root, target);
+        if (!relative) return { path: target };
+        const inProject = relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+        return { path: target, editor: inProject
+          ? { file: relative.split(path.sep).join('/') }
+          : { folder: await fs.realpath(path.dirname(target)).catch(() => path.dirname(target)), file: path.basename(target) } };
+      }
       const whole = value => (Number.isSafeInteger(value) && value > 0 ? value : undefined);
       return openPath({ ide: text(input.ide, '편집기', 100), root, target, line: whole(input.line), column: whole(input.column) });
     }

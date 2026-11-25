@@ -741,6 +741,12 @@ test('IDE paths resolve from the chat worktree or project and can be copied as a
   assert.deepEqual(await call('ide/resolve', { path: projectRelative, chatId }), { path: target });
   assert.deepEqual(await call('ide/resolve', { path: target, chatId }), { path: target });
   assert.deepEqual(await call('ide/resolve', { path: inWorktree }), { path: join(repo, inWorktree) });
+  assert.deepEqual(await call('ide/resolve', { path: join(repo, inWorktree), editor: true }), {
+    path: join(repo, inWorktree), editor: { file: 'src/b.ts' }
+  });
+  assert.deepEqual(await call('ide/resolve', { path: inWorktree, chatId, editor: true }), {
+    path: target, editor: { folder: join(worktree, 'src'), file: 'b.ts' }
+  });
   assert.deepEqual(await call('ide/resolve', { path: '.' }), { path: repo });
   await call('ide/resolve', { path: '//server/share/file.txt', chatId }, 400);
 

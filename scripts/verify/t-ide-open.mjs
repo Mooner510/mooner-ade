@@ -76,15 +76,19 @@ if (typed) {
   await c.waitFor(`!!document.querySelector('.quick')`);
   const chipAsk = await title(), chipChoices = await options();
   ok(chipAsk.includes('파일을 열까요?') && chipAsk.includes('src/b.ts:2'), 'click: asks which way to open it', JSON.stringify(chipAsk));
-  ok(chipChoices.some(x => x.includes('Visual Studio Code에서 열기')) && chipChoices.some(x => x.includes('탐색기에서 위치 열기')), 'click: editors and file manager offered', chipChoices.join(' | '));
+  ok(chipChoices.some(x => x.includes('ADE에서 열기')) && chipChoices.some(x => x.includes('Visual Studio Code에서 열기')) && chipChoices.some(x => x.includes('탐색기에서 위치 열기')), 'click: ADE, external editors and file manager offered', chipChoices.join(' | '));
   await c.shot('ide-chip-dialog');
   if (real.has('explorer')) { await pickOption('탐색기에서 위치 열기'); await sleep(1200); ok(!(await errors()).length, 'no error after showing the file in Explorer', JSON.stringify(await errors())); }
   else { await c.key('Escape', 'Escape'); await sleep(300); }
+  await chip('src/b.ts:2');
+  await c.waitFor(`!!document.querySelector('.quick')`);
+  await pickOption('ADE에서 열기');
+  ok(await c.waitFor(`!!document.querySelector('.editor-group.focused .monaco-editor') && !!document.querySelector('.editor-group.focused [role="tab"][aria-selected="true"] > span[title="src/b.ts"]')`), 'ADE editor loads the linked file');
   // A folder chip asks about a folder.
   await chip('src/');
   await c.waitFor(`!!document.querySelector('.quick')`);
   const folderAsk = await title(), folderChoices = await options();
-  ok(folderAsk.includes('폴더를 열까요?') && folderChoices.some(x => x.includes('탐색기에서 폴더 열기')), 'folder chip: asks about a folder', JSON.stringify(folderAsk) + ' ' + folderChoices.join(' | '));
+  ok(folderAsk.includes('폴더를 열까요?') && folderChoices.some(x => x.includes('탐색기에서 폴더 열기')) && !folderChoices.some(x => x.includes('ADE에서 열기')), 'folder chip: asks about a folder', JSON.stringify(folderAsk) + ' ' + folderChoices.join(' | '));
   await c.key('Escape', 'Escape'); await sleep(300);
 }
 console.log('problems:', JSON.stringify(c.problems));

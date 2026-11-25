@@ -33,6 +33,7 @@ import { ErrorCorner } from './error-ui';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { bytesToBase64 } from './feedback-model';
+import type { FileLocation } from './file-buffer';
 import { endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
@@ -295,6 +296,10 @@ function Shell() {
   const [ready, setReady] = useState(false), [booted, setBooted] = useState(false), [bootError, setBootError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]), [activeRoot, setActiveRoot] = useState('');
   const [status, setStatus] = useState<Record<string, WorkspaceStatus>>({});
+  const [requestedFile, setRequestedFile] = useState<{ root: string; path: string; location: FileLocation }>();
+  const clearFileRequest = useCallback((request: { path: string; location: FileLocation }) => {
+    setRequestedFile(previous => previous === request ? undefined : previous);
+  }, []);
   const [recent, setRecent] = useState<Recent[]>([]), [picker, setPicker] = useState(false);
   // splash: the launch animation, on every start once onboarded and when the tour ends.
   const [splash, setSplash] = useState(false);
@@ -460,18 +465,34 @@ function Shell() {
   const addProject = useCallback((path: string) => openEntry('project/open', { path }), []);
   const cloneProject = useCallback((url: string, parent: string, name: string) => openEntry('project/clone', name ? { url, parent, name } : { url, parent }), []);
   const createProject = useCallback((name: string, parent: string, git: boolean) => openEntry('project/create', { name, parent, git }), []);
-  async function openEntry(action: string, input: object) {
+  async function openEntry(action: string, input: object, file?: { folder: string; path: string; location: FileLocation }) {
     try {
       const opened = await api<{ id: string; root: string }>(action, input);
       // The same project can be reached through different paths (worktrees, symlinks); the id decides.
       const existing = entriesRef.current.find(entry => entry.id === opened.id || entry.root === opened.root);
+      if (file && opened.root !== file.folder) throw new Error('ADE에서 이 파일의 폴더를 별도로 열 수 없습니다.');
       if (existing) setActiveRoot(existing.root);
       else { commit([...entriesRef.current, { root: opened.root, id: opened.id }]); setActiveRoot(opened.root); }
+      if (file) setRequestedFile({ root: existing?.root ?? opened.root, path: file.path, location: file.location });
       setPicker(false);
       void api<Recent[]>('recent').then(setRecent).catch(() => {});
-      if ('Notification' in window && Notification.permission === 'default' && entriesRef.current.length > 1) void Notification.requestPermission();
+      if (!file && 'Notification' in window && Notification.permission === 'default' && entriesRef.current.length > 1) void Notification.requestPermission();
     } catch (cause) { report(cause); }
   }
+  const openExternalFile = useCallback(async (folder: string, path: string, location: FileLocation) => {
+    const windows = /^[a-z]:/i.test(folder);
+    const normalize = (value: string) => (windows ? value.replace(/\\/g, '/') : value).replace(/\/+$/, '');
+    const directory = normalize(folder);
+    const match = (value: string) => windows ? value.toLowerCase() : value;
+    const owner = entriesRef.current.map(entry => ({ entry, base: normalize(entry.root) }))
+      .filter(({ base }) => match(directory) === match(base) || match(directory).startsWith(`${match(base)}/`))
+      .sort((a, b) => b.base.length - a.base.length)[0];
+    if (owner) {
+      const relative = directory.slice(owner.base.length).replace(/^\//, '');
+      setActiveRoot(owner.entry.root);
+      setRequestedFile({ root: owner.entry.root, path: relative ? `${relative}/${path}` : path, location });
+    } else await openEntry('project/open', { path: folder }, { folder, path, location });
+  }, []);
   const closeProject = useCallback(async (root: string, forceAsk = false) => {
     const handle = handles.current.get(root); if (!handle) return;
     let closed = false;
@@ -729,6 +750,8 @@ function Shell() {
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} projectId={entry.id} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
+        requestedFile={requestedFile?.root === entry.root ? requestedFile : undefined} onOpenExternalFile={openExternalFile}
+        onFileOpened={clearFileRequest}
         onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}

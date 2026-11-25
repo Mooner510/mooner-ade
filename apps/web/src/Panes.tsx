@@ -717,7 +717,7 @@ function EditorGroup({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom }: {
         onSelect={() => ctx.onSelectTab(leaf.id, spec)} onClose={() => ctx.onCloseTab(leaf.id, spec)} />;
     })}</div>
       <div className="group-actions"><IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} action="zoom" onClick={() => onZoom(leaf.id)} /><IconButton icon="x" label="편집기 패널 닫기" onClick={() => ctx.onCloseGroup(leaf.id)} /></div></header>
-    {path ? <FileEditor key={path} buffer={ctx.fileBuffer(path)} settings={ctx.settings} visible={visible} watch={ctx.watchFiles} />
+    {path ? <FileEditor key={path} buffer={ctx.fileBuffer(path)} settings={ctx.settings} visible={visible} focused={focused} watch={ctx.watchFiles} />
       : active ? <DiffTab key={active} spec={active} ctx={ctx} />
         : <div className="empty"><h2>열린 파일이 없습니다</h2></div>}
   </section>;
