@@ -348,7 +348,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const inflight = typeof base === 'number' && costPerUnit && live > 0 ? live * costPerUnit : 0;
     // The API Usage figure grows with the running turn too (the in-flight part is billed to the key), so it moves live like the session cost.
     const costUsd = typeof base === 'number' ? base + inflight : base;
-    return { ...state, tokens, costUsd, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn(),
+    const mcpServers = chatMcpServers({ chatId: id, projectId, agent }).map(server => ({ name: server.name, disabledTools: [...(server.disabledTools ?? [])], autoApprove: server.autoApprove === true }));
+    return { ...state, tokens, costUsd, apiCostUsd: state.apiKey ? keyTotal() + inflight : state.apiCostUsd, pending: approvals.size, recoverable: canRetryTurn(), mcpServers,
       limit: meta.limit ? limitView(meta.limit, { ...limitNow, ...(typeof costUsd === 'number' && { cost: costUsd }) }) : null, limitOptions: limitOptions({ agent, cost: state.capabilities.cost, apiKey: state.apiKey }),
       ...(agent === 'claude' && { idleCompact: { chat: typeof meta.idleCompact === 'boolean' ? meta.idleCompact : null, on: idleSetting().on } }) };
   };

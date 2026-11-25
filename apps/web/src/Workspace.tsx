@@ -959,11 +959,11 @@ ${where}`, [
     if (opened) { selectTab(opened.id); setFocusLeaf(id); return; }
     await takeOver(from, { id, kind: 'chat', agent });
   }
-  // A conversation made with the plain `claude` CLI becomes a new chat tab; the server writes its transcript into the chat first.
-  async function importCliChat(sessionId: string, from?: string) {
+  // A conversation made with the plain CLI becomes a new chat tab. Claude reads its transcript; Cursor copies the session and does not change the original.
+  async function importCliChat(sessionId: string, from?: string, agent: Agent = 'claude') {
     if (!from && refs.paneTabs.current.length >= 16) throw new Error('프로젝트당 최대 16개 탭을 열 수 있습니다.');
-    const leaf = chatLeaf(undefined, 'claude');
-    await call('chat/import-cli', { sessionId, newId: leaf.id });
+    const leaf = chatLeaf(undefined, agent);
+    await call(agent === 'cursor' ? 'chat/import-cursor' : 'chat/import-cli', { sessionId, newId: leaf.id });
     await takeOver(from, leaf);
   }
   async function launch(command: string, where: 'tab' | 'split') {

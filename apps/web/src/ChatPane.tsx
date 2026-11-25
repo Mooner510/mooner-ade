@@ -53,7 +53,7 @@ export type ChatCtx = {
   toTerminal(id: string, fresh: boolean): void;
   resumeChat(id: string, agent: 'claude' | 'codex' | 'cursor', from?: string): Promise<void>;
   // Continue a conversation made with the plain `claude` CLI as a new chat tab.
-  importCliChat(sessionId: string, from?: string): Promise<void>;
+  importCliChat(sessionId: string, from?: string, agent?: 'claude' | 'codex' | 'cursor'): Promise<void>;
   // Start screen only: replace this pane with an empty chat of another provider (forget = drop the stored empty chat).
   switchAgent(id: string, agent: 'claude' | 'codex' | 'cursor', forget: boolean): Promise<boolean>;
   onSettingsChange(settings: Settings): void;
@@ -103,7 +103,7 @@ function modelOptions(model: string | null, catalog = baseCatalog(), aliases: Re
 }
 
 type SavedChat = { id: string; sessionId?: string; title: string; model: string | null; updatedAt: number };
-type CliChat = { sessionId: string; title: string; updatedAt: number; size: number; running: boolean; chatId: string | null };
+type CliChat = { sessionId: string; title: string; updatedAt: number; size?: number; running: boolean; chatId: string | null };
 type ResumeChoice = { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string };
 type ResumeEntry = { key: string; title: string; updatedAt: number; detail?: string; code: string; running?: boolean; choice: ResumeChoice };
 const when = (time: number) => new Date(time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -118,14 +118,15 @@ function ResumeModal({ agent, exclude, call, onPick, onClose }: { agent: 'claude
     let live = true;
     setSaved(null); setCli(null); setFailed(null);
     void call<SavedChat[]>('chat/sessions', { agent, exclude }).then(value => { if (live) setSaved(value); }, error => { if (live) { setSaved([]); setFailed(String(error?.message ?? error)); } });
-    void (agent === 'claude' ? call<CliChat[]>('chat/cli-sessions', {}) : Promise.resolve<CliChat[]>([])).then(value => { if (live) setCli(value); }, error => { if (live) { setCli([]); setFailed(String(error?.message ?? error)); } });
+    const cliAction = agent === 'claude' ? 'chat/cli-sessions' : agent === 'cursor' ? 'chat/cursor-sessions' : '';
+    void (cliAction ? call<CliChat[]>(cliAction, {}) : Promise.resolve<CliChat[]>([])).then(value => { if (live) setCli(value); }, error => { if (live) { setCli([]); setFailed(String(error?.message ?? error)); } });
     return () => { live = false; };
   }, [call, agent, exclude]);
   const chats = saved ?? [], known = new Set(chats.flatMap(chat => chat.sessionId ? [chat.sessionId] : [])), loading = saved === null || cli === null;
   const entries: ResumeEntry[] = [
     ...chats.map(chat => ({ key: `chat:${chat.id}`, title: chat.title, updatedAt: chat.updatedAt, detail: chat.model ? shortModel(chat.model) : undefined, code: (chat.sessionId ?? chat.id).slice(0, 8), choice: { kind: 'chat', id: chat.id } as ResumeChoice })),
     ...(cli ?? []).filter(item => item.chatId !== exclude && !known.has(item.sessionId) && !(item.chatId && chats.some(chat => chat.id === item.chatId)))
-      .map(item => ({ key: `cli:${item.sessionId}`, title: item.title, updatedAt: item.updatedAt, detail: sizeOf(item.size), code: item.sessionId.slice(0, 8), running: item.running,
+      .map(item => ({ key: `cli:${item.sessionId}`, title: item.title, updatedAt: item.updatedAt, detail: item.size ? sizeOf(item.size) : undefined, code: item.sessionId.slice(0, 8), running: item.running,
         choice: (item.chatId ? { kind: 'chat', id: item.chatId } : { kind: 'cli', sessionId: item.sessionId }) as ResumeChoice }))
   ].sort((a, b) => b.updatedAt - a.updatedAt);
   const needle = query.trim().toLowerCase(), rows = entries?.filter(item => !needle || item.title.toLowerCase().includes(needle));
@@ -1596,10 +1597,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
           if (viewRef.current.items.some(item => item.kind === 'mcp')) { release(); scroller.current?.querySelector('.mcp-card')?.scrollIntoView({ behavior: calm() ? 'auto' : 'smooth', block: 'center' }); syncPin(); return true; }
           apply(view => ({ ...view, items: [...view.items, { kind: 'mcp', key: `m${Date.now()}${Math.random()}`, local: true, fresh: true }] })); return true;
         }
-        const servers = new Map<string, number>();
-        for (const tool of state.tools) { const match = /^mcp__(.+?)__/.exec(tool); if (match) servers.set(match[1], (servers.get(match[1]) ?? 0) + 1); }
-        if (!servers.size) note(state.tools.length ? '이 채팅에 연결된 MCP 서버가 없습니다.' : '첫 응답 후 연결된 MCP 서버가 표시됩니다.');
-        else info(`### MCP 서버\n\n| 서버 | 도구 |\n|---|---|\n${[...servers].map(([server, count]) => `| ${server} | ${count}개 |`).join('\n')}`);
+        const fromTools = new Map<string, number>();
+        for (const tool of state.tools) { const match = /^mcp__(.+?)__/.exec(tool); if (match) fromTools.set(match[1], (fromTools.get(match[1]) ?? 0) + 1); }
+        const attached = state.mcpServers ?? [];
+        const names = [...new Set([...fromTools.keys(), ...attached.map(server => server.name)])];
+        if (!names.length) note(state.tools.length ? '이 채팅에 연결된 MCP 서버가 없습니다.' : '첫 응답 후 연결된 MCP 서버가 표시됩니다.');
+        else {
+          const byName = new Map(attached.map(server => [server.name, server]));
+          const rows = names.map(name => {
+            const server = byName.get(name), count = fromTools.get(name);
+            const extra = [count != null ? `${count}개` : '연결됨', server?.disabledTools.length ? `끔: ${server.disabledTools.join(', ')}` : '', server?.autoApprove ? '자동 승인' : ''].filter(Boolean).join(' · ');
+            return `| ${name} | ${extra} |`;
+          });
+          info(`### MCP 서버\n\n| 서버 | 도구 |\n|---|---|\n${rows.join('\n')}`);
+        }
         return true;
       }
       case 'tasks': {
@@ -1738,7 +1749,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }
   async function pickResume(choice: { kind: 'chat'; id: string } | { kind: 'cli'; sessionId: string }) {
     setResumeOpen(false); setResuming(true);
-    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent, id) : ctx.importCliChat(choice.sessionId, id)); }
+    try { await (choice.kind === 'chat' ? ctx.resumeChat(choice.id, agent, id) : ctx.importCliChat(choice.sessionId, id, agent)); }
     catch (cause) { ctx.fail(cause); }
     finally { setResuming(false); }
   }

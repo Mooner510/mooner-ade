@@ -11,7 +11,7 @@ import { agentExitBenign, chatFolder, openChatSession, seedChat, probeAgentModel
 import { createCursorModelCache, cursorSurface } from '../apps/local-server/src/cursor-model-cache.js';
 import { createApiSpend } from '../apps/local-server/src/api-spend.js';
 import { listCommands } from '../apps/local-server/src/slash-commands.js';
-import { chatCapabilities, codexPermissions, createChatProtocol } from '../apps/local-server/src/chat-rpc.js';
+import { chatCapabilities, codexPermissions, createChatProtocol, elicitationContent, elicitationQuestions } from '../apps/local-server/src/chat-rpc.js';
 import { chatLaunchFiles } from '../apps/local-server/src/chat-launch-files.js';
 import { contextGauge, contextReported, fromReplay, pendingAsyncQuestions } from '../apps/web/src/chat-model.ts';
 
@@ -1433,4 +1433,31 @@ test('Claude: denying a request grants nothing, even when the tool button was me
   await session.approve(ask.requestId, { allow: false, allowTool: true });
   await until(() => session.state().status === 'idle');
   assert.equal(events.filter(event => event.kind === 'message').flatMap(event => event.blocks.map(block => block.text ?? '')).at(-1), 'grants=[]');
+});
+
+test('Codex elicitation forms become question cards and approval-tagged ones stay unsupported', async () => {
+  const events = [], sent = [];
+  let protocol;
+  const answers = { initialize: {}, 'model/list': { data: [] }, 'skills/list': { data: [] }, 'thread/start': { thread: { id: 't1' }, model: 'm' } };
+  protocol = createChatProtocol('codex', { write: async line => { const message = JSON.parse(line); sent.push(message); if (message.method in answers) queueMicrotask(() => protocol.handle({ id: message.id, result: answers[message.method] })); }, emit: event => events.push(event) });
+  await protocol.initialize({ permissionMode: 'default', addDirs: [] }, '/repo');
+  protocol.handle({ id: 'f1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', message: '이름', requestedSchema: { type: 'object', properties: { name: { type: 'string', title: '이름' }, ok: { type: 'boolean' } }, required: ['name'] } } });
+  const card = events.find(event => event.kind === 'approval' && event.phase === 'request');
+  assert.equal(card.questions[0].id, 'name');
+  assert.equal(card.questions[1].options[0].id, 'true');
+  await protocol.approve('f1', { allow: true, answers: { name: ['Ada'], ok: ['true'] } });
+  assert.deepEqual(sent.find(message => message.id === 'f1').result, { action: 'accept', content: { name: 'Ada', ok: true } });
+  protocol.handle({ id: 'e1', method: 'mcpServer/elicitation/request', params: { threadId: 't1', message: 'Allow?', requestedSchema: {}, _meta: { codex_approval_kind: 'mcp_tool_call' } } });
+  assert.equal(sent.find(message => message.id === 'e1').error.code, -32601);
+  assert.deepEqual(elicitationQuestions({ message: '하나만' }), [{ id: 'answer', prompt: '하나만', allowOther: true }]);
+  assert.deepEqual(elicitationContent({ requestedSchema: { properties: { n: { type: 'integer' } } } }, { n: ['3'] }), { n: 3 });
+});
+
+test('Codex compaction reports token counts only when the item has them', () => {
+  const events = [];
+  const protocol = createChatProtocol('codex', { write: async () => {}, emit: event => events.push(event) });
+  protocol.handle({ method: 'item/completed', params: { item: { id: 'c1', type: 'contextCompaction' } } });
+  protocol.handle({ method: 'item/completed', params: { item: { id: 'c2', type: 'contextCompaction', preTokens: 10, postTokens: 4 } } });
+  assert.deepEqual(events.filter(event => event.kind === 'compact').map(event => [event.preTokens, event.postTokens]), [[null, null], [10, 4]]);
+  protocol.dispose();
 });

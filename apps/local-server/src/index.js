@@ -31,7 +31,7 @@ import { createTerminalSize, typedInput, validSize } from './terminal-size.js';
 import { watchProjectFiles } from './project-watch.js';
 import { readTerminalSession, seedTerminalSession, setAgentMcpServers, syncClaudeSession, terminalAgentCommand, terminalSessionShell } from './terminal-sessions.js';
 import { listCliSessions, importCliSession, defaultClaudeDir } from './cli-sessions.js';
-import { readCodexConversation, readCursorConversation } from './cli-conversations.js';
+import { importCursorCliSession, readCodexConversation, readCursorConversation } from './cli-conversations.js';
 import { cursorConfigDir, forkCursorSession, listCursorSessions } from './cursor-sessions.js';
 import { createCursorModelCache } from './cursor-model-cache.js';
 import { readSessionStats, sessionFiles, withSubagents } from './chat-stats.js';
@@ -776,6 +776,19 @@ function trimRecent(list) {
 // Anything that cannot be verified refuses (the Claude is left untouched). Only then is the process ended, so the session has one writer
 // again, and the same session continues as a chat. A half-typed prompt in the composer is not detectable and is lost with the process.
 const SWITCH_BLOCKED = { turn: '응답 중입니다', background: '백그라운드 작업이 실행 중입니다', waiting: '승인 또는 질문을 기다리고 있습니다', scheduled: '예약된 작업이 남아 있습니다', unknown: '상태를 확인할 수 없습니다' };
+async function runningCursorSessionIds(project) {
+  const roots = [...project.terminals.values()].filter(terminal => !terminal.exited && terminal.native?.pid).map(terminal => terminal.native.pid);
+  if (!roots.length) return new Set();
+  const table = await processTable(roots).catch(() => null);
+  if (!table) return new Set();
+  const ids = new Set();
+  for (const row of table) {
+    const command = String(row.command ?? '');
+    if (!/cursor-agent/i.test(command)) continue;
+    for (const match of command.matchAll(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi)) ids.add(match[0].toLowerCase());
+  }
+  return ids;
+}
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function terminalToChat(project, id, newId, workspace, stop = false, selectedSession) {
   const refuse = why => fault('CHAT_SWITCH_UNSAFE', `Chat으로 전환할 수 없습니다: ${why}`, 409);
@@ -1175,6 +1188,18 @@ async function route(action, input, project) {
     }
     case 'chat/cli-sessions': return listCliSessions({ directory: project.directory, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
     case 'chat/import-cli': return importCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId: input.sessionId, cwd: workspace.root, configDirs: await cliConfigDirs(project) });
+    case 'chat/cursor-sessions': {
+      const configDir = cursorConfigDir();
+      const running = await runningCursorSessionIds(project);
+      return (await listCursorSessions({ cwd: workspace.root, configDir })).map(({ sessionId, title, updatedAt }) => ({ sessionId, title, updatedAt, running: running.has(sessionId.toLowerCase()), chatId: null }));
+    }
+    case 'chat/import-cursor': {
+      const configDir = cursorConfigDir();
+      const sessionId = String(input.sessionId ?? '');
+      const running = await runningCursorSessionIds(project);
+      return importCursorCliSession({ directory: project.directory, id: text(input.newId, '채팅 ID', 128), sessionId, cwd: workspace.root, configDir, running: running.has(sessionId.toLowerCase()),
+        readEvents: nextId => readCursorConversation({ cwd: workspace.root, env: { CURSOR_CONFIG_DIR: configDir } }, nextId).catch(() => []) });
+    }
     case 'chat/retry': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
@@ -1241,13 +1266,11 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       await chat.set({ auth: input.auth, configOption: input.configOption, model: input.model, effort: input.effort, worktree: input.worktree, addDirs: input.addDirs, permissionMode: input.permissionMode, sandbox: input.sandbox, network: input.network, runEverything: input.runEverything });
       // Remembered per project and agent for the next new chat: the mode, and the model with its effort as a pair (a new model drops the old effort,
-      // like the chat itself does). bypassPermissions is never inherited. Cursor's model and effort are config options, not remembered.
+      // like the chat itself does). bypassPermissions is never inherited. A Cursor model the CLI rejects is forgotten on the next start.
       const pick = {}, ok = value => typeof value === 'string' && value.length <= 200;
       if (ok(input.permissionMode) && input.permissionMode !== 'bypassPermissions') pick.permissionMode = input.permissionMode;
-      if (chat.agent !== 'cursor') {
-        if (input.model !== undefined) { pick.model = ok(input.model) ? input.model : null; pick.effort = ok(input.effort) ? input.effort : null; }
-        else if (input.effort !== undefined) pick.effort = ok(input.effort) ? input.effort : null;
-      }
+      if (input.model !== undefined) { pick.model = ok(input.model) ? input.model : null; pick.effort = ok(input.effort) ? input.effort : null; }
+      else if (input.effort !== undefined) pick.effort = ok(input.effort) ? input.effort : null;
       if (Object.keys(pick).length) {
         const file = path.join(project.directory, 'last-picks.json'), all = await readJson(file, {}).catch(() => ({}));
         const merged = Object.fromEntries(Object.entries({ ...all[chat.agent], ...pick }).filter(([, value]) => value != null));

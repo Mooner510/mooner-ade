@@ -1,7 +1,20 @@
 import { StringDecoder } from 'node:string_decoder';
 import { spawnAgent } from './agent-spawn.js';
+import { seedChat } from './chat.js';
 import { createChatProtocol } from './chat-rpc.js';
+import { forkCursorSession, listCursorSessions } from './cursor-sessions.js';
 import { fault } from './files.js';
+
+// Copies a Cursor CLI session into a new ADE chat. The original store is left as it is. History replay is best-effort.
+export async function importCursorCliSession({ directory, id, sessionId, cwd, configDir, running = false, readEvents }) {
+  if (running) throw fault('CHAT_BUSY', '터미널에서 실행 중인 대화는 불러올 수 없습니다.', 409);
+  const found = (await listCursorSessions({ cwd, configDir })).find(item => item.sessionId.toLowerCase() === String(sessionId).toLowerCase());
+  if (!found) throw fault('NOT_FOUND', 'Cursor 대화를 찾을 수 없습니다.', 404);
+  const next = await forkCursorSession({ checkpoint: found.file, cwd, configDir });
+  const events = await Promise.resolve(readEvents?.(next)).catch(() => []) ?? [];
+  await seedChat({ directory, id, events, meta: { agent: 'cursor', cwd, configDir, sessionId: next, addDirs: [] } });
+  return { id, sessionId: next };
+}
 
 // Short-lived protocol client for history and metadata only; never starts a model turn or resumes a writer.
 export async function withAgentRpc({ agent, cwd, env = {}, executable = agent === 'cursor' ? 'cursor-agent' : agent, executableArgs = [], spawnProcess = spawnAgent }, read) {
