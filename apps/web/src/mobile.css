@@ -92,10 +92,10 @@
   .git-resizer::after { left: 50%; width: 40px; margin-left: -20px; top: 7px; height: 4px; border-radius: 2px; background: var(--border-strong); }
   .git-drawer > :not(.git-resizer):first-of-type { padding-top: 10px; }
   /* ---- the phone's status strip (MobileStatus in Workspace.tsx): branch and each agent's highest usage, large; a tap opens the details ---- */
-  .statusbar.m-status { height: auto; min-height: 40px; gap: 8px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px)); justify-content: flex-start; font-size: 13px; }
-  .m-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+  .statusbar.m-status { height: auto; min-height: 32px; gap: 8px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom, 0px)); justify-content: flex-start; font-size: 13px; }
+  .m-branch { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%; height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
   .m-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .m-usage { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+  .m-usage { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
   .m-usage-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--fg); font-variant-numeric: tabular-nums; }
   .m-usage-chip > b { font-weight: 600; font-size: 13px; }
   .m-usage-chip[style] > b { color: hsl(var(--usage-hue) 70% 60%); }
@@ -115,7 +115,13 @@
   /* ---- chat: full width, the composer stays above the keyboard (the page resizes with it) ---- */
   .chat-pane { --chat-width: 100%; }
   .chat-composer { padding: 10px 8px 6px 12px; border-radius: 16px; }
-  .chat-composer textarea { font-size: 16px; max-height: 40dvh; } /* 16px: a smaller font makes mobile browsers zoom the page on focus */
+  /* 15px: the page's own 16px rule for inputs is for iOS, which zooms in on a smaller one; the Android WebView does not, and 16px was larger than the messages above it. */
+  .chat-composer textarea { font-size: 15px; max-height: 40dvh; }
+  /* Closer to the screen's edges: the thread's sides, top and bottom, the dock under it, and its own status line. No scrollbar gutter: a touch screen scrolls with an overlay bar. */
+  .chat-scroll { scrollbar-gutter: auto; }
+  .chat-thread { padding: 12px 12px 22px; gap: 12px; }
+  .chat-dock { padding: 0 8px 6px; }
+  .chat-statusbar { padding: 3px 12px 0; min-height: 0; }
   .chat-pane button { touch-action: manipulation; }
 
   /* ---- settings: a slim bar on top (search and a clear close button), one line of section tabs, then the page. The page scrolls on its own and the

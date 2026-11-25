@@ -641,10 +641,21 @@ const sameTurn = (a: TurnProps, b: TurnProps) => a.items.length === b.items.leng
 // `token` ↑ in ↓ out | `database` ↑ cache written ↓ cache read, the groups divided by a thin rule.
 const GlyphIcon = ({ name, size = 14 }: { name: string; size?: number }) => <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{name}</span>;
 function TurnTokens({ done }: { done: TurnDone }) {
-  const rows = turnTokenRows(done);
-  return <span className="chat-done-tip">
+  const rows = turnTokenRows(done), pop = useRef<HTMLSpanElement>(null);
+  // The note opens above the icon, starting at its left edge. Shown, it is pushed back inside the thread's box (a phone is narrower than the note is long) and
+  // drops below the icon when there is no room above it (the first rows of the thread). It wraps in the CSS when even the whole width is too narrow.
+  const place = () => {
+    const el = pop.current; if (!el) return;
+    el.style.setProperty('--pop-x', '0px'); el.dataset.side = 'above';
+    const box = el.getBoundingClientRect(), host = el.closest('.chat-scroll')?.getBoundingClientRect(), margin = 8;
+    const left = Math.max(host?.left ?? 0, 0) + margin, right = Math.min(host?.right ?? innerWidth, innerWidth) - margin;
+    let shift = 0; if (box.right > right) shift = right - box.right; if (box.left + shift < left) shift = left - box.left;
+    el.style.setProperty('--pop-x', `${Math.round(shift)}px`);
+    if (box.top < (host?.top ?? 0) + 44) el.dataset.side = 'below';
+  };
+  return <span className="chat-done-tip" onMouseEnter={place} onFocus={place}>
     <IconButton icon="info" tip="none" label={[...rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`), ...(done.costUsd ? [`비용 ${dollars(done.costUsd)}달러`] : [])].join(', ')} size={13} />
-    <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
+    <span className="chat-done-pop" role="tooltip" ref={pop}>{rows.map(row => <span key={row.icon} className="chat-done-row">
       <GlyphIcon name={row.icon} size={15} /><b>{row.label}</b>
       <span><GlyphIcon name="arrow_upward" size={13} />{row.up.value}</span><span><GlyphIcon name="arrow_downward" size={13} />{row.down.value}</span>
     </span>)}{done.costUsd != null && <span className="chat-done-row"><GlyphIcon name="payments" size={15} /><b>비용</b><span>{'$' + dollars(done.costUsd)}</span></span>}</span>
