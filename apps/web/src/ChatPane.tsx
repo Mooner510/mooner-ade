@@ -820,21 +820,22 @@ type PlanAnswer = { mode?: string; message?: string; allowTool?: boolean; perman
 function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: string[]; choices?: boolean; onAnswer(allow: boolean, answer?: PlanAnswer): void; onBack?(): void }) {
   const [revising, setRevising] = useState(false), [note, setNote] = useState(''), feedback = note.trim();
   if (revising) return <footer className="plan-revise">
-    <label htmlFor="plan-feedback">어떻게 고치면 좋을지 알려 주세요</label>
+    <label htmlFor="plan-feedback">{choices ? '어떻게 고치면 좋을지 알려 주세요' : '다음 메시지로 어떻게 고칠지 알려 주세요'}</label>
     <textarea id="plan-feedback" autoFocus rows={3} maxLength={4000} value={note} placeholder="예: 2단계는 기존 API를 유지하는 쪽으로 다시 설계해 주세요. 테스트 계획도 추가해 주세요."
       onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
     <div className="plan-actions">
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
       <button type="button" onClick={() => onAnswer(false)}>의견 없이 반려</button>
-      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>의견 보내고 다시 계획</button>
+      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>{choices ? '의견 보내고 다시 계획' : '의견 보내고 다음 메시지로'}</button>
     </div>
   </footer>;
   // Like Claude Code: two ways to approve, differing only in the permission mode the run continues in. Auto (the CLI decides) is the default
   // choice; "edits allowed" lets file edits through and still asks for commands. Without auto mode the edit choice becomes the primary one.
   const auto = modes.includes('auto');
-  // Cursor's plan has no permission mode to pick and no revision message: just approve or turn it down.
+  // Cursor's plan has no permission mode to pick. A revision is the next user message, not a mode choice.
   if (!choices) return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
+    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…</button>
     <button type="button" className="secondary" onClick={() => onAnswer(false)}>거부</button>
     <button type="button" className="primary" onClick={() => onAnswer(true)}>승인</button>
   </footer>;

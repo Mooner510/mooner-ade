@@ -279,7 +279,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // `cursorSurfaceLive` flips once that pick is echoed, and only then do the new model's Effort and options replace the ones on screen (one change, not two).
   let cursorModelHold = null, cursorSurfaceLive = true, cursorModeHold = null, cursorAppliedModel = null;
   const copiedBlobs = new Set(); // blob ids already archived for this chat; later checkpoints only copy what is new
-  let child = null, protocol = null, closed = false, turnOpen = false, turnSeq = 0, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve(), publishTimer = null, lastCommandOutput = null;
+  let child = null, protocol = null, closed = false, turnOpen = false, followText = '', turnSeq = 0, restartAfterTurn = false, idleTimer = null, writing = Promise.resolve(), publishTimer = null, lastCommandOutput = null;
   let reopened = false, activityTimer = null; // reopened: the turn is "open" only because background output arrived after a `result`
   // Claude: the message streaming right now per subagent ('' = main thread). Text deltas name no message; they belong to the latest start of their own stream.
   const streamIds = new Map(), toolInputSize = new Map();
@@ -737,6 +737,11 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         // The turn's cost is known now (Claude reports it only here): a cost limit reached by it stops the chat before the turn counts as over.
         if (meta.limit && !meta.limit.stop && !limitBypass) { const hit = limitStep(shown().costUsd, null); if (hit) stopByLimit(hit, { interrupt: false }); }
         streamIds.clear(); toolInputSize.clear(); resetLive(); turnOpen = steers.size > 0; setStatus(); limitAfterResult();
+        if (followText && !turnOpen) {
+          const saying = followText;
+          followText = '';
+          queueMicrotask(() => chatApi.send(saying, []).catch(error => { emit({ kind: 'error', message: error.message ?? '이어서 보내지 못했습니다.' }); publish(); }));
+        }
         if (agent === 'claude' && event.contextWindow) void refreshAutoCompact();
         if (agent === 'claude') refreshCacheSoon();
         if (agent === 'cursor') startCursorStorePoll(Date.now() + 45_000);
@@ -1028,6 +1033,15 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent === 'cursor') startCursorStorePoll();
     setStatus();
   }
+  // Codex can fold the note into the live turn. Cursor has no steer, so the note waits until that turn ends and goes out as the next message.
+  async function deliverNote(note) {
+    if (agent === 'codex' && turnOpen) {
+      try { await chatApi.send(note, [], { steer: true }); return; }
+      catch { /* the turn ended before the steer landed */ }
+    }
+    if (!turnOpen) { await chatApi.send(note, []); return; }
+    followText = note;
+  }
   const chatApi = {
     id, agent, get cwd() { return cwd; },
     // Server shutdown: an agent running in the pty-host stays, and live.json tells the next server how far this one read and what was open.
@@ -1262,6 +1276,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       approvals.delete(requestId);
       emit({ kind: 'approval', phase: 'answer', requestId, tool: pending.tool, allow: answer.allow === true });
       setStatus();
+      // Only Claude reads a reason with a refusal; for Codex and Cursor the note leaves as the next user message.
+      const note = agent !== 'claude' && answer.allow !== true && typeof answer.message === 'string' ? answer.message.trim() : '';
+      if (note) await deliverNote(note);
     },
     // Ends one background task (shell, Monitor, subagent) on its own, without interrupting the turn. toolUseId is the Agent/Bash/Monitor call that started it.
     async stopTask(toolUseId) {
@@ -1306,9 +1323,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     async set({ model, effort, worktree, addDirs, permissionMode, configOption, sandbox, network, runEverything, auth }) {
       live();
       // The login (CLI plan or API key) is read when the child starts, so changing it replaces the child; the next message resumes the same session on the new
-      // login. Nothing is asked here: the composer asks before a message changes the login of a chat that has already had a turn (the prompt cache does not carry over).
+      // login. Nothing is asked here: the composer asks before a message that would change the account a chat has already used.
       if (auth !== undefined) {
-        if (agent !== 'claude') throw fault('CHAT_UNSUPPORTED', '로그인 방식은 Claude 채팅에서만 바꿀 수 있습니다.', 409);
         if (auth !== 'login' && auth !== 'key') throw fault('INVALID_INPUT', '잘못된 로그인 방식입니다.');
         if ([model, effort, worktree, addDirs, permissionMode, configOption, sandbox, network, runEverything].some(value => value !== undefined)) throw fault('INVALID_INPUT', '로그인 방식은 다른 설정과 함께 바꿀 수 없습니다.');
         if (configuring || !quiet()) throw fault('CHAT_BUSY', '응답과 백그라운드 작업이 끝난 뒤 로그인 방식을 바꿀 수 있습니다.', 409);

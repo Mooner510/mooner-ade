@@ -1478,3 +1478,27 @@ test('Cursor: a rejected remembered model opens on the CLI default and is forgot
   assert.equal(picks.cursor.permissionMode, 'plan');
 });
 
+test('Codex and Cursor: an open chat switches login and keeps the session', async t => {
+  for (const agent of ['codex', 'cursor']) {
+    const { session } = await setup(t, agent);
+    await session.send('hello');
+    await until(() => session.state().status === 'idle');
+    const id = session.state().sessionId;
+    await session.set({ auth: 'key' });
+    assert.equal(session.state().auth, 'key');
+    await session.send('again');
+    await until(() => session.state().status === 'idle');
+    assert.equal(session.state().sessionId, id);
+  }
+});
+
+test('a refusal note leaves Codex or Cursor as a later user message', async t => {
+  for (const agent of ['codex', 'cursor']) {
+    const { session, events } = await setup(t, agent);
+    await session.send('approval');
+    await until(() => session.state().status === 'attention');
+    const requestId = session.replay().approvals[0].requestId;
+    await session.approve(requestId, { allow: false, message: '다른 방법으로' });
+    await until(() => events.some(event => (event.kind === 'user' || event.kind === 'steer') && event.text === '다른 방법으로'));
+  }
+});

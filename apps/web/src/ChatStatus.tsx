@@ -86,7 +86,7 @@ function StatBox({ cls, icon, text, tip, color, align }: { cls: string; icon: st
 }
 
 // The usage item is a button and the switch: it names what this chat is billed against (Plan Usage, or API Usage with the money it has cost) and,
-// pressed, lets a Claude chat go on with the CLI plan or the API key. Switching is silent; the composer asks before the first message that would
+// pressed, lets the chat go on with the CLI plan or the API key. Switching is silent; the composer asks before the first message that would
 // change the login of a chat that has had a turn (the two logins do not share a prompt cache). The key itself is registered in Settings > AI 툴.
 // Claude's prompt-cache lifetime (Settings > AI 툴 too): 자동 leaves it to the CLI, the others force it. It applies to chats started or relaunched afterwards.
 export const cacheTtlOptions: { value: CacheTtl; label: string; hint: string }[] = [
@@ -117,10 +117,10 @@ function SwapText({ name, children }: { name: string; children: ReactNode }) {
 
 function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatState; share?: string | null; align: 'left' | 'right'; onSettings?(): void; onAuth(auth: 'login' | 'key'): void }) {
   const pop = useRef<HTMLSpanElement>(null), popId = useId(), [open, setOpen] = useState(false), [keyReady, setKeyReady] = useState<boolean | null>(null), [ttl, setTtl] = useState<CacheTtl>('auto');
-  const key = state.apiKey === true, locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
+  const key = state.apiKey === true, agent = state.agent === 'codex' || state.agent === 'cursor' ? state.agent : 'claude', locked = state.status !== 'idle', spent = state.apiCostUsd ?? 0;
   const needsKey = !key && keyReady === false;
   const choose = (auth: 'login' | 'key') => { if (!locked && (auth === 'login') === key) { onAuth(auth); pop.current?.hidePopover(); } };
-  useEffect(() => { if (open) void api<{ claude?: { key: string }; cacheTtl?: CacheTtl }>('agent-keys/status').then(status => { setKeyReady(Boolean(status.claude?.key)); setTtl(status.cacheTtl ?? 'auto'); }, () => setKeyReady(null)); }, [open]);
+  useEffect(() => { if (open) void api<Record<string, { key?: string }> & { cacheTtl?: CacheTtl }>('agent-keys/status').then(status => { setKeyReady(Boolean(status[agent]?.key)); setTtl(status.cacheTtl ?? 'auto'); }, () => setKeyReady(null)); }, [open, agent]);
   const chooseTtl = (value: CacheTtl) => { const before = ttl; setTtl(value); void api('agent-keys/config', { agent: 'claude', cacheTtl: value }).catch(() => setTtl(before)); };
   const openSettings = () => { pop.current?.hidePopover(); onSettings?.(); };
   return <>
@@ -147,7 +147,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
           {needsKey && (onSettings ? <button type="button" className="usage-panel-action" onClick={openSettings}>키 등록</button> : <span className="usage-note">키 필요</span>)}
         </span>
       </span>
-      <CacheTtlPicker value={ttl} onChange={chooseTtl} />
+      {agent === 'claude' ? <CacheTtlPicker value={ttl} onChange={chooseTtl} /> : <span className="usage-note">다음 메시지부터 요금·한도를 쓰는 계정이 바뀝니다.</span>}
       {locked && <span className="usage-note">로그인 방식은 응답이 끝난 뒤 바꿀 수 있습니다.</span>}
     </span>
   </>;
@@ -156,7 +156,7 @@ function UsageButton({ state, share, align, onSettings, onAuth }: { state: ChatS
 function ChatItem({ id, view, align, state, share, onSettings, onAuth }: { id: string; view: NonNullable<ReturnType<typeof chatItemView>>; align: 'left' | 'right'; state: ChatState; share?: string | null; onSettings?(): void; onAuth?(auth: 'login' | 'key'): void }) {
   const apiUsage = id === 'share' && state.apiKey;
   return <>
-    {id === 'share' && state.agent === 'claude' && onAuth ? <UsageButton state={state} share={share} align={align} onSettings={onSettings} onAuth={onAuth} />
+    {id === 'share' && onAuth ? <UsageButton state={state} share={share} align={align} onSettings={onSettings} onAuth={onAuth} />
       : <StatBox cls={`chat-stat-${id}`} icon={apiUsage ? 'key' : view.icon} text={apiUsage ? `${view.text} $${dollars(state.apiCostUsd ?? 0)}` : view.text} tip={view.tip} color={view.color} align={align} />}
     {view.extra && <StatBox cls={`chat-stat-${id}-extra`} icon={view.extra.icon} text={view.extra.text} tip={view.extra.tip} color={view.color} align={align} />}
   </>;
