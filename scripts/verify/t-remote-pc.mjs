@@ -128,7 +128,7 @@ try {
     assert(frame.width === '3px' && frame.color === 'rgb(34, 197, 94)' && frame.position === 'fixed' && frame.events === 'none', JSON.stringify(frame));
   });
   await check('the other PC\'s recent project is listed, and opening it works through the link', async () => {
-    const name = other.repo.split('/').pop();
+    const name = other.repo.split(/[\\/]/).pop();
     await win.waitFor(`document.body.innerText.includes(${JSON.stringify(other.repo)})`, 30000);
     // The picker of the other PC: its recent project row opens the project there (control scope may; the plugin checks it is a known project).
     await win.ev(`const row = [...document.querySelectorAll("button")].find(item => item.textContent.includes(${JSON.stringify(other.repo)})); if (!row) throw new Error("no recent row"); row.click();`);
@@ -139,8 +139,8 @@ try {
   await check('a terminal opened in the window runs on the other PC, and the events stream is open', async () => {
     // The workspace may still be loading its project when the button first shows: press again until the call goes out.
     // A new project shows the launcher (terminal, Claude, Codex, Cursor); "터미널 zsh" starts a plain shell on the other PC.
-    await win.waitFor('[...document.querySelectorAll("button")].some(item => /터미널/.test(item.textContent) && /zsh|bash|sh/.test(item.textContent))', 30000);
-    await win.ev(`const button = [...document.querySelectorAll("button")].find(item => /터미널/.test(item.textContent) && /zsh|bash|sh/.test(item.textContent)); button.click();`);
+    await win.waitFor('[...document.querySelectorAll("button")].some(item => /터미널/.test(item.textContent) && /zsh|bash|sh|PowerShell|cmd/i.test(item.textContent))', 30000);
+    await win.ev(`const button = [...document.querySelectorAll("button")].find(item => /터미널/.test(item.textContent) && /zsh|bash|sh|PowerShell|cmd/i.test(item.textContent)); button.click();`);
     await win.waitFor('Boolean(document.querySelector(".xterm"))', 30000).catch(async () => { throw new Error(`no terminal in the page; console: ${win.logs.slice(-6).join(' || ')}; text: ${(await win.ev('return document.body.innerText.replace(/\\s+/g, " ").slice(0, 700)'))}`); });
     await until(() => calls.includes('terminal/open'), 10000, 200).catch(() => { throw new Error(`terminal/open never reached the other PC; calls ${calls.slice(-8).join(',')}`); });
     assert(forwards.size >= 1, 'the window never opened the events stream');
