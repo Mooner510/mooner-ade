@@ -52,8 +52,10 @@ node scripts/verify/session.mjs up --as <이름>      # main이 없으면 띄우
 node scripts/verify/session.mjs tab --as <이름>     # main Chrome에 내 탭(백그라운드, 포커스 안 가져감). 이후 드라이버에 VERIFY_TAB=<이름>
 VERIFY_TAB=<이름> node scripts/verify/t-open-chat.mjs   # main의 드라이버는 VERIFY_OUT 없이 실행한다
 node scripts/verify/session.mjs use [<checkout>]   # main의 서버를 다른 worktree 소스로(기본: 지금 checkout). Chrome·데이터는 유지
+node scripts/verify/session.mjs build              # 폰이 받는 PC 화면(apps/web/dist)을 다시 만든다. 세션이 뜰 때 없으면 한 번 만든다
 node scripts/verify/session.mjs reset              # main의 데이터를 비우고 다시(첫 실행 화면이 필요할 때)
 ```
+- **폰에 보이는 화면은 `apps/web/dist`다.** 폰은 PC의 서버가 내려 주는 빌드된 화면을 보므로(`ui/manifest`, docs/REMOTE_UI.md), HMR만 도는 세션에는 그 화면이 없어 `UI_UNAVAILABLE`이 되고 폰이 옛 기본 화면으로 떨어진다. 세션은 시작할 때 `apps/web/dist`가 없으면 한 번 만들고, 웹을 고친 뒤 폰 쪽에서 보려면 `session.mjs build`로 다시 만든다(Chrome의 페이지는 HMR로 이미 따라간다).
 - **소스는 알아서 따라간다.** 웹 소스는 Vite HMR로 바로 반영된다. 서버 소스(`apps/local-server/src`, `apps/desktop/src`, 플러그인 하네스)를 고치면 서버만 자동 재시작되고, 포트·토큰이 고정이라 주소와 로그인이 유지되며 열린 탭은 스스로 새로고침된다. 문법 오류로 서버가 못 뜨면 `status`에 오류가 보이고, 고치면 다시 뜬다. 수동 재시작은 `session.mjs restart`.
 - **main은 함께 쓴다.** `use`·`reset`은 main을 보는 모든 에이전트의 화면을 바꾸므로 `status`의 시작자·소스를 보고 쓴다. 설정을 바꾼 테스트는 끝나면 되돌린다. main의 소스가 내 worktree가 아니면 `status`가 알려 준다.
 - 새 세션을 띄우기 전에 반드시 `status`. `tmp/` 밖에 `start-ui.mjs`를 직접 띄우지 않는다. 남의 격리 세션은 건드리지 않는다.
