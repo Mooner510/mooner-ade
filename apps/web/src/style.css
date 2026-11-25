@@ -3208,8 +3208,9 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .chat-done-time { margin-left: 6px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; color: color-mix(in srgb, var(--muted) 72%, var(--bg)); }
 .chat-done-time > span + span::before { content: '/'; margin: 0 6px; }
 .chat-done-tip { position: relative; display: inline-flex; }
-.chat-done-pop { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 60; width: max-content; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; line-height: 1.4; pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity .12s, transform .12s; }
-.chat-done-row { display: flex; align-items: center; gap: 5px; }
+.chat-done-pop { position: absolute; bottom: calc(100% + 6px); left: 0; translate: var(--pop-x, 0) 0; z-index: 60; width: max-content; max-width: calc(100vw - 16px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; line-height: 1.4; pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity .12s, transform .12s; }
+.chat-done-pop[data-side="below"] { bottom: auto; top: calc(100% + 6px); }
+.chat-done-row { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .chat-done-row > b { font-weight: 500; color: color-mix(in srgb, var(--fg) 70%, var(--muted)); }
 .chat-done-row > span { display: inline-flex; align-items: center; gap: 1px; }
 .chat-done-row + .chat-done-row { padding-left: 8px; border-left: 1px solid var(--border-strong); }

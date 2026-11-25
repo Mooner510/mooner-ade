@@ -4,6 +4,7 @@
 //   node scripts/verify/session.mjs up [--as <이름>] [--source <checkout>]   tmp/main: start it if it is not running (else just print it); reopens a closed Chrome
 //   node scripts/verify/session.mjs tab --as <이름> [--close]       a background tab of your own in main's Chrome; then VERIFY_TAB=<이름> for cdp.mjs
 //   node scripts/verify/session.mjs use [<checkout>]               main's server follows another checkout/worktree (default: this one). Chrome and data stay
+//   node scripts/verify/session.mjs build [<세션>]                  rebuild apps/web/dist, the PC screen a phone loads through the remote link (made once at start when missing);
 //   node scripts/verify/session.mjs restart [<세션>]                restart a session's server (normally automatic on a server source edit);
 //                                                                  with VERIFY_PLUGIN_DIR=<folder> the server also installs that local plugin source
 //   node scripts/verify/session.mjs reset                          main with fresh data (first-run screens); everyone using main sees it
@@ -239,6 +240,7 @@ async function prune() {
 }
 
 const commands = { status, up, tab, new: newSession, down, prune,
+  build: async () => { await control(positional[0] ? sessionDir(positional[0]) : MAIN, 'build'); console.log('apps/web/dist를 다시 만들었습니다(폰이 받는 PC 화면).'); },
   restart: async () => report(await control(positional[0] ? sessionDir(positional[0]) : MAIN, 'restart')),
   use: async () => { const to = resolve(positional[0] ?? ROOT); console.log(`main의 소스를 ${rel(to)} (${branchOf(to)})로 바꿉니다. main을 보는 다른 에이전트의 화면도 바뀝니다.`); report(await control(MAIN, 'source', { source: to })); },
   reset: async () => { console.log('main의 데이터(data·home·repo)를 비우고 서버를 다시 띄웁니다. Chrome 프로필은 그대로입니다.'); report(await control(MAIN, 'reset')); } };

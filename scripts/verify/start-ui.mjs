@@ -1,6 +1,7 @@
 // Long-running owner of ONE session folder (VERIFY_OUT; default tmp/main): server + fake Hub + one visible Chrome, recorded in its env.json.
 // Start it through `node scripts/verify/session.mjs up` (tmp/main) or `session.mjs new` (an isolated tmp/ade-*): those check first whether it already runs.
-// - No web build: the server runs ADE_DEV=1 (in-process Vite, HMR), so web edits show up in the open page by themselves.
+// - No web build for the page: the server runs ADE_DEV=1 (in-process Vite, HMR), so web edits show up in the open page by themselves. The only build is apps/web/dist
+//   for a phone (see buildDist): made once when missing, `session.mjs build` refreshes it.
 // - It follows the server source too: an edit under apps/local-server/src, apps/desktop/src or the verify plugin harness restarts the server alone.
 //   The session keeps one port and one ADE_DEV_TOKEN, so the URL and the browser's cookie survive every restart and the open tabs just reconnect.
 // - control.json (written by session.mjs restart/use/reset/up) asks for a restart, another source checkout, fresh data or a new Chrome
@@ -9,9 +10,10 @@
 //   It shares only the tab for getDisplayMedia (--auto-accept-this-tab-capture); an "Entire screen" auto-select flag makes captures screen-sized.
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
+import { existsSync, openSync, closeSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { basename, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { basename, dirname, join, resolve } from 'node:path';
 import { boot, fakeHub, sleep, S, ROOT, WebSocket } from './lib.mjs';
 import { branchOf, commandLines, defaultChrome, ensureSession, readEnv, readJson, sessionState } from './session-dirs.mjs';
 
@@ -26,6 +28,17 @@ const freePort = () => new Promise((res, rej) => { const srv = createServer(); s
 let port = prev.port || await freePort();
 const devToken = /^[0-9a-f]{64}$/.test(prev.token ?? '') ? prev.token : randomBytes(32).toString('hex');
 const serverOk = dir => existsSync(join(dir, 'apps/local-server/src/index.js'));
+// The phone shows the PC's own UI from apps/web/dist (local-server remote-ui.js `ui/manifest`); the dev server of this session has no build, so without one the app falls back to its old native screens.
+// A build is made when the source has none (and on `session.mjs build`); web edits after that are not in it until the next `build`. The page in Chrome still follows the edits by HMR.
+const distOk = dir => existsSync(join(dir, 'apps/web/dist/index.html'));
+async function buildDist(dir) {
+  const webDir = join(dir, 'apps/web'), log = openSync(join(S, 'web-build.log'), 'w');
+  try {
+    const vite = join(dirname(createRequire(join(webDir, 'package.json')).resolve('vite/package.json')), 'bin/vite.js');
+    const code = await new Promise(res => { const c = spawn(process.execPath, [vite, 'build'], { cwd: webDir, stdio: ['ignore', log, log], windowsHide: true }); c.on('exit', code => res(code ?? 1)); c.on('error', () => res(1)); });
+    if (code !== 0) throw new Error(`apps/web 빌드 실패(종료 코드 ${code}). ${join(S, 'web-build.log')}`);
+  } finally { closeSync(log); }
+}
 // A checkout from before the shared sessions has the old plugin harness gate (OS temp only), which would stop its server: plugins stay off there.
 const pluginsOk = dir => existsSync(join(dir, 'scripts/verify/session-dirs.mjs'));
 let source = resolve(process.env.VERIFY_SOURCE || prev.source || ROOT);
@@ -34,6 +47,7 @@ if (!serverOk(source)) { console.error(`소스 checkout에 서버가 없습니�
 const hub = await fakeHub();
 let s = null, serverError = '', lastControl = prev.lastControl, queue = Promise.resolve();
 async function bootServer() {
+  if (!distOk(source)) await buildDist(source).catch(e => { console.error(String(e.message ?? e)); });
   const env = { ADE_HUB_URL: hub.url, ADE_DEV: '1', ADE_DEV_TOKEN: devToken, ...(pluginsOk(source) && { ADE_VERIFY_PLUGINS: '1' }) };
   for (let tries = 0; ; tries++) {
     try {
@@ -138,6 +152,7 @@ setInterval(() => {
     for (const d of ['data', 'home', 'repo', 'fake-claude.jsonl', 'ctl.json']) rmSync(join(S, d), { recursive: true, force: true });
     await bootServer(); if (await cdpAlive(cdp)) await pointTabs();
   });
+  else if (c.action === 'build') run('폰용 화면 빌드(apps/web/dist)', async () => { await buildDist(source); });
   else if (c.action === 'chrome') run('Chrome 확인', async () => { if (!(await cdpAlive(cdp))) await openChrome(); await pointTabs(); });
   else run(`알 수 없는 요청 ${c.action}`, async () => {});
 }, 500);
