@@ -98,7 +98,7 @@ if (!stream) {
       send({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' }, session_id: sid, isReplay: true, uuid: 'echo' + Date.now() });
       result('', { local_command: 'compact', num_turns: 0 }); return;
     }
-    // Phone end-to-end rig (scripts/verify/t-phone-e2e.mjs): `e2e-echo <text>` answers `echo: <text>`; `e2e-stream <n>` streams n answers one line each, 600 ms apart
+    // Phone end-to-end rig (scripts/verify/t-phone-e2e.mjs): `e2e-echo <text>` answers `echo: <text>`; `e2e-stream <n> [tag]` streams n answers one line each (`스트림 [tag ]i/n번째 줄입니다.`), 600 ms apart
     // (a long live answer to scroll with), then ends the turn.
     if (text.includes('e2e-stream')) {
       const n = Math.min(Number(/e2e-stream\s+(\d+)/.exec(text)?.[1] ?? 12), 60);

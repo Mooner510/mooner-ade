@@ -77,7 +77,8 @@ export function webviewPort(adb, pkg = PKG) {
 export const listPages = async port => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter(t => t.type === 'page');
 
 // A page driver: ev(js) runs an async function body in the page, waitFor(expr), tap/type with real touch/keyboard events through DevTools.
-export async function attach(target) {
+// `mouse`: a desktop browser (mouse events) instead of the phone's touch events.
+export async function attach(target, { mouse = false } = {}) {
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((res, rej) => { socket.once('open', res); socket.once('error', rej); });
   let id = 0; const waiting = new Map(), logs = [];
@@ -97,21 +98,30 @@ export async function attach(target) {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result.value;
   };
-  await send('Runtime.enable');
+  await send('Runtime.enable').catch(() => {}); // a browser-level endpoint has no Runtime domain
   const page = {
     target, send, ev, logs, close: () => socket.close(), get url() { return target.url; },
     waitFor: (expression, ms = 15000, label = expression.slice(0, 100)) => until(() => ev(`const v = (${expression}); return v && typeof v === 'object' && v.nodeType ? true : v`), ms, 250).catch(error => { throw new Error(`waitFor 시간 초과: ${label}${error.message.includes('until timeout') ? '' : ` (${error.message})`}`); }),
     // The element (matching selector, containing text or aria-label text) as a viewport centre, scrolled into view; null when absent or hidden.
     centre: (selector, text) => ev(`const want = ${JSON.stringify(text ?? null)}, els = [...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.getClientRects().length && (want === null || (e.textContent || '').includes(want) || (e.getAttribute('aria-label') || '').includes(want) || (e.getAttribute('title') || '').includes(want)));
-      const e = els[0]; if (!e) return null; e.scrollIntoView({ block: 'center', inline: 'center' }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];`),
+      const e = els[0]; if (!e) return null; e.scrollIntoView({ block: 'center', inline: 'center' }); const r = e.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2, top = document.elementFromPoint(x, y); return [x, y, Boolean(top && (e === top || e.contains(top)))];`),
     // A touch tap (touchStart/touchEnd produce the same click a finger does).
     async tapAt(x, y) {
+      if (mouse) { await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }); await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }); return; }
       await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
       await sleep(40);
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     },
-    async tap(selector, text) { const c = await page.centre(selector, text); if (!c) throw new Error(`요소가 없습니다: ${selector} ${text ?? ''}`); await page.tapAt(...c); return c; },
+    // Waits until the element is really the one under that point (a splash or a dialog on top would take the tap).
+    async tap(selector, text) {
+      let c = await page.centre(selector, text);
+      for (let i = 0; i < 24 && c && !c[2]; i++) { await sleep(250); c = await page.centre(selector, text); }
+      if (!c) throw new Error(`요소가 없습니다: ${selector} ${text ?? ''}`);
+      if (!c[2]) throw new Error(`요소가 다른 것에 가려져 있습니다: ${selector} ${text ?? ''}`);
+      await page.tapAt(c[0], c[1]); return c;
+    },
     async swipe(x1, y1, x2, y2, steps = 8) {
+      if (mouse) throw new Error('swipe는 폰 페이지 전용입니다');
       await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x1, y: y1 }] });
       for (let i = 1; i <= steps; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x1 + (x2 - x1) * i / steps, y: y1 + (y2 - y1) * i / steps }] }); await sleep(16); }
       await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });

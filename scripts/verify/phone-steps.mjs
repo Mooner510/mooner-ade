@@ -112,24 +112,24 @@ async function pair({ argv }) {
 }
 
 // Opens the paired PC from the app's PC list (the card), which connects through the Hub and the plugin and starts RemoteUiActivity with the PC's own UI.
-export async function open({ argv } = { argv: [] }) {
+export async function open() {
   const m = needRig(), adb = adbTool();
   ensureReverse(m, adb);
-  adb.start();
-  const page = await mainPage(adb, 30000);
-  await page.waitFor('document.querySelector("#root")?.children.length > 0', 30000);
-  if (adb.focusedPackage() === PKG && !(await listPages(webviewPort(adb))).some(isRemote)) {
+  // Already showing the PC: leave it alone (starting MainActivity again would close the activity above it, it is a singleTask).
+  if (!adb.focus().includes('RemoteUiActivity')) {
+    adb.start();
+    const page = await mainPage(adb, 30000);
+    await page.waitFor('document.querySelector("#root")?.children.length > 0', 30000);
     await tabTo(page, 'PC');
     await page.waitFor('document.querySelector(".card-main")', 20000, 'PC 카드');
-    const name = (await page.ev('return document.querySelector(".card-name")?.textContent')) ?? '';
-    log(`PC 카드: ${name} → 탭`);
+    log(`PC 카드: ${(await page.ev('return document.querySelector(".card-name")?.textContent')) ?? ''} → 탭`);
     await page.tap('button.card-main');
     page.close();
-  } else page.close();
+  }
   const remote = await findPage(adb, isRemote, 90000);
   await remote.waitFor('document.documentElement.dataset.remote', 30000, 'data-remote');
   await remote.waitFor('document.querySelector(".shell, .welcome, .projects, main, #root > *")', 60000, 'PC 화면');
-  log(`RemoteUiActivity: ${remote.url} remote=${await remote.ev('return document.documentElement.dataset.remote + "/" + document.documentElement.dataset.remoteClient')}`);
+  log(`RemoteUiActivity: ${remote.url.split('#')[0]} remote=${await remote.ev('return document.documentElement.dataset.remote + "/" + document.documentElement.dataset.remoteClient')}`);
   return remote;
 }
 
@@ -142,8 +142,25 @@ async function debugPage({ argv }) {
   page.close();
 }
 
+async function shot({ argv }) {
+  const name = argv[argv.indexOf('shot') + 1] ?? `shot-${Date.now()}`;
+  console.log(adbTool().screencap(name));
+}
+
+async function all(ctx) {
+  const m0 = readManifest();
+  if (!m0?.ready) await ctx.up();
+  await ctx.link();
+  await apk(ctx); await login(ctx); await pair(ctx);
+  await (await import('./phone-scenarios.mjs')).scenarios({ ...ctx, argv: ['scenarios'] });
+}
+
 export async function run(cmd, ctx) {
-  const table = { apk, login, pair, open: async ctx => { const r = await open(ctx); r.close(); }, describe: debugPage };
-  if (!table[cmd]) throw new Error(`아직 없는 명령: ${cmd}`);
+  const table = {
+    apk, login, pair, open: async c => { const r = await open(c); r.close(); }, describe: debugPage, shot, all,
+    scenarios: async c => (await import('./phone-scenarios.mjs')).scenarios(c),
+    help: async () => console.log('명령: up | link | apk | login | pair | open | scenarios [s1-phone-roundtrip s2-live-stream s3-desktop-to-phone s4-autoscroll s5-reconnect s6-offline-safety] | all | shot <이름> | describe [--remote|--any] [--eval <js>] | status | down')
+  };
+  if (!table[cmd]) throw new Error(`모르는 명령: ${cmd}`);
   await table[cmd](ctx);
 }
