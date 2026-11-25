@@ -1897,7 +1897,18 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {!view.approvals.length && asyncQuestions.length > 0 && <QuestionCard key={asyncQuestions[0].id} questions={asyncQuestions} submitting={sendingQuestion} onAnswer={answerAsyncQuestion} />}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
       {queue.length > 0 && <div className="chat-queue"><div role="status">{sendQueueLabel(queue)}</div>
-        <ol>{queue.map((item, index) => <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} /><IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => setQueue(items => items.filter((_, i) => i !== index))} /></li>)}</ol></div>}
+        <ol>{queue.map((item, index) => editOpen && editingQueue!.item === item
+          ? <li key={index} className="editing"><textarea autoFocus rows={2} aria-label="대기 메시지 수정" value={editingQueue!.text} onChange={event => setEditingQueue({ item, text: event.target.value })}
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); saveQueueEdit(); }
+              else if (event.key === 'Escape') { event.preventDefault(); setEditingQueue(null); }
+            }} />
+            <IconButton icon="check" label="수정 저장 (Enter)" size={12} disabled={!editingQueue!.text.trim()} onClick={saveQueueEdit} />
+            <IconButton icon="x" label="수정 취소 (Esc)" size={12} onClick={() => setEditingQueue(null)} /></li>
+          : <li key={index}><span>{item.text}</span><UserImages previews={item.images.map(image => image.url)} count={item.images.length} />
+            <IconButton icon="edit" label={`대기 메시지 수정: ${item.text}`} size={12} onClick={() => setEditingQueue({ item, text: item.text })} />
+            <IconButton icon="x" label={`대기 메시지 취소: ${item.text}`} size={12} onClick={() => { setQueue(items => items.filter((_, i) => i !== index)); if (editingQueue?.item === item) setEditingQueue(null); }} /></li>)}</ol></div>}
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
       <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
