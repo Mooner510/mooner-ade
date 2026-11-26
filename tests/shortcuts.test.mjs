@@ -79,6 +79,35 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   }
 });
 
+test('a plain Ctrl+letter stays with the editor everywhere, and with any text field on macOS', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'ade-keys-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const outfile = join(directory, 'field.cjs');
+  await build({ stdin: { contents: `export * from './shortcuts';`, resolveDir }, bundle: true, platform: 'node', format: 'cjs', outfile });
+  const { appKey, appKeyDefs, keyBelongsToField, keyPlace, matches } = require(outfile);
+  const key = (code, modifiers = {}) => ({ code, key: code, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
+  const ctrlD = key('KeyD', { ctrlKey: true });
+  // Monaco's Ctrl+D (add next match) is not taken by the split key, on Windows or macOS.
+  assert.ok(matches(appKey({}, 'splitRight'), ctrlD));
+  assert.ok(keyBelongsToField(ctrlD, 'editor', false) && keyBelongsToField(ctrlD, 'editor', true));
+  // A text field (the chat box): Windows keeps Ctrl+D as the split key; macOS leaves it to Cocoa (delete forward).
+  assert.ok(!keyBelongsToField(ctrlD, 'text', false));
+  assert.ok(keyBelongsToField(ctrlD, 'text', true));
+  // Outside a field the app keeps it.
+  assert.ok(!keyBelongsToField(ctrlD, 'other', false) && !keyBelongsToField(ctrlD, 'other', true));
+  // Only plain Ctrl+letter: Ctrl+Shift+D (split down), Ctrl+Alt+D (^D), ⌘ combos, Alt+digit, Ctrl+PageDown and Ctrl+, stay app keys even in the editor.
+  for (const event of [key('KeyD', { ctrlKey: true, shiftKey: true }), key('KeyD', { ctrlKey: true, altKey: true }), key('KeyD', { ctrlKey: true, metaKey: true }),
+    key('KeyP', { metaKey: true, shiftKey: true }), key('Digit1', { altKey: true }), key('PageDown', { ctrlKey: true }), key('Comma', { ctrlKey: true }), key('Digit1', { ctrlKey: true }), key('F1')]) {
+    for (const mac of [false, true]) for (const place of ['editor', 'text']) assert.ok(!keyBelongsToField(event, place, mac), `${JSON.stringify(event)} ${place} mac=${mac}`);
+  }
+  // Without a DOM (or for a non-element target) the place is "other".
+  assert.equal(keyPlace(null), 'other');
+  // The ninth tab/project key goes to the last one, and the label says so.
+  assert.equal(appKeyDefs.find(def => def.id === 'tab9').label, '마지막 탭으로 이동');
+  assert.equal(appKeyDefs.find(def => def.id === 'project9').label, '마지막 프로젝트로 이동');
+  assert.equal(appKeyDefs.find(def => def.id === 'tab8').label, '8번 탭으로 이동');
+});
+
 test('app shortcut overrides survive persistence validation; malformed values are rejected', () => {
   const state = appKeys => ({ openProjects: [], activeProjectId: '', settings: { appKeys, chatKeys: { stash: 'ctrl+k' } } });
   const overrides = { newTab: 'meta+alt+k', project9: 'ctrl+9', nextTab: 'alt+bracketright' };

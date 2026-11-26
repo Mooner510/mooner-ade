@@ -277,7 +277,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - **대화 중 모델 변경 경고**: 프롬프트 캐시는 모델별이라, 지금까지 주고받은 메시지가 있는 채팅(`/clear` 직후 제외)에서 다른 모델을 고르면 확인 창이 뜹니다. "다음 메시지에서 지금까지의 컨텍스트 전체를 캐시 없이 다시 읽어 사용량이 늘 수 있습니다." 선택지는 "모델 변경" · "취소"이고, 채팅이 `/compact`를 지원하면(`available`에 `compact`가 있을 때) "압축(/compact)하고 전환"이 더해집니다. 압축을 고르면 지금 모델로 `/compact`를 먼저 보내고, 압축 구분선이 생긴 직후 새 모델로 바꾼 뒤 "압축을 마치고 모델을 …(으)로 바꿨습니다" 안내를 남깁니다. 압축이 끝나지 않으면 모델을 바꾸지 않고 안내만 남기며, 응답 중이거나 대기열이 있을 때는 압축을 시작하지 않고 안내만 합니다. 이 확인은 `ChatPane.tsx`의 `setChat` 한 곳에 있습니다(에이전트 구분은 없음).
 
 ### Effort
-- Claude: low · medium · high · xhigh · max. 드롭다운과 `/effort`, 단축키(Shift+↑/↓)로 바꿉니다.
+- Claude: low · medium · high · xhigh · max. 드롭다운과 `/effort`, 단축키(기본 Ctrl+Alt+↑/↓, 채팅 입력창에서)로 바꿉니다.
 - Effort는 시작 옵션이라 바꾸면 자식 프로세스를 다시 띄웁니다. 응답 중이면 응답이 끝난 뒤 적용합니다.
 - 고르지 않았으면 CLI 설정(`effortLevel`, `CLAUDE_CODE_EFFORT_LEVEL`)을 따릅니다(기본 "자동 · CLI 설정 따름").
 - 최고 단계(xhigh·max)는 색과 불꽃 효과로 강조됩니다.
@@ -286,7 +286,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - 켜기·끄기 스위치(Fast 등), MAX 토글(최대 컨텍스트 또는 MAX 모드), 컨텍스트 창 선택, 그 밖의 config option 드롭다운이 입력창 아래에 나옵니다.
 
 ### 모델 관련 단축키
-- `Shift+→` / `Shift+←`: 다음·이전 모델로 전환(채팅 입력창에서).
+- `Ctrl+Alt+→` / `Ctrl+Alt+←`: 다음·이전 모델로 전환(채팅 입력창에서). 기본값은 `apps/web/src/chat-model.ts`의 `chatKeyDefs`이고 설정 › 단축키에서 바꿀 수 있습니다(§18).
 
 ---
 
@@ -495,10 +495,10 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 | 동작 | 기본 키 | 설정 키 |
 |---|---|---|
-| Effort 올리기 | Shift+↑ | `effortUp` |
-| Effort 내리기 | Shift+↓ | `effortDown` |
-| 다음 모델로 전환 | Shift+→ | `modelNext` |
-| 이전 모델로 전환 | Shift+← | `modelPrev` |
+| Effort 올리기 | Ctrl+Alt+↑ | `effortUp` |
+| Effort 내리기 | Ctrl+Alt+↓ | `effortDown` |
+| 다음 모델로 전환 | Ctrl+Alt+→ | `modelNext` |
+| 이전 모델로 전환 | Ctrl+Alt+← | `modelPrev` |
 | 입력 임시 보관 / 복원 | Ctrl+S | `stash` |
 | 권한 모드 순환 | Shift+Tab | (고정) |
 | 메뉴 항목 선택 | Tab / Enter | (고정) |

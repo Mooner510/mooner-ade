@@ -1,4 +1,4 @@
-import { appKey, appKeyInTerminal, matches, showAppKey } from './shortcuts';
+import { appKey, appKeyInTerminal, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isLeaf, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
@@ -48,7 +48,7 @@ export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' 
 export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
-// `forceAsk`: the sidebar X always confirms. Shortcuts and the pane's own close button still follow the confirm settings.
+// `forceAsk`: the sidebar X and Delete on a sidebar row always confirm. Shortcuts, middle-click and the pane's own close button still follow the confirm settings.
 export type WorkspaceHandle = { requestClose(forceAsk?: boolean): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string, forceAsk?: boolean): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string, forceAsk?: boolean): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown> } &
   ({ hidden?: false; icon: IconName } | { hidden: true; icon?: never });
@@ -1100,8 +1100,11 @@ ${where}`, [
     }
   }
   function moveFocus(step: number) {
-    const ids = leaves(activePane());
-    if (ids.length) setFocusLeaf(ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length]);
+    const ids = leaves(activePane()); if (!ids.length) return;
+    const next = ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length];
+    setFocusLeaf(next);
+    // While a pane is maximized the maximize moves with the focus (like tmux), so the focus never lands on a pane that is off screen.
+    setZoom(value => value ? next : value);
   }
   async function closeFocused() {
     const leaf = findLeaf(activePane(), refs.focus.current); if (!leaf) return;
@@ -1181,7 +1184,7 @@ ${where}`, [
     { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', icon: 'externalLink', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
     { id: 'nextTab2', label: '다음 탭', hidden: true, run: () => cyclePaneTab(1) },
     { id: 'prevTab2', label: '이전 탭', hidden: true, run: () => cyclePaneTab(-1) },
-    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: index === 8 ? '마지막 탭' : `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
     { id: 'splitRight', label: '오른쪽으로 분할', icon: 'splitH', run: () => splitTerminal(refs.focus.current, 'row') },
     { id: 'splitDown', label: '아래로 분할', icon: 'splitV', run: () => splitTerminal(refs.focus.current, 'column') },
     { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', icon: 'terminal', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },
@@ -1214,6 +1217,8 @@ ${where}`, [
       if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
       // In a terminal, plain Ctrl+key stays with the shell unless the key is meant to work there or the user said so (settings.termKeys, per key).
       if (inTerminal && !appKeyInTerminal(settingsRef.current, command.id, event)) return;
+      // In the editor (and in any text field on macOS) a plain Ctrl+letter is the field's own key, e.g. Monaco's Ctrl+D.
+      if (!inTerminal && keyBelongsToField(event, keyPlace(event.target), mac)) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);

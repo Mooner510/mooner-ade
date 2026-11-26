@@ -1,4 +1,5 @@
-import { AppKeysContext, showAppKey } from './shortcuts';
+import { AppKeysContext, appKey, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
+import { QuickInput, type QuickRequest } from './QuickInput';
 import { installTooltips } from './tooltip';
 import { dragStartsOnButton, notePress } from './drag-guard';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
@@ -12,7 +13,7 @@ import { RemotePcDialog, remoteBridge } from './RemotePc';
 import { closeRemote, isRemote, onRemoteBack, openEvents, remoteClient, type Events } from './transport';
 import { setDrawer, useDrawer, useMobile } from './mobile';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
-import { installThemes, themeById } from './themes';
+import { installThemes, nextTheme, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
@@ -39,7 +40,7 @@ import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { bytesToBase64 } from './feedback-model';
 import type { FileLocation } from './file-buffer';
-import { endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, useFeedback } from './feedback-store';
+import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, requestCapture, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
 import '@fontsource-variable/noto-sans-kr/wght.css';
@@ -51,6 +52,7 @@ addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(
 import './style.css';
 import './mobile.css';
 installThemes();
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 type Entry = { root: string; id: string };
 type Recent = { id?: string; root: string; pinned?: boolean };
@@ -285,8 +287,8 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
 // The feedback inbox is global, so it also opens from the screen with no project (the workspace has its own copy in its right panel).
 // ponytail: window.prompt/confirm stand in for the workspace's quick dialogs; no AI screen context without a project.
 const plainAsk = { input: async (title: string, initial = '') => window.prompt(title, initial), confirm: async (message: string) => window.confirm(message) };
-function WelcomeFeedback({ settings, setSettings }: { settings: Settings; setSettings: Dispatch<SetStateAction<Settings>> }) {
-  const [open, setOpen] = useState(false), [wide, setWide] = useState(false), { capture } = useFeedback();
+function WelcomeFeedback({ settings, setSettings, open, setOpen }: { settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; open: boolean; setOpen: Dispatch<SetStateAction<boolean>> }) {
+  const [wide, setWide] = useState(false), { capture } = useFeedback();
   const fail = (cause: unknown) => pushError('shell', errorText(cause));
   return <>
     <button type="button" className="bar-button welcome-feedback-button" title="피드백 요청" aria-label="피드백 요청" aria-pressed={open} onClick={() => setOpen(value => !value)}><Icon name="feedback" /></button>
@@ -527,7 +529,7 @@ function Shell() {
     { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', run: () => actions.current.cycle(-1) },
-    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: index === 8 ? '마지막 프로젝트' : `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
   // With an agent, Settings opens on that agent's AI 툴 tab (where its API key is).
@@ -587,7 +589,42 @@ function Shell() {
   // Seeing the tour to its end means seeing its Git graph step, which is what the one-time Git card says; skipping it does not (the card stays for that person).
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION, ...(skipped ? {} : { gitTipPending: false }) })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}<AppUpdate compact={false} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  // Keys on the screen with no project: no Workspace is mounted to listen, so this one runs the keys that need no project (and its palette lists only those).
+  const [welcomeFeedback, setWelcomeFeedback] = useState(false), [welcomeQuick, setWelcomeQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
+  const welcomeCommands = useRef<Command[]>([]);
+  const openWelcomePalette = async () => {
+    const items = welcomeCommands.current.filter(command => !command.hidden).map(command => ({ id: command.id, label: command.label, icon: command.icon!, keys: command.keys && showKeys(command.keys) }));
+    const choice = await new Promise<string | null>(resolve => setWelcomeQuick(previous => { previous?.request.resolve(null); return { key: (previous?.key ?? 0) + 1, request: { kind: 'pick', title: '명령 팔레트', items, resolve } }; }));
+    if (choice) await welcomeCommands.current.find(command => command.id === choice)?.run();
+  };
+  const welcomeList: Command[] = [
+    { id: 'addProject', label: '프로젝트 열기…', icon: 'folderOpen', run: async () => { const path = await chooseFolder('프로젝트 폴더 선택', ''); if (path) await addProject(path); } },
+    { id: 'settings', label: '설정 열기', icon: 'settings', run: () => setSettingsOpen('default') },
+    { id: 'feedback', label: '피드백 요청', icon: 'feedback', run: () => setWelcomeFeedback(value => !value) },
+    { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', icon: 'captureWindow', run: () => { if (!canCapture()) throw new Error('이 브라우저는 화면 캡쳐를 지원하지 않습니다. 이미지를 붙여넣거나 파일로 추가하세요.'); requestCapture('element'); } },
+    { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
+    { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, icon: 'palette', run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
+    { id: 'palette', label: '명령 팔레트', hidden: true, run: openWelcomePalette },
+    { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openWelcomePalette }
+  ];
+  welcomeCommands.current = welcomeList.map(command => ({ ...command, keys: appKey(settings.appKeys, command.id) }));
+  const welcome = booted && !entries.length;
+  useEffect(() => {
+    if (!welcome) return;
+    // The same rules as the workspace's handler (Workspace.tsx): the tour and a capture keep the keys, a dialog too (except the capture key), and so does a field's own Ctrl+letter.
+    const handler = (event: KeyboardEvent) => {
+      if (event.isComposing || touringRef.current || document.querySelector('.tour, .feedback-capture')) return;
+      const command = welcomeCommands.current.find(item => item.keys && matches(item.keys, event));
+      if (!command) return;
+      if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
+      if (keyBelongsToField(event, keyPlace(event.target), isMac)) return;
+      event.preventDefault(); event.stopPropagation(); void Promise.resolve().then(() => command.run()).catch(report);
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [welcome, report]);
+  const welcomeQuickDialog = welcomeQuick && createPortal(<QuickInput key={welcomeQuick.key} request={welcomeQuick.request} onClose={() => setWelcomeQuick(current => current?.key === welcomeQuick.key ? null : current)} />, document.body);
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} open={welcomeFeedback} setOpen={setWelcomeFeedback} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}<AppUpdate compact={false} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}{welcomeQuickDialog}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''} ${mobile ? 'mobile' : ''} ${mobile && drawer ? 'drawer-open' : ''}`} style={{ '--rail-w': mobile ? 'min(86vw, 340px)' : compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     {mobile && drawer && <button type="button" className="drawer-scrim" aria-label="프로젝트 목록 닫기" onClick={() => setDrawer(false)} />}
@@ -663,7 +700,7 @@ function Shell() {
                   const box = (event.currentTarget as HTMLElement).getBoundingClientRect(), mouse = 'clientX' in event && event.clientX ? event : null;
                   setMenu({ x: mouse ? mouse.clientX : box.left + 24, y: mouse ? mouse.clientY : box.bottom, root: entry.root, tabId: tab.id, paneId });
                 };
-                // Keys on a focused sidebar row: F2 rename, Delete close, Alt+↑/↓ move, Shift+F10 / menu key opens the menu.
+                // Keys on a focused sidebar row: F2 rename, Delete close (always asks first, like the X: a stray key must not close anything), Alt+↑/↓ move, Shift+F10 / menu key opens the menu.
                 const rowKeys = (event: React.KeyboardEvent, onEnter: () => void, onDelete: () => void, paneId?: string) => {
                   const neighbour = item.tabs[tabIndex + (event.key === 'ArrowUp' ? -1 : 1)];
                   if (event.key === 'Enter' || event.key === ' ') onEnter();
@@ -714,7 +751,7 @@ function Shell() {
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
                   <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)}
-                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)}
+                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id, true))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span>{trail(tab)}
                     {!on && settings.cacheTimer && tab.cache && <CacheTimer cache={tab.cache} working={tab.working} warn={settings.cacheWarn} />}
@@ -724,13 +761,14 @@ function Shell() {
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                   <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head"
-                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
+                    onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id, true))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
                       draggable onPointerDownCapture={notePress} onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
-                      onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
+                      onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id, true), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
+
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}

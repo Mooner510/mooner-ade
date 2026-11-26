@@ -33,8 +33,9 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   { id: 'prevProject', group: '프로젝트', label: '이전 프로젝트', keys: 'mod+alt+[' },
   { id: 'splitRight', group: '분할/Pane', label: '좌우 분할', keys: 'ctrl+d', term: true },
   { id: 'splitDown', group: '분할/Pane', label: '상하 분할', keys: 'ctrl+shift+d', term: true },
-  ...Array.from({ length: 9 }, (_, i) => ({ id: `tab${i + 1}`, group: '탭', label: `${i + 1}번 탭으로 이동`, keys: `alt+${i + 1}` })),
-  ...Array.from({ length: 9 }, (_, i) => ({ id: `project${i + 1}`, group: '프로젝트', label: `${i + 1}번 프로젝트로 이동`, keys: `mod+alt+${i + 1}` })),
+  // The ninth key goes to the last tab/project (like browsers), whatever the count; the id stays `tab9`/`project9` so saved overrides keep working.
+  ...Array.from({ length: 9 }, (_, i) => ({ id: `tab${i + 1}`, group: '탭', label: i === 8 ? '마지막 탭으로 이동' : `${i + 1}번 탭으로 이동`, keys: `alt+${i + 1}` })),
+  ...Array.from({ length: 9 }, (_, i) => ({ id: `project${i + 1}`, group: '프로젝트', label: i === 8 ? '마지막 프로젝트로 이동' : `${i + 1}번 프로젝트로 이동`, keys: `mod+alt+${i + 1}` })),
 ];
 // Does this key belong to ADE (true) or the shell (false) while a terminal has focus? An explicit termKeys choice wins; otherwise only
 // plain Ctrl+key is left to the shell, unless the key is a default that must work there or the user rebound it themselves.
@@ -42,6 +43,21 @@ export function appKeyInTerminal(settings: { appKeys?: Record<string, string>; t
   const chosen = settings?.termKeys?.[id];
   if (chosen !== undefined) return chosen;
   return event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey || !!settings?.appKeys?.[id] || !!appKeyDefs.find(def => def.id === id)?.term;
+}
+// Where a key was typed, for keyBelongsToField: inside a Monaco editor, in a plain text field (chat box, input), or anywhere else.
+export type KeyPlace = 'editor' | 'text' | 'other';
+export function keyPlace(target: EventTarget | null): KeyPlace {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return 'other';
+  if (target.closest('.monaco-editor')) return 'editor';
+  const textInput = target instanceof HTMLInputElement && !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(target.type);
+  return target instanceof HTMLTextAreaElement || textInput || (target instanceof HTMLElement && target.isContentEditable) ? 'text' : 'other';
+}
+// Does a plain Ctrl+letter (no Shift, Alt or ⌘) stay with the field instead of running an app key? In the editor it is Monaco's own key
+// (Ctrl+D adds the next match to the selection). On macOS every text field uses it for Cocoa editing (Ctrl+D deletes forward, Ctrl+A/E
+// line start/end), and the app's mod there is ⌘, so only Ctrl-bound keys are given up. Elsewhere, Windows' chat box included, the app keeps it.
+export function keyBelongsToField(event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }, place: KeyPlace, mac: boolean): boolean {
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !/^Key[A-Z]$/.test(event.code)) return false;
+  return place === 'editor' || (place === 'text' && mac);
 }
 // The same decision for the settings list, which has no event: a combo that is just Ctrl+key is the shell's by default.
 export function appKeyInTerminalByDefault(settings: { appKeys?: Record<string, string> } | undefined, id: string): boolean {
