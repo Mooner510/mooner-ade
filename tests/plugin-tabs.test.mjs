@@ -25,3 +25,25 @@ test('plugin panel renders documents as text and provides masked secret inputs',
   assert.doesNotMatch(html, /<script>/);
   delete globalThis.window; delete globalThis.innerWidth; delete globalThis.innerHeight; delete globalThis.document;
 });
+
+test('a plugin starting again keeps its setup steps and does not make the restart the step to do', async t => {
+  const require = createRequire(import.meta.url);
+  const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');
+  const directory = await mkdtemp(join(tmpdir(), 'ade-plugin-guide-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const outfile = join(directory, 'guide.cjs');
+  await build({ stdin: { contents: `export { guideSteps } from './PluginSettings';`, loader: 'tsx', resolveDir: fileURLToPath(new URL('../apps/web/src/', import.meta.url)) },
+    bundle: true, jsx: 'automatic', platform: 'node', format: 'cjs', external: ['monaco-editor', 'monaco-editor/*'], outfile });
+  globalThis.innerWidth = 1200; globalThis.innerHeight = 800; globalThis.document = { addEventListener() {} };
+  t.after(() => { delete globalThis.innerWidth; delete globalThis.innerHeight; delete globalThis.document; });
+  const { guideSteps } = require(outfile);
+  const stale = { status: null, info: [], fields: [], actions: [], setup: [{ id: 'server', status: 'done', fields: [], info: [], actions: [] }, { id: 'connect', status: 'todo', fields: [], info: [], actions: [] }] };
+  const plugin = { id: 'demo', folder: 'demo', name: 'Demo', state: 'starting', view: null, builtin: true, builtinEnabled: true,
+    setup: [{ id: 'server', label: '서버', detail: '' }, { id: 'connect', label: '연결', detail: '' }] };
+  const restarting = guideSteps(plugin, stale);
+  assert.deepEqual(restarting.map(step => step.status), ['done', 'active', 'done', 'todo']);
+  assert.equal(restarting.find(step => step.id === 'ade-run').background, true);
+  // Without a view from before (a first start) the plugin's own steps wait for it to run.
+  const first = guideSteps(plugin);
+  assert.deepEqual(first.map(step => step.status), ['done', 'active', 'pending', 'pending']);
+  assert.ok(!first.find(step => step.id === 'ade-run').background);
+});
