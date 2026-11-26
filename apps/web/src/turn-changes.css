@@ -37,9 +37,9 @@ button.tc-file:hover .tc-name span { text-decoration: underline; text-underline-
 /* Rewind / undo dialog. */
 .tc-dialog-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; padding: 6px 18px 14px; font-size: 13px; line-height: 1.5; }
 .tc-dialog-body p { margin: 0; }
-.tc-check { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.tc-check { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .tc-check:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.tc-check input { margin-top: 3px; }
+.tc-check input { flex: none; margin: 3px 0 0; }
 .tc-check span { display: grid; gap: 2px; }
 .tc-check small { color: var(--muted); font-size: 12px; }
 .tc-plan { display: flex; flex-direction: column; gap: 10px; }

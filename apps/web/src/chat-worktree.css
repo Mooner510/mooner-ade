@@ -55,7 +55,11 @@ button.wt-badge:hover { background: color-mix(in srgb, var(--wt) 22%, transparen
 .wt-modal button:disabled { opacity: .5; cursor: not-allowed; }
 .wt-modal .wt-primary { border-color: var(--accent-strong); background: var(--accent); color: var(--accent-fg); font-weight: 600; }
 .wt-modal .wt-danger { border-color: color-mix(in srgb, var(--error) 60%, transparent); background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
-.wt-check, .wt-choice { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+/* A row like the app's other check rows (label.check): the box beside its text, not above it (a bare label is a column in style.css). */
+.wt-check, .wt-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; line-height: 1.5; cursor: pointer; }
+.wt-check > input, .wt-choice > input { flex: none; margin: 3px 0 0; cursor: pointer; }
+.wt-actions .wt-check { align-items: center; }
+.wt-actions .wt-check > input { margin: 0; }
 .wt-choice[data-tone="danger"] b { color: var(--error); }
 .wt-confirm { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
 .wt-confirm input { padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--input); color: var(--fg); font: 12px var(--mono); }
