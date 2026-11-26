@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon, Tick, type IconName } from './Icon';
+import { submenuLeft } from './popover-place';
 
 // One menu for the Git tool window: right-click menus, toolbar drop-downs and their submenus. Fixed to the viewport (it is opened at
 // the pointer or under a button), moved back inside the window when it would overflow, and driven by the keyboard like a native menu.
@@ -9,14 +10,18 @@ export type MenuEntry =
 type Item = Exclude<MenuEntry, null | false | 'separator' | { header: string }>;
 const isItem = (entry: MenuEntry): entry is Item => Boolean(entry) && entry !== 'separator' && !('header' in (entry as object));
 
-export function PopupMenu({ x, y, items, onClose, label, depth = 0, align = 'start' }: { x: number; y: number; items: MenuEntry[]; onClose(): void; label: string; depth?: number; align?: 'start' | 'end' }) {
+// `parent`: a submenu's parent box; with no room on its right the submenu opens on the parent's left instead of covering it.
+export function PopupMenu({ x, y, items, onClose, label, depth = 0, align = 'start', parent }: { x: number; y: number; items: MenuEntry[]; onClose(): void; label: string; depth?: number; align?: 'start' | 'end'; parent?: { left: number; right: number } }) {
   const box = useRef<HTMLDivElement>(null), [at, setAt] = useState({ x, y }), [open, setOpen] = useState(-1), [active, setActive] = useState(-1);
   const list = items.filter((entry, index, all) => entry && !(entry === 'separator' && (index === 0 || all[index - 1] === 'separator' || index === all.length - 1)));
   useLayoutEffect(() => {
-    const rect = box.current!.getBoundingClientRect();
-    const left = align === 'end' ? x - rect.width : x;
+    const el = box.current!, was = el.style.left;
+    el.style.left = '0px'; // measure at the natural width: next to the right edge a fixed box would be squeezed to what is left
+    const rect = el.getBoundingClientRect();
+    el.style.left = was;
+    const left = parent ? submenuLeft({ parentLeft: parent.left, parentRight: parent.right, viewport: innerWidth, width: rect.width }) : align === 'end' ? x - rect.width : x;
     setAt({ x: Math.max(4, Math.min(left, innerWidth - rect.width - 4)), y: Math.max(4, Math.min(y, innerHeight - rect.height - 4)) });
-  }, [x, y, align]);
+  }, [x, y, align, parent?.left, parent?.right]);
   useEffect(() => { if (!depth) box.current?.focus(); }, [depth]);
   useEffect(() => {
     if (depth) return;
@@ -53,7 +58,7 @@ export function PopupMenu({ x, y, items, onClose, label, depth = 0, align = 'sta
     </button>;
   });
   const sub = open >= 0 && isItem(list[open]) ? (list[open] as Item) : null;
-  const subAt = () => { const el = box.current?.querySelectorAll(':scope > button, :scope > hr, :scope > small')[open] as HTMLElement | undefined, rect = el?.getBoundingClientRect(), mine = box.current?.getBoundingClientRect(); return { x: (mine?.right ?? 0) - 2, y: (rect?.top ?? 0) - 5 }; };
+  const subAt = () => { const el = box.current?.querySelectorAll(':scope > button, :scope > hr, :scope > small')[open] as HTMLElement | undefined, rect = el?.getBoundingClientRect(), mine = box.current?.getBoundingClientRect(); return { x: (mine?.right ?? 0) - 2, y: (rect?.top ?? 0) - 5, parent: { left: mine?.left ?? 0, right: mine?.right ?? 0 } }; };
   return <>
     <div ref={box} className="menu git-menu" role="menu" aria-label={label} tabIndex={-1} style={{ left: at.x, top: at.y }} onKeyDown={onKey} onContextMenu={event => event.preventDefault()}>{rows}</div>
     {sub?.items && <PopupMenu {...subAt()} items={sub.items} label={sub.label} depth={depth + 1} onClose={() => { setOpen(-1); box.current?.focus(); }} />}

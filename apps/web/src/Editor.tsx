@@ -273,7 +273,8 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
       const model = monaco.editor.createModel(now.state.draft ?? '', languageOf(monaco, buffer.path) ?? 'plaintext');
       monaco.editor.setTheme(themeName(now.settings.theme));
       const editor = monaco.editor.create(host.current, {
-        model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
+        // fixedOverflowWidgets: hover / suggest widgets may leave a short editor's box instead of being cut off by it.
+        model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fixedOverflowWidgets: true,
         fontSize: now.settings.fontSize, wordWrap: now.settings.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now.settings),
         readOnly: Boolean(now.state.conflict || now.state.busy), ariaLabel: buffer.path
       });
@@ -343,8 +344,9 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       if (disposed || !host.current) return;
       const now = latest.current.settings;
       monaco.editor.setTheme(themeName(now.theme));
+      // Not in the chat's compact diff: it sits in a size-contained .chat-pane, which would become the containing block of the fixed widgets.
       const diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false,
+        automaticLayout: true, readOnly: true, originalEditable: false, fixedOverflowWidgets: !compact, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false,
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
