@@ -45,7 +45,7 @@ export type Settings = {
   chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean; animateInBackground: boolean;
-  terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
+  terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean; treeGitColors: boolean;
   // Feedback inbox: feedbackAgentTool lets chat agents put drafts in it; feedbackAiContext adds screen layout and recent errors to an AI draft request.
   feedbackAgentTool: boolean; feedbackAiContext: boolean; feedbackAiModel: '' | 'claude-haiku-5-5' | 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'sonnet' | 'opus'; feedbackAiEffort: '' | 'low' | 'medium' | 'high';
   // Git tool window (the commit graph drawer), with IntelliJ's options and defaults. Drawer: height, docked (terminals shrink) or floating over them.
@@ -157,7 +157,7 @@ export const defaultSettings: Settings = {
   chatFileChipLabel: 'path',
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
-  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
+  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true, treeGitColors: true,
   feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low',
   gitLogHeight: 380, gitLogDock: false, gitLogLimit: 5000, gitBranchesWidth: 230, gitDetailsWidth: 400,
   gitSort: 'date', gitLinear: false, gitFirstParent: false, gitNoMerges: false,
