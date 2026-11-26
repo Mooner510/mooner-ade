@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MoonerADE Plugin Manifest API v2",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^[a-z0-9][a-z0-9-]{1,39}$"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 60,
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^[0-9A-Za-z.+-]+$",
+      "minLength": 1
+    },
+    "apiVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "main": {
+      "allOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^(?![/\\\\:])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^:\\\\\\x00]+$"
+        },
+        {
+          "pattern": "\\.m?js$"
+        }
+      ]
+    },
+    "icon": {
+      "allOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^(?![/\\\\:])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^:\\\\\\x00]+$"
+        },
+        {
+          "pattern": "\\.[sS][vV][gG]$"
+        }
+      ]
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^(?![/\\\\:])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^:\\\\\\x00]+$"
+        },
+        "envPrefix": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Z][A-Z0-9]*_([A-Z0-9]+_)*$",
+          "minLength": 4
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[a-z][a-z0-9_]{1,39}$"
+        },
+        "script": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^(?![/\\\\:])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^:\\\\\\x00]+$"
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[^']+$"
+          }
+        },
+        "chatOnly": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "script"
+      ]
+    },
+    "workspace": {
+      "type": "boolean"
+    },
+    "feedback": {
+      "type": "boolean"
+    },
+    "header": {
+      "type": "boolean"
+    },
+    "console": {
+      "type": "boolean"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hub": {
+          "type": "boolean"
+        },
+        "github": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "asset": {
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[^/]+\\.zip$"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "github"
+          ]
+        },
+        {
+          "required": [
+            "hub"
+          ],
+          "properties": {
+            "hub": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "setup": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      }
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "apiVersion",
+    "main"
+  ]
+}

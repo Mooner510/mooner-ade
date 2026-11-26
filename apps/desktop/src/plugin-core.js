@@ -236,7 +236,8 @@ export function grantsFor(manifest) {
     manifest.mcp && `MoonerADE 터미널에서 실행한 Claude Code와 Codex에 MCP 도구(${manifest.mcp.name})를 줍니다. 에이전트가 그 도구를 직접 쓸 수 있습니다.`,
     manifest.workspace && '이 PC의 프로젝트와 터미널을 열고 조작할 수 있습니다.',
     manifest.feedback && '피드백 요청에서 제출한 피드백(본문과 스크린샷)을 받아 개발자에게 전송합니다.',
-    manifest.header && '앱 상단 바에 버튼을 추가하고, 누르면 플러그인 패널을 엽니다.'
+    manifest.header && '앱 상단 바에 버튼을 추가하고, 누르면 플러그인 패널을 엽니다.',
+    manifest.console && '작업 화면에 이 플러그인의 콘솔 탭을 열 수 있게 하고, 그 탭에서 입력한 명령을 받아 처리합니다.'
   ].filter(Boolean);
 }
 // `place` is the folder or zip line.
@@ -490,7 +491,7 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
 // clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
 // openExternal(url) opens GitHub's sign-in page in the browser.
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console, registry = pluginApi }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, onConsole = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console, registry = pluginApi }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -539,6 +540,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
           header: host?.status === 'running' && item.manifest?.header === true,
+          console: host?.status === 'running' && item.manifest?.console === true,
           // What the plugin adds, for the settings page: command names, env names (never values) and its MCP tools.
           commands: item.commands ?? [], envPrefix: item.manifest?.terminal?.envPrefix ?? null,
           env: host?.status === 'running' && host.terminal ? Object.keys(host.terminal.env) : [],
@@ -698,7 +700,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     else host.error = `${host.error} 계속 종료되어 다시 시작하지 않습니다.`;
     changed();
   }
-  const hostContext = { ask, changed, dataRoot, discoverTools, emitFeedback, emitTerminal, log, notify,
+  // Output of a command run from a console tab: straight to the window, never through snapshot().
+  const emitConsole = (host, event) => onConsole({ plugin: host.id, ...event });
+  const hostContext = { ask, changed, dataRoot, discoverTools, emitConsole, emitFeedback, emitTerminal, log, notify,
     relayWorkspace, sendHost, store, terminalNode, writeStorageFile };
 
   function onHostMessage(host, message) {
@@ -852,6 +856,13 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!host.terminal?.mcp) throw fail('플러그인이 아직 에이전트 도구를 주고 있지 않습니다. 플러그인 설정을 먼저 마치세요.', 'MCP_NOT_OFFERED');
     discoverTools(host, true);
     return snapshot();
+  }
+  // A request from the plugin's console tab (API v2 `console`): run a command, signal it, or answer its password prompt.
+  function consoleRequest(id, request) {
+    const host = hosts.get(id);
+    if (!host || host.status !== 'running' || !host.child?.connected) throw fail('플러그인이 실행 중이 아닙니다.', 'PLUGIN_STOPPED');
+    if (!host.item.manifest.console || !host.contract.host.consoleRequest) throw fail('이 플러그인은 콘솔 탭을 쓰지 않습니다.', 'PLUGIN_NO_CONSOLE');
+    sendHost(host, host.contract.host.consoleRequest(request));
   }
   // `item` is the id of a view.lists item whose button was pressed.
   async function action(id, actionId, values, item) {
@@ -1434,7 +1445,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     for (const host of [...hosts.values()]) stop(host);
   }
 
-  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback, queryFeedbackStatus,
+  return { snapshot, rescan, restart, setEnabled, setBuiltin, approve, revoke, action, consoleRequest, setMcp, refreshTools, installZip, droppedZips, close, emitTerminal, fromServer, serverReset, feedbackStatus, submitFeedback, queryFeedbackStatus,
     startUpdates, checkUpdates, installUpdate: id => installUpdate(id), setUpdateMode, connectGithub, disconnectGithub, signInGithub, cancelSignIn, probeGithub, selectGithubAccount, runUpdateRound: runRound,
     hubCatalog, installFromHub, signInHub, cancelHubSignIn, signOutHub };
 }

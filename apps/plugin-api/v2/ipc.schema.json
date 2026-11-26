@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MoonerADE Plugin IPC API v2",
+  "description": "Message envelopes. View limits and operation-specific request and response semantics are defined by the v2 runtime and the plugin guide.",
+  "anyOf": [{ "$ref": "#/$defs/fromApp" }, { "$ref": "#/$defs/fromPlugin" }],
+  "$defs": {
+    "fromApp": { "oneOf": [
+      {"type":"object","properties":{"type":{"const":"init"},"apiVersion":{"const":2},"id":{"type":"string"},"appVersion":{"type":"string"},"dataDir":{"type":"string"},"storage":{},"features":{"const":["view.setup","view.lists","view.document","view.password","view.folder","header","updates","hub","console"]}},"required":["type","apiVersion","id","appVersion","dataDir","storage","features"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"action"},"id":{"type":"string"},"action":{"type":"string"},"values":{"type":"object"},"item":{"type":"string"}},"required":["type","id","action","values"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"confirm-result"},"id":{},"ok":{"type":"boolean"}},"required":["type","id","ok"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"feedback/submit"},"id":{"type":"integer"},"meta":{"type":"object"},"images":{"type":"array","items":{}}},"required":["type","id","meta","images"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"feedback/status"},"id":{"type":"integer"},"keys":{"type":"array","items":{"type":"string"}},"have":{"type":"object"}},"required":["type","id","keys","have"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"workspace"},"op":{"enum":["api-result","message","closed","reset"]},"session":{"type":"string"},"id":{"type":"integer"},"action":{"type":"string"},"input":{"type":"object"},"ok":{"type":"boolean"},"value":{},"error":{"type":"object"},"message":{"type":"object"},"text":{"type":"string"}},"required":["type","op"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"console"},"op":{"enum":["run","signal","password"]},"run":{"type":"string"},"command":{"type":"string"},"signal":{"enum":["INT","TERM","KILL"]},"value":{"type":"string"},"save":{"type":"boolean"}},"required":["type","op","run"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"shutdown"}},"required":["type"],"additionalProperties":false}
+    ] },
+    "fromPlugin": { "oneOf": [
+      {"type":"object","properties":{"type":{"const":"ready"}},"required":["type"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"view"},"view":{"$ref":"#/$defs/view"}},"required":["type","view"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"badge"},"badge":{"type":["object","null"]}},"required":["type","badge"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"notify"},"title":{"type":"string"},"body":{"type":"string"}},"required":["type"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"storage"},"value":{}},"required":["type"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"confirm"},"id":{},"message":{"type":"string"},"detail":{"type":"string"},"confirmLabel":{"type":"string"}},"required":["type","id"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"terminal"},"env":{"type":"object"},"mcpArgs":{"type":"array","items":{"type":"string"}},"autoApprove":{"type":"boolean"},"enabled":{"type":"boolean"}},"required":["type"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"action-result"},"id":{"type":"string"},"ok":{"type":"boolean"},"message":{"type":"string"},"error":{"type":"string"}},"required":["type","id","ok"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"workspace"},"op":{"enum":["open","close","api","send"]},"session":{"type":"string"},"id":{"type":"integer"},"action":{"type":"string"},"input":{"type":"object"},"ok":{"type":"boolean"},"value":{},"error":{"type":"object"},"message":{"type":"object"},"text":{"type":"string"}},"required":["type","op"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"feedback"},"available":{"type":"boolean"},"account":{"type":"string"},"reason":{"type":"string"},"statusQuery":{"type":"boolean"}},"required":["type","available"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"feedback/result"},"id":{"type":"integer"},"ok":{"type":"boolean"},"issueNumber":{"type":"integer"},"error":{"type":"object"}},"required":["type","id","ok"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"feedback/status-result"},"id":{"type":"integer"},"ok":{"type":"boolean"},"items":{"type":"object"},"latestStable":{"type":"string"},"error":{"type":"object"}},"required":["type","id","ok"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"console"},"op":{"enum":["started","out","prompt","exit","error"]},"run":{"type":"string"},"pid":{"type":"integer"},"fd":{"enum":[1,2]},"data":{"type":"string"},"code":{"type":["integer","null"]},"signal":{"type":["string","null"]},"timedOut":{"type":"boolean"},"durationMs":{"type":["number","null"]},"message":{"type":"string"}},"required":["type","op","run"],"additionalProperties":false},
+      {"type":"object","properties":{"type":{"const":"log"},"level":{"enum":["info","warn","error"]},"message":{"type":"string"}},"required":["type","message"],"additionalProperties":false}
+    ] },
+    "view": {"type":"object","properties":{"status":{"type":"object"},"info":{"type":"array","items":{"type":"object"}},"fields":{"type":"array","items":{"type":"object"}},"actions":{"type":"array","items":{"type":"object"}},"qr":{"type":["object","null"]},"lists":{"type":"array","items":{"type":"object"}},"setup":{"type":"array","items":{"type":"object"}},"formId":{"type":"string"},"document":{"type":["object","null"]},"panel":{"$ref":"#/$defs/view"}},"additionalProperties":false}
+  }
+}
