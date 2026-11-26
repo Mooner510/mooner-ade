@@ -115,7 +115,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     openFolder: async () => { const failure = await shell.openPath(dir); if (failure) throw new Error(failure); return manager.snapshot(); },
     installZip: installPickedZip,
     checkUpdates: id => manager.checkUpdates(typeof id === 'string' ? id : undefined),
-    installUpdate: id => manager.installUpdate(String(id)),
+    installUpdate: (id, expected) => manager.installUpdate(String(id), { expected }),
     setUpdateMode: mode => manager.setUpdateMode(String(mode)),
     connectGithub: token => manager.connectGithub(typeof token === 'string' ? token : ''),
     disconnectGithub: () => manager.disconnectGithub(),
@@ -128,7 +128,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     cancelHubSignIn: () => manager.cancelHubSignIn(),
     signOutHub: () => manager.signOutHub(),
     hubCatalog: options => manager.hubCatalog({ force: options?.force === true }),
-    hubInstall: id => manager.installFromHub(String(id)),
+    hubInstall: (id, expected) => manager.installFromHub(String(id), expected),
     usageSync: async body => {
       try {
         const localId = typeof body?.localId === 'string' ? body.localId : '';

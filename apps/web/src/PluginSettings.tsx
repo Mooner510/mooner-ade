@@ -32,12 +32,13 @@ export type PluginView = {
 // plugin.json `setup`: the guide shown even before the plugin runs.
 export type ManifestStep = { id: string; label: string; detail: string; optional?: boolean };
 export type UpdateMode = 'auto' | 'notify' | 'manual';
+export type PluginSelection = { version: string; apiVersion?: number | null; sha256: string };
 export type PluginUpdate = {
   // Where updates come from: the plugin's GitHub repository, or MoonerADE Hub (then a GitHub repository may be named beside it for an older app).
   source: { kind: 'github' | 'hub'; github?: string; asset?: string } | null;
   // `needs-login`: a Hub plugin, and this app is not signed in to the Hub.
   status?: 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'installing' | 'error' | 'needs-login';
-  current?: string; latest?: string | null; available?: boolean; checkedAt?: number | null; error?: string | null; via?: string | null; viaLabel?: string; review?: string[];
+  current?: string; latest?: string | null; apiVersion?: number | null; sha256?: string | null; available?: boolean; checkedAt?: number | null; error?: string | null; via?: string | null; viaLabel?: string; review?: string[];
 };
 export type GithubAccount = {
   ghAvailable?: boolean; accounts?: { login: string; active: boolean; valid: boolean }[]; ghAccount?: string | null;
@@ -46,9 +47,11 @@ export type GithubAccount = {
 };
 // MoonerADE Hub: the app's sign-in (the account's name, never a token) and the plugin market it serves (snapshot().hub).
 export type HubGrants = { terminal: boolean; mcp: boolean; workspace: boolean; feedback: boolean; header: boolean };
+export type PluginApiStatus = 'supported' | 'deprecated' | 'removed' | 'unsupported';
 export type HubPlugin = {
   id: string; name: string; description: string; version: string; size: number; grants: HubGrants; publishedAt: number | null;
-  installed: { version: string } | null; updateAvailable: boolean;
+  apiVersion?: number | null; apiStatus?: PluginApiStatus | null; sha256?: string;
+  installed: { version: string; apiVersion?: number | null } | null; updateAvailable: boolean;
   // A plugin that ships with the app owns this id.
   reserved: boolean;
 };
@@ -65,7 +68,8 @@ export type PluginInfo = {
   folder: string; id: string | null; name: string; version: string | null; description: string; hash: string | null;
   // plugin.json `icon`: the SVG text (PluginIcon), null without one.
   icon?: string | null;
-  state: 'invalid' | 'new' | 'changed' | 'off' | 'starting' | 'running' | 'error' | 'stopped';
+  apiVersion?: number | null; apiStatus?: PluginApiStatus | null;
+  state: 'invalid' | 'incompatible' | 'new' | 'changed' | 'off' | 'starting' | 'running' | 'error' | 'stopped';
   error: string | null; terminal: boolean; mcp: string | null; mcpChatOnly?: boolean; workspace?: boolean; view: PluginView | null; badge?: PluginBadge | null;
   // A plugin that ships with the app: no approval, no "plugins on" switch, only its own on/off (`builtinEnabled`).
   builtin?: boolean; builtinEnabled?: boolean;
@@ -81,13 +85,13 @@ export type PluginsBridge = {
   action(id: string, action: string, values: Record<string, string>, item?: string): Promise<PluginsState>; openFolder(): Promise<PluginsState>;
   setMcp(id: string, change: { tool?: string; enabled: boolean }): Promise<PluginsState>; refreshTools(id: string): Promise<PluginsState>;
   pickZip(): Promise<PluginsState>; installZip(file: string): Promise<PluginsState>; onOpen?(listener: () => void): () => void;
-  checkUpdates?(): Promise<PluginsState>; installUpdate?(id: string): Promise<PluginsState>; setUpdateMode?(mode: UpdateMode): Promise<PluginsState>;
+  checkUpdates?(): Promise<PluginsState>; installUpdate?(id: string, expected?: PluginSelection): Promise<PluginsState>; setUpdateMode?(mode: UpdateMode): Promise<PluginsState>;
   connectGithub?(token: string): Promise<PluginsState>; disconnectGithub?(): Promise<PluginsState>; signInGithub?(): Promise<PluginsState>; cancelSignIn?(): Promise<PluginsState>;
   probeGithub?(): Promise<PluginsState>; openTokenPage?(): Promise<PluginsState>;
   selectGithubAccount?(login: string): Promise<PluginsState>;
   // MoonerADE Hub: sign in with the browser, the market list, installing from it (the install asks in the desktop app's own dialog).
   signInHub?(): Promise<PluginsState>; cancelHubSignIn?(): Promise<PluginsState>; signOutHub?(): Promise<PluginsState>;
-  hubCatalog?(options?: { force?: boolean }): Promise<PluginsState>; hubInstall?(id: string): Promise<PluginsState>;
+  hubCatalog?(options?: { force?: boolean }): Promise<PluginsState>; hubInstall?(id: string, expected?: PluginSelection): Promise<PluginsState>;
 };
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
 export const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
@@ -206,13 +210,16 @@ function QrCode({ text, label, size = 200 }: { text: string; label: string; size
 
 type State = PluginInfo['state'];
 const stateLabel: Record<State, string> = {
-  invalid: '읽을 수 없음', new: '승인 필요', changed: '다시 승인 필요', off: '꺼짐',
+  invalid: '읽을 수 없음', incompatible: '호환되지 않음', new: '승인 필요', changed: '다시 승인 필요', off: '꺼짐',
   starting: '시작하는 중', running: '실행 중', error: '오류', stopped: '멈춤'
 };
-const stateTone = (state: State): Tone => state === 'running' ? 'ok' : ['invalid', 'error', 'changed'].includes(state) ? 'error' : state === 'new' ? 'warn' : 'info';
+const stateTone = (state: State): Tone => state === 'running' ? 'ok' : ['invalid', 'incompatible', 'error', 'changed'].includes(state) ? 'error' : state === 'new' ? 'warn' : 'info';
 const toneIcon: Record<Tone, IconName> = { ok: 'check', warn: 'alert', error: 'alert', info: 'info' };
 // Installed plugins with a newer version waiting, by the plugin's own update or the Hub's list (flagged with a red dot in the settings button,
 // the settings 플러그인 section, the tabs and the row).
+export const apiStatusLabel = (status: PluginApiStatus | null | undefined) =>
+  status === 'deprecated' ? '지원 종료 예정' : status === 'removed' ? '지원 종료' : status === 'unsupported' ? 'API 미지원' : '';
+
 const hasUpdate = (plugin: PluginInfo) => !plugin.builtin && Boolean(plugin.update?.available);
 export function pluginUpdateCount(state: PluginsState | null | undefined) {
   if (!state) return 0;
@@ -222,7 +229,7 @@ export function pluginUpdateCount(state: PluginsState | null | undefined) {
 }
 export const usePluginUpdateCount = () => pluginUpdateCount(usePluginsState());
 // Plugins that need the user come first; the rest keep the folder order.
-const needsUser = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid'].includes(plugin.state) || Boolean(plugin.update?.available) || setupLeft(plugin) > 0;
+const needsUser = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid', 'incompatible'].includes(plugin.state) || plugin.apiStatus === 'deprecated' || Boolean(plugin.update?.available) || setupLeft(plugin) > 0;
 
 // ---- the setup guide ---------------------------------------------------------------------------------------------
 // One list from what MoonerADE knows (approved, running) and what the plugin declared (plugin.json `setup`) and reports
@@ -397,7 +404,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => {
     const result = noticeFor(plugin.folder);
     return <li key={plugin.folder}>
-      <PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!))} />
+      <PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!, plugin.update?.sha256 && plugin.update.latest ? { version: plugin.update.latest, apiVersion: plugin.update.apiVersion, sha256: plugin.update.sha256 } : undefined))} />
       {result?.step === 'update' && <Callout tone={result.error ? 'error' : 'ok'}>{result.text}</Callout>}
     </li>;
   })}</ul>;
@@ -465,13 +472,13 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   </div>;
 }
 
-function StatePill({ state }: { state: State }) {
-  return <span className="plugin-pill" data-tone={stateTone(state)}>{state === 'starting' ? <span className="plugin-spinner" aria-hidden="true" /> : <i aria-hidden="true" />}{stateLabel[state]}</span>;
+function StatePill({ state, label }: { state: State; label?: string }) {
+  return <span className="plugin-pill" data-tone={stateTone(state)}>{state === 'starting' ? <span className="plugin-spinner" aria-hidden="true" /> : <i aria-hidden="true" />}{label || stateLabel[state]}</span>;
 }
 
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
 function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; onOpen(): void; onUpdate(): void }) {
-  const left = setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
+  const left = plugin.state === 'incompatible' ? 0 : setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
   const updateStatus = plugin.update?.status;
   const updating = busy === `${plugin.folder}:update` || updateStatus === 'downloading' || updateStatus === 'installing';
   // A div, not a button: the update button inside it must not be a button within a button.
@@ -480,6 +487,8 @@ function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; bus
     <PluginMark plugin={plugin} />
     <span className="plugin-row-text">
       <span className="plugin-row-name"><strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
+        {plugin.apiVersion != null && <span className="plugin-tag">API v{plugin.apiVersion}</span>}
+        {plugin.apiStatus === 'deprecated' && <span className="plugin-tag" data-tone="warn">{apiStatusLabel(plugin.apiStatus)}</span>}
         {left > 0 && <span className="plugin-tag" data-tone="warn">설정 {left}단계 남음</span>}
         {hasUpdate(plugin) && !canUpdate && <span className="plugin-tag" data-tone="info">업데이트 v{plugin.update!.latest}</span>}
         {hasUpdate(plugin) && !canUpdate && <i className="plugin-new-dot" title="업데이트 있음" aria-label="업데이트 있음" />}</span>
@@ -488,7 +497,7 @@ function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; bus
     {canUpdate && <span className="plugin-row-update" onClick={event => event.stopPropagation()}>
       <BusyButton className="primary" busy={Boolean(busy) || updating || updateStatus === 'checking'} running={updating} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
     </span>}
-    <StatePill state={plugin.state} />
+    <StatePill state={plugin.state} label={plugin.state === 'incompatible' ? apiStatusLabel(plugin.apiStatus) : undefined} />
     <Icon name="chevronRight" size={16} />
   </div>;
 }
@@ -538,7 +547,8 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     for (const field of view?.fields ?? []) if (field.type === 'password') setValue(field.key, '');
     if (id) run(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`, () => bridge.action(id, action, submitted, item));
   };
-  const steps = plugin.state === 'invalid' ? [] : guideSteps(plugin);
+  const blocked = ['invalid', 'incompatible'].includes(plugin.state);
+  const steps = blocked ? [] : guideSteps(plugin);
   const complete = steps.every(step => step.optional || step.status === 'done');
   // While setting up, what a step names is drawn inside that step; once everything is done it is all ordinary settings.
   const inSteps = complete ? null : stepParts(steps);
@@ -553,13 +563,15 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
         <div>
           <strong>{plugin.name}</strong>{plugin.version && <span className="plugin-version">v{plugin.version}</span>}
           <span className="plugin-tag" data-tone={plugin.builtin ? 'info' : undefined}>{plugin.builtin ? '내장' : '설치함'}</span>
-          <StatePill state={plugin.state} />
+          <StatePill state={plugin.state} label={plugin.state === 'incompatible' ? apiStatusLabel(plugin.apiStatus) : undefined} />
         </div>
         {plugin.description && <p>{plugin.description}</p>}
       </div>
-      {id && plugin.state !== 'invalid' && <input type="checkbox" role="switch" className="plugin-master" aria-label={`${plugin.name} 사용`} checked={on} disabled={Boolean(busy)} onChange={event => toggle(event.target.checked)} />}
+      {id && !blocked && <input type="checkbox" role="switch" className="plugin-master" aria-label={`${plugin.name} 사용`} checked={on} disabled={Boolean(busy)} onChange={event => toggle(event.target.checked)} />}
     </header>
     {plugin.state === 'invalid' && <Callout tone="error">{plugin.error ?? '플러그인을 읽을 수 없습니다.'}<small>plugin.json과 폴더 구성을 고친 뒤 목록의 다시 읽기를 누르세요.</small></Callout>}
+    {plugin.state === 'incompatible' && <Callout tone="error">{plugin.error}</Callout>}
+    {plugin.apiStatus === 'deprecated' && <Callout tone="warn">플러그인 API v{plugin.apiVersion} 지원이 종료될 예정입니다. 호환되는 새 버전이 있으면 업데이트하세요.</Callout>}
     {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
     {view?.status && <StatusLine status={view.status} />}
 
@@ -928,6 +940,7 @@ function PluginFacts({ plugin }: { plugin: PluginInfo }) {
   const rows: { label: string; value: string; copy?: boolean }[] = [
     { label: 'id', value: plugin.id ?? '—' },
     { label: '버전', value: plugin.version ?? '—' },
+    ...(plugin.apiVersion != null ? [{ label: '플러그인 API', value: `v${plugin.apiVersion}` }] : []),
     { label: '폴더', value: plugin.builtin ? 'MoonerADE에 포함됨' : plugin.folder },
     ...(plugin.hash ? [{ label: 'SHA-256', value: plugin.hash, copy: true }] : [])
   ];

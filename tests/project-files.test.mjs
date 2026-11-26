@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LocalWorkspace } from '../apps/local-server/src/runtime.js';
-import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from '../apps/local-server/src/project-files.js';
+import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveDroppedFiles, moveProjectEntries, projectDirectory, readProjectFile, writeProjectFile } from '../apps/local-server/src/project-files.js';
 import { FileBuffer } from '../apps/web/src/file-buffer.ts';
 
 async function project(t) {
@@ -12,6 +13,66 @@ async function project(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { dir, workspace: new LocalWorkspace(dir) };
 }
+
+test('native drops move multiple files and report project-relative paths for open editors', async t => {
+  const { dir, workspace } = await project(t);
+  const outside = await project(t);
+  const external = path.join(outside.dir, '외부 파일.txt'), internal = path.join(dir, 'note.txt');
+  await writeFile(external, 'outside');
+  await writeFile(internal, 'inside');
+  await mkdir(path.join(dir, 'dest'));
+  assert.deepEqual(await moveDroppedFiles(workspace, { paths: [external, internal], dir: 'dest' }), {
+    moved: [{ from: null, to: 'dest/외부 파일.txt' }, { from: 'note.txt', to: 'dest/note.txt' }]
+  });
+  await assert.rejects(lstat(external), { code: 'ENOENT' });
+  await assert.rejects(lstat(internal), { code: 'ENOENT' });
+  const moved = path.join(dir, 'dest', '외부 파일.txt');
+  assert.equal(await readFile(moved, 'utf8'), 'outside');
+  assert.equal(await readFile(path.join(dir, 'dest', 'note.txt'), 'utf8'), 'inside');
+  assert.deepEqual(await moveDroppedFiles(workspace, { paths: [moved], dir: 'dest' }), { moved: [] });
+});
+
+test('native drops reject conflicts and dirty editors before moving any files', async t => {
+  const { dir, workspace } = await project(t);
+  const outside = await project(t);
+  const first = path.join(outside.dir, 'first.txt'), conflict = path.join(outside.dir, 'note.txt'), note = path.join(dir, 'note.txt');
+  await writeFile(first, 'first');
+  await writeFile(conflict, 'external note');
+  await writeFile(note, 'project note');
+  await mkdir(path.join(dir, 'dest'));
+  await symlink(outside.dir, path.join(dir, 'link'), 'junction');
+
+  await assert.rejects(moveDroppedFiles(workspace, { paths: [first, conflict], dir: '.' }), { code: 'EXISTS' });
+  await assert.rejects(moveDroppedFiles(workspace, { paths: [first, note], dir: 'dest', dirty: ['note.txt'] }), { code: 'FILE_DIRTY' });
+  await assert.rejects(moveDroppedFiles(workspace, { paths: [first], dir: 'link' }), /symlink escape/);
+  await assert.rejects(moveDroppedFiles(workspace, { paths: [outside.dir], dir: '.' }), { code: 'INVALID_INPUT' });
+  assert.deepEqual(await readdir(path.join(dir, 'dest')), []);
+  assert.equal(await readFile(first, 'utf8'), 'first');
+  assert.equal(await readFile(conflict, 'utf8'), 'external note');
+  assert.equal(await readFile(note, 'utf8'), 'project note');
+});
+
+test('native drops copy across volumes and preserve the source if a destination appears during the move', async t => {
+  const { dir, workspace } = await project(t);
+  const outside = await project(t);
+  const source = path.join(outside.dir, 'note.txt'), dest = path.join(dir, 'note.txt');
+  await writeFile(source, 'source');
+  const acrossVolumes = Object.assign(new Error('different volumes'), { code: 'EXDEV' });
+  const link = t.mock.method(fs, 'link', async () => {
+    await writeFile(dest, 'concurrent file');
+    throw acrossVolumes;
+  });
+  assert.deepEqual(await moveDroppedFiles(workspace, { paths: [source], dir: '.' }), {
+    moved: [], error: '같은 이름이 이미 있습니다: note.txt'
+  });
+  assert.equal(await readFile(source, 'utf8'), 'source');
+  assert.equal(await readFile(dest, 'utf8'), 'concurrent file');
+  await unlink(dest);
+  link.mock.mockImplementation(async () => { throw acrossVolumes; });
+  assert.deepEqual(await moveDroppedFiles(workspace, { paths: [source], dir: '.' }), { moved: [{ from: null, to: 'note.txt' }] });
+  assert.equal(await readFile(dest, 'utf8'), 'source');
+  await assert.rejects(lstat(source), { code: 'ENOENT' });
+});
 
 test('project tree lists real folders and files, including empty directories, within the workspace', async t => {
   const { dir, workspace } = await project(t);

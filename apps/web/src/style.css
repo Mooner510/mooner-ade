@@ -374,7 +374,9 @@ body.resizing .right-panel { transition: none; }
 :root[data-scheme=light] .terminal-pane[data-ssh] { --ssh: #0f9d3a; }
 .terminal-pane[data-ssh] .pane-label { color: var(--ssh); font-weight: 600; text-shadow: 0 0 4px color-mix(in srgb, var(--ssh) 70%, transparent), 0 0 10px color-mix(in srgb, var(--ssh) 45%, transparent); }
 :root[data-scheme=light] .terminal-pane[data-ssh] .pane-label { text-shadow: 0 0 6px color-mix(in srgb, var(--ssh) 35%, transparent); }
-.dim-inactive .terminal-pane:not(.focused) .xterm-host, .dim-inactive .editor-group:not(.focused) .editor { opacity: .55; transition: opacity .15s; }
+.dim-inactive .terminal-pane:not(.focused) .xterm-host,
+.dim-inactive .chat-pane:not(.focused),
+.dim-inactive .editor-group:not(.focused) .editor { opacity: .55; transition: opacity .15s; }
 @keyframes bell-flash { from { box-shadow: inset 0 0 0 2px var(--accent); } to { box-shadow: inset 0 0 0 2px transparent; } }
 .xterm-host.bell { animation: bell-flash .25s ease-out; }
 .xterm-host { box-sizing: content-box; flex: 1; min-height: 0; padding: 8px 10px 12px; overflow: hidden; }
@@ -413,7 +415,7 @@ body.resizing .right-panel { transition: none; }
 .tab button.unsaved { opacity: 1; position: relative; }
 .tab button.unsaved i { position: absolute; inset: 50% auto auto 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--fg); }
 .tab button.unsaved:is(:hover, :focus-visible) i { display: none; }
-.tab button.unsaved:not(:hover, :focus-visible) svg { visibility: hidden; }
+.tab button.unsaved:not(:hover, :focus-visible) > .icon { visibility: hidden; }
 .group-actions { display: flex; padding: 0 4px; flex-shrink: 0; }
 .group-actions button { color: var(--muted); padding: 2px 6px; }
 .editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
@@ -608,8 +610,48 @@ body.resizing .shell { transition: none; }
 .folder-tabs > li.drop-after::after { bottom: -2px; }
 .folder-empty { padding: 4px 8px; font-size: 12px; color: var(--muted); }
 .folder-empty button { padding: 0 4px; color: var(--accent); text-decoration: underline; }
-.projects-foot { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--border); }
+.projects-foot { flex: none; display: flex; align-items: center; gap: 4px; padding: 9px 8px; border-top: 1px solid var(--border); }
 .shell.compact .projects-foot { flex-direction: column; padding: 8px 0; }
+.sidebar-update { flex: none; display: grid; gap: 6px; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.sidebar-update-label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.sidebar-update-label > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-update-percent { flex: none; font-variant-numeric: tabular-nums; }
+.sidebar-update-track { height: 3px; overflow: hidden; border-radius: 3px; background: var(--border-strong); }
+.sidebar-update-track > div { height: 100%; border-radius: inherit; background: var(--accent); transition: width .15s; }
+.sidebar-update-track:not([aria-valuenow]) > div { width: 35%; animation: update-progress-slide 1.4s ease-in-out infinite; }
+@keyframes update-progress-slide { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+.sidebar-update.ready { justify-items: start; }
+.sidebar-update-apply { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 3px 8px; color: var(--accent); background: var(--accent-soft); }
+.shell.compact .sidebar-update { padding: 8px 7px; }
+.shell.compact .sidebar-update-label { flex-direction: column; text-align: center; }
+.shell.compact .sidebar-update.ready { justify-items: center; }
+.shell.compact .sidebar-update-apply { padding: 5px; }
+.welcome > .sidebar-update { position: fixed; bottom: 12px; left: 12px; width: min(228px, calc(50vw - 90px)); border: 1px solid var(--border-strong); border-radius: 8px; background: var(--raised); }
+@media (max-width: 560px) { .welcome > .sidebar-update { bottom: 62px; width: min(228px, calc(100vw - 24px)); } }
+.update-countdown {
+  position: fixed; inset: 24px; margin: auto; width: max-content; max-width: calc(100dvw - 48px); height: max-content;
+  padding: 0; border: 0; overflow: visible; background: transparent; pointer-events: none;
+  color: color-mix(in srgb, var(--fg) 78%, transparent); text-align: center;
+  text-shadow: 0 0 2px #000, 0 0 5px #000e, 0 1px 9px #000b;
+}
+.update-countdown::backdrop { background: transparent; pointer-events: none; }
+.update-countdown[data-vertical="top"] { top: max(24px, calc(max(env(titlebar-area-height, 0px), var(--desktop-titlebar-height, 0px)) + 12px)); margin-top: 0; }
+.update-countdown[data-vertical="bottom"] { margin-bottom: 0; }
+.update-countdown[data-horizontal="left"] { margin-left: 0; text-align: left; --countdown-origin: left; }
+.update-countdown[data-horizontal="right"] { margin-right: 0; text-align: right; --countdown-origin: right; }
+.update-countdown > [role="status"] { display: block; margin-top: 8px; font-weight: 500; }
+.update-countdown-number {
+  font-size: 52px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--accent) 74%, transparent);
+  text-shadow: 0 1px 4px #000c, 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 28px color-mix(in srgb, var(--accent) 35%, transparent);
+  transform-origin: var(--countdown-origin, center) center;
+  animation: update-countdown-tick .25s ease-out;
+}
+@keyframes update-countdown-tick { from { opacity: .55; transform: scale(.88); } }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-track > div { transition: none; }
+  .sidebar-update-track:not([aria-valuenow]) > div, .update-countdown-number { animation: none; }
+}
 .app-version { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; user-select: text; }
 .app-version.beta { color: var(--beta); }
 .shell.compact .app-version { display: none; }
@@ -1597,10 +1639,11 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-bubble.clipped::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 80px; pointer-events: none;
   background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--chat-bubble-fade-shade) 11%, transparent) 42%, var(--chat-bubble-surface) 100%); }
 .chat-images { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: var(--muted); }
-.chat-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+/* Every thumbnail is the same 4:3 tile (cropped to fill), laid out in a grid of --cols columns, so mixed sizes still stack evenly. A lone image gets a bigger tile (--tile set inline). */
+.chat-user-images { --tile: 132px; display: grid; grid-template-columns: repeat(var(--cols, 3), var(--tile)); justify-content: end; gap: 6px; margin-top: 6px; }
 .chat-user-images:first-child { margin-top: 0; }
 .chat-user-images button { display: block; padding: 0; border: 0; background: none; border-radius: 8px; cursor: zoom-in; }
-.chat-user-images img { display: block; max-width: 220px; max-height: 160px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.chat-user-images img { display: block; box-sizing: border-box; width: var(--tile); aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
 /* One turn = the request and every row that answered it. Rows keep their DOM node from the first streamed character on; the process rows fold with a
    height transition (grid 1fr -> 0fr) when the turn ends, so nothing remounts or jumps. Spacing lives inside the rows so a folded row takes no room. */
 .chat-turn { display: flex; flex-direction: column; min-width: 0; }
@@ -1833,7 +1876,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-approval-line { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .chat-approval footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
 /* The decision sits at the right: 거부, then 허용 as a split button whose caret opens the "allow and remember" choices (placed on screen by the card, which clips). */
-.approve-split { display: inline-flex; align-items: stretch; }
+.approve-split { display: inline-flex; align-items: center; }
+.approve-split > .primary { display: inline-flex; align-items: center; justify-content: center; }
 .approve-split > .primary:first-child { border-radius: 6px 0 0 6px; }
 .approve-split .approve-caret { padding: 0 6px; border-radius: 0 6px 6px 0; border-left-color: color-mix(in srgb, var(--accent-fg) 35%, transparent); }
 .menu.approve-menu { position: fixed; z-index: 1000; top: auto; left: auto; min-width: 190px; }
@@ -1885,11 +1929,11 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-queue { color: var(--muted); font-size: 12px; }
 .chat-queue ol { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; }
 .chat-queue li { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; background: var(--raised); }
-.chat-queue .chat-user-images { margin: 0; flex-wrap: nowrap; }
+.chat-queue .chat-user-images { margin: 0; display: flex; }
 .chat-queue li.editing { align-items: center; padding: 4px 8px; }
 .chat-queue li textarea { flex: 1; min-width: 0; margin: 0; box-sizing: border-box; resize: vertical; font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
 .chat-queue li textarea:focus { outline: none; border-color: var(--accent); }
-.chat-queue .chat-user-images img { max-width: 40px; max-height: 40px; }
+.chat-queue .chat-user-images img { width: 40px; aspect-ratio: 1; }
 .chat-queue li span { flex: 1; min-width: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .chat-composer { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 10px 8px 16px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--input); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
 .chat-composer[hidden] { display: none; }
@@ -1914,12 +1958,10 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
    a transform animation on that element off the compositor for good (restyling the document every frame for the whole turn). */
 .chat-send.stop::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: var(--raised); border: 1px solid var(--border-strong); }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; container-type: inline-size; }
-/* Thumbnails keep the picture's own shape, at most 80px tall and as wide as the composer: nothing is cropped, so a wide screenshot is not cut to a scrap of text.
-   The width cap is 100cqw, not 100%: a percentage max-width on the img is cyclic and ignored when the wrapper is sized, so the wrapper took the picture's natural
-   width and the remove button sat far outside the thumbnail. */
+/* Composer thumbnails are fixed 72px squares (cropped to fill) so a mix of shapes lines up; click to see one whole. */
 .chat-attachments > span { position: relative; max-width: 100%; }
 .chat-attachments .chat-attachment-open { display: block; padding: 0; border: 0; border-radius: 8px; cursor: zoom-in; }
-.chat-attachments img { display: block; width: auto; height: auto; max-width: 100cqw; max-height: 80px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
+.chat-attachments img { display: block; width: 72px; height: 72px; object-fit: cover; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); }
 .chat-attachments .chat-attachment-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; box-sizing: border-box; display: grid; place-items: center; padding: 0; border-radius: 50%; background: var(--overlay); color: var(--muted); border: 1px solid var(--border-strong); line-height: 0; }
 .chat-attachments .chat-attachment-open { position: relative; }
 .chat-attachments .chat-reduced { position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 999px; font-size: 10px; line-height: 1.4; color: #fff; background: #000a; }
@@ -2618,7 +2660,7 @@ dialog.chat-stats > :is(.stats-empty, .stats-error) { padding: var(--stats-pad);
 .chat-plan > header, dialog.plan-modal > header { display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr); align-items: center; gap: 10px; }
 .chat-plan > header .plan-label, dialog.plan-modal > header .plan-label { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--agent); white-space: nowrap; }
 .chat-plan > header .plan-head-end, dialog.plan-modal > header .plan-head-end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; justify-self: end; }
-.chat-plan-body { max-height: min(56dvh, 560px); overflow: auto; padding: 4px 18px 12px; border-top: 1px solid var(--border); font-size: 14px; line-height: 1.7; overscroll-behavior: contain; }
+.chat-plan-body { max-height: min(56dvh, 560px); overflow: auto; padding: 4px 18px 12px; border-top: 1px solid var(--border); font-size: 13px; line-height: 1.7; overscroll-behavior: contain; }
 .chat-plan-body h2 { margin: 14px 0 4px; font-size: 15px; } .chat-plan-body > :first-child > :first-child { margin-top: 8px; }
 .chat-plan footer, dialog.plan-modal footer { padding: 8px 12px; } .chat-plan footer .primary, dialog.plan-modal footer .primary { font-weight: 600; }
 .chat-approval footer.plan-actions, .plan-revise .plan-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
@@ -2627,7 +2669,7 @@ dialog.plan-modal { width: min(1120px, calc(100vw - 48px)); height: calc(100dvh 
 dialog.plan-modal[open] { display: flex; flex-direction: column; }
 dialog.plan-modal > header { color: var(--fg); padding: 12px 16px; border-bottom: 1px solid var(--border); }
 dialog.plan-modal > header h2 { margin: 0; min-width: 0; font-size: 15px; text-align: center; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plan-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 10px max(24px, calc(50% - 400px)) 24px; font-size: 15px; line-height: 1.75; }
+.plan-modal-body { flex: 1; min-height: 0; overflow: auto; padding: 10px max(24px, calc(50% - 400px)) 24px; font-size: 14px; line-height: 1.75; }
 /* The approve buttons sit at the right (the main one last); the side ones (.plan-back: 돌아가기, 수정 요청…, 취소) at the left. */
 dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions > .plan-back + :not(.plan-back) { margin-left: auto; }
 
@@ -2644,7 +2686,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .plan-modal-main .plan-modal-body { padding: 14px clamp(36px, 6vw, 72px) 40px; }
 .plan-modal-body section { max-width: 80ch; margin: 0 auto; padding: 14px 0; }
 .plan-modal-body section + section { border-top: 1px solid var(--border); }
-.plan-modal-body section > h2 { font-size: 18px; margin: 0 0 8px; }
+.plan-modal-body section > h2 { font-size: 17px; margin: 0 0 8px; }
 @media (max-width: 720px) { .plan-modal-toc { display: none; } }
 
 /* Subagents: a card per Agent call, the tracker above the composer, and the drawer with one subagent's run. --agent-color is that subagent's own colour. */
@@ -3205,7 +3247,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 /* After the copy / branch / rewind / info icons: when the answer ended and how long it took, always shown, a little dimmer and smaller than the icons' muted text. The pieces are inline in one line box (separate flex items put
    Latin digits and Korean glyphs on different baselines), joined by a middle dot; the info icon's tooltip (tokens, in icons) opens above it, aligned to its left edge. */
 .chat-msg-actions { align-items: center; }
-.chat-done-time { margin-left: 6px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; color: color-mix(in srgb, var(--muted) 72%, var(--bg)); }
+.chat-done-time { margin-left: 6px; translate: 0 1px; font-size: 10.5px; line-height: 1.2; white-space: nowrap; color: color-mix(in srgb, var(--muted) 72%, var(--bg)); }
 .chat-done-time > span + span::before { content: '/'; margin: 0 6px; }
 .chat-done-tip { position: relative; display: inline-flex; }
 .chat-done-pop { position: absolute; bottom: calc(100% + 6px); left: 0; translate: var(--pop-x, 0) 0; z-index: 60; width: max-content; max-width: calc(100vw - 16px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--overlay); color: var(--fg); white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 11.5px; line-height: 1.4; pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity .12s, transform .12s; }

@@ -4,6 +4,19 @@ MoonerADE가 기본으로 갖고 있지 않은 기능을, 받은 플러그인을
 하나씩 승인해야 합니다. MoonerADE에는 [내장 플러그인](#내장-플러그인)이 몇 개 함께 들어 있고, MoonerADE Hub에 로그인하면
 [마켓](#hub-마켓)에서 Hub가 제공하는 플러그인을 골라 설치할 수도 있습니다.
 
+## 플러그인 API 버전
+
+ADE 0.6.3의 플러그인 계약을 API v1로 정의합니다. `plugin.json`의 `apiVersion`은 사용할 계약을 지정하는 양의 정수입니다.
+`version`은 플러그인 자체의 패키지 버전이고, ADE 버전은 앱 릴리스 버전입니다. 앱은 선언된 API의 매니페스트를 검증하고
+같은 API로 호스트 IPC와 작업공간 세션을 실행합니다. 여러 API를 지원하는 앱에서도 각 플러그인의 선언은 유지됩니다.
+
+- **지원** 상태의 API는 일반 설치·승인 절차를 따릅니다. **지원 종료 예정**의 API는 동일하게 실행되며 설정에서 전환 안내를 보여 줍니다.
+- **지원 종료** 또는 **미지원** 버전의 설치·실행은 차단됩니다. 이미 설치된 항목의 버전·폴더·데이터·사용자 설정은 보존됩니다.
+- 앱에 포함되는 버전과 상태는 [버전 목록](../apps/plugin-api/versions.json)에서 정합니다. 종료된 버전은 데스크톱·로컬 서버 패키지에서 해당 구현을 제외합니다.
+- 필드·메시지·권한·기본값·작업 범위를 바꾸거나 추가할 때 다음 API 버전을 등록합니다. v1의 [매니페스트 스키마](../apps/plugin-api/v1/manifest.schema.json), [IPC 메시지 스키마](../apps/plugin-api/v1/ipc.schema.json),
+  [작업공간 요청 목록](../apps/plugin-api/v1/workspace-requests.json) 및 [응답·이벤트 형식](../apps/plugin-api/v1/workspace.js)이 기준입니다.
+  앱 내부 수정과 계약을 복원하는 버그 수정은 같은 버전에 반영합니다. 호환되는 패키지를 제공하고 안정 릴리스에서 한 번 이상 예고한 뒤 종료합니다.
+
 ## 내장 플러그인
 
 앱에 함께 들어 있는 플러그인(`apps/desktop/builtin-plugins/<id>/`)입니다. 같은 플러그인 API로 만들어졌고 설정 → 플러그인에 **내장**
@@ -109,7 +122,7 @@ Hub가 출처이고, GitHub는 Hub를 모르는 옛 MoonerADE와 Hub에 로그�
 
 - **자동으로 켜는 것은 네이티브 확인 창을 거칩니다.** 업데이트를 배포할 수 있는 사람이 이 PC에서 코드를 실행할 수 있게 되기 때문입니다. 알림·수동으로 바꾸는 것은 확인 창이 없습니다.
 - **자동이어도 묻는 업데이트가 있습니다.** 새 버전이 전에 없던 권한(`terminal`, `mcp`, `workspace`, `feedback`, 다른 `envPrefix` 등)을
-  요청하거나 업데이트 출처(`source.github`)가 바뀌면 설치하지 않고 알립니다. 목록의 **업데이트 vX**를 누르면 확인 창에 바뀌는 점이 표시됩니다. 승인되어 실행할 수 있는 플러그인만 자동으로 업데이트합니다.
+  요청하거나 업데이트 출처(`source.github`) 또는 플러그인 API가 바뀌면 설치하지 않고 알립니다. 목록의 **업데이트 vX**를 누르면 확인 창에 바뀌는 점이 표시됩니다. 승인되어 실행할 수 있는 플러그인만 자동으로 업데이트합니다.
 - 설치는 zip 설치와 같은 길을 갑니다(압축 검사, 승인 고정, 저장된 데이터 유지). 받은 zip의 `plugin.json` id와 버전이 릴리스에서
   찾은 것과 다르면 설치하지 않습니다.
 
@@ -122,6 +135,9 @@ Hub가 출처이고, GitHub는 Hub를 모르는 옛 MoonerADE와 Hub에 로그�
 3. 받는 파일은 모두 체크섬을 맞춰 봅니다. 릴리스에 `SHA256SUMS`(`<sha256>  <파일 이름>` 줄)를 올리거나, GitHub이 파일에 붙이는
    `sha256` digest가 있어야 합니다. 둘 다 있으면 둘 다 맞아야 하고, 하나도 없으면 받지 않습니다. `versions.json`도 같습니다.
 4. 파일은 32 MiB까지 받습니다.
+5. 여러 API 버전을 배포할 때는 체크섬을 포함한 `plugin-releases.json`에 `plugins: [{id, version, apiVersion, asset}]`를 적습니다.
+   ADE는 지원하는 API에 해당하는 패키지 중 가장 높은 버전을 선택하고, 설치 전에 ZIP 안의 선언과 대조합니다.
+   0.6.3은 기존 에셋 이름과 `versions.json`을 사용하므로 해당 이름의 ZIP과 버전 항목은 API v1에 사용합니다.
 
 **GitHub 계정** (비공개 저장소)
 
@@ -260,7 +276,7 @@ MoonerADE → 플러그인
 
 | 메시지 | 뜻 |
 |---|---|
-| `{type:'init', apiVersion, id, appVersion, dataDir, storage, features}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값. `features`는 이 MoonerADE가 아는 추가 기능(`view.setup`, `view.lists`, `updates`, `hub`, `workspace.quiet` 등)이고, 없으면 그 전 MoonerADE입니다. `hub`는 `source.hub`를 아는 MoonerADE입니다 |
+| `{type:'init', apiVersion, id, appVersion, dataDir, storage, features}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값. `features`는 이 MoonerADE가 아는 추가 기능(`view.setup`, `view.lists`, `view.document`, `view.password`, `view.folder`, `header`, `updates`, `hub`, `workspace.quiet`)입니다. 0.6.3 이전 앱에서는 일부 항목이 없을 수 있습니다. `hub`는 `source.hub`를 아는 MoonerADE입니다 |
 | `{type:'action', id, action, values, item?}` | 설정 화면에서 버튼을 눌렀습니다. `values`는 입력칸 값, `item`은 목록(`view.lists`) 항목의 버튼일 때 그 항목의 `id` |
 | `{type:'confirm-result', id, ok}` | 확인 창 결과 |
 | `{type:'workspace', ...}` | 작업공간 세션의 응답과 출력(아래 [작업공간](#작업공간-workspace)) |
@@ -311,7 +327,7 @@ lists: [{ id: 'phones', title: '페어링한 폰', empty: '아직 없습니다.'
 ### 작업공간 (`workspace`)
 
 `plugin.json`에 `"workspace": true`가 있는 플러그인은 세션을 열어 MoonerADE 화면과 같은 방식으로 프로젝트와 터미널을 쓸 수
-있습니다. 세션은 화면이 받는 것과 같은 알림(프로젝트 상태, 터미널 출력 등)을 받습니다.
+있습니다. 세션은 선언한 API 버전에서 제공하는 프로젝트 상태·터미널 출력·채팅 이벤트를 받습니다.
 
 플러그인 → MoonerADE
 
@@ -425,3 +441,13 @@ MoonerADE → 플러그인
 ### 격리 브라우저 테스트
 
 검증 세션(`node scripts/verify/session.mjs up`)에서도 플러그인을 설치·승인하고 상단 탭에서 사용할 수 있습니다. 실행 코어와 호스트 IPC는 데스크톱과 같고, 확인창·zip 선택·저장소는 테스트 전용 구현입니다. 일반 웹 서버에서는 활성화되지 않습니다. 로컬 소스는 `VERIFY_PLUGIN_DIR=<플러그인 폴더>`로 지정하며 공개 저장소에 비공개 플러그인을 넣지 않습니다. 키 보호 수준·실제 CLI 모드·재시작·정리는 [TESTING_GUIDE 7절](TESTING_GUIDE.md#7-브라우저에서-플러그인-검증)을 따릅니다.
+
+### 규격 지원 상태 변경 검증
+
+지원 목록은 앱 배포물마다 하나입니다. 해당 목록은 설치 스캔, 호스트 IPC, 로컬 서버 세션, 마켓 조회, 패키징에서 같이 씁니다.
+구형 ADE의 마켓 목록과 직접 다운로드는 API v1을 제공합니다. 현재 ADE는 후보의 ID·패키지 버전·API 버전·체크섬을 유지하고
+목록이 바뀌면 다시 선택하도록 합니다. 업데이트가 실패하면 기존 폴더와 승인을 복구합니다.
+
+지원 종료를 적용할 때는 버전 목록에서 실행 버전을 빼고 종료 목록에 기록합니다. 빌드는 실행 버전 디렉터리만 복사하고 그 버전을
+지원하지 않는 내장 플러그인이 남아 있으면 실패합니다. 전체 설치 및 Windows 앱 전용 업데이트를 검증할 때, 설치되어 있던 패키지의
+설정과 데이터 보존, 비활성화 표시, 실행 코드 제외를 같이 확인합니다.

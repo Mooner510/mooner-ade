@@ -9,34 +9,20 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, HUB_CHECK_EVERY_MS, UPDATE_MODES, credentialLabel, isNewer, sourceKey, sourceKind, sourceLabel, validSource, versionText } from './plugin-updates.js';
+import { pluginApi } from '../../plugin-api/active.js';
+import { fail, ID, plainText, pluginIdentity, pluginSource, str } from '../../plugin-api/metadata.js';
+import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, HUB_CHECK_EVERY_MS, UPDATE_MODES, credentialLabel, isNewer, sourceKey, sourceKind, sourceLabel, versionText } from './plugin-updates.js';
 
-export const PLUGIN_API = 1;
-// What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell. `hub`: plugin.json
-// `source.hub` (updates and installs from MoonerADE Hub).
-export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub', 'workspace.quiet'];
-const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
-const ITEM_ID = /^[\w.-]{1,64}$/;
-const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
-const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
-const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
-const FIELD_KEY = /^[a-z][a-zA-Z0-9_]{0,31}$/;
-const ACTION_ID = /^[a-z][a-z0-9-]{0,31}$/;
 // An MCP tool name as the agents see it (Claude: mcp__<server>__<tool>, Codex: disabled_tools). Also safe inside TOML literal strings.
 export const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
-// A prefix may not reach into what the app, Node or the agents read themselves, nor into variables that run code or move
-// trust in every shell and tool started there (shell startup, proxies, TLS trust, language runtimes).
-const RESERVED_PREFIX = /^(ADE_|NODE_|ELECTRON_|NPM_|CLAUDE|CODEX|OPENAI|ANTHROPIC|GIT_|SSH_|PATH|HOME|USER|SHELL|TERM|LD_|DYLD_|BASH_|PROMPT_|HTTP_|HTTPS_|ALL_|FTP_|SSL_|CURL_|REQUESTS_|JAVA_|JDK_|DOTNET_|COR_|CORECLR_|PYTHON|PIP_|SUDO_|XDG_|OTEL_|MCP_|DISABLE_|MAX_|API_)/;
 export const MAX_FILES = 2000, MAX_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST = 64 * 1024;
+const MAX_STORAGE = 64 * 1024;
 // A plugin's icon (plugin.json `icon`): one SVG file in its folder. The page draws it only as a CSS mask (an image: no script runs,
 // nothing is fetched), in the colour of the text around it, so a plugin's icon sits with the app's own line icons.
 const MAX_ICON = 32 * 1024;
 const SVG_START = /^﻿?\s*(<\?xml[^>]*\?>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i;
-export const MAX_STORAGE = 64 * 1024;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
-// OS notifications a plugin may raise: this many per minute, more are dropped.
-const NOTIFY_PER_MINUTE = 10;
 // Workspace relay: what a host may ask for, and how much output may wait for a host that stops reading before its session is closed.
 const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
 // Feedback submission (plugins that declared `feedback`): how long an upload may take before MoonerADE gives up on the answer.
@@ -44,82 +30,16 @@ export const FEEDBACK_TIMEOUT_MS = 120_000;
 export const FEEDBACK_STATUS_TIMEOUT_MS = 40_000;
 const NO_FEEDBACK_PLUGIN = '원격 접속 플러그인을 설치하고 로그인하면 피드백을 제출할 수 있습니다.';
 
-const fail = (message, code = 'PLUGIN_INVALID') => Object.assign(new Error(message), { code });
-// The name and description appear in MoonerADE's own approval dialog: no control or bidirectional formatting characters
-// that could fake its layout or reorder what it says (the description keeps single line breaks).
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
-const plainText = text => text.replace(/\r\n?/g, '\n').split('\n').map(line => line.replace(new RegExp(UNSAFE_TEXT.source, 'g'), '')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
-const str = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && !value.includes('\0');
-// A path inside the plugin folder, written with forward slashes, never absolute and never climbing out. No `:` anywhere:
-// besides drive letters, on NTFS `host.js:x.js` names an alternate data stream, which the tree hash never reads.
-function relative(value, what) {
-  if (!str(value, 200) || /^[\\/]|[\\:]/.test(value)) throw fail(`${what} 경로가 올바르지 않습니다.`);
-  const parts = value.split('/');
-  if (parts.some(part => !part || part === '.' || part === '..')) throw fail(`${what} 경로가 올바르지 않습니다.`);
-  return parts.join('/');
-}
+// These helpers are also used by the verification harness and contract tests.
+export const validView = view => pluginApi.defaultContract?.host.validView(view);
+export const validBadge = badge => pluginApi.defaultContract?.host.validBadge(badge);
+export const pluginTerminal = (manifest, ...args) => pluginApi.get(manifest.apiVersion ?? pluginApi.defaultContract?.version)?.host.pluginTerminal(manifest, ...args);
 
-export function validManifest(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('plugin.json이 객체가 아닙니다.');
-  if (value.apiVersion !== PLUGIN_API) throw fail(`이 MoonerADE가 모르는 플러그인 API 버전입니다 (${value.apiVersion}).`);
-  if (!str(value.id, 40) || !ID.test(value.id)) throw fail('플러그인 id가 올바르지 않습니다.');
-  if (!str(value.name, 60) || UNSAFE_TEXT.test(value.name) || !value.name.trim()) throw fail('플러그인 이름이 없거나 쓸 수 없는 문자가 있습니다.');
-  if (!str(value.version, 32) || !/^[0-9A-Za-z.+-]+$/.test(value.version)) throw fail('플러그인 버전이 올바르지 않습니다.');
-  const manifest = { id: value.id, name: value.name, version: value.version, apiVersion: PLUGIN_API, description: typeof value.description === 'string' ? plainText(value.description.slice(0, 300)) : '', main: relative(value.main, 'main') };
-  if (!/\.(m?js)$/.test(manifest.main)) throw fail('main은 .js 또는 .mjs 파일이어야 합니다.');
-  if (value.terminal !== undefined) {
-    const terminal = value.terminal;
-    if (!terminal || typeof terminal !== 'object') throw fail('terminal 항목이 올바르지 않습니다.');
-    manifest.terminal = {};
-    if (terminal.bin !== undefined) manifest.terminal.bin = relative(terminal.bin, 'terminal.bin');
-    if (terminal.envPrefix !== undefined) {
-      if (!str(terminal.envPrefix, 32) || !/^[A-Z][A-Z0-9]*_([A-Z0-9]+_)*$/.test(terminal.envPrefix) || terminal.envPrefix.length < 4 || RESERVED_PREFIX.test(terminal.envPrefix)) throw fail('terminal.envPrefix가 올바르지 않습니다.');
-      manifest.terminal.envPrefix = terminal.envPrefix;
-    }
-  }
-  if (value.mcp !== undefined) {
-    const mcp = value.mcp;
-    if (!mcp || typeof mcp !== 'object' || !str(mcp.name, 40) || !MCP_NAME.test(mcp.name)) throw fail('mcp.name이 올바르지 않습니다.');
-    const args = mcp.args ?? [];
-    if (!Array.isArray(args) || args.length > 8 || !args.every(arg => str(arg, 200) && !arg.includes("'"))) throw fail('mcp.args가 올바르지 않습니다.');
-    manifest.mcp = { name: mcp.name, script: relative(mcp.script, 'mcp.script'), args: [...args] };
-    // Only for chats (never terminals), and told which chat it serves. A plugin that talks between chats needs this.
-    if (mcp.chatOnly !== undefined) {
-      if (typeof mcp.chatOnly !== 'boolean') throw fail('mcp.chatOnly가 올바르지 않습니다.');
-      if (mcp.chatOnly) manifest.mcp.chatOnly = true;
-    }
-  }
-  if (value.workspace !== undefined) {
-    if (typeof value.workspace !== 'boolean') throw fail('workspace 항목이 올바르지 않습니다.');
-    if (value.workspace) manifest.workspace = true;
-  }
-  if (value.feedback !== undefined) {
-    if (typeof value.feedback !== 'boolean') throw fail('feedback 항목이 올바르지 않습니다.');
-    if (value.feedback) manifest.feedback = true;
-  }
-  if (value.icon !== undefined) {
-    manifest.icon = relative(value.icon, 'icon');
-    if (!/\.svg$/i.test(manifest.icon)) throw fail('icon은 .svg 파일이어야 합니다.');
-  }
-  if (value.header !== undefined) {
-    if (typeof value.header !== 'boolean') throw fail('header 항목이 올바르지 않습니다.');
-    if (value.header) manifest.header = true;
-  }
-  // Where updates come from: MoonerADE Hub and/or a GitHub repository's releases (plugin-updates.js).
-  if (value.source !== undefined) manifest.source = validSource(value.source, manifest.id);
-  // The steps that make the plugin work, shown as a guide before it even runs; the running plugin reports how far it got
-  // (view.setup). Shown by MoonerADE as plain text.
-  if (value.setup !== undefined) {
-    if (!Array.isArray(value.setup) || value.setup.length > 8) throw fail('setup 항목이 올바르지 않습니다.');
-    const seen = new Set();
-    manifest.setup = value.setup.map(step => {
-      if (!step || typeof step !== 'object' || !STEP_ID.test(step.id ?? '') || seen.has(step.id)) throw fail('setup 단계의 id가 올바르지 않습니다.');
-      if (!str(step.label, 60) || UNSAFE_TEXT.test(step.label)) throw fail('setup 단계의 label이 올바르지 않습니다.');
-      seen.add(step.id);
-      return { id: step.id, label: step.label, detail: typeof step.detail === 'string' ? plainText(step.detail.slice(0, 300)) : '', ...(step.optional === true && { optional: true }) };
-    });
-  }
-  return manifest;
+export function validManifest(value, registry = pluginApi) {
+  const identity = pluginIdentity(value);
+  const contract = registry.get(identity.apiVersion);
+  if (!contract) throw fail(registry.describe(identity.apiVersion), 'PLUGIN_API_UNSUPPORTED');
+  return contract.host.validManifest(value, identity);
 }
 
 // SHA-256 over every file's relative path, size and bytes, in path order. Links are refused: what is hashed must be what runs.
@@ -147,14 +67,17 @@ export function treeHash(dir) {
 }
 
 // The checked plugin.json of one plugin folder.
-export function readManifest(folder) {
+function readManifestValue(folder) {
   const file = path.join(folder, 'plugin.json');
   const stat = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!stat) throw fail('plugin.json이 없습니다.');
   if (!stat.isFile() || stat.size > MAX_MANIFEST) throw fail('plugin.json이 올바르지 않습니다.');
   let value;
   try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error instanceof SyntaxError) throw fail('plugin.json을 읽을 수 없습니다.'); throw error; }
-  return validManifest(value);
+  return value;
+}
+export function readManifest(folder, registry = pluginApi) {
+  return validManifest(readManifestValue(folder), registry);
 }
 // The plugin's icon as SVG text, or null when it has none or it cannot be used (too large, not an SVG): a bad icon only costs the
 // icon (the generic one is drawn), never the plugin.
@@ -175,7 +98,7 @@ export function checkPluginFiles(folder, manifest) {
 // so the settings page can say why. A second folder with an id already taken is refused.
 // `builtin` marks the plugins that ship inside the app (their folder key is `builtin:<name>`); `seen` carries ids already taken,
 // so a plugin in the user's folder can never shadow a built-in one.
-export function scanPlugins(dir, { builtin = false, seen = new Set() } = {}) {
+export function scanPlugins(dir, { builtin = false, seen = new Set(), registry = pluginApi } = {}) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const list = [];
@@ -183,9 +106,18 @@ export function scanPlugins(dir, { builtin = false, seen = new Set() } = {}) {
     const folder = path.join(dir, entry.name), item = { folder: builtin ? `builtin:${entry.name}` : entry.name, dir: folder, manifest: null, hash: null, error: null, ...(builtin && { builtin: true }) };
     if (!fs.lstatSync(path.join(folder, 'plugin.json'), { throwIfNoEntry: false })) continue;
     try {
-      item.manifest = readManifest(folder);
-      if (seen.has(item.manifest.id)) throw fail(`같은 id(${item.manifest.id})의 플러그인이 이미 있습니다.`);
-      seen.add(item.manifest.id);
+      const value = readManifestValue(folder);
+      const identity = pluginIdentity(value);
+      const contract = registry.get(identity.apiVersion);
+      item.identity = identity;
+      if (contract) item.manifest = contract.host.validManifest(value, identity);
+      if (seen.has(identity.id)) throw fail(`같은 id(${identity.id})의 플러그인이 이미 있습니다.`);
+      seen.add(identity.id);
+      item.apiStatus = registry.status(identity.apiVersion);
+      if (!contract) {
+        try { identity.source = pluginSource(value, identity.id); } catch { /* The disabled item can still be replaced using a ZIP. */ }
+        throw fail(registry.describe(identity.apiVersion), 'PLUGIN_API_UNSUPPORTED');
+      }
       checkPluginFiles(folder, item.manifest);
       item.hash = treeHash(folder);
       item.commands = binCommands(folder, item.manifest);
@@ -265,6 +197,38 @@ function moveFolder(from, to) {
 }
 
 // ---- what a plugin is allowed, as the approval and install dialogs list it ------------------------------------------
+// Keep old files on the same volume until the new contents and approval are committed.
+function replaceInstalledFolders(dir, root, id, folders, commit, log) {
+  const backup = fs.mkdtempSync(path.join(dir, '.ade-plugin-backup-'));
+  const target = path.join(dir, id), saved = [];
+  let moved = false, recoveryFailed = false;
+  try {
+    for (const folder of folders) {
+      const location = path.join(backup, String(saved.length));
+      fs.renameSync(folder, location);
+      saved.push({ folder, location });
+    }
+    moveFolder(root, target);
+    moved = true;
+    commit();
+  } catch (error) {
+    try {
+      if (moved) fs.rmSync(target, { recursive: true, force: true });
+      for (const { folder, location } of saved.reverse()) fs.renameSync(location, folder);
+    } catch (restoreError) {
+      recoveryFailed = true;
+      log.error?.(`플러그인 ${id} 복구 실패. 백업 위치: ${backup}`, restoreError);
+      throw fail(`이전 플러그인을 복구하지 못했습니다. 백업 위치: ${backup}`, 'PLUGIN_RECOVERY');
+    }
+    throw error;
+  } finally {
+    if (!recoveryFailed) {
+      try { fs.rmSync(backup, { recursive: true, force: true }); }
+      catch (error) { log.warn(`플러그인 백업을 지우지 못했습니다: ${error.message}`); }
+    }
+  }
+}
+
 export function grantsFor(manifest) {
   return [
     '별도 프로세스로 실행되며 이 컴퓨터에서 MoonerADE와 같은 권한을 갖습니다.',
@@ -277,13 +241,14 @@ export function grantsFor(manifest) {
 }
 // `place` is the folder or zip line.
 const sourceLine = manifest => !manifest.source ? '' : sourceKind(manifest.source) === 'hub' ? `\n업데이트 출처: ${sourceLabel(manifest.source)}` : `\n업데이트 출처: ${sourceLabel(manifest.source)} (릴리스)`;
-const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id}${sourceLine(manifest)}\n${place}\nSHA-256: ${hash}`;
+const pluginDetail = (manifest, hash, place) => `${manifest.description ? `${manifest.description}\n\n` : ''}이 플러그인은:\n${grantsFor(manifest).map(line => `• ${line}`).join('\n')}\n\nid: ${manifest.id} · 플러그인 API v${manifest.apiVersion ?? pluginApi.defaultContract.version}${sourceLine(manifest)}\n${place}\nSHA-256: ${hash}`;
 // What an update asks for that the installed version did not: new grants, or updates from another place (another repository,
 // or the Hub instead of GitHub). An update that asks for more is never installed without the user seeing it, even in automatic mode.
 // `managed`: the update came from the Hub for a plugin the Hub serves to this signed-in account (it is the place updates come from now,
 // whatever the old manifest said), so moving to the Hub is not a change of source.
 export function updateReview(before, after, { managed = false } = {}) {
   const had = new Set(grantsFor(before)), review = grantsFor(after).filter(line => !had.has(line)).map(line => `새 권한: ${line}`);
+  if (before.apiVersion !== after.apiVersion) review.unshift(`플러그인 API가 바뀝니다: v${before.apiVersion} → v${after.apiVersion}`);
   if (!(managed && sourceKind(after.source) === 'hub') && sourceKey(before.source) !== sourceKey(after.source)) review.push(`업데이트 출처가 바뀝니다: ${sourceLabel(before.source)} → ${sourceLabel(after.source)}`);
   return review;
 }
@@ -405,6 +370,7 @@ export function createPluginStore({ file, crypto }) {
       const current = view(), next = change(current), value = validPluginState({ ...next, github: null, hub: null });
       const github = githubMeta(next.github);
       const touchesSealed = forceSealed || SEALED.some(key => Object.hasOwn(next, key)) || (next.github ?? null) !== current.github || (next.hub ?? null) !== current.hub;
+      let nextSealed = null, blob = null;
       if (touchesSealed) {
         const old = openSealed();
         const token = next.github === current.github ? old.token : next.github?.token ?? null;
@@ -412,93 +378,31 @@ export function createPluginStore({ file, crypto }) {
         const hub = (next.hub ?? null) === current.hub ? old.hub : next.hub ?? null;
         const all = validPluginState({ ...value, approved: Object.hasOwn(next, 'approved') ? next.approved : old.approved, data: Object.hasOwn(next, 'data') ? next.data : old.data, github: github && token ? { ...github, token } : null, hub });
         // No probe() before sealing either (one more Keychain password prompt on macOS): encryptString itself throws when encryption does not work.
-        let blob;
         try { blob = crypto.encryptString(JSON.stringify(all)); available = true; }
         catch { available = false; throw fail('이 컴퓨터에서는 설정을 안전하게 암호화할 수 없어 플러그인을 쓸 수 없습니다.', 'ENCRYPTION_UNAVAILABLE'); }
-        writeAtomic(file, blob);
-        sealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all };
+        nextSealed = { approved: all.approved, data: all.data, token: all.github?.token ?? null, hub: all.hub, all };
       }
-      plain = { ...value, github: touchesSealed && !sealed.token ? null : github, hub: touchesSealed && !sealed.hub ? null : hubMeta(next.hub) };
-      writePlain();
-      if (touchesSealed) problem = null;
+      const nextPlain = { ...value, github: nextSealed && !nextSealed.token ? null : github, hub: nextSealed && !nextSealed.hub ? null : hubMeta(next.hub) };
+      if (nextSealed) {
+        let previous;
+        try { previous = fs.readFileSync(file); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        writeAtomic(file, blob);
+        try { writePlain(nextPlain); }
+        catch (error) {
+          if (previous) writeAtomic(file, previous);
+          else fs.rmSync(file, { force: true });
+          throw error;
+        }
+        sealed = nextSealed;
+        problem = null;
+      } else writePlain(nextPlain);
+      plain = nextPlain;
       return view();
     }
   };
-  const writePlain = () => writeAtomic(plainFile, JSON.stringify({ ...plain, approved: {}, data: {} }));
+  const writePlain = (state = plain) => writeAtomic(plainFile, JSON.stringify({ ...state, approved: {}, data: {} }));
   return store;
-}
-
-// ---- what a plugin may show and add ------------------------------------------------------------------------------
-const TONES = ['ok', 'warn', 'error', 'info'];
-const FIELD_TYPES = ['text', 'select', 'switch', 'number', 'password', 'folder', 'textarea'];
-// How far a setup step got: done, todo (not started), active (in progress, e.g. waiting for a browser sign-in), error.
-export const STEP_STATUS = ['done', 'todo', 'active', 'error'];
-// The settings page draws this as plain text; nothing a plugin sends becomes markup.
-export function validView(view) {
-  if (!view || typeof view !== 'object') return null;
-  const text = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
-  const list = (value, max) => Array.isArray(value) ? value.slice(0, max) : [];
-  const keys = (value, test, max = 12) => [...new Set(list(value, max).filter(key => typeof key === 'string' && test.test(key)))];
-  const button = item => ({ id: item.id, label: item.label, primary: item.primary === true, ...(item.danger === true && { danger: true }) });
-  const validButton = item => item && ACTION_ID.test(item.id ?? '') && str(item.label, 40);
-  return {
-    status: view.status && TONES.includes(view.status.tone) ? { tone: view.status.tone, text: text(view.status.text, 300) } : null,
-    // `key` lets a setup step show the row inside the step.
-    info: list(view.info, 30).filter(item => item && str(item.label, 60)).map(item => ({ label: item.label, value: text(item.value, 2000), mono: item.mono === true, copy: item.copy === true, ...(FIELD_KEY.test(item.key ?? '') && { key: item.key }) })),
-    // `type` is how the page draws the input: text (default), select (needs `options`), switch ('true' / 'false') or number. The value stays a string.
-    fields: list(view.fields, 24).filter(item => item && FIELD_KEY.test(item.key ?? '') && str(item.label, 60)).map(item => {
-      const type = FIELD_TYPES.includes(item.type) ? item.type : 'text';
-      const options = type === 'select' ? list(item.options, 12).filter(option => option && str(option.value, 60) && str(option.label, 60)).map(option => ({ value: option.value, label: option.label })) : [];
-      return { key: item.key, label: item.label, type: type === 'select' && !options.length ? 'text' : type, value: type === 'password' ? '' : text(item.value, 4096), placeholder: text(item.placeholder, 200), hint: text(item.hint, 300), ...(item.required === true && { required: true }), ...(options.length && type === 'select' && { options }) };
-    }),
-    actions: list(view.actions, 12).filter(validButton).map(button),
-    formId: text(view.formId, 64),
-    // What the plugin's header panel shows. `view` itself is the settings page, so the two can differ.
-    panel: view.panel && typeof view.panel === 'object' && !Array.isArray(view.panel) ? validView({ ...view.panel, panel: undefined }) : null,
-    document: view.document && str(view.document.title, 100) && str(view.document.text, 65536) ? { title: view.document.title, text: view.document.text } : null,
-    // Only the text to encode; the settings page draws the code itself.
-    qr: view.qr && str(view.qr.value, 1000) ? { label: text(view.qr.label, 60), value: view.qr.value } : null,
-    // How far each setup step got (merged with plugin.json `setup` by id), and which fields, info rows, buttons and the QR
-    // code belong to it: those are drawn inside the step instead of in the settings below.
-    setup: list(view.setup?.steps ?? view.setup, 8).filter(step => step && STEP_ID.test(step.id ?? '') && STEP_STATUS.includes(step.status)).map(step => ({
-      id: step.id, status: step.status,
-      ...(str(step.label, 60) && !UNSAFE_TEXT.test(step.label) && { label: step.label }),
-      ...(typeof step.detail === 'string' && step.detail && { detail: plainText(step.detail.slice(0, 300)) }),
-      ...(typeof step.optional === 'boolean' && { optional: step.optional }),
-      fields: keys(step.fields, FIELD_KEY), info: keys(step.info, FIELD_KEY), actions: keys(step.actions, ACTION_ID, 4), ...(step.qr === true && { qr: true })
-    })),
-    // Things the user manages one by one (paired devices, keys, ...), each with its own buttons. A button sends `action`
-    // with `item` set to the item's id.
-    lists: list(view.lists, 4).filter(group => group && STEP_ID.test(group.id ?? '') && str(group.title, 60)).map(group => ({
-      id: group.id, title: group.title, empty: text(group.empty, 200),
-      items: list(group.items, 50).filter(item => item && ITEM_ID.test(item.id ?? '') && str(item.label, 100)).map(item => ({
-        id: item.id, label: item.label, detail: text(item.detail, 300),
-        ...(item.tag && TONES.includes(item.tag.tone) && str(item.tag.text, 20) && { tag: { text: item.tag.text, tone: item.tag.tone } }),
-        actions: list(item.actions, 4).filter(validButton).map(button)
-      }))
-    }))
-  };
-}
-// A short status-bar item. Single line: it sits between MoonerADE's own items.
-export function validBadge(badge) {
-  if (!badge || typeof badge !== 'object' || !TONES.includes(badge.tone) || typeof badge.text !== 'string') return null;
-  const text = plainText(badge.text).replace(/\s+/g, ' ').slice(0, 24).trim();
-  return text ? { text, tone: badge.tone } : null;
-}
-// Terminal additions are limited to what the manifest declared: its own env prefix, its own bin folder, its own MCP script.
-// `builtin` plugins (shipped with the app, so trusted like the app) may also ask for their MCP tools to run without a permission prompt.
-export function pluginTerminal(manifest, dir, report, nodeBinary, { builtin = false } = {}) {
-  const env = {};
-  if (manifest.terminal?.envPrefix && report?.env && typeof report.env === 'object') {
-    for (const [name, value] of Object.entries(report.env).slice(0, 32)) if (ENV_NAME.test(name) && name.startsWith(manifest.terminal.envPrefix) && typeof value === 'string' && value.length <= 4096 && !value.includes('\0')) env[name] = value;
-  }
-  const extra = Array.isArray(report?.mcpArgs) ? report.mcpArgs.slice(0, 16).filter(arg => str(arg, 1024) && !arg.includes("'")) : [];
-  return {
-    id: manifest.id, env,
-    path: manifest.terminal?.bin ? [path.join(dir, ...manifest.terminal.bin.split('/'))] : [],
-    mcp: manifest.mcp ? { name: manifest.mcp.name, command: nodeBinary, args: [path.join(dir, ...manifest.mcp.script.split('/')), ...manifest.mcp.args, ...extra],
-      ...(manifest.mcp.chatOnly && { chatOnly: true }), ...(builtin && report?.autoApprove === true && { autoApprove: true }) } : null
-  };
 }
 
 // What an MCP server's tools/list said, as the settings page shows it: plain text, limited in size.
@@ -586,7 +490,7 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
 // clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
 // openExternal(url) opens GitHub's sign-in page in the browser.
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console, registry = pluginApi }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -595,10 +499,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   const tools = new Map();
   const mcpPrefs = id => store.state.mcp?.[id] ?? { off: false, disabled: [] };
 
+  const identityOf = item => item.manifest ?? item.identity;
   const approvedFor = item => item.manifest && store.state.approved[item.manifest.id];
   const builtinOn = item => store.state.builtin?.[item.manifest?.id]?.enabled !== false;
-  const eligible = item => !item.error && (item.builtin ? builtinOn(item) : store.state.enabled && approvedFor(item)?.hash === item.hash && approvedFor(item)?.folder === item.folder);
+  const eligible = item => Boolean(item.manifest) && !item.error && (item.builtin ? builtinOn(item) : store.state.enabled && approvedFor(item)?.hash === item.hash && approvedFor(item)?.folder === item.folder);
   function stateOf(item) {
+    if (item.apiStatus === 'removed' || item.apiStatus === 'unsupported') return 'incompatible';
     if (item.error) return 'invalid';
     if (item.builtin) return builtinOn(item) ? hosts.get(item.manifest.id)?.status ?? 'stopped' : 'off';
     const approval = approvedFor(item);
@@ -609,7 +515,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   function snapshot() {
     return {
-      available: store.available, problem: store.problem, enabled: store.state.enabled, dir, updateMode: store.state.updateMode,
+      available: store.available, problem: store.problem, enabled: store.state.enabled, dir, updateMode: store.state.updateMode, supportedApiVersions: registry.versions,
       // The GitHub account for private plugin repositories. Never the token itself.
       github: {
         available: Boolean(github), login: store.state.github?.login ?? null, via: store.state.github?.via ?? null, machine: machineVia, machineChecked, signIn: Boolean(clientId), error: githubError,
@@ -624,10 +530,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       },
       plugins: list.map(item => {
         const host = item.manifest && hosts.get(item.manifest.id);
+        const identity = identityOf(item);
         return {
-          folder: item.folder, id: item.manifest?.id ?? null, name: item.manifest?.name ?? item.folder, version: item.manifest?.version ?? null,
+          folder: item.folder, id: identity?.id ?? null, name: identity?.name ?? item.folder, version: identity?.version ?? null,
+          apiVersion: identity?.apiVersion ?? null, apiStatus: item.apiStatus ?? null,
           builtin: item.builtin === true, ...(item.builtin && { builtinEnabled: builtinOn(item) }),
-          description: item.manifest?.description ?? '', icon: item.icon ?? null, hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
+          description: identity?.description ?? '', icon: item.icon ?? null, hash: item.hash, state: stateOf(item), error: item.error ?? host?.error ?? null,
           terminal: Boolean(item.manifest?.terminal), mcp: item.manifest?.mcp?.name ?? null, mcpChatOnly: item.manifest?.mcp?.chatOnly === true, workspace: Boolean(item.manifest?.workspace), feedback: Boolean(item.manifest?.feedback), view: host?.status === 'running' ? host.view : null,
           badge: host?.status === 'running' ? host.badge : null,
           header: host?.status === 'running' && item.manifest?.header === true,
@@ -637,7 +545,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           tools: item.manifest?.mcp ? toolsView(item.manifest.id, host) : null,
           // The setup guide from plugin.json (the running plugin's view.setup says how far it got).
           setup: item.manifest?.setup ?? [],
-          update: item.manifest && !item.builtin ? updateView(item) : null
+          update: identity && !item.builtin ? updateView(item) : null
         };
       })
     };
@@ -670,6 +578,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     onFeedback(status);
   }
   // Hands one submission to the plugin that can send it now and resolves its answer. Never rejects and never leaves a request hanging.
+  function sendHost(host, message, done) {
+    host.child.send(host.contract.host.encode(message), done);
+  }
   function submitFeedback({ meta, images }) {
     const status = feedbackStatus(), host = status.ok ? hosts.get(status.plugin) : null;
     if (!host?.child?.connected) return Promise.resolve({ ok: false, error: { code: 'FEEDBACK_UNAVAILABLE', message: status.reason || NO_FEEDBACK_PLUGIN } });
@@ -678,7 +589,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const timer = setTimeout(() => { host.feedbackPending.delete(id); resolve({ ok: false, error: { code: 'PLUGIN_TIMEOUT', message: '플러그인이 제때 응답하지 않았습니다. 잠시 뒤 다시 제출하세요.' } }); }, FEEDBACK_TIMEOUT_MS);
       timer.unref?.();
       host.feedbackPending.set(id, value => { clearTimeout(timer); resolve(value); });
-      host.child.send({ type: 'feedback/submit', id, meta, images });
+      sendHost(host, { type: 'feedback/submit', id, meta, images });
     });
   }
   // Asks the signed-in plugin how far some feedback has come (`feedback/status` → `feedback/status-result`). Only plugins that said `statusQuery: true` are asked,
@@ -693,7 +604,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       host.feedbackStatusPending.set(id, value => { clearTimeout(timer); resolve(value); });
       // `have`: the comment counts the app already holds (key → count), so the Hub reads a thread's comments again only when its count changed.
       const held = Object.fromEntries(Object.entries(have && typeof have === 'object' ? have : {}).filter(([key, count]) => /^[A-Za-z0-9_-]{8,64}$/.test(key) && Number.isSafeInteger(count) && count >= 0 && count <= 1_000_000).slice(0, 50));
-      host.child.send({ type: 'feedback/status', id, keys: keys.slice(0, 50), have: held });
+      sendHost(host, { type: 'feedback/status', id, keys: keys.slice(0, 50), have: held });
     });
   }
   // What the user turned off stays out: a server turned off is not given at all, single tools are named for the agents to leave out.
@@ -734,7 +645,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (hash !== item.hash) { item.hash = hash; return; }
     const dataDir = path.join(dataRoot, manifest.id);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    const host = { id: manifest.id, item, child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), feedback: null, feedbackPending: new Map(), feedbackStatusPending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
+    const host = { id: manifest.id, item, contract: registry.get(manifest.apiVersion), generation: randomUUID(), child: null, status: 'starting', error: null, view: null, badge: null, notices: [], terminal: null, pending: new Map(), feedback: null, feedbackPending: new Map(), feedbackStatusPending: new Map(), confirms: Promise.resolve(), stopping: false, backlog: 0 };
     hosts.set(manifest.id, host);
     let child;
     try { child = spawnHost({ id: manifest.id, dir: item.dir, main: path.join(item.dir, ...manifest.main.split('/')) }); }
@@ -746,7 +657,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     let storage = null;
     // A built-in never reads the sealed data (that would open the Keychain at every start); it keeps its own file.
     try { const text = item.builtin ? readStorageFile(dataDir) : store.state.data[manifest.id]; storage = text ? JSON.parse(text) : null; } catch { storage = null; }
-    child.send({ type: 'init', apiVersion: PLUGIN_API, id: manifest.id, appVersion, dataDir, storage, features: [...PLUGIN_FEATURES] });
+    sendHost(host, { type: 'init', apiVersion: manifest.apiVersion, id: manifest.id, appVersion, dataDir, storage });
   }
   function stop(host) {
     host.stopping = true;
@@ -756,7 +667,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     closeWorkspace(host);
     const child = host.child;
     if (child && child.exitCode === null) {
-      if (child.connected) child.send({ type: 'shutdown' });
+      if (child.connected) sendHost(host, { type: 'shutdown' });
       setTimeout(() => { if (child.exitCode === null) child.kill(); }, 2000).unref?.();
     }
     if (hosts.get(host.id) === host) hosts.delete(host.id);
@@ -787,105 +698,20 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     else host.error = `${host.error} 계속 종료되어 다시 시작하지 않습니다.`;
     changed();
   }
+  const hostContext = { ask, changed, dataRoot, discoverTools, emitFeedback, emitTerminal, log, notify,
+    relayWorkspace, sendHost, store, terminalNode, writeStorageFile };
+
   function onHostMessage(host, message) {
     if (hosts.get(host.id) !== host || !message || typeof message.type !== 'string') return;
-    const { manifest } = host.item;
-    switch (message.type) {
-      case 'ready': host.status = 'running'; host.error = null; changed(); emitTerminal(); break;
-      case 'view': host.view = validView(message.view); changed(); break;
-      case 'badge': host.badge = validBadge(message.badge); changed(); break;
-      case 'notify': {
-        const now = Date.now();
-        host.notices = host.notices.filter(at => now - at < 60_000);
-        if (host.notices.length >= NOTIFY_PER_MINUTE) break;
-        const title = plainText(String(message.title ?? '')).slice(0, 100), body = plainText(String(message.body ?? '')).slice(0, 300);
-        if (!title && !body) break;
-        host.notices.push(now);
-        // Titled by MoonerADE with the plugin's name, like its dialogs, so it cannot pass for MoonerADE's own.
-        notify({ id: manifest.id, title: `플러그인: ${manifest.name}`, body: [title, body].filter(Boolean).join('\n') });
-        break;
-      }
-      case 'storage': {
-        const text = JSON.stringify(message.value ?? null);
-        if (text.length > MAX_STORAGE) { log.warn(`[plugin ${host.id}] 저장할 데이터가 너무 큽니다.`); break; }
-        if (host.item.builtin) { writeStorageFile(path.join(dataRoot, manifest.id), text); break; }
-        // Plugins send it on every start; sealing the same value again would read the Keychain for nothing.
-        if (store.state.data[manifest.id] !== text) store.update(state => ({ ...state, data: { ...state.data, [manifest.id]: text } }));
-        break;
-      }
-      case 'confirm': {
-        const id = message.id;
-        // One dialog at a time, always titled with the plugin's name so it cannot pass for MoonerADE's own.
-        host.confirms = host.confirms.then(async () => {
-          const answer = await ask({
-            type: 'warning', title: `플러그인: ${manifest.name}`, message: String(message.message ?? '').slice(0, 300) || '계속할까요?',
-            detail: `${String(message.detail ?? '').slice(0, 2000)}\n\n이 확인 창은 플러그인 “${manifest.name}”(${manifest.id})이 요청했습니다.`.trim(),
-            buttons: [String(message.confirmLabel ?? '').slice(0, 30) || '확인', '취소'], defaultId: 1, cancelId: 1
-          }).catch(() => 1);
-          if (host.child?.connected) host.child.send({ type: 'confirm-result', id, ok: answer === 0 });
-        });
-        break;
-      }
-      // `enabled: false` withdraws the additions (e.g. a plugin that is not set up yet).
-      case 'terminal':
-        host.terminal = message.enabled === false ? null : pluginTerminal(manifest, host.item.dir, message, terminalNode, { builtin: host.item.builtin === true });
-        if (host.status === 'running') emitTerminal();
-        discoverTools(host);
-        changed();
-        break;
-      case 'action-result': {
-        const pending = host.pending.get(message.id);
-        if (!pending) break;
-        host.pending.delete(message.id);
-        message.ok ? pending.resolve(message.message ?? null) : pending.reject(fail(String(message.error ?? '플러그인 작업이 실패했습니다.').slice(0, 500), 'PLUGIN_ACTION'));
-        break;
-      }
-      case 'workspace': relayWorkspace(host, message); break;
-      // Only for a plugin whose approved manifest declared `feedback` (docs/PLUGINS.md).
-      case 'feedback': {
-        if (!manifest.feedback) break;
-        const account = typeof message.account === 'string' ? plainText(message.account).slice(0, 100) : '';
-        const reason = typeof message.reason === 'string' ? plainText(message.reason).slice(0, 200) : '';
-        host.feedback = { available: message.available === true, ...(account && { account }), ...(reason && { reason }), ...(message.statusQuery === true && { statusQuery: true }) };
-        emitFeedback();
-        break;
-      }
-      // The answer to `feedback/status`: only well-formed {state, version?, commentCount?, comments?} entries are passed on. The comments are the maintainers' answers ({at, body}, no author); none of the feedback's own text is in it.
-      case 'feedback/status-result': {
-        const answer = host.feedbackStatusPending.get(message.id);
-        if (!answer) break;
-        host.feedbackStatusPending.delete(message.id);
-        if (message.ok !== true) { answer({ ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'network_error', ...(Number.isInteger(message.error?.retryAfter) && message.error.retryAfter > 0 && { retryAfter: Math.min(message.error.retryAfter, 86_400) }) } }); break; }
-        const items = {};
-        for (const [key, value] of Object.entries(message.items && typeof message.items === 'object' ? message.items : {}).slice(0, 50)) {
-          if (!/^[A-Za-z0-9_-]{8,64}$/.test(key) || !value || !['pending', 'beta', 'released', 'closed', 'declined'].includes(value.state)) continue;
-          items[key] = { state: value.state, ...(typeof value.version === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(value.version) && { version: value.version }),
-            ...(Number.isSafeInteger(value.commentCount) && value.commentCount >= 0 && { commentCount: value.commentCount }),
-            ...(Array.isArray(value.comments) && { comments: value.comments.slice(-50).filter(entry => typeof entry?.body === 'string' && typeof entry.at === 'string').map(entry => ({ at: entry.at.slice(0, 40), body: entry.body.slice(0, 4000) })) }) };
-        }
-        answer({ ok: true, items, ...(typeof message.latestStable === 'string' && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,40})?$/.test(message.latestStable) && { latestStable: message.latestStable }) });
-        break;
-      }
-      case 'feedback/result': {
-        const answer = host.feedbackPending.get(message.id);
-        if (!answer) break;
-        host.feedbackPending.delete(message.id);
-        answer(message.ok === true
-          ? { ok: true, ...(Number.isSafeInteger(message.issueNumber) && { issueNumber: message.issueNumber }) }
-          : { ok: false, error: { code: typeof message.error?.code === 'string' ? message.error.code.slice(0, 40) : 'PLUGIN_FEEDBACK', message: plainText(String(message.error?.message ?? '피드백을 보내지 못했습니다.')).slice(0, 500) || '피드백을 보내지 못했습니다.',
-            ...(Number.isInteger(message.error?.retryAfter) && message.error.retryAfter > 0 && { retryAfter: Math.min(message.error.retryAfter, 86_400) }) } });
-        break;
-      }
-      case 'log': log[message.level === 'error' ? 'error' : message.level === 'warn' ? 'warn' : 'log'](`[plugin ${host.id}] ${String(message.message ?? '').slice(0, 2000)}`); break;
-    }
+    host.contract.host.onMessage(host, message, hostContext);
   }
   // ---- workspace sessions (plugins that declared `workspace`) --------------------------------------------------------
-  // The server owns the sessions; this only relays, and only for a plugin whose approved manifest asked for it.
+  // The server owns the sessions. The host identity and API come from the approved package.
   function relayWorkspace(host, message) {
     const { manifest } = host.item;
     if (!manifest.workspace || !SESSION_ID.test(message.session ?? '')) return;
-    const { op, session } = message, base = { type: 'plugin/workspace', plugin: manifest.id, op, session };
-    const reply = value => { if (host.child?.connected) host.child.send({ type: 'workspace', session, ...value }); };
+    const { op, session } = message, base = { ...workspaceAddress(host), op, session };
+    const reply = value => { if (host.child?.connected) sendHost(host, { type: 'workspace', session, ...value }); };
     if (op === 'open' || op === 'close') { if (!toServer(op === 'open' && message.quiet === true ? { ...base, quiet: true } : base) && op === 'open') reply({ op: 'closed' }); }
     else if (op === 'send') { if (message.message && typeof message.message === 'object') toServer({ ...base, message: message.message }); }
     else if (op === 'api') {
@@ -894,26 +720,29 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       if (!toServer({ ...base, id: message.id, action: message.action, input: message.input ?? {} })) reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'SERVER_UNAVAILABLE', message: '로컬 서버가 실행 중이 아닙니다.' } });
     }
   }
+  function workspaceAddress(host) {
+    return { type: 'plugin/workspace', plugin: host.id, apiVersion: host.contract.version, generation: host.generation };
+  }
   function closeWorkspace(host) {
-    if (host.item.manifest.workspace) toServer({ type: 'plugin/workspace', plugin: host.id, op: 'close-all' });
+    if (host.item.manifest.workspace) toServer({ ...workspaceAddress(host), op: 'close-all' });
   }
   // A message from the server for a plugin's session.
   function fromServer(message) {
     const host = hosts.get(message?.plugin);
-    if (!host?.item.manifest.workspace || !host.child?.connected || !SESSION_ID.test(message.session ?? '')) return;
+    if (!host?.item.manifest.workspace || host.generation !== message.generation || host.contract.version !== message.apiVersion || !host.child?.connected || !SESSION_ID.test(message.session ?? '')) return;
     const { op, session } = message;
     if (op === 'message' && typeof message.text === 'string') {
       // A host that stops reading would otherwise pile its output up in this process.
-      if (host.backlog > WORKSPACE_BACKLOG) { toServer({ type: 'plugin/workspace', plugin: host.id, op: 'close', session }); return; }
+      if (host.backlog > WORKSPACE_BACKLOG) { toServer({ ...workspaceAddress(host), op: 'close', session }); return; }
       const size = message.text.length;
       host.backlog += size;
-      host.child.send({ type: 'workspace', op, session, text: message.text }, () => { host.backlog -= size; });
-    } else if (op === 'closed') host.child.send({ type: 'workspace', op, session });
-    else if (op === 'api-result' && Number.isSafeInteger(message.id)) host.child.send({ type: 'workspace', op, session, id: message.id, ok: message.ok === true, ...(message.ok === true ? { value: message.value ?? null } : { error: message.error ?? null }) });
+      sendHost(host, { type: 'workspace', op, session, text: message.text }, () => { host.backlog -= size; });
+    } else if (op === 'closed') sendHost(host, { type: 'workspace', op, session });
+    else if (op === 'api-result' && Number.isSafeInteger(message.id)) sendHost(host, { type: 'workspace', op, session, id: message.id, ok: message.ok === true, ...(message.ok === true ? { value: message.value ?? null } : { error: message.error ?? null }) });
   }
   // The server started again: every session is gone, so the hosts open what they need again.
   function serverReset() {
-    for (const host of hosts.values()) if (host.item.manifest.workspace && host.child?.connected) host.child.send({ type: 'workspace', op: 'reset' });
+    for (const host of hosts.values()) if (host.item.manifest.workspace && host.child?.connected) sendHost(host, { type: 'workspace', op: 'reset' });
   }
 
   // Starts what should run and stops what should not.
@@ -932,7 +761,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   function rescan() {
     // Built-in ones first: their ids are taken, so a plugin of the same id in the user's folder shows up as a duplicate.
     const seen = new Set();
-    list = [...(builtinDir ? scanPlugins(builtinDir, { builtin: true, seen }) : []), ...scanPlugins(dir, { seen })];
+    list = [...(builtinDir ? scanPlugins(builtinDir, { builtin: true, seen, registry }) : []), ...scanPlugins(dir, { seen, registry })];
     reconcile();
     return snapshot();
   }
@@ -1011,7 +840,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // Turns a plugin that ships with the app on or off. No dialog: it is part of the app, and turning it off only removes things.
   function setBuiltin(id, on) {
     const item = list.find(entry => entry.builtin && entry.manifest?.id === id);
-    if (!item) throw fail('내장 플러그인이 아닙니다.', 'NOT_FOUND');
+    if (!item || item.error) throw fail('내장 플러그인이 아닙니다.', 'NOT_FOUND');
     store.update(state => ({ ...state, builtin: { ...state.builtin, [id]: { enabled: on === true } } }));
     reconcile();
     return snapshot();
@@ -1028,16 +857,13 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   async function action(id, actionId, values, item) {
     const host = hosts.get(id);
     if (!host || host.status !== 'running' || !host.child?.connected) throw fail('플러그인이 실행 중이 아닙니다.', 'PLUGIN_STOPPED');
-    if (!ACTION_ID.test(String(actionId))) throw fail('잘못된 작업입니다.');
-    if (item !== undefined && item !== null && !ITEM_ID.test(String(item))) throw fail('잘못된 항목입니다.');
-    const clean = {};
-    if (values && typeof values === 'object') for (const [key, value] of Object.entries(values).slice(0, 24)) if (FIELD_KEY.test(key) && typeof value === 'string') clean[key] = value.slice(0, 4096);
+    const clean = host.contract.host.actionValues(actionId, values, item);
     const requestId = randomUUID();
     const message = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { host.pending.delete(requestId); reject(fail('플러그인이 응답하지 않습니다.', 'PLUGIN_TIMEOUT')); }, ACTION_TIMEOUT_MS);
       timer.unref?.();
       host.pending.set(requestId, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
-      host.child.send({ type: 'action', id: requestId, action: String(actionId), values: clean, ...(item != null && { item: String(item) }) });
+      sendHost(host, { type: 'action', id: requestId, action: String(actionId), values: clean, ...(item != null && { item: String(item) }) });
     });
     return { ...snapshot(), message: typeof message === 'string' ? message.slice(0, 500) : null };
   }
@@ -1066,13 +892,13 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // Folders the install replaces: every folder holding this id, and the folder named after it if its plugin.json is broken.
   // A folder of that name holding another plugin, or something that is not a plugin, is left alone and the install refused.
   function replaced(id) {
-    const own = list.filter(item => item.manifest?.id === id), named = list.find(item => item.folder === id);
-    if (named?.manifest && named.manifest.id !== id) throw fail(`플러그인 폴더의 ${id} 폴더에 다른 플러그인(${named.manifest.id})이 있습니다.`);
+    const own = list.filter(item => identityOf(item)?.id === id), named = list.find(item => item.folder === id);
+    if (named && identityOf(named) && identityOf(named).id !== id) throw fail(`플러그인 폴더의 ${id} 폴더에 다른 플러그인(${identityOf(named).id})이 있습니다.`);
     if (!named && fs.lstatSync(path.join(dir, id), { throwIfNoEntry: false })) throw fail(`플러그인 폴더에 플러그인이 아닌 ${id}이(가) 이미 있습니다. 옮기거나 지운 뒤 다시 시도하세요.`);
     const folders = own.map(item => item.dir);
     if (named && !folders.includes(named.dir)) folders.push(named.dir);
     const current = own.find(item => !item.error) ?? own[0];
-    return { folders, current: folders.length ? current?.manifest?.version ?? '알 수 없음' : null };
+    return { folders, current: folders.length ? (current && identityOf(current)?.version) ?? '알 수 없음' : null };
   }
   // `update` ({ id, version, auto }) is a release downloaded by the updater: the zip must be that plugin at that version.
   // With `auto`, an update that asks for nothing new is installed without the dialog; one that does throws NEEDS_REVIEW.
@@ -1094,21 +920,24 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       await extractZip({ zip: copy, dest: staging });
       // Everything that came out, not only the plugin folder: no links, nothing but files and folders, within the limits.
       treeHash(staging);
-      const root = zipPluginRoot(staging), manifest = readManifest(root);
+      const root = zipPluginRoot(staging), manifest = readManifest(root, registry);
       checkPluginFiles(root, manifest);
-      if (update && (manifest.id !== update.id || versionText(manifest.version) !== update.version)) throw fail(`받은 플러그인(${manifest.id} ${manifest.version})이 업데이트 정보(${update.id} ${update.version})와 다릅니다. 설치하지 않았습니다.`, 'PLUGIN_ZIP');
+      if (update && (manifest.id !== update.id || versionText(manifest.version) !== update.version || (update.apiVersion !== undefined && manifest.apiVersion !== update.apiVersion))) throw fail(`받은 플러그인(${manifest.id} ${manifest.version}, API v${manifest.apiVersion})이 업데이트 정보(${update.id} ${update.version}${update.apiVersion ? `, API v${update.apiVersion}` : ''})와 다릅니다. 설치하지 않았습니다.`, 'PLUGIN_ZIP');
       const hash = treeHash(root), wasOn = store.state.enabled;
       rescan();
-      if (list.some(entry => entry.builtin && entry.manifest?.id === manifest.id)) throw fail(`이 id(${manifest.id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
-      const { current } = replaced(manifest.id);
-      const installed = list.find(entry => !entry.builtin && !entry.error && entry.manifest?.id === manifest.id);
-      const review = installed ? updateReview(installed.manifest, manifest, { managed: update?.managed === true }) : [];
+      if (list.some(entry => entry.builtin && identityOf(entry)?.id === manifest.id)) throw fail(`이 id(${manifest.id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
+      const { current, folders: beforeFolders } = replaced(manifest.id);
+      const installKey = () => JSON.stringify(list.filter(entry => identityOf(entry)?.id === manifest.id || entry.folder === manifest.id).map(entry => [entry.folder, entry.hash, entry.error, identityOf(entry)?.apiVersion]));
+      const beforeInstall = installKey();
+      const installed = list.find(entry => !entry.builtin && identityOf(entry)?.id === manifest.id);
+      const installedIdentity = installed && identityOf(installed);
+      const review = installedIdentity ? updateReview(installedIdentity, manifest, { managed: update?.managed === true }) : [];
       // Automatic: only an approved, running-eligible plugin whose update asks for nothing new goes in without a dialog.
       if (update?.auto && store.state.updateMode !== 'auto') throw fail('플러그인 업데이트 방식이 바뀌었습니다.', 'UPDATE_MODE_CHANGED');
       const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
       if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
       if (!silent) {
-        const source = installed?.manifest.source ?? manifest.source;
+        const source = installedIdentity?.source ?? manifest.source;
         const from = origin === 'hub' ? '받은 곳: MoonerADE Hub' : update ? `${source?.github ? `github.com/${source.github}` : ''} 릴리스` : `파일: ${zip}`;
         const answer = await ask({
           type: 'warning', title: current ? '플러그인 업데이트' : '플러그인 설치',
@@ -1122,13 +951,18 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const after = fs.lstatSync(zip, { throwIfNoEntry: false });
       if (!after || zipKey(zip, after) !== key || treeHash(root) !== hash) throw fail('확인하는 동안 플러그인 파일이 바뀌었습니다. 다시 시도하세요.');
       rescan();
-      const { folders } = replaced(manifest.id), host = hosts.get(manifest.id);
+      if (installKey() !== beforeInstall) throw fail('확인하는 동안 설치된 플러그인이 바뀌었습니다. 다시 시도하세요.', 'CHANGED');
+      const host = hosts.get(manifest.id);
       if (host) stop(host);
       crashes.delete(manifest.id);
-      for (const folder of folders) fs.rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-      moveFolder(root, path.join(dir, manifest.id));
-      // The plugin's saved data stays.
-      store.update(state => ({ ...state, enabled: true, approved: { ...state.approved, [manifest.id]: { hash, folder: manifest.id, version: manifest.version, approvedAt: Date.now() } } }));
+      try {
+        replaceInstalledFolders(dir, root, manifest.id, beforeFolders, () => {
+          store.update(state => ({ ...state, enabled: true, approved: { ...state.approved, [manifest.id]: { hash, folder: manifest.id, version: manifest.version, approvedAt: Date.now() } } }));
+        }, log);
+      } catch (error) {
+        rescan();
+        throw error;
+      }
       // A zip picked from elsewhere (e.g. Downloads) is the user's; only one dropped into the plugin folder is removed.
       if (path.relative(path.resolve(dir), path.dirname(zip)) === '') {
         try { fs.rmSync(zip, { force: true }); } catch (error) { handled.add(key); log.warn(`플러그인 zip을 지우지 못했습니다: ${error.message}`); }
@@ -1154,9 +988,9 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // Where THIS plugin's updates come from right now. Signed in to the Hub, a plugin the Hub can serve (plugin.json says `source.hub`, or the
   // Hub's list has its id: installed from the market) comes only from the Hub: no GitHub sign-in, no release is asked. Signed out, it is what
   // the manifest names for GitHub (the Hub part is ignored), and a plugin that only names the Hub waits for the sign-in.
-  const hubListed = id => Boolean(hubCatalogRaw?.plugins.some(entry => entry.id === id));
+  const hubListed = id => Boolean(hubCatalogRaw && (hubCatalogRaw.managedIds?.includes(id) || hubCatalogRaw.plugins.some(entry => entry.id === id)));
   function sourceOf(item) {
-    const declared = item.manifest.source ?? null, id = item.manifest.id;
+    const { source: declared = null, id } = identityOf(item);
     if (hubSignedIn() && (declared?.hub || hubListed(id))) return { hub: true };
     if (declared?.github && !(declared.hub && hubSignedIn())) return { github: declared.github, asset: declared.asset };
     return declared?.hub ? { hub: true } : null;
@@ -1165,37 +999,59 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   // known (it is asked for here) nothing is checked, and a Hub that cannot be reached is not a reason to go to GitHub.
   async function settledSource(item) {
     if (hubSignedIn() && !hubCatalogRaw) await hubCatalog().catch(() => {});
-    if (hubSignedIn() && !hubCatalogRaw && !item.manifest.source?.hub) throw fail('MoonerADE Hub의 플러그인 목록을 받지 못해 이 플러그인이 Hub에서 오는지 알 수 없습니다. 잠시 뒤 다시 시도하세요.', 'HUB_BUSY');
+    if (hubSignedIn() && !hubCatalogRaw && !identityOf(item).source?.hub) throw fail('MoonerADE Hub의 플러그인 목록을 받지 못해 이 플러그인이 Hub에서 오는지 알 수 없습니다. 잠시 뒤 다시 시도하세요.', 'HUB_BUSY');
     return sourceOf(item);
   }
   function updateView(item) {
-    const id = item.manifest.id, source = sourceOf(item);
+    const { id, version } = identityOf(item), source = sourceOf(item);
     if (!source) return { source: null };
     const kind = sourceKind(source), raw = updates.get(id), entry = raw?.kind === kind ? raw : null;
     // The Hub's list already says what is newest, so an update shows (and flags) before the plugin itself was checked.
-    let latest = entry?.found?.version ?? null;
-    const listed = kind === 'hub' ? hubCatalogRaw?.plugins.find(item2 => item2.id === id)?.version ?? null : null;
-    if (listed && (!latest || isNewer(listed, latest))) latest = listed;
-    const available = Boolean(latest && isNewer(latest, item.manifest.version));
+    const cached = entry?.status !== 'error' ? entry?.found : null;
+    const listed = kind === 'hub' ? hubCatalogRaw?.plugins.find(candidate => candidate.id === id) : null;
+    const candidate = listed && (!cached || !isNewer(cached.version, listed.version)) ? listed : cached;
+    const latest = candidate?.version ?? null;
+    const available = Boolean(latest && (isNewer(latest, version) || stateOf(item) === 'incompatible'));
     let status = !entry ? (available ? 'available' : 'idle') : ['latest', 'available'].includes(entry.status) ? (available ? 'available' : 'latest') : entry.status;
     // A Hub plugin cannot be checked until the Hub sign-in is back: the page says so instead of showing an old answer.
     if (kind === 'hub' && !hubSignedIn() && !['checking', 'downloading', 'installing'].includes(status)) status = 'needs-login';
     return {
       source: kind === 'hub' ? { kind } : { kind, github: source.github, asset: source.asset },
-      status, current: item.manifest.version, latest, available,
+      status, current: version, latest, available, apiVersion: candidate?.apiVersion ?? null, sha256: candidate?.sha256 ?? null,
       checkedAt: entry?.checkedAt ?? null, error: entry?.error ?? null, via: entry?.found?.via ?? null, viaLabel: credentialLabel(entry?.found?.via ?? null),
       review: available ? entry?.review ?? [] : []
     };
   }
   function sourceItem(id) {
     if (!github && !hub) throw fail('이 MoonerADE에서는 플러그인 업데이트를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
-    const item = list.find(entry => !entry.builtin && entry.manifest?.id === id);
-    if (!item?.manifest) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
+    const item = list.find(entry => !entry.builtin && identityOf(entry)?.id === id);
+    if (!item || !identityOf(item) || (item.error && stateOf(item) !== 'incompatible')) throw fail('플러그인을 찾을 수 없습니다.', 'NOT_FOUND');
     if (!sourceOf(item)) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
     if (!clientFor(sourceOf(item))) throw fail('이 MoonerADE에서는 이 플러그인의 업데이트 출처를 쓸 수 없습니다.', 'UPDATES_UNAVAILABLE');
     return item;
   }
   // One check at a time per plugin; a check started while one runs gets the running one's answer.
+  async function inspectUpdateArchive(data) {
+    const zip = writeStagingZip(data);
+    const staging = fs.mkdtempSync(path.join(stagingRoot, 'inspect-'));
+    try {
+      await extractZip({ zip, dest: staging });
+      treeHash(staging);
+      return pluginIdentity(readManifestValue(zipPluginRoot(staging)));
+    } finally {
+      fs.rmSync(staging, { recursive: true, force: true });
+      fs.rmSync(zip, { force: true });
+    }
+  }
+
+  const compatible = entry => entry.apiVersion === undefined ? registry.versions.includes(1) : Boolean(registry.get(entry.apiVersion));
+  const requiredApiError = () => fail('이 MoonerADE가 지원하는 플러그인 API 버전의 패키지가 없습니다.', 'PLUGIN_API_UNSUPPORTED');
+  const findUpdate = async (client, source, id) => {
+    const entry = await client.latest(source, id, { apiVersions: registry.versions, inspect: inspectUpdateArchive });
+    if (!compatible(entry)) throw requiredApiError();
+    return entry;
+  };
+
   async function checkUpdate(id) {
     if (checking.has(id)) return checking.get(id);
     const item = sourceItem(id), source = await settledSource(item);
@@ -1211,8 +1067,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (entry.kind !== kind) { entry.found = null; entry.review = []; }
     Object.assign(entry, { kind, status: 'checking', error: null });
     changed();
-    const run = client.latest(source, id).then(found => {
-      if (entry.found?.version !== found.version) entry.review = [];
+    const run = findUpdate(client, source, id).then(found => {
+      if (entry.found?.version !== found.version || entry.found?.apiVersion !== found.apiVersion || entry.found?.sha256 !== found.sha256) entry.review = [];
       Object.assign(entry, { status: 'latest', found, checkedAt: Date.now(), error: null });
       if (found.via === 'gh' || found.via === 'git') { machineVia = found.via; machineChecked = true; }
       return found;
@@ -1232,20 +1088,34 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   }
   // Downloads the newest release (or the Hub's newest), checks it against the checksum it was announced with and installs it the
   // way a zip is installed (the dialog, unless `auto` and the update asks for nothing new). A check within the last minute is reused.
-  async function installUpdate(id, { auto = false } = {}) {
+  function checkSelected(found, expected) {
+    if (expected && (found?.sha256 !== expected.sha256 || found?.version !== expected.version ||
+        (found?.apiVersion ?? null) !== (expected.apiVersion ?? null))) {
+      throw fail('플러그인 목록이 바뀌었습니다. 새로고침하고 다시 시도하세요.', 'CHANGED');
+    }
+  }
+
+  async function installUpdate(id, { auto = false, expected } = {}) {
     const item = sourceItem(id), source = await settledSource(item), entry = updates.get(id), kind = sourceKind(source);
     if (!source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
     const found = entry?.found && entry.kind === kind && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
+    checkSelected(found, expected);
     const now = updates.get(id);
-    if (!isNewer(found.version, item.manifest.version)) return { ...snapshot(), message: `“${item.manifest.name}” 플러그인은 이미 최신(${item.manifest.version})입니다.` };
+    const { version, name, apiVersion } = identityOf(item);
+    if (!isNewer(found.version, version) && stateOf(item) !== 'incompatible') return { ...snapshot(), message: `“${name}” 플러그인은 이미 최신(${version})입니다.` };
     let zip = null;
     try {
+      if (auto && found.apiVersion !== undefined && found.apiVersion !== apiVersion) {
+        throw Object.assign(fail('플러그인 API가 바뀌어 확인이 필요합니다.', 'NEEDS_REVIEW'), {
+          review: [`플러그인 API가 바뀝니다: v${apiVersion} → v${found.apiVersion}`]
+        });
+      }
       now.status = 'downloading'; changed();
       const { data, signature, sha256 } = await clientFor(source).download(found);
       observeSignature(signature, { kind: 'plugin', id, version: found.version, platform: 'any', variant: 'zip', sha256, size: data.length });
       zip = writeStagingZip(data);
       now.status = 'installing'; changed();
-      const result = await installZip(zip, { picked: true, update: { id, version: found.version, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
+      const result = await installZip(zip, { picked: true, update: { id, version: found.version, apiVersion: found.apiVersion, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
       now.status = 'latest';
       return { ...snapshot(), message: result.message };
     } catch (error) {
@@ -1272,19 +1142,19 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (store.state.updateMode === 'manual') return;
     if (hubSignedIn()) await hubCatalog({ force: true }).catch(() => {});
     for (const item of [...list]) {
-      const id = item.manifest?.id;
+      const identity = identityOf(item), id = identity?.id;
       if (closing || store.state.updateMode === 'manual') return;
-      if (!id || item.builtin || item.error || !item.manifest.source && !hubListed(id)) continue;
+      if (!id || item.builtin || (item.error && stateOf(item) !== 'incompatible') || !identity.source && !hubListed(id)) continue;
       const source = sourceOf(item), kind = sourceKind(source);
       // Without the client (an app build without the Hub) or the Hub sign-in there is nothing to ask; the settings page says so.
       if (!source || !clientFor(source) || (kind === 'hub' && !hubSignedIn())) continue;
       if (hubOnly && kind !== 'hub') continue;
       // Signed in but the Hub's list could not be read: a plugin that only names GitHub may be one the Hub serves, so it is not asked of GitHub.
-      if (hubSignedIn() && !hubCatalogRaw && !item.manifest.source?.hub) continue;
+      if (hubSignedIn() && !hubCatalogRaw && !identityOf(item).source?.hub) continue;
       if (kind === 'hub' && hubCatalogRaw) {
         const listed = hubCatalogRaw.plugins.find(entry => entry.id === id);
         if (!listed) continue;
-        if (!isNewer(listed.version, item.manifest.version)) {
+        if (!isNewer(listed.version, identity.version) && stateOf(item) !== 'incompatible') {
           const quiet = updates.get(id);
           if (!quiet || !['checking', 'downloading', 'installing'].includes(quiet.status)) { updates.set(id, Object.assign(quiet ?? {}, { kind, status: 'latest', checkedAt: Date.now(), error: null })); changed(); }
           continue;
@@ -1294,8 +1164,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       try { found = await checkUpdate(id); } catch (error) { log.warn(`[plugin ${id}] 업데이트를 확인하지 못했습니다: ${error.message}`); continue; }
       const mode = store.state.updateMode;
       if (mode === 'manual') return;
-      const { name, version } = item.manifest;
-      if (!isNewer(found.version, version)) continue;
+      const { name, version } = identity;
+      if (!isNewer(found.version, version) && stateOf(item) !== 'incompatible') continue;
       if (mode === 'auto' && eligible(item)) {
         try {
           await installUpdate(id, { auto: true });
@@ -1303,7 +1173,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
           continue;
         } catch (error) {
           if (error.code === 'NEEDS_REVIEW') {
-            announce(id, found.version, `${name} ${found.version}은(는) 새 권한을 요청해 자동으로 설치하지 않았습니다. 설정 → 플러그인의 설치한 목록에서 확인하고 설치하세요.`);
+            const reason = error.review?.some(line => line.startsWith('플러그인 API')) ? '플러그인 API가 바뀌어' : '새 권한을 요청해';
+            announce(id, found.version, `${name} ${found.version}은(는) ${reason} 자동으로 설치하지 않았습니다. 설정 → 플러그인의 설치한 목록에서 확인하고 설치하세요.`);
             continue;
           }
           if (error.code !== 'UPDATE_MODE_CHANGED') { log.warn(`[plugin ${id}] 자동 업데이트하지 못했습니다: ${error.message}`); continue; }
@@ -1329,20 +1200,20 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
   async function checkUpdates(id) {
     if (id) {
       const item = sourceItem(id), found = await checkUpdate(id);
-      return { ...snapshot(), message: isNewer(found.version, item.manifest.version) ? `${item.manifest.name} ${found.version} 업데이트가 있습니다.` : `${item.manifest.name} 플러그인은 최신(${item.manifest.version})입니다.` };
+      return { ...snapshot(), message: isNewer(found.version, identityOf(item).version) || stateOf(item) === 'incompatible' ? `${identityOf(item).name} ${found.version} 업데이트가 있습니다.` : `${identityOf(item).name} 플러그인은 최신(${identityOf(item).version})입니다.` };
     }
     if (hubSignedIn()) await hubCatalog({ force: true }).catch(() => {});
     // A plugin that only names GitHub is left alone while the Hub, which may serve it, cannot be read.
-    const usable = item => { const source = sourceOf(item); return source && clientFor(source) && (sourceKind(source) !== 'hub' || hubSignedIn()) && (!hubSignedIn() || hubCatalogRaw || item.manifest.source?.hub); };
-    const targets = list.filter(item => !item.builtin && !item.error && item.manifest && usable(item));
+    const usable = item => { const source = sourceOf(item); return source && clientFor(source) && (sourceKind(source) !== 'hub' || hubSignedIn()) && (!hubSignedIn() || hubCatalogRaw || identityOf(item).source?.hub); };
+    const targets = list.filter(item => !item.builtin && identityOf(item) && (!item.error || stateOf(item) === 'incompatible') && usable(item));
     if (!targets.length) {
-      const waiting = list.some(item => !item.builtin && !item.error && sourceKind(sourceOf(item)) === 'hub' && !hubSignedIn());
+      const waiting = list.some(item => !item.builtin && !item.error && identityOf(item) && sourceKind(sourceOf(item)) === 'hub' && !hubSignedIn());
       return { ...snapshot(), message: waiting ? 'Hub에서 받은 플러그인을 확인하려면 설정 → 정보에서 MoonerADE Hub에 로그인하세요.' : '업데이트 출처를 알려 주는 플러그인이 없습니다.' };
     }
-    const results = await Promise.allSettled(targets.map(item => checkUpdate(item.manifest.id)));
-    const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && isNewer(results[index].value.version, item.manifest.version));
+    const results = await Promise.allSettled(targets.map(item => checkUpdate(identityOf(item).id)));
+    const newer = targets.filter((item, index) => results[index].status === 'fulfilled' && (isNewer(results[index].value.version, identityOf(item).version) || stateOf(item) === 'incompatible'));
     const failed = results.filter(result => result.status === 'rejected').length;
-    return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => item.manifest.name).join(', ')}` : '모두 최신입니다'}${failed ? `, ${failed}개는 확인하지 못했습니다` : ''}.` };
+    return { ...snapshot(), message: `${newer.length ? `업데이트 ${newer.length}개: ${newer.map(item => identityOf(item).name).join(', ')}` : '모두 최신입니다'}${failed ? `, ${failed}개는 확인하지 못했습니다` : ''}.` };
   }
   // Automatic updates run new code without a dialog, so turning them on is confirmed natively; manual and notify only take away.
   async function setUpdateMode(mode) {
@@ -1351,7 +1222,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (mode === 'auto') {
       const answer = await ask({
         type: 'warning', title: '플러그인 자동 업데이트', message: '설치한 모든 플러그인을 자동으로 업데이트할까요?',
-        detail: '앞으로 설치하는 플러그인에도 적용됩니다. 승인된 플러그인의 새 버전을 MoonerADE Hub 또는 GitHub 릴리스에서 받아 체크섬을 확인하고, 확인 창 없이 설치한 뒤 다시 시작합니다.\n\n새 권한을 요청하거나 업데이트 출처가 바뀌면 설치 전에 확인이 필요합니다.\n\n업데이트를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있습니다. 믿을 수 있는 플러그인만 설치하세요.',
+        detail: '앞으로 설치하는 플러그인에도 적용됩니다. 승인된 플러그인의 새 버전을 MoonerADE Hub 또는 GitHub 릴리스에서 받아 체크섬을 확인하고, 확인 창 없이 설치한 뒤 다시 시작합니다.\n\n플러그인 API, 권한 또는 업데이트 출처가 바뀌면 설치 전에 확인이 필요합니다.\n\n업데이트를 올릴 수 있는 사람은 이 PC에서 MoonerADE와 같은 권한으로 코드를 실행할 수 있습니다. 믿을 수 있는 플러그인만 설치하세요.',
         buttons: ['자동 업데이트 켜기', '취소'], defaultId: 1, cancelId: 1
       });
       if (answer !== 0) return snapshot();
@@ -1453,13 +1324,15 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!hub) return null;
     return {
       status: hubCatalogStatus, error: hubCatalogError, checkedAt: hubCatalogRaw?.checkedAt ?? null,
-      plugins: (hubCatalogRaw?.plugins ?? []).map(entry => {
-        const installed = list.find(item => !item.builtin && item.manifest?.id === entry.id)?.manifest ?? null;
+      plugins: [...(hubCatalogRaw?.plugins ?? []), ...(hubCatalogRaw?.incompatible ?? [])].map(entry => {
+        const installedItem = list.find(item => !item.builtin && identityOf(item)?.id === entry.id);
+        const installed = installedItem ? identityOf(installedItem) : null;
         return {
-          id: entry.id, name: plainText(entry.name).slice(0, 60) || entry.id, description: plainText(entry.description), version: entry.version, size: entry.size, grants: entry.grants, publishedAt: entry.publishedAt,
-          installed: installed ? { version: installed.version } : null, updateAvailable: Boolean(installed && isNewer(entry.version, installed.version)),
+          id: entry.id, name: plainText(entry.name).slice(0, 60) || entry.id, description: plainText(entry.description), version: entry.version, apiVersion: entry.apiVersion ?? null, apiStatus: registry.status(entry.apiVersion ?? 1), sha256: entry.sha256, size: entry.size, grants: entry.grants, publishedAt: entry.publishedAt,
+          installed: installed ? { version: installed.version, apiVersion: installed.apiVersion } : null,
+          updateAvailable: Boolean(installed && compatible(entry) && (isNewer(entry.version, installed.version) || stateOf(installedItem) === 'incompatible')),
           // A plugin that ships with the app owns its id: the Hub's one cannot be installed.
-          reserved: list.some(item => item.builtin && item.manifest?.id === entry.id)
+          reserved: list.some(item => item.builtin && identityOf(item)?.id === entry.id)
         };
       })
     };
@@ -1471,7 +1344,12 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (hubCatalogLoading) { await hubCatalogLoading; return snapshot(); }
     if (!force && hubCatalogRaw && Date.now() - hubCatalogRaw.checkedAt < 60_000) return snapshot();
     hubCatalogStatus = 'loading'; changed();
-    hubCatalogLoading = hub.catalog().then(raw => { hubCatalogRaw = raw; hubCatalogStatus = 'ok'; hubCatalogError = null; }, error => {
+    hubCatalogLoading = hub.catalog(registry.versions).then(raw => {
+      hubCatalogRaw = { ...raw, plugins: raw.plugins.filter(compatible),
+        incompatible: [...(raw.incompatible ?? []), ...raw.plugins.filter(entry => !compatible(entry))],
+        managedIds: raw.managedIds ?? raw.plugins.map(entry => entry.id) };
+      hubCatalogStatus = 'ok'; hubCatalogError = null;
+    }, error => {
       hubCatalogStatus = 'error'; hubCatalogError = String(error?.message ?? error).slice(0, 300);
       if (HUB_SIGN_IN_ERRORS.includes(error?.code)) { hubCatalogRaw = null; noteHubError(error); }
     }).finally(() => { hubCatalogLoading = null; changed(); });
@@ -1479,19 +1357,24 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     return snapshot();
   }
   // Installs the Hub's newest version of a plugin: downloaded, checked against the Hub's checksum, then the zip install dialog.
-  async function installFromHub(id) {
+  async function installFromHub(id, expected) {
     needSignIn();
     if (!ID.test(String(id))) throw fail('플러그인 id가 올바르지 않습니다.', 'NOT_FOUND');
-    if (list.some(item => item.builtin && item.manifest?.id === id)) throw fail(`이 id(${id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
+    if (list.some(item => item.builtin && identityOf(item)?.id === id)) throw fail(`이 id(${id})는 MoonerADE에 들어 있는 플러그인이 쓰고 있습니다.`, 'PLUGIN_ZIP');
     let found, zip = null;
     try {
-      found = await hub.latest(null, id);
-      const installed = list.find(item => !item.builtin && !item.error && item.manifest?.id === id)?.manifest;
-      if (installed && !isNewer(found.version, installed.version)) return { ...snapshot(), message: `“${installed.name}” 플러그인은 이미 최신(${installed.version})입니다.` };
+      await hubCatalog();
+      const shown = hubCatalogRaw?.plugins.find(entry => entry.id === id);
+      if (expected) checkSelected(shown, expected);
+      if (hubCatalogRaw?.incompatible?.some(entry => entry.id === id)) throw requiredApiError();
+      found = shown ? { ...shown, via: 'hub', asset: { name: `${id}-${shown.version}.zip` } } : await findUpdate(hub, null, id);
+      const installedItem = list.find(item => !item.builtin && identityOf(item)?.id === id);
+      const installed = installedItem && identityOf(installedItem);
+      if (installed && !isNewer(found.version, installed.version) && stateOf(installedItem) !== 'incompatible') return { ...snapshot(), message: `“${installed.name}” 플러그인은 이미 최신(${installed.version})입니다.` };
       const { data, signature, sha256 } = await hub.download(found);
       observeSignature(signature, { kind: 'plugin', id, version: found.version, platform: 'any', variant: 'zip', sha256, size: data.length });
       zip = writeStagingZip(data);
-      return await installZip(zip, { picked: true, update: { id, version: found.version }, origin: 'hub' });
+      return await installZip(zip, { picked: true, update: { id, version: found.version, apiVersion: found.apiVersion }, origin: 'hub' });
     } catch (error) { noteHubError(error); changed(); throw error; }
     finally { if (zip) fs.rmSync(zip, { force: true }); changed(); }
   }

@@ -26,7 +26,7 @@ export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
 // exits, a shell helper swaps the new bundle in for the old one and opens it. User data lives in ~/Library.
 // Terminals live in the pty-host, outside the app (apps/local-server/src/pty-host.js): just before the restart the app asks it to keep
 // them, and the restarted app takes them over, so agents and commands running in them simply go on. Restored sessions make the app
-// look busy almost all the time, so an accepted update is downloaded immediately and installed on the next quit. There is no idle wait.
+// look busy almost all the time, so the updater asks about work that would actually be interrupted. There is no idle wait.
 // The previous version is not kept (the new files are mirrored over it), and the scratch folder is removed after the helper has run.
 
 // Only a packaged copy (exe + resources/app, or MoonerADE.app/Contents/Resources/app) updates itself;
@@ -60,34 +60,36 @@ if [ -n "$7" ]; then "$3/Contents/MacOS/$7" >/dev/null 2>&1 & else /usr/bin/open
 rm -rf "$5" "$6"
 `;
 
-// Progress stays in the main window on every platform, including macOS full-screen spaces.
+// The current status can also be read by a renderer that missed an event while starting or reloading.
+let status = null;
+export const updateStatus = () => status;
+
 function progressWindow(parent) {
   const main = () => parent && !parent.isDestroyed() ? parent : null;
   let last = 0;
+  const publish = value => {
+    status = value;
+    main()?.webContents.send('ade:update-progress', value);
+  };
   return {
     // fraction === null shows an indeterminate bar.
     set(text, fraction = null, force = true) {
       const now = Date.now();
       if (!force && now - last < 100) return;
       last = now;
-      const target = main();
-      if (target) {
-        target.webContents.send('ade:update-progress', { text, fraction });
-        fraction === null ? target.setProgressBar(2, { mode: 'indeterminate' }) : target.setProgressBar(fraction);
-      }
+      publish({ kind: 'progress', text, fraction });
+      if (fraction === null) main()?.setProgressBar(2, { mode: 'indeterminate' });
+      else main()?.setProgressBar(fraction);
     },
-    close() {
-      const target = main();
-      if (target) { target.setProgressBar(-1); target.webContents.send('ade:update-progress', null); }
-    }
+    close(next = null) { main()?.setProgressBar(-1); publish(next); },
   };
 }
 
 // One check or update at a time: the periodic timer, the startup check and the settings button may overlap.
 // `applying` stays set once the helper has been started, so no check or prompt can come in during the few seconds the app takes to quit.
-let running = false, applying = false;
-// An accepted update already on disk, installed the next time the app quits: { version, launch, discard }.
-let stagedUpdate = null;
+let running = false, applying = false, startingRestart = false;
+// A prepared update is only applied on a regular quit if the user explicitly chose that option.
+let pendingUpdate = null;
 // Versions the user answered "later" to; background checks leave them alone until the app is restarted.
 const declined = createDeclined();
 // Versions whose install failed (update-policy.js createFailures): the timer waits longer each time and finally leaves the version alone.
@@ -96,16 +98,17 @@ const failures = createFailures(() => Date.now());
 // Resolves to 'unsupported' | 'latest' | 'declined' | 'staged' | 'updating' | 'error'. `manual` (the settings button) also answers
 // "up to date" and failures in a dialog, asks again about a version turned down earlier, and can install or drop an update already
 // downloaded; background checks stay silent unless a new version is there. `getBusy()` asks the server what a restart would cut off.
-export async function checkForUpdate({ repo, asset, window, manual = false, beta = false, getBusy, beforeRestart }) {
+export async function checkForUpdate({ repo, asset, window, manual = false, beta = false, autoDownload = true, getBusy, getCountdownPosition, beforeRestart }) {
   if (!portable()) {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '설치된 앱(Windows 포터블, macOS .app)에서만 자동 업데이트를 지원합니다.', detail: '소스에서 실행 중이면 git pull로 직접 갱신하세요.' });
     return 'unsupported';
   }
-  if (applying) return 'updating';
-  if (stagedUpdate) return manual ? manageStaged(window) : 'staged';
-  if (running) return 'updating';
+  if (running || applying) return 'updating';
   running = true;
-  try { return await check({ repo, asset, window, manual, beta, getBusy, beforeRestart }); }
+  try {
+    if (pendingUpdate) return manual ? await manageStaged({ window, getBusy, beforeRestart }) : 'staged';
+    return await check({ repo, asset, window, manual, beta, autoDownload, getBusy, getCountdownPosition, beforeRestart });
+  }
   catch (error) {
     if (manual) await say(window, { type: 'error', title: '업데이트', message: `업데이트를 확인하지 못했습니다: ${describeFailure(error)}` });
     else throw error;
@@ -114,16 +117,29 @@ export async function checkForUpdate({ repo, asset, window, manual = false, beta
 }
 
 // The version of an update waiting to be installed on the next quit (the quit question words itself after it), or null.
-export const stagedUpdateVersion = () => stagedUpdate?.version ?? null;
+export const stagedUpdateVersion = () => pendingUpdate?.onQuit ? pendingUpdate.version : null;
+export const updateRestartPending = () => startingRestart;
+
+export function discardPendingUpdate() {
+  const current = pendingUpdate;
+  pendingUpdate = null;
+  current?.discard();
+}
 
 // Called from the app's quit path. Starts the helper that swaps the files in once this process exits. False when nothing is staged.
-export async function applyStagedUpdate() {
-  const current = stagedUpdate;
-  if (!current) return false;
-  stagedUpdate = null;
+export async function applyStagedUpdate(window) {
+  const current = pendingUpdate;
+  if (!current?.onQuit || applying) return false;
   applying = true;
-  try { await current.launch(); return true; }
-  catch (error) { applying = false; stagedUpdate = current; throw error; }
+  try {
+    await launchPrepared(current, window);
+    pendingUpdate = null;
+    return true;
+  } catch (error) {
+    applying = false;
+    showPrepared(window);
+    throw error;
+  }
 }
 
 // An answer that cannot be read counts as busy: the app is not restarted on a guess.
@@ -134,19 +150,37 @@ async function readBusy(getBusy) {
 }
 
 // The settings button after an update has been downloaded: install on the next quit, install now, or drop it.
-async function manageStaged(window) {
-  const current = stagedUpdate;
-  if (!current) return 'updating';
+async function manageStaged({ window, getBusy, beforeRestart }) {
+  const current = pendingUpdate;
+  const wait = current.onQuit ? '종료할 때까지 대기' : '나중에';
   const options = {
-    type: 'info', buttons: ['지금 재시작', '받지 않기', '종료할 때까지 대기'], defaultId: 2, cancelId: 2, title: '업데이트',
+    type: 'info', buttons: ['지금 재시작', '받지 않기', wait], defaultId: 2, cancelId: 2, title: '업데이트',
     message: `v${current.version}을 받아 두었습니다.`,
-    detail: '앱을 종료하면 이 버전을 설치하고 다시 실행합니다. 그 전까지 작업은 계속하면 됩니다.',
+    detail: current.onQuit ? '앱을 종료하면 이 버전을 설치하고 다시 실행합니다. 그 전까지 작업은 계속하면 됩니다.' : '현재 실행 중인 앱의 사이드바 하단에서 언제든 적용할 수 있습니다.',
   };
-  const { response } = await (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
-  if (response === 1) { declined.add(current.version); current.discard(); if (stagedUpdate === current) stagedUpdate = null; return 'declined'; }
+  const { response } = await ask(window, options);
+  if (pendingUpdate !== current || applying) return 'updating';
+  if (response === 1) { declined.add(current.version); discardPendingUpdate(); showPrepared(window); return 'declined'; }
   if (response !== 0) return 'staged';
+  if (current.autoDownload) return applyPrepared({ current, window, getBusy, beforeRestart });
   app.quit();
   return 'updating';
+}
+
+export async function applyDownloadedUpdate({ window, getBusy, beforeRestart }) {
+  if (running || applying) return 'updating';
+  const current = pendingUpdate;
+  if (!current?.autoDownload) return 'declined';
+  running = true;
+  try { return await applyPrepared({ current, window, getBusy, beforeRestart }); }
+  finally { running = false; }
+}
+
+async function applyPrepared({ current, window, getBusy, beforeRestart }) {
+  const report = await readBusy(getBusy);
+  if (report.busy && !(await confirmInterrupt(window, report))) return 'staged';
+  if (pendingUpdate !== current || applying) return 'updating';
+  return restartNow({ current, window, beforeRestart });
 }
 
 // ADE_UPDATE_ANSWER ('지금 업데이트|확인', button labels) answers the updater's prompts: native dialogs cannot be clicked by a test
@@ -246,7 +280,7 @@ async function probeLatest(repo, beta) {
   } catch { return null; }
 }
 
-async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart }) {
+async function check({ repo, asset, window, manual, beta, autoDownload, getBusy, getCountdownPosition, beforeRestart }) {
   const upToDate = async () => {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.${beta ? ' (베타 포함)' : ''}` });
     return 'latest';
@@ -275,6 +309,27 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   // It could not be installed a moment ago: the timer does not ask again about it until its wait is over (the settings button does).
   if (!manual && failures.blocked(version)) return 'error';
   const { file, kind } = await pickPackage(release, asset, version);
+  const signature = release.assets.find(asset => asset.name === file.name + '.sig');
+  const prepare = () => prepareUpdate({ version, file, signature, kind, window, autoDownload, manual, getCountdownPosition });
+  if (autoDownload) {
+    const current = await prepare();
+    if (!current) return 'error';
+    try {
+      const report = await readBusy(getBusy);
+      const listed = report.busy ? `\n\n지금 업데이트하면 아래 작업이 중단됩니다.\n${describeReasons(report.reasons)}` : '';
+      const { response } = await ask(window, {
+        type: report.busy ? 'warning' : 'info', buttons: ['종료할 때 업데이트', '지금 업데이트', '나중에'], defaultId: 2, cancelId: 2, title: '업데이트',
+        message: `새 ${label} ${version}을 받아 두었습니다.`,
+        detail: `나중에를 선택하면 현재 실행 중인 앱의 사이드바 하단에서 적용할 수 있습니다.${listed}`,
+      });
+      if (response === 0) current.onQuit = true;
+      if (response === 1) return await applyPrepared({ current, window, getBusy, beforeRestart });
+      return 'staged';
+    } finally {
+      if (pendingUpdate === current && !applying) showPrepared(window);
+    }
+  }
+
   const report = await readBusy(getBusy), size = `다운로드 크기는 ${mb(file.size || 0)} MB입니다.`, listed = report.busy ? describeReasons(report.reasons) : '';
   // "나중에" is the default: the prompt can appear while typing, and a stray Enter must not end every session.
   // Nothing an update would cut off (terminals and chats live on through the restart): updating now is safe, so waiting for the quit is not offered.
@@ -291,18 +346,35 @@ async function check({ repo, asset, window, manual, beta, getBusy, beforeRestart
   if (choice === buttons.length - 1) { declined.add(version); return 'declined'; }
   const now = buttons[choice] === '지금 업데이트';
   if (now && report.busy && !(await confirmInterrupt(window, report))) return 'declined';
-  return install({ version, file, signature: release.assets.find(asset => asset.name === file.name + '.sig'), kind, window, getBusy, beforeRestart, onQuit: !now, force: now && report.busy });
+  const current = await prepare();
+  if (!current) return 'error';
+  if (!now) {
+    current.onQuit = true;
+    await say(window, { type: 'info', title: '업데이트', message: `v${version}을 받아 두었습니다.`, detail: '앱을 종료하면 설치되고 다시 실행됩니다. 그 전까지 작업은 계속하면 됩니다.' });
+    return 'staged';
+  }
+  // Work may have started during the download if the user accepted while idle.
+  if (!report.busy) {
+    const again = await readBusy(getBusy);
+    if (again.busy && !(await confirmInterrupt(window, again))) { discardPendingUpdate(); return 'declined'; }
+  }
+  return restartNow({ current, window, beforeRestart });
 }
 
-function holdForQuit({ version, work, staged }) {
-  stagedUpdate?.discard();
-  stagedUpdate = { version, discard() { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); }, launch: () => staged.launch({ work }) };
+function showPrepared(window) {
+  const current = pendingUpdate;
+  progressWindow(window).close(current?.autoDownload ? { kind: 'ready', version: current.version, onQuit: current.onQuit } : null);
 }
 
-async function install({ version, file, signature, kind, window, getBusy, beforeRestart, onQuit, force }) {
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
-  let progress = progressWindow(window), staged = null, held = false;
+function reportUpdateFailure(error) {
+  dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${describeFailure(error)}\n\n지금 쓰는 버전은 그대로 사용할 수 있습니다. 설정에서 업데이트를 다시 확인할 수 있습니다.`);
+}
+
+async function prepareUpdate({ version, file, signature, kind, window, autoDownload, manual, getCountdownPosition }) {
+  const progress = progressWindow(window);
+  let work;
   try {
+    work = fs.mkdtempSync(path.join(os.tmpdir(), 'mooner-update-'));
     if (process.platform === 'win32') ensureWritable(kind === 'app' ? app.getAppPath() : path.dirname(process.execPath));
     const zip = path.join(work, file.name);
     progress.set(`v${version} 다운로드 준비 중…`);
@@ -321,43 +393,55 @@ async function install({ version, file, signature, kind, window, getBusy, before
     observeSignature(raw, { kind: 'app', id: 'mooner-ade', version, platform: `${process.platform}-${process.arch}`, variant: kind,
       sha256: file.digest.slice(7), size: fs.statSync(zip).size });
     progress.set('압축 푸는 중…');
-    staged = process.platform === 'darwin' ? await stageMac({ zip, progress }) : await stageWindows({ zip, work, kind });
-    if (onQuit) {
-      progress.close();
-      holdForQuit({ version, work, staged });
-      held = true;
-      failures.clear(version);
-      await say(window, { type: 'info', title: '업데이트', message: `v${version}을 받아 두었습니다.`, detail: '앱을 종료하면 설치되고 다시 실행됩니다. 그 전까지 작업은 계속하면 됩니다.' });
-      return 'staged';
-    }
-    // "지금 업데이트" while idle: work may have started during the download, so ask once before cutting it off.
-    if (!force) {
-      const again = await readBusy(getBusy);
-      if (again.busy) {
-        progress.close();
-        if (!(await confirmInterrupt(window, again))) { staged.discard(); fs.rmSync(work, { recursive: true, force: true }); return 'declined'; }
-        progress = progressWindow(window);
-      }
-    }
-    progress.set('설치를 위해 앱을 다시 시작합니다…');
-    await staged.launch({ work, progress });
-    applying = true;
+    const staged = process.platform === 'darwin' ? await stageMac({ zip, progress }) : await stageWindows({ zip, work, kind });
+    progress.close();
+    pendingUpdate = {
+      version, autoDownload, onQuit: false, getCountdownPosition,
+      discard() { try { staged.discard(); } finally { fs.rmSync(work, { recursive: true, force: true }); } },
+      launch: () => staged.launch({ work }),
+    };
     failures.clear(version);
-    // Tells the app to have its terminals kept for the new version instead of ended with this one.
-    beforeRestart?.();
-    // The progress overlay stays up until the app exits, so the restart does not look like a crash.
-    app.quit();
-    return 'updating';
+    return pendingUpdate;
   } catch (error) {
     progress.close();
-    if (held && stagedUpdate?.version === version) stagedUpdate = null;
-    staged?.discard();
-    fs.rmSync(work, { recursive: true, force: true });
+    if (work) fs.rmSync(work, { recursive: true, force: true });
     failures.record(version);
-    // Nothing of the installed app was touched: say so, and where to try again.
-    dialog.showErrorBox('업데이트', `업데이트하지 못했습니다: ${describeFailure(error)}\n\n지금 쓰는 버전은 그대로 사용할 수 있습니다. 설정에서 업데이트를 다시 확인할 수 있습니다.`);
-    return 'error';
+    if (autoDownload && !manual) throw error;
+    reportUpdateFailure(error);
+    return null;
   }
+}
+
+const RESTART_DELAY_MS = 10_000;
+async function launchPrepared(current, window) {
+  const progress = progressWindow(window);
+  progress.set('설치를 위해 앱을 다시 시작합니다…');
+  await current.launch();
+  if (!current.autoDownload && window && !window.isDestroyed()) {
+    progress.close({ kind: 'countdown', restartAt: Date.now() + RESTART_DELAY_MS, position: current.getCountdownPosition?.() });
+    await new Promise(resolve => setTimeout(resolve, RESTART_DELAY_MS));
+  }
+}
+
+async function restartNow({ current, window, beforeRestart }) {
+  startingRestart = true;
+  try {
+    await launchPrepared(current, window);
+    pendingUpdate = null;
+    applying = true;
+    failures.clear(current.version);
+  } catch (error) {
+    if (!current.autoDownload) discardPendingUpdate();
+    showPrepared(window);
+    failures.record(current.version);
+    reportUpdateFailure(error);
+    return 'error';
+  } finally {
+    startingRestart = false;
+  }
+  beforeRestart?.();
+  app.quit();
+  return 'updating';
 }
 
 // Windows: the helper that swaps the files in starts only after the app has quit and cannot report back, so a folder it cannot write to would end with the same
@@ -435,6 +519,7 @@ async function stageMac({ zip, progress }) {
         const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('ADE_PTY_')));
         const relaunch = process.env.ADE_USER_DATA_DIR ? path.basename(process.execPath) : '';
         const helper = spawn('/bin/sh', [script, String(process.pid), next, target, path.join(stage, 'previous.app'), stage, work, relaunch], { detached: true, stdio: 'ignore', env });
+        await new Promise((resolve, reject) => { helper.once('spawn', resolve); helper.once('error', reject); });
         helper.unref();
       },
     };

@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { flipFuses, FuseV1Options, FuseVersion } from '@electron/fuses';
 import { brandBundle, brandExe, signBundle } from './brand.mjs';
+import { stagePluginApi } from './plugin-api-package.mjs';
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
 assert.ok(nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 21), 'Node.js 24.21.0 or newer is required');
@@ -73,6 +74,7 @@ try {
   mkdirSync(path.join(stage, 'apps', 'web'), { recursive: true });
   cpSync(path.join(import.meta.dirname, 'src'), path.join(stage, 'apps/desktop/src'), { recursive: true });
   cpSync(path.join(import.meta.dirname, 'assets'), path.join(stage, 'apps/desktop/assets'), { recursive: true });
+  stagePluginApi(path.join(root, 'apps/plugin-api'), path.join(stage, 'apps/plugin-api'), path.join(import.meta.dirname, 'builtin-plugins'));
   cpSync(path.join(import.meta.dirname, 'builtin-plugins'), path.join(stage, 'apps/desktop/builtin-plugins'), { recursive: true });
   cpSync(path.join(root, 'apps/local-server/src'), path.join(stage, 'apps/local-server/src'), { recursive: true });
   cpSync(path.join(root, 'apps/web/dist'), path.join(stage, 'apps/web/dist'), { recursive: true });

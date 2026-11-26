@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64 as SERVER_BASE64, MAX_IMAGE_BYTES as SERVER_BYTES } from '../apps/local-server/src/image-limit.js';
-import { MAX_IMAGE_BASE64, MAX_IMAGE_BYTES, fitImageBytes, imageWithinLimit } from '../apps/web/src/image-fit.ts';
+import { MAX_CHAT_IMAGES as SERVER_IMAGES, MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64 as SERVER_BASE64, MAX_IMAGE_BYTES as SERVER_BYTES } from '../apps/local-server/src/image-limit.js';
+import { MAX_CHAT_IMAGES, MAX_IMAGE_BASE64, MAX_IMAGE_BYTES, fitImageBytes, imageWithinLimit } from '../apps/web/src/image-fit.ts';
 
 const encoded = (mime, length) => ({ mime, bytes: new Uint8Array(length) });
 
@@ -12,7 +12,8 @@ test('the chat image cap is 5MB on the server and in the client', () => {
   assert.equal(SERVER_BASE64, MAX_IMAGE_BASE64);
   assert.equal(imageWithinLimit(MAX_IMAGE_BYTES, MAX_IMAGE_BASE64), true);
   assert.equal(imageWithinLimit(MAX_IMAGE_BYTES + 1, MAX_IMAGE_BASE64), false);
-  assert.ok(MAX_CHAT_SEND_BODY >= 4 * MAX_IMAGE_BASE64 + 4 * 150_000 + 200_000);
+  assert.equal(SERVER_IMAGES, MAX_CHAT_IMAGES);
+  assert.ok(MAX_CHAT_SEND_BODY >= MAX_CHAT_IMAGES * (MAX_IMAGE_BASE64 + 150_000) + 200_000);
 });
 
 test('a jpeg just over the cap drops quality before it changes the pixels', async () => {

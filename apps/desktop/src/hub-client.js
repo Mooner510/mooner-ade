@@ -32,9 +32,10 @@ export function validEntry(value) {
   const version = versionText(value.version);
   if (typeof value.id !== 'string' || !PLUGIN_ID.test(value.id) || !version) return null;
   if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) return null;
+  if (value.apiVersion !== undefined && (!Number.isSafeInteger(value.apiVersion) || value.apiVersion < 1)) return null;
   const grants = Object.fromEntries(GRANTS.map(key => [key, value.grants?.[key] === true]));
   return {
-    id: value.id, version, ...(value.sig === true && { sig: true }), sha256: value.sha256, name: text(value.name, 60) || value.id, description: text(value.description, 300),
+    id: value.id, version, ...(value.apiVersion !== undefined && { apiVersion: value.apiVersion }), ...(value.sig === true && { sig: true }), sha256: value.sha256, name: text(value.name, 60) || value.id, description: text(value.description, 300),
     size: Number.isSafeInteger(value.size) && value.size >= 0 ? value.size : 0, grants,
     publishedAt: Number.isFinite(value.publishedAt) ? value.publishedAt : null
   };
@@ -156,6 +157,11 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
     return response;
   }
 
+  const versionQuery = versions => versions?.length ? `?apiVersions=${versions.join(',')}` : '';
+  const assetQuery = found => found.apiVersion === undefined ? '' : '?' + new URLSearchParams({
+    apiVersion: String(found.apiVersion), version: found.version, sha256: found.sha256
+  });
+
   return {
     get available() { return Boolean(origin); },
     get url() { return origin; },
@@ -201,17 +207,22 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
 
     // ---- plugins ------------------------------------------------------------------------------------------------------
     // Everything the Hub serves this account: { plugins: [entry], checkedAt }.
-    async catalog() {
-      const response = await authed('/v1/plugins', { what: '플러그인 목록을 받지' });
+    async catalog(versions) {
+      const response = await authed(`/v1/plugins${versionQuery(versions)}`, { what: '플러그인 목록을 받지' });
       if (!response.ok) throw await statusError(response, '플러그인 목록을 받지');
       const body = await readJson(response, '플러그인 목록');
       if (!Array.isArray(body?.plugins)) throw fail('MoonerADE Hub의 플러그인 목록이 올바르지 않습니다.', 'HTTP');
-      return { plugins: body.plugins.slice(0, MAX_PLUGINS).map(validEntry).filter(Boolean), checkedAt: now() };
+      const entries = value => Array.isArray(value) ? value.slice(0, MAX_PLUGINS).map(validEntry).filter(Boolean) : [];
+      const plugins = entries(body.plugins);
+      const managedIds = Array.isArray(body.managedIds)
+        ? body.managedIds.slice(0, MAX_PLUGINS).filter(id => typeof id === 'string' && PLUGIN_ID.test(id))
+        : plugins.map(entry => entry.id);
+      return { plugins, managedIds, incompatible: entries(body.incompatible), checkedAt: now() };
     },
     // The same call plugin-updates.js createGithub().latest makes: what the Hub has now for plugin `id`.
-    async latest(_source, id) {
+    async latest(_source, id, { apiVersions } = {}) {
       if (!PLUGIN_ID.test(String(id))) throw fail('플러그인 id가 올바르지 않습니다.', 'NOT_FOUND');
-      const response = await authed(`/v1/plugins/${id}`, { what: '업데이트를 확인' });
+      const response = await authed(`/v1/plugins/${id}${versionQuery(apiVersions)}`, { what: '업데이트를 확인' });
       if (response.status === 404) { await response.body?.cancel().catch(() => {}); throw fail(`MoonerADE Hub에 ${id} 플러그인이 없습니다.`, 'MISSING'); }
       if (!response.ok) throw await statusError(response, '업데이트를 확인');
       const entry = validEntry(await readJson(response, '플러그인 정보'));
@@ -221,10 +232,15 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
     // The zip `latest` found, checked against the checksum the Hub listed: { data, sha256 }.
     async download(found) {
       if (!found || !PLUGIN_ID.test(String(found.id))) throw fail('받을 플러그인이 올바르지 않습니다.', 'NOT_FOUND');
-      const response = await authed(`/v1/plugins/${found.id}/download`, { accept: 'application/zip', timeout: downloadTimeoutMs, what: '파일을 받지' });
+      const query = assetQuery(found);
+      const response = await authed(`/v1/plugins/${found.id}/download${query}`, { accept: 'application/zip', timeout: downloadTimeoutMs, what: '파일을 받지' });
+      if (response.status === 404 && query) {
+        await response.body?.cancel();
+        throw fail('MoonerADE Hub의 플러그인 목록이 바뀌었습니다. 새로고침하고 다시 시도하세요.', 'CHANGED');
+      }
       if (!response.ok) throw await statusError(response, '파일을 받지');
       // Published again between the check and the download: ask again instead of installing something nobody looked at.
-      if (response.headers.get('x-plugin-version') !== found.version || response.headers.get('x-plugin-sha256') !== found.sha256) {
+      if (response.headers.get('x-plugin-version') !== found.version || response.headers.get('x-plugin-sha256') !== found.sha256 || (query && response.headers.get('x-plugin-api-version') !== String(found.apiVersion))) {
         await response.body?.cancel().catch(() => {});
         throw fail('그 사이 MoonerADE Hub의 플러그인이 새로 올라왔습니다. 목록을 새로고침하고 다시 시도하세요.', 'CHANGED');
       }
@@ -233,7 +249,7 @@ export function createHubClient({ store, baseUrl = process.env.ADE_HUB_URL || DE
       let signature;
       if (found.sig) {
         try {
-          const res = await authed(`/v1/plugins/${found.id}/signature`, { what: '서명을 받지' });
+          const res = await authed(`/v1/plugins/${found.id}/signature${query}`, { what: '서명을 받지' });
           if (res.ok) signature = (await readBody(res, 'signature', 4096)).toString('utf8');
           else { await res.body?.cancel(); signature = ''; }
         } catch { signature = ''; }

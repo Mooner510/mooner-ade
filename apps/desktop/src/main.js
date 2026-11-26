@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -15,7 +15,7 @@ import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { QUIT_CANCEL, QUIT_KEEP, quitPrompt } from './update-policy.js';
 import { lastSignature, loadSignatureStatus } from './release-signature.js';
-import { applyStagedUpdate, checkForUpdate, stagedUpdateVersion, sweepStaleUpdates, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
+import { applyDownloadedUpdate, applyStagedUpdate, checkForUpdate, discardPendingUpdate, stagedUpdateVersion, sweepStaleUpdates, updateRestartPending, updateStatus, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
 // (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
@@ -377,15 +377,55 @@ ipcMain.on('ade:changelog-set', (event, key, value) => {
   }
   event.returnValue = null;
 });
-// Just before the update restarts the app: keep the terminals for the new version instead of ending them.
-// Beta updates are the user's choice, kept beside the other app data (not in the server's settings: the updater lives in this process).
+// Update preferences belong to the desktop process and must survive a change of the local server's origin.
 const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
-const readBeta = () => { try { return JSON.parse(fs.readFileSync(channelFile, 'utf8')).beta === true; } catch { return false; } };
-const updateTarget = (manual = false) => ({ repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, beta: readBeta(), getBusy: serverBusy, beforeRestart: () => { keepTerminalsOnQuit = true; } });
+const isCountdownPosition = value => typeof value === 'string' && /^(top|middle|bottom)-(left|center|right)$/.test(value);
+const readUpdatePreferences = () => {
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(channelFile, 'utf8')); } catch { /* use defaults */ }
+  return { beta: saved?.beta === true, autoDownload: saved?.autoDownload !== false, countdownPosition: isCountdownPosition(saved?.countdownPosition) ? saved.countdownPosition : 'middle-center' };
+};
+const updatePreference = (key, value) => {
+  fs.writeFileSync(`${channelFile}.tmp`, JSON.stringify({ ...readUpdatePreferences(), [key]: value }));
+  fs.renameSync(`${channelFile}.tmp`, channelFile);
+  return value;
+};
+const updateTarget = (manual = false) => {
+  const { beta, autoDownload } = readUpdatePreferences();
+  return { repo: 'Mooner510/mooner-ade', asset: `MoonerADE-${process.platform}-${process.arch}.zip`, window: mainWindow, manual, beta, autoDownload, getBusy: serverBusy,
+    getCountdownPosition: () => readUpdatePreferences().countdownPosition, beforeRestart: () => { keepTerminalsOnQuit = true; } };
+};
+const fromMainWindow = event => event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame && sameOrigin(event.senderFrame?.url ?? '');
+ipcMain.handle('ade:move-dropped-files', (event, input) => {
+  if (!fromMainWindow(event)) throw new Error('허용되지 않은 요청입니다.');
+  const child = server;
+  if (!child?.connected) throw new Error('서버와 연결되어 있지 않습니다.');
+  return new Promise((resolve, reject) => {
+    const id = randomUUID();
+    const finish = (error, result) => {
+      child.off('message', onMessage);
+      child.off('disconnect', onDisconnect);
+      if (error) reject(error); else resolve(result);
+    };
+    const onMessage = message => {
+      if (message?.type === 'files/drop-result' && message.id === id) finish(null, message.result);
+    };
+    const onDisconnect = () => finish(new Error('서버와 연결이 끊겼습니다.'));
+    child.on('message', onMessage);
+    child.once('disconnect', onDisconnect);
+    child.send({ type: 'files/drop', id, input }, error => { if (error) finish(error); });
+  });
+});
 ipcMain.handle('ade:app-info', () => ({ version: appVersion, dev, lastSignature }));
-ipcMain.handle('ade:get-beta-updates', () => readBeta());
-ipcMain.handle('ade:set-beta-updates', (_event, beta) => { fs.writeFileSync(channelFile, JSON.stringify({ beta: beta === true })); return readBeta(); });
-ipcMain.handle('ade:check-update', () => checkForUpdate(updateTarget(true)));
+ipcMain.handle('ade:get-beta-updates', () => readUpdatePreferences().beta);
+ipcMain.handle('ade:set-beta-updates', (event, beta) => fromMainWindow(event) ? updatePreference('beta', beta === true) : readUpdatePreferences().beta);
+ipcMain.handle('ade:get-auto-download-updates', () => readUpdatePreferences().autoDownload);
+ipcMain.handle('ade:set-auto-download-updates', (event, enabled) => fromMainWindow(event) ? updatePreference('autoDownload', enabled === true) : readUpdatePreferences().autoDownload);
+ipcMain.handle('ade:get-update-countdown-position', () => readUpdatePreferences().countdownPosition);
+ipcMain.handle('ade:set-update-countdown-position', (event, position) => fromMainWindow(event) && isCountdownPosition(position) ? updatePreference('countdownPosition', position) : readUpdatePreferences().countdownPosition);
+ipcMain.handle('ade:check-update', event => fromMainWindow(event) && checkForUpdate(updateTarget(true)));
+ipcMain.handle('ade:update-status', event => fromMainWindow(event) ? updateStatus() : null);
+ipcMain.handle('ade:apply-downloaded-update', event => fromMainWindow(event) && !quitting && applyDownloadedUpdate(updateTarget()));
 
 function installMenu() {
   if (process.platform !== 'darwin') {
@@ -435,7 +475,10 @@ if (leavingConsole) {
   });
   app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') console.warn(`GPU 프로세스 종료 (${details.reason}, exit ${details.exitCode})`); });
   app.on('window-all-closed', () => app.quit());
-  app.on('quit', () => { plugins?.close(); remote?.close(); });
+  app.on('quit', () => {
+    try { discardPendingUpdate(); } catch (error) { console.warn(`받아 둔 업데이트를 정리하지 못했습니다: ${error.message}`); }
+    plugins?.close(); remote?.close();
+  });
   let asking = false;
   const quitNow = () => {
     quitting = true;
@@ -463,15 +506,17 @@ if (leavingConsole) {
   app.on('before-quit', event => {
     if (quitting) return;
     event.preventDefault();
+    if (updateRestartPending()) return;
+    // An explicit restart already got its answer, even if a normal quit was being confirmed in the meantime.
+    if (keepTerminalsOnQuit && !leftInBackground) { quitNow(); return; }
     if (asking) return;
     asking = true;
     void confirmQuit().catch(() => true).then(async go => {
-      asking = false;
-      if (!go) return;
+      if (quitting || !go || updateRestartPending()) return;
       // Left in the background, the app must not come back on its own: a downloaded update waits for a plain quit.
-      try { if (!leftInBackground && await applyStagedUpdate()) keepTerminalsOnQuit = true; }
+      try { if (!leftInBackground && await applyStagedUpdate(mainWindow)) keepTerminalsOnQuit = true; }
       catch (error) { dialog.showErrorBox('업데이트', `설치를 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`); return; }
       quitNow();
-    });
+    }).finally(() => { asking = false; });
   });
 }

@@ -350,10 +350,23 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
   }
   // A built-in plugin's MCP tool (the agent bus) needs no prompt. Cursor names an MCP tool in the request's title; shell, file and fetch kinds never match.
   const autoApprovedTool = toolCall => autoServers.length > 0 && [undefined, 'other'].includes(toolCall?.kind) && typeof toolCall?.title === 'string' && autoServers.some(name => toolCall.title.includes(name));
-  // Run Everything: accept the request once (never "always", so turning it off takes effect on the next request).
-  function autoAllowCursor(raw) {
-    const option = raw.params?.options?.find(o => o.kind === 'allow_once'); if (!option) return false;
-    void send({ id: raw.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } }); return true;
+  // Run Everything: accept once (never "always", so turning it off takes effect on the next request). Newer cursor-agent builds sometimes label the once choice `allow` instead of `allow_once`.
+  const cursorAllowOnceOption = options => {
+    const list = options ?? [];
+    return list.find(o => o.kind === 'allow_once')
+      ?? list.find(o => o.kind === 'allow')
+      ?? list.find(o => typeof o.kind === 'string' && o.kind.startsWith('allow') && o.kind !== 'allow_always')
+      ?? list.find(o => o.kind !== 'reject_once' && o.kind !== 'allow_always');
+  };
+  function autoAllowCursor(raw, { required = false } = {}) {
+    const option = cursorAllowOnceOption(raw.params?.options);
+    if (!option) {
+      if (!required) return false;
+      void send({ id: raw.id, error: { code: -32602, message: '허용 선택지가 없습니다.' } });
+      return true;
+    }
+    void send({ id: raw.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } });
+    return true;
   }
   function clearTransportResumeTimer() {
     if (transportResumeTimer) { clearTimeout(transportResumeTimer); transportResumeTimer = null; }
@@ -456,7 +469,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         else void send({ id: raw.id, error: { code: -32602, message: '이 입력 요청은 채팅에서 답할 수 없습니다.' } });
       } else void send({ id: raw.id, error: { code: -32601, message: `Unsupported client request: ${raw.method}` } });
     } else if (p.sessionId && p.sessionId !== sessionId && !cursorChildren.has(p.sessionId)) void send({ id: raw.id, error: { code: -32602, message: 'Unknown session' } });
-    else if (raw.method === 'session/request_permission' && runEverything && autoAllowCursor(raw)) return;
+    else if (raw.method === 'session/request_permission' && runEverything) { autoAllowCursor(raw, { required: true }); return; }
     else if (raw.method === 'session/request_permission' && autoApprovedTool(p.toolCall) && autoAllowCursor(raw)) return;
     // An MCP tool the user trusted in the settings is allowed once per request; every other request waits on the card, which offers to trust an MCP tool.
     else if (raw.method === 'session/request_permission' && isTrusted(trusted(), cursorMcp(p.toolCall)) && autoAllowCursor(raw)) return;
@@ -603,7 +616,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     async setRunEverything(on) {
       if (agent !== 'cursor') return;
       runEverything = on === true;
-      if (runEverything) for (const [id, raw] of [...approvals]) if (raw.method === 'session/request_permission' && autoAllowCursor(raw)) { approvals.delete(id); emit({ kind: 'approval', phase: 'cancel', requestId: id }); }
+      if (runEverything) for (const [id, raw] of [...approvals]) if (raw.method === 'session/request_permission') { autoAllowCursor(raw, { required: true }); approvals.delete(id); emit({ kind: 'approval', phase: 'cancel', requestId: id }); }
     },
     async configure({ model, configOption, permissionMode }) {
       if (agent !== 'cursor') throw fault('CHAT_UNSUPPORTED', 'Cursor 설정만 지원합니다.', 409);

@@ -24,11 +24,17 @@ for (const sc of process.argv.slice(2).length ? process.argv.slice(2) : ALL) {
   const s = sc.startsWith('ade') ? await boot() : null; await s?.setCtl({ slowms: 120000 });
   // past the first-run tutorial, with the temp repo open (the state a returning user sees); the rest of the settings are the app defaults
   await s?.api('app/state', { state: { openProjects: [{ id: s.projectId, root: s.repo }], activeProjectId: s.projectId, settings: { onboarded: true, tourVersion: 2 } } });
+  const turnId = 'frame-cost-turn';
+  if (s?.projectId && sc.includes('turn')) {
+    try { await s.api('chat/close', { projectId: s.projectId, id: turnId, forget: true }); } catch { /* none */ }
+  }
   const target = s ? `${s.origin}/#token=${s.token}` : `file://${HERE}/blank.html?mode=${sc.slice(6)}`;
   const ud = await mkdtemp(join(tmpdir(), 'ade-perf-ud-'));
-  const p = spawn(electron, [HERE, `--user-data-dir=${ud}`], { env: { ...process.env, SCENARIO: sc, TARGET: target, SHOT: join(S, `${sc}.png`) } });
+  const childEnv = { ...process.env, SCENARIO: sc, TARGET: target, SHOT: join(S, `${sc}.png`) };
+  if (s?.projectId) Object.assign(childEnv, { PERF_PROJECT_ID: s.projectId, PERF_CHAT_ID: turnId, ...(sc.includes('turn') && { PERF_SLOW_VIA_API: '1' }) });
+  const p = spawn(electron, [HERE, `--user-data-dir=${ud}`], { env: childEnv });
   try {
-  let display = ''; await new Promise((ok, fail) => { let out = '', ready = false; p.stdout.on('data', c => { out += c; display = /DISPLAY (.*)/.exec(out)?.[1] ?? display; if (!ready && out.includes('READY')) { ready = true; if (process.env.PROBE) for (const l of out.split('\n')) if (/^(ANIMATIONS|EFFECTS|SURFACES|TIME|ARGS|LAYERS|RAF|METRICS|TRACE|NOT_COMPOSITED|INVALIDATIONS) /.test(l)) console.log(sc, l); ok(); } }); p.once('exit', () => fail(new Error(sc + ': electron exited'))); setTimeout(() => fail(new Error(sc + ': no READY')), 30000); });
+  let display = ''; await new Promise((ok, fail) => { let out = '', ready = false, done = false; const finish = (err, val) => { if (done) return; done = true; err ? fail(err) : ok(val); }; p.stdout.on('data', c => { out += c; display = /DISPLAY (.*)/.exec(out)?.[1] ?? display; if (!ready && out.includes('READY')) { ready = true; if (process.env.PROBE) for (const l of out.split('\n')) if (/^(ANIMATIONS|EFFECTS|SURFACES|TIME|ARGS|LAYERS|RAF|METRICS|TRACE|NOT_COMPOSITED|INVALIDATIONS) /.test(l)) console.log(sc, l); finish(); } }); p.once('exit', (code) => { if (!ready) finish(new Error(sc + ': electron exited' + (code != null ? ` (${code})` : ''))); }); setTimeout(() => { if (!ready) finish(new Error(sc + ': no READY')); }, 90000); });
   let focus = null; p.stdout.on('data', c => { for (const m of String(c).matchAll(/FOCUS (true|false)/g)) if (focus) focus[m[1] === 'true' ? 0 : 1]++; });
   await sleep(WARM); const a = cpu(p.pid); focus = [0, 0]; await sleep(WINDOW); const b = cpu(p.pid);
   const pct = k => +(((b[k] ?? 0) - (a[k] ?? 0)) / (WINDOW / 1000) * 100).toFixed(1);

@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { pluginApi } from '../apps/plugin-api/active.js';
+import { createPluginRegistry } from '../apps/plugin-api/registry.js';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,7 +31,7 @@ function fakeHost() {
 }
 
 // installed: [{ id, version, source? }] already in the plugin folder and approved. answers: the dialog buttons pressed, in order.
-async function setup(t, { installed = [], answers = [], signedIn = true, builtin = [], github = null } = {}) {
+async function setup(t, { installed = [], answers = [], signedIn = true, builtin = [], github = null, registry } = {}) {
   const root = temp(t), dir = path.join(root, 'plugins'), builtinDir = path.join(root, 'builtin'), asked = [], notices = [], opened = [], warnings = [];
   const fake = await startFakeHub();
   t.after(() => fake.close());
@@ -48,7 +50,7 @@ async function setup(t, { installed = [], answers = [], signedIn = true, builtin
   store.load();
   const hub = createHubClient({ store, baseUrl: fake.url, name: () => 'ADE · test-pc' });
   const manager = createPluginManager({
-    dir, builtinDir: builtin.length ? builtinDir : null, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, hub, github,
+    dir, builtinDir: builtin.length ? builtinDir : null, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip: jsonExtractor, hub, github, registry,
     log: { log() {}, warn: message => warnings.push(message), error() {} }, notify: notice => notices.push(notice), openExternal: url => opened.push(url),
     spawnHost: () => fakeHost(), ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; }
   });
@@ -81,7 +83,7 @@ test('the market lists what the Hub serves next to what is installed; a built-in
   const { hub } = await env.manager.hubCatalog();
   assert.equal(hub.catalog.status, 'ok');
   const byId = Object.fromEntries(hub.catalog.plugins.map(plugin => [plugin.id, plugin]));
-  assert.deepEqual({ installed: byId.demo.installed, updateAvailable: byId.demo.updateAvailable, name: byId.demo.name, description: byId.demo.description }, { installed: { version: '1.0.0' }, updateAvailable: true, name: '데모', description: '설명입니다' });
+  assert.deepEqual({ installed: byId.demo.installed, updateAvailable: byId.demo.updateAvailable, name: byId.demo.name, description: byId.demo.description }, { installed: { version: '1.0.0', apiVersion: 1 }, updateAvailable: true, name: '데모', description: '설명입니다' });
   assert.deepEqual({ installed: byId.fresh.installed, updateAvailable: byId.fresh.updateAvailable, reserved: byId.fresh.reserved }, { installed: null, updateAvailable: false, reserved: false });
   assert.equal(byId['agent-tool'].reserved, true);
   await assert.rejects(env.manager.installFromHub('agent-tool'), { code: 'PLUGIN_ZIP' });
@@ -323,3 +325,15 @@ test('a Hub that cannot be reached shows an error in the list; losing the accoun
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, ms) { const end = Date.now() + ms; while (Date.now() < end) { if (check()) return; await sleep(50); } assert.fail('timed out waiting'); }
+
+test('an old Hub catalog keeps v1 packages disabled in a v2-only app', async t => {
+  const v1 = pluginApi.get(1), registry = createPluginRegistry([{ ...v1, version: 2 }], [1]);
+  const { manager, fake, asked } = await setup(t, { registry });
+  fake.publish({ id: 'demo', version: '1.0.0', zip: zipOf('demo', '1.0.0') });
+  const { hub } = await manager.hubCatalog();
+  assert.equal(hub.catalog.plugins[0].id, 'demo');
+  assert.equal(hub.catalog.plugins[0].apiStatus, 'removed');
+  assert.equal(hub.catalog.plugins[0].updateAvailable, false);
+  await assert.rejects(manager.installFromHub('demo'), { code: 'PLUGIN_API_UNSUPPORTED' });
+  assert.deepEqual(asked, []);
+});
