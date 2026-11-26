@@ -42,6 +42,9 @@ test('v1 workspace requests and events are bounded by the 0.6.3 contract', () =>
     { type: 'chat/event', event: { kind: 'result', status: 'success' } });
   assert.deepEqual(workspace.event({ type: 'terminal/size', id: 't', cols: 80, rows: 24, futureField: true }), { type: 'terminal/size', id: 't', cols: 80, rows: 24 });
   assert.deepEqual(workspace.result('snapshot', { id: 'p', terminals: [{ id: 't', cols: 80, future: true }], future: true }), { id: 'p', terminals: [{ id: 't', cols: 80 }] });
+  // The agent bus quotes the sender's last user message; dropping it here made every message say the user had typed nothing.
+  assert.deepEqual(workspace.result('chat/peers', [{ id: 'c', agent: 'claude', lastUser: { text: 'hi', at: 5, future: true }, future: true }, { id: 'd', agent: 'codex', lastUser: null }]),
+    [{ id: 'c', agent: 'claude', lastUser: { text: 'hi', at: 5 } }, { id: 'd', agent: 'codex', lastUser: null }]);
 });
 
 test('removal keeps an approved package and its data but never starts its host', async t => {

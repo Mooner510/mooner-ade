@@ -1880,6 +1880,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const waitingAgents = useMemo(() => new Set(askingAgents.values()), [askingAgents]);
   const shown = useMemo(() => { const from = lastIndexWhere(view.items, item => item.kind === 'divider'); return from < 0 ? view.items : view.items.slice(from + 1); }, [view.items]);
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
+  // The pin is measured on scroll, but a new conversation (/clear) replaces the thread without one: the previous conversation's last request (often a
+  // message from the agent bus) stayed pinned above the new, empty chat. It is measured again whenever the thread starts somewhere else.
+  const threadStart = shown[0]?.key ?? '';
+  useLayoutEffect(() => { if (!threadStart) setPin(null); else syncPin(); }, [threadStart, syncPin]);
   // Only the newest turns are in the DOM; the rest load as the reader scrolls up (a long chat was thousands of elements per pane, laid out and kept in memory for every open tab).
   const [turnLimit, setTurnLimit] = useState(TURN_PAGE);
   const hiddenTurns = Math.max(0, turns.length - turnLimit), renderedTurns = hiddenTurns ? turns.slice(hiddenTurns) : turns;
