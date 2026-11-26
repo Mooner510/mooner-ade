@@ -6,6 +6,7 @@ import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-mete
 import type { FileBuffer } from './file-buffer';
 import { TIPS_VERSION } from './tips';
 import { wireDiffEditor, wireFileEditor, type DiffSend } from './send-to-chat-monaco';
+import { diffSides } from './diff-sides';
 
 // An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
 export type McpTrust = { server: string; tool?: string };
@@ -338,7 +339,9 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
   const [narrow, setNarrow] = useState(true);
   const sideBySide = !narrow && (settings.diffLayout === 'split' || (settings.diffLayout === 'auto' && !compact));
   const live = useRef<{ monaco: typeof Monaco; diff: Monaco.editor.IStandaloneDiffEditor; a: Monaco.editor.ITextModel; b: Monaco.editor.ITextModel } | null>(null);
-  const latest = useRef({ original, modified, settings, sideBySide, onHeight }); latest.current = { original, modified, settings, sideBySide, onHeight };
+  // A new (or deleted) file: only its lines, without Monaco's removed (added) blank line for the empty side (diff-sides.ts).
+  const sides = diffSides(original, modified);
+  const latest = useRef({ sides, settings, sideBySide, onHeight }); latest.current = { sides, settings, sideBySide, onHeight };
   const sendRef = useRef(send); sendRef.current = send;
   useEffect(() => {
     const box = host.current!;
@@ -355,12 +358,12 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       const now = latest.current.settings;
       monaco.editor.setTheme(themeName(now.theme));
       const diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false,
+        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false, experimental: { useTrueInlineView: latest.current.sides.whole === 'added' },
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
       const uri = (side: string) => monaco.Uri.from({ scheme: 'diff', path: `/${side}/${path}`, query: String(Math.random()) });
-      const a = monaco.editor.createModel(latest.current.original, undefined, uri('a')), b = monaco.editor.createModel(latest.current.modified, undefined, uri('b'));
+      const a = monaco.editor.createModel(latest.current.sides.original, undefined, uri('a')), b = monaco.editor.createModel(latest.current.sides.modified, undefined, uri('b'));
       diff.setModel({ original: a, modified: b });
       live.current = { monaco, diff, a, b };
       const sized = compact ? diff.getModifiedEditor().onDidContentSizeChange(event => {
@@ -386,15 +389,16 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
   }, [path, compact, minHeight, settings.diffFoldUnchanged, settings.diffContextLines]);
   useEffect(() => {
     const editor = live.current; if (!editor) return;
-    if (editor.a.getValue() !== original) editor.a.setValue(original);
-    if (editor.b.getValue() !== modified) editor.b.setValue(modified);
-  }, [original, modified]);
+    editor.diff.updateOptions({ experimental: { useTrueInlineView: sides.whole === 'added' } });
+    if (editor.a.getValue() !== sides.original) editor.a.setValue(sides.original);
+    if (editor.b.getValue() !== sides.modified) editor.b.setValue(sides.modified);
+  }, [sides.original, sides.modified, sides.whole]);
   useEffect(() => {
     const editor = live.current; if (!editor) return;
     editor.monaco.editor.setTheme(themeName(settings.theme));
     editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide, ignoreTrimWhitespace: settings.diffIgnoreWhitespace, maxComputationTime: settings.diffComputeMs, fontFamily: diffFontFamily(settings) });
   }, [settings.theme, settings.fontSize, settings.wordWrap, sideBySide, settings.diffIgnoreWhitespace, settings.diffComputeMs, settings.diffFont, settings.terminalFont]);
-  return <div className={compact ? 'chat-diff-wrap' : 'diff-view'}>
+  return <div className={compact ? 'chat-diff-wrap' : 'diff-view'} data-whole={sides.whole ?? undefined}>
     <div className="diff-view-bar">
       {header}
       <span className="diff-view-choices" role="group" aria-label="diff 보기 방식">

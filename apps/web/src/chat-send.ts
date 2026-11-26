@@ -179,8 +179,9 @@ export function unifiedPatch(path: string, original: string, modified: string, c
     for (let k = index; k <= last; k++) {
       const span = spans[k];
       for (; ai < span.aStart; ai++) body.push(` ${a[ai]}`);
-      for (let i = span.aStart; i < span.aEnd; i++) body.push(`-${a[i]}`);
-      for (let i = span.bStart; i < span.bEnd; i++) body.push(`+${b[i]}`);
+      // Monaco names an empty side (a new or deleted file) as one line it does not have: only lines that exist go in.
+      for (let i = span.aStart; i < Math.min(span.aEnd, a.length); i++) body.push(`-${a[i]}`);
+      for (let i = span.bStart; i < Math.min(span.bEnd, b.length); i++) body.push(`+${b[i]}`);
       ai = span.aEnd;
     }
     for (; ai < aTo; ai++) body.push(` ${a[ai]}`);
