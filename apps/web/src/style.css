@@ -1046,6 +1046,16 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-field.wide { flex-direction: column; align-items: stretch; gap: 8px; }
 .plugin-actions-note { flex: 1 1 200px; display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; color: var(--tone); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .plugin-actions-note .icon { flex: none; }
+/* A plugin action's result, under the buttons that ran it. */
+.plugin-result { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: var(--tone); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; animation: fade-in .18s ease-out; }
+.plugin-result .icon { flex: none; margin-top: 1px; }
+/* Buttons held while something runs dim only if it takes a moment: a quick save no longer flashes the whole page. */
+.plugins button:disabled, .plugins input[role=switch]:disabled, .plugin-panel button:disabled { transition: opacity .15s ease .35s, background .12s, color .12s, border-color .12s; }
+/* A result whose buttons are not on screen: held at the bottom of the scrolling settings body. */
+.plugin-float { position: sticky; bottom: 0; z-index: 3; margin-top: 12px; padding-bottom: 2px; }
+.plugin-float .plugin-callout { background: color-mix(in srgb, var(--tone) 12%, var(--raised)); box-shadow: 0 8px 28px rgb(0 0 0 / .35); align-items: center; }
+.plugin-float .plugin-callout-action .icon-btn { width: 26px; height: 26px; }
+@media (prefers-reduced-motion: reduce) { .plugin-result { animation: none; } .plugin-float .plugin-callout { animation: none; } }
 .plugin-field-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .plugin-field-text > span { font-weight: 600; font-size: 13px; }
 .plugin-field small { line-height: 1.4; color: var(--muted); }
