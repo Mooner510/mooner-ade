@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { cleanChatTitle } from './chat-title.js';
 import { mergeCursorCommands } from './slash-commands.js';
+import { askMcpTitle, askMcpTools } from './terminal-sessions.js';
 
 const mcpFilter = fileURLToPath(new URL('./mcp-filter.js', import.meta.url));
 // ACP session/new takes a whole server. A server with tools turned off is started through mcp-filter.js, which hides those names.
@@ -349,7 +350,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
     await send({ id: raw.id, result: response });
   }
   // A built-in plugin's MCP tool (the agent bus) needs no prompt. Cursor names an MCP tool in the request's title; shell, file and fetch kinds never match.
-  const autoApprovedTool = toolCall => autoServers.length > 0 && [undefined, 'other'].includes(toolCall?.kind) && typeof toolCall?.title === 'string' && autoServers.some(name => toolCall.title.includes(name));
+  const autoApprovedTool = toolCall => autoServers.length > 0 && [undefined, 'other'].includes(toolCall?.kind) && typeof toolCall?.title === 'string' && autoServers.some(name => toolCall.title.includes(name)) && !askMcpTitle(toolCall.title);
   // Run Everything: accept once (never "always", so turning it off takes effect on the next request). Newer cursor-agent builds sometimes label the once choice `allow` instead of `allow_once`.
   const cursorAllowOnceOption = options => {
     const list = options ?? [];
@@ -551,7 +552,7 @@ export function createChatProtocol(agent, { write, emit, fail, transportResumeDe
         const permissions = codexPermissions(meta.permissionMode, cwd, meta.addDirs, meta.sandbox, meta.network);
         const params = { cwd, model: meta.model ?? null, approvalPolicy: permissions.approvalPolicy, approvalsReviewer: permissions.approvalsReviewer, sandbox: permissions.sandboxMode,
           config: { ...(config.effort && { model_reasoning_effort: config.effort }), 'sandbox_workspace_write.writable_roots': [cwd, ...meta.addDirs], 'sandbox_workspace_write.network_access': meta.network === true,
-            ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args, ...(s.env && { env: s.env }), ...(s.autoApprove && { default_tools_approval_mode: 'approve' }), ...(s.disabledTools?.length && { disabled_tools: s.disabledTools }) }])) } };
+            ...Object.fromEntries(servers.map(s => [`mcp_servers.${s.name}`, { command: s.command, args: s.args, ...(s.env && { env: s.env }), ...(s.autoApprove && { default_tools_approval_mode: 'approve' }), ...(askMcpTools(s).length && { tools: Object.fromEntries(askMcpTools(s).map(tool => [tool, { approval_mode: 'prompt' }])) }), ...(s.disabledTools?.length && { disabled_tools: s.disabledTools }) }])) } };
         // A thread keeps the provider it was started with and resumes with it, so switching between the login and an API key (Settings > AI 툴) would not
         // reach an existing chat, and a chat started with the key could not resume once its provider is gone. Resume with the provider configured now.
         const provider = meta.resumeAt || meta.sessionId ? await request('config/read', { includeLayers: false }).then(result => result?.config?.model_provider || 'openai', () => null) : null;

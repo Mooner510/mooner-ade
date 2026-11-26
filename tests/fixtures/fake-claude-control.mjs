@@ -5,7 +5,7 @@ import { appendFileSync } from 'node:fs';
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const sessionId = process.env.ADE_TEST_CLAUDE_SESSION ?? 'control-session';
 const result = (extra = {}) => send({ type: 'result', is_error: false, result: 'ok', session_id: sessionId, total_cost_usd: 0.01, duration_ms: 5, num_turns: 1, ...extra });
-send({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'] });
+send({ type: 'system', subtype: 'init', session_id: sessionId, model: 'fake-model', permissionMode: 'default', slash_commands: [], tools: ['Bash'], ...(process.env.ADE_TEST_REPORT_CWD && { cwd: process.env.ADE_TEST_REPORT_CWD }) });
 let running = false, askx = 0, allow = [], mcpAnswer = 'grants'; // allow: the permissions.allow the host put into the flag settings
 readline.createInterface({ input: process.stdin }).on('line', line => {
   let message; try { message = JSON.parse(line); } catch { return; }
@@ -59,6 +59,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     result();
     return;
   }
+  if (text.endsWith('whereami')) { send({ type: 'assistant', message: { id: `m${Date.now()}`, content: [{ type: 'text', text: `cwd=${process.cwd()}|note=${text.startsWith('[ADE]')}` }] } }); result(); return; }
   if (text === 'slow') { running = true; return; }
   if (text === 'bgtask') { // a background subagent that outlives its turn: it ends only by stop_task (or with the child)
     send({ type: 'system', subtype: 'task_started', tool_use_id: 'toolu_bg', task_id: 'task-bg', description: 'long', subagent_type: 'general-purpose', is_backgrounded: true, session_id: 'control-session' });

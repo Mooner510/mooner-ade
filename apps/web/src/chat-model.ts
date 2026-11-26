@@ -1,6 +1,7 @@
 // What the chat tab knows about one conversation, built from the events the local server streams (apps/local-server/src/chat-claude.js).
 // Pure functions only, so tests/chat-model.test.mjs can load this file through Node's type stripping.
 import { applyFileRewind, attachTurnChanges, type FileRewindData, type TurnChanges } from './turn-changes.ts';
+import { worktreeLine } from './chat-worktree.ts';
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheCreate: number };
 export type ModelConfigOption = { id: string; name: string; description?: string; category?: string; type: 'select'; currentValue: string; options: { value: string; name: string; description?: string }[] };
@@ -466,12 +467,8 @@ export function reduce(view: ChatView, event: any): ChatView {
       return append(view, { kind: 'note', key, text: `AI가 ${label}로 변경했습니다.`, tones: [{ value: label, color: permissionModeColor(mode), icon: modeIcons[mode] ?? 'tune' }], fresh });
     }
     // The agent moved the session into a worktree or back out: file paths and the branch it works on differ from here on.
-    case 'worktree': {
-      const folder = (path: unknown) => typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '' : '';
-      const enter = event.phase === 'enter', name = folder(enter ? event.path : event.from);
-      const tail = enter ? (event.branch && event.branch !== name ? ` (${event.branch})` : '') : name ? ` ${event.removed ? '삭제됨' : '유지됨'}` : '';
-      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? `, ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
-    }
+    // Also the user's own moves, commits, merges and the worktree let go (chat-worktree.ts).
+    case 'worktree': { const line = worktreeLine(event); return line ? append(view, { kind: 'note', key, ...line, fresh }) : view; }
     case 'limit': {
       // The CLI reports again whenever the rounded share moves, so one window keeps one line that follows the latest reading (not a new line per percent, and not the first reading for good).
       const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.resetsAt}:${event.overage}`, at = view.items.findIndex(item => item.key === id);

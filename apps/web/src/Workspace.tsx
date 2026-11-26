@@ -46,12 +46,14 @@ import { focusInPanes, focusPane } from './pane-focus';
 import { pickChat } from './attention-nav';
 import { swapLeaves } from './tree-nav';
 import { sendToChat, setActiveRoots, type SendGet, type SendHost } from './send-to-chat';
+import { openChatWorktree, WorktreeManager } from './ChatWorktree';
+import { worktreeBadge, worktreeMark, worktreeOf, type WorktreeInfo, type WorktreeMark } from './chat-worktree.ts';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
-export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' | 'chat' | 'launcher'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache };
-export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
+export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' | 'chat' | 'launcher'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache; worktree?: WorktreeMark };
+export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache; worktree?: WorktreeMark };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 // `forceAsk`: the sidebar X and Delete on a sidebar row always confirm. Shortcuts, middle-click and the pane's own close button still follow the confirm settings.
@@ -259,6 +261,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const [caches, setCaches] = useState<Record<string, ClaudeCache>>({});
   const dropCache = (id: string) => setCaches(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
+  // Each chat's git worktree (chat-worktree.ts): the sidebar mark, and the question when a chat that still holds one is closed. `worktreeList`: the palette's list of all of them.
+  const [worktrees, setWorktrees] = useState<Record<string, WorktreeInfo>>({}), [worktreeList, setWorktreeList] = useState(false);
+  const noteWorktree = (id: string, info: WorktreeInfo | null) => setWorktrees(previous => {
+    if (!info) { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; }
+    return JSON.stringify(previous[id]) === JSON.stringify(info) ? previous : { ...previous, [id]: info };
+  });
+  const worktreeMarks = useMemo(() => Object.fromEntries(Object.entries(worktrees).map(([id, info]) => [id, worktreeMark(info)])), [worktrees]);
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
@@ -645,8 +654,8 @@ ${where}`, [
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
-    return { id: tab.id, label: tabLabel(tab), kind: current?.kind === 'chat' ? 'chat' : !current || current.kind === 'launcher' ? 'launcher' : undefined, count: list.length, agent: current?.kind === 'chat' ? current.agent ?? 'claude' : current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined,
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : leaf.kind === 'chat' ? 'chat' : leaf.kind === 'launcher' ? 'launcher' : 'terminal', agent: leaf.kind === 'editor' ? undefined : leaf.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id) })) : [] };
+    return { id: tab.id, label: tabLabel(tab), kind: current?.kind === 'chat' ? 'chat' : !current || current.kind === 'launcher' ? 'launcher' : undefined, count: list.length, agent: current?.kind === 'chat' ? current.agent ?? 'claude' : current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined, worktree: list.length === 1 ? worktreeMarks[list[0].id] : undefined,
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : leaf.kind === 'chat' ? 'chat' : leaf.kind === 'launcher' ? 'launcher' : 'terminal', agent: leaf.kind === 'editor' ? undefined : leaf.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id), worktree: worktreeMarks[leaf.id] })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, tabs: JSON.parse(tabInfo), activeTab });
@@ -1039,9 +1048,25 @@ ${where}`, [
     // A background subagent is always asked about: closing ends it silently otherwise. Sidebar X also asks before an idle chat disappears.
     const question = bgChats.current.has(id) ? '백그라운드 작업이 실행 중인 채팅을 닫을까요? 작업이 종료됩니다.' : working.has(id) && (forceAsk || settingsRef.current.confirmCloseChat) ? '응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.' : forceAsk ? '이 채팅을 닫을까요?' : '';
     if (question && !(await askClose(question))) return;
+    if (!(await keepWorktreeOnClose(id))) return;
     await call('chat/close', { id }).catch(report);
     chatBus.current.delete(id); chatPrev.current.delete(id);
     removeTerminalPane(id);
+  }
+  // A chat that still holds its worktree is asked about before it closes: the worktree and branch stay (and show in the palette's worktree list),
+  // or it is merged first, or (when there is nothing in it) let go with the chat.
+  async function keepWorktreeOnClose(id: string) {
+    const kept = worktrees[id];
+    if (!kept?.managed || kept.status?.exists === false) return true;
+    const ahead = kept.status?.ahead ?? 0, dirty = kept.status?.dirty ?? 0, idle = !working.has(id);
+    const work = [ahead && `합치지 않은 커밋 ${ahead}개`, dirty && `커밋하지 않은 변경 ${dirty}개`].filter(Boolean).join(', ');
+    const choice = await pick(`이 채팅의 worktree ${worktreeBadge(kept).label}${work ? `에 ${work}가 있습니다` : '가 남아 있습니다'}. 닫아도 worktree와 브랜치는 남고, 다시 열거나 ‘채팅 worktree 관리’에서 정리할 수 있습니다.`, [
+      { id: 'keep', label: '닫기 (worktree는 남김)', icon: 'x' },
+      ...(work ? [{ id: 'merge', label: '원본으로 합치기…', icon: 'merge' as const }] : idle ? [{ id: 'release', label: 'worktree 해제하고 닫기', icon: 'trash' as const }] : []),
+      { id: 'cancel', label: '취소' }]);
+    if (choice === 'merge') { openChatWorktree(id, 'merge'); return false; }
+    if (choice === 'release') return call('chat/worktree/remove', { id, deleteBranch: true }).then(() => true, cause => { report(cause); return false; });
+    return choice === 'keep';
   }
   function onAgentEvent(id: string, event: AgentEventKind | 'asyncQuestion') {
     const owner = tabOf(id), leaf = findLeaf(owner?.pane ?? null, id);
@@ -1056,6 +1081,7 @@ ${where}`, [
   // Status of a chat for the sidebar: working while it answers, attention while it waits for an approval, done (once) when it finishes.
   function onChatState(id: string, state: ChatState) {
     const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
+    noteWorktree(id, worktreeOf(state));
     if (state.liveTasks?.length) bgChats.current.add(id); else bgChats.current.delete(id);
     paneProps.onAgentWorking(id, state.status === 'working' || state.status === 'attention');
     // The chat's prompt cache feeds the sidebar timer like a terminal Claude's does; only changed values re-render.
@@ -1087,6 +1113,9 @@ ${where}`, [
     if (!(await saveBeforeClose(leafList(tab.pane).flatMap(leaf => leaf.tabs ?? [])))) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     const chats = leafList(tab.pane).filter(leaf => leaf.kind === 'chat');
+    // Chats with work left in their worktree: one question for the tab (the worktrees stay; the palette lists them).
+    const unmerged = chats.filter(leaf => worktrees[leaf.id]?.managed && ((worktrees[leaf.id].status?.ahead ?? 0) > 0 || (worktrees[leaf.id].status?.dirty ?? 0) > 0));
+    if (unmerged.length && !(await askClose(`이 탭의 채팅 ${unmerged.length}개가 worktree에 합치지 않은 작업을 남겨 두고 있습니다(${unmerged.map(leaf => worktrees[leaf.id].branch).join(', ')}). 닫아도 worktree와 브랜치는 남고 ‘채팅 worktree 관리’에서 정리할 수 있습니다. 닫을까요?`))) return;
     // Busy: answering, waiting for an approval, or running a background subagent. Background work is asked about whatever the setting says.
     const busy = chats.filter(leaf => working.has(leaf.id) || bgChats.current.has(leaf.id)).length, background = chats.some(leaf => bgChats.current.has(leaf.id));
     if (forceAsk || (running.length && settingsRef.current.confirmClose) || (chats.length && settingsRef.current.confirmCloseChat) || background) {
@@ -1325,6 +1354,7 @@ ${where}`, [
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', icon: 'branch', run: switchBranch },
+    { id: 'chatWorktrees', label: '채팅 worktree 관리…', icon: 'merge', run: () => setWorktreeList(true) },
     { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, icon: 'palette', run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
     ...navCommands,
     ...projectCommands
@@ -1560,6 +1590,7 @@ ${where}`, [
         openFeedback(item.id); showFeedback();
       }} />}
     {quickDialog}
+    {worktreeList && <WorktreeManager call={call} fail={report} onClose={() => setWorktreeList(false)} onOpenChat={chatId => { const owner = tabOf(chatId); if (owner) { selectTab(owner.id); setFocusLeaf(chatId); } }} />}
   </main>;
 }));
 

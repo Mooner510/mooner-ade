@@ -28,6 +28,8 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   // Cursor's "add selection to chat" key. Takes Monaco's Ctrl+Shift+L (select all occurrences; Ctrl+F2 still does it) and, in a terminal, the
   // same ^L as Ctrl+L (left to the shell); nothing else in the app, Windows or macOS uses it.
   { id: 'sendToChat', group: '화면/도구', label: '선택 영역을 채팅으로 보내기', keys: 'mod+shift+l' },
+  // No default key: the palette's "채팅 worktree 관리…"; a key can be set in Settings.
+  { id: 'chatWorktrees', group: '화면/도구', label: '채팅 worktree 관리', keys: '' },
   { id: 'addProject', group: '프로젝트', label: '프로젝트 열기…', keys: 'mod+alt+o' },
   { id: 'toggleProjects', group: '화면/도구', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b' },
   { id: 'settings', group: '화면/도구', label: '설정 열기', keys: 'mod+,' },

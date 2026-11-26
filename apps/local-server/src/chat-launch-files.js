@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ATTRIBUTION_OFF } from './agent-signature.js';
 import { chatPrompt } from './chat-prompt.js';
 import { writeIfChanged, writeShared } from './file-util.js';
-import { chatMcpServers, deniedMcpTools } from './terminal-sessions.js';
+import { askMcpTools, chatMcpServers, deniedMcpTools } from './terminal-sessions.js';
 
 // The same plugin MCP servers the terminals give `claude`, passed as a --mcp-config file next to the chat's transcript, and
 // the plugin tools the user turned off as deny rules in a --settings file.
@@ -22,7 +22,8 @@ export function chatLaunchFiles(dataRoot) {
     const promptFile = prompt ? await writeShared(shared, 'ade-ui-prompt', '.md', prompt) : undefined;
     // The settings file always exists: it also tells Claude not to sign the user's commits and PRs (see agent-signature.js).
     const denied = deniedMcpTools(servers), allowed = servers.filter(server => server.autoApprove).map(server => `mcp__${server.name}`);
-    const permissions = { ...(allowed.length && { allow: allowed }), ...(denied.length && { deny: denied }) };
+    const asked = servers.flatMap(server => askMcpTools(server).map(tool => `mcp__${server.name}__${tool}`));
+    const permissions = { ...(allowed.length && { allow: allowed }), ...(asked.length && { ask: asked }), ...(denied.length && { deny: denied }) };
     const settingsFile = await writeShared(shared, 'claude-settings', '.json', JSON.stringify({ ...ATTRIBUTION_OFF, ...(Object.keys(permissions).length && { permissions }) }));
     if (!servers.length) return { settingsFile, promptFile };
     const mcpFile = path.join(root, 'claude-mcp.json');
