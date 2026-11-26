@@ -590,7 +590,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'idleCompactMinK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'idleCompact' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'idleCompact' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'treeGitColors' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -857,6 +857,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
         {(searching || section === 'git') && <SectionFrame label="Git" searching={searching}>
           <GitSettings settings={settings} set={set} />
+          <Group title="파일 트리">
+            <Row title="Git 상태 색상" hint="프로젝트 파일 트리에서 .gitignore에 걸리는 파일은 회색, 아직 git에 추가하지 않은 파일은 다홍색, 새로 추가(staged)한 파일은 초록색, 수정한 파일(과 그 폴더)은 파란색으로 표시합니다.">{toggle('treeGitColors')}</Row>
+          </Group>
           <Group title="Diff">
             <p className="setting-note">글꼴, 줄바꿈, 표시 방식, 구간 접기는 외관에서 바꿉니다.</p>
             <Row title="공백 변경 무시" hint="줄 앞뒤 공백만 바뀐 줄은 변경으로 표시하지 않습니다.">{toggle('diffIgnoreWhitespace')}</Row>

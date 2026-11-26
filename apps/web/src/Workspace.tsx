@@ -1368,7 +1368,7 @@ ${where}`, [
     </header>
     <ErrorToast scope={root} active={active} />
     <div className="workbench">
-      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
+      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} gitColors={settings.treeGitColors} expanded={treeExpanded} setExpanded={setTreeExpanded}
         onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} host={treeHost} />
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>

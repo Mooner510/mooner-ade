@@ -228,16 +228,25 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .project-tree-list { --tree-indent: 8px; flex: 1; min-height: 0; overflow: auto; padding: 4px; }
 .project-tree-list [role="treeitem"] { outline: none; }
 .project-tree-list [role="group"] { position: relative; }
-.project-tree-list [role="group"]::before { content: ''; position: absolute; inset: 0 auto 0 calc(11px + var(--depth) * var(--tree-indent)); width: 1px; background: var(--border-strong); pointer-events: none; }
+.project-tree-list [role="group"]::before { content: ''; position: absolute; inset: 0 auto 0 calc(12px + var(--depth) * var(--tree-indent)); width: 1px; background: var(--border-strong); pointer-events: none; }
 .project-tree-row { display: flex; align-items: center; gap: 5px; min-height: 24px; padding: 0 6px 0 calc(3px + var(--depth) * var(--tree-indent)); border-radius: 4px; white-space: nowrap; user-select: none; }
 .project-tree-row:hover { background: var(--hover); }
 .project-tree-list [aria-selected="true"] > .project-tree-row { background: var(--selected); }
 .project-tree-list [role="treeitem"]:focus-visible > .project-tree-row { box-shadow: inset 0 0 0 1px var(--focus); }
-.project-tree-chevron { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; height: 24px; color: var(--muted); }
+/* The chevron glyph has empty space on both sides, so inside its 16px box it sat close to the indent line and far from the icon: nudge it right (same box, same widths). */
+.project-tree-chevron { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; height: 24px; margin-right: -2px; color: var(--muted); }
+.project-tree-chevron > .icon { transform: translateX(3px); }
 .project-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .project-tree-message { padding: 4px 12px; color: var(--muted); }
 .project-tree-notice { color: var(--del); cursor: pointer; white-space: pre-line; }
 .project-tree-row.cut { opacity: .5; }
+/* Git state colours (Settings > Git > 파일 트리): gray ignored, vermilion untracked, green newly added, blue modified (and the folders that hold them). */
+.project-tree-list { --tree-untracked: color-mix(in srgb, var(--del) 75%, var(--warn)); }
+.project-tree-row[data-git="ignored"] .project-tree-name { color: var(--faint); }
+.project-tree-row[data-git="ignored"] .file-glyph { opacity: .5; }
+.project-tree-row[data-git="untracked"] .project-tree-name { color: var(--tree-untracked); }
+.project-tree-row[data-git="added"] .project-tree-name { color: var(--add); }
+.project-tree-row[data-git="modified"] .project-tree-name { color: var(--info); }
 .project-tree-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .project-tree-resize { position: absolute; inset: 0 -6px 0 auto; width: 6px; cursor: col-resize; touch-action: none; }
 .project-tree-resize:is(:hover, :focus-visible, :active) { background: var(--accent-soft); }

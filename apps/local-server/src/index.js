@@ -18,6 +18,7 @@ import { fault, text, readText, serial } from './files.js';
 import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveDroppedFiles, moveProjectEntries, openProjectMedia, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
 import { createTipClaims, validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
+import { readTreeStates } from './tree-git.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
 import { connectPtyHost } from './pty-client.js';
 import { runningCommands, terminalProcesses } from './terminal-processes.js';
@@ -1419,6 +1420,15 @@ async function route(action, input, project) {
       return openPath({ ide: text(input.ide, '편집기', 100), root, target, line: whole(input.line), column: whole(input.column) });
     }
     case 'files/directory': return { entries: await projectDirectory(workspace, input.path) };
+    case 'files/git-status': {
+      // The tree's git colours. Same reuse rule as git/status: while the watcher saw nothing and git's own files are untouched, the last answer stands (at most 15 s).
+      const fsVersion = project.fsVersion, stamp = project.watcher?.watching ? await gitStamp(workspace.root) : null;
+      const last = project.treeStates?.get(workspace.root);
+      if (stamp && last?.stamp === stamp && last.fsVersion === fsVersion && Date.now() - last.at < 15_000) return last.result;
+      const result = { states: await readTreeStates(runtime) };
+      if (stamp) (project.treeStates ??= new Map()).set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
+      return result;
+    }
     case 'files/read': return { file: await readProjectFile(workspace, input.path) };
     case 'files/write': return writeProjectFile(workspace, input);
     case 'files/create': await createProjectEntry(workspace, input); return {};
