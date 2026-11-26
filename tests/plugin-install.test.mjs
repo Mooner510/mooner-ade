@@ -280,3 +280,23 @@ test('zips are asked about one at a time, and a picked zip from elsewhere is kep
   assert.ok(!fs.existsSync(path.join(dir, 'one.zip')));
   assert.equal(hosts.length, 2);
 });
+
+test('an approval write failure restores the installed folder and does not start the candidate', async t => {
+  const { root, dir, store, manager, hosts, leftovers } = setup(t, { answers: [0, 0] });
+  const archive = (file, version) => jsonZip(path.join(root, file), {
+    'demo/plugin.json': JSON.stringify({ id: 'demo', name: 'Demo', version, apiVersion: 1, main: 'host.js' }),
+    'demo/host.js': `// ${version}`
+  });
+  await manager.installZip(archive('current.zip', '1.0.0'), { picked: true });
+  const before = store.state.approved.demo;
+  const update = store.update.bind(store);
+  store.update = () => { throw new Error('approval write failed'); };
+  await assert.rejects(manager.installZip(archive('candidate.zip', '2.0.0'), { picked: true }), /approval write failed/);
+  store.update = update;
+  assert.deepEqual(store.state.approved.demo, before);
+  assert.equal(fs.readFileSync(path.join(dir, 'demo', 'host.js'), 'utf8'), '// 1.0.0');
+  assert.equal(manager.snapshot().plugins[0].version, '1.0.0');
+  assert.ok(hosts.every(host => host.child.sent.find(message => message.type === 'init').storage === null));
+  assert.deepEqual(fs.readdirSync(dir), ['demo']);
+  assert.deepEqual(leftovers(), []);
+});

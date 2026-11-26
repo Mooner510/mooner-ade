@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createPluginRegistry } from '../apps/plugin-api/registry.js';
+import { pluginApi } from '../apps/plugin-api/active.js';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -227,7 +229,7 @@ function fakeHost() {
   return child;
 }
 // latest: what the fake release holds ({ version, extra }); answers: the dialog buttons pressed, in order.
-function setup(t, { latest, answers = [], probeCredential, extractZip = jsonExtractor }) {
+function setup(t, { latest, answers = [], probeCredential, extractZip = jsonExtractor, registry }) {
   const root = temp(t), dir = path.join(root, 'plugins'), asked = [], notices = [], hosts = [];
   fs.mkdirSync(path.join(dir, 'demo'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'demo', 'plugin.json'), JSON.stringify(manifestOf('1.0.0')));
@@ -236,12 +238,12 @@ function setup(t, { latest, answers = [], probeCredential, extractZip = jsonExtr
   store.load();
   const release = { ...latest };
   const github = {
-    latest: async () => ({ repo: 'o/r', tag: `v${release.version}`, version: release.version, asset: { id: 1, name: 'demo.zip' }, sha256: 'x', via: null }),
+    latest: async () => ({ repo: 'o/r', tag: `v${release.version}`, version: release.version, apiVersion: release.apiVersion, asset: { id: 1, name: 'demo.zip' }, sha256: 'x', via: null }),
     download: async found => ({ data: pluginZip(found.version, release.extra) }),
     whoami: async token => { if (token !== 'good'.repeat(10)) throw Object.assign(new Error('bad token'), { code: 'UNAUTHORIZED' }); return { login: 'me' }; }
   };
   const manager = createPluginManager({
-    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip, github, probeCredential,
+    dir, dataRoot: path.join(root, 'plugin-data'), stagingRoot: path.join(root, 'staging'), store, nodeBinary: '/node', extractZip, github, probeCredential, registry,
     log: { log() {}, warn() {}, error() {} }, notify: notice => notices.push(notice),
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; }
@@ -417,4 +419,59 @@ test('gh account selection is validated, persisted across restarts, and never ex
   accounts = [];
   await assert.rejects(env.manager.selectGithubAccount('bob'), { code: 'GH_AUTH_FAILED' });
   assert.equal(env.store.state.ghAccount, 'bob', 'no silent account change');
+});
+
+test('GitHub selects the highest compatible package from a shared release', async t => {
+  const zip1 = pluginZip('1.9.1'), zip2 = pluginZip('2.0.0', { apiVersion: 2 });
+  const catalog = Buffer.from(JSON.stringify({ plugins: [
+    { id: 'demo', version: '1.9.1', apiVersion: 1, asset: 'demo.zip' },
+    { id: 'demo', version: '2.0.0', apiVersion: 2, asset: 'demo-api-v2.zip' }
+  ] }));
+  const assets = { 'demo.zip': zip1, 'demo-api-v2.zip': zip2, 'plugin-releases.json': catalog, 'versions.json': Buffer.from('{"demo":"1.9.1"}') };
+  const { api } = await fakeGithub(t, { releases: [{ tag: 'shared-bundle', assets: { ...assets, SHA256SUMS: sums(assets) } }] });
+  const github = createGithub({ api }), source = { github: 'o/r', asset: 'demo.zip' };
+  assert.equal((await github.latest(source, 'demo')).version, '1.9.1');
+  assert.equal((await github.latest(source, 'demo', { apiVersions: [1] })).apiVersion, 1);
+  const newest = await github.latest(source, 'demo', { apiVersions: [1, 2] });
+  assert.equal(newest.apiVersion, 2);
+  assert.deepEqual((await github.download(newest)).data, zip2);
+  await assert.rejects(github.latest(source, 'demo', { apiVersions: [3] }), { code: 'PLUGIN_API_UNSUPPORTED' });
+});
+
+test('legacy GitHub packages are inspected before offering them as compatible', async t => {
+  const older = pluginZip('1.9.1'), newer = pluginZip('2.0.0', { apiVersion: 2 });
+  const { api } = await fakeGithub(t, { releases: [
+    { tag: 'v2.0.0', assets: { 'demo.zip': newer, SHA256SUMS: sums({ 'demo.zip': newer }) } },
+    { tag: 'v1.9.1', assets: { 'demo.zip': older, SHA256SUMS: sums({ 'demo.zip': older }) } }
+  ] });
+  const github = createGithub({ api }), source = { github: 'o/r', asset: 'demo.zip' };
+  const inspect = data => JSON.parse(JSON.parse(data).files['demo/plugin.json']);
+  const found = await github.latest(source, 'demo', { apiVersions: [1], inspect });
+  assert.equal(found.version, '1.9.1');
+  assert.equal(found.apiVersion, 1);
+});
+
+test('an API upgrade always asks even when no new permissions are declared', async t => {
+  const v1 = pluginApi.get(1), registry = createPluginRegistry([{ ...v1, status: 'deprecated' }, { ...v1, version: 2 }]);
+  const env = setup(t, { registry, latest: { version: '2.0.0', apiVersion: 2, extra: { apiVersion: 2 } }, answers: [0, 0] });
+  approve(env);
+  await env.manager.setUpdateMode('auto');
+  await env.manager.runUpdateRound();
+  assert.equal(env.plugin().apiVersion, 1);
+  assert.equal(env.plugin().update.status, 'available');
+  assert.match(env.plugin().update.review[0], /v1 → v2/);
+  assert.equal(env.asked.length, 1);
+  await env.manager.installUpdate('demo');
+  assert.match(env.asked[1].detail, /v1 → v2/);
+  assert.equal(env.plugin().apiVersion, 2);
+  assert.equal(env.hosts.at(-1).child.sent[0].apiVersion, 2);
+});
+
+test('an update whose ZIP declares another supported API is rejected', async t => {
+  const v1 = pluginApi.get(1), registry = createPluginRegistry([v1, { ...v1, version: 2 }]);
+  const env = setup(t, { registry, latest: { version: '2.0.0', apiVersion: 1, extra: { apiVersion: 2 } }, answers: [0] });
+  approve(env);
+  await assert.rejects(env.manager.installUpdate('demo'), { code: 'PLUGIN_ZIP' });
+  assert.equal(env.plugin().version, '1.0.0');
+  assert.deepEqual(env.asked, []);
 });

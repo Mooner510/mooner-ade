@@ -20,7 +20,7 @@ async function boot(t) {
     await rm(data, removal); await rm(folder, removal);
   });
   await new Promise((resolve, reject) => { child.stdout.once('data', resolve); child.once('exit', () => reject(new Error('server exited'))); });
-  const send = (op, extra = {}) => child.send({ type: 'plugin/workspace', plugin: 'example', op, ...extra });
+  const send = (op, extra = {}) => child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'generation-one', op, ...extra });
   const until = async (predicate, ms = 20000) => {
     const end = Date.now() + ms;
     while (Date.now() < end) { const index = messages.findIndex(predicate); if (index >= 0) return messages.splice(index, 1)[0]; await new Promise(resolve => setTimeout(resolve, 25)); }
@@ -48,7 +48,8 @@ test('a plugin session lists projects, opens a terminal, types into it and reads
   const projectId = opened.value.id;
   assert.ok((await api('s1', 'recent')).value.some(item => item.root === folder));
   assert.ok((await api('s1', 'app/state')).ok);
-  assert.equal((await api('s1', 'no/such-action', {})).ok, false);
+  assert.equal((await api('s1', 'no/such-action', {})).error.code, 'NOT_FOUND');
+  assert.equal((await api('s1', 'git/op', { projectId, op: 'future-operation' })).error.code, 'NOT_FOUND');
   send('send', { session: 's1', message: { type: 'subscribe', projectId } });
   await received('s1', message => message.type === 'snapshot' && message.projectId === projectId);
   // The open session counts as work an app restart would cut off.
@@ -102,4 +103,13 @@ test('a plugin can open at most 8 terminals', async t => {
   const again = await api('main', 'terminal/open', { projectId: project.id });
   assert.equal(again.ok, true, JSON.stringify(again.error));
   for (const id of [...opened.slice(1), again.value.id]) await api('main', 'terminal/close', { projectId: project.id, id });
+});
+
+test('the same session id is isolated between host generations', async t => {
+  const { send, until, api } = await boot(t);
+  send('open', { session: 'same' });
+  send('open', { session: 'same', generation: 'generation-two' });
+  send('close-all', { generation: 'generation-two' });
+  await until(message => message.op === 'closed' && message.generation === 'generation-two');
+  assert.equal((await api('same', 'app/state')).ok, true);
 });
