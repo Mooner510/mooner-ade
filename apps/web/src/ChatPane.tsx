@@ -38,6 +38,8 @@ import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-de
 import type { QuickItem } from './QuickInput';
 import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
+import { useChatPasteRefs, useChatSendTarget } from './chat-send-ui';
+import { joinPath } from './chat-send';
 import { can, isRemote } from './transport';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 
@@ -255,7 +257,9 @@ const SetDiffLayoutContext = createContext<(layout: DiffLayoutChoice) => void>((
 function ChatDiff({ from, to, path, settings, named = false }: { from: string; to: string; path: string; settings: Settings; named?: boolean }) {
   const setLayout = useContext(SetDiffLayoutContext), cwd = useContext(CwdContext);
   const { added, removed } = useMemo(() => lineChanges(from, to), [from, to]);
-  return <DiffView original={from} modified={to} path={path} settings={settings} onLayoutChange={setLayout} compact minHeight={0}
+  // 채팅으로 보내기 from an agent's edit: the file it changed, against the chat's folder.
+  const send = useMemo(() => path === 'edit' ? undefined : { file: cwd ? { path: joinPath(cwd, path), base: 'abs' as const } : { path, base: 'project' as const } }, [path, cwd]);
+  return <DiffView original={from} modified={to} path={path} settings={settings} onLayoutChange={setLayout} compact minHeight={0} send={send}
     header={<span className="chat-diff-title">{named && <span className="chat-diff-path" title={path}>{relativePath(path, cwd)}</span>}
       <span className="chat-diff-count"><span className="add">+{added}</span><span className="del">−{removed}</span></span></span>} />;
 }
@@ -1926,6 +1930,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // The width only matters while the drawer is open (dock or overlay) or when it crosses the dock threshold. Following every frame of a resizing pane (a split growing in) re-rendered the
   // pane and changed `--drawer-w` on its root, so the style of the whole thread was recalculated each frame.
   const [paneWidth, setPaneWidth] = useState(0), paneRef = useRef<HTMLElement>(null), drawerOpen = useRef(false); drawerOpen.current = Boolean(drawerAgent);
+  // 채팅으로 보내기 / ADE에서 복사한 것을 참조로 붙여넣기 (chat-send-ui.tsx). Paths are written against the chat's own working folder.
+  const sendCwd = state.cwd || cwd;
+  useChatSendTarget(id, sendCwd, setText, box, paneRef);
+  const pasteRefs = useChatPasteRefs({ enabled: ctx.settings.chatPasteRefs !== false, box, cwd: sendCwd, root: ctx.root });
   useEffect(() => {
     const el = paneRef.current; if (!el || typeof ResizeObserver !== 'function') return;
     const observer = new ResizeObserver(([entry]) => { const width = Math.round(entry.borderBoxSize[0].inlineSize); setPaneWidth(previous => drawerOpen.current || previous === 0 || (previous >= DRAWER_DOCK) !== (width >= DRAWER_DOCK) ? width : previous); });
@@ -2068,6 +2076,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <span className="chat-command-head"><b>내 기기에서 파일 선택</b></span>
           </button></li>}</ul>}
         {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 모드: {ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}로 터미널 명령어 실행</span></p>}
+        {pasteRefs.notice}
         {commandDraft && <p className="chat-command-args stacked" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {shrinking > 0 && <div className="chat-attachments"><span className="chat-shrinking" role="status"><i className="chat-spin" aria-hidden="true" />이미지를 5MB 아래로 줄이는 중…</span></div>}
         {images.length > 0 && <AttachmentStrip images={images} onOpen={setBigImage} onRemove={index => setImages(items => items.filter((_, i) => i !== index))} />}
@@ -2078,9 +2087,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중, 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기, Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기, Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요, !명령으로 셸 실행'} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { const next = shellBang(text) + event.target.value; if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(next); setCaret(event.target.selectionStart + shellBang(next).length); }} onSelect={event => setCaret(event.currentTarget.selectionStart + shellBang(text).length)}
-          onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
+          onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } pasteRefs.onPaste(event); }}
           onKeyDown={event => {
             if (event.nativeEvent.isComposing) return;
+            if (pasteRefs.onKeyDown(event)) return;
             const modSend = ctx.settings.chatSendKey === 'mod-enter';
             const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
             const combo = comboOf(event.nativeEvent), keyOf = (id: Parameters<typeof chatKey>[1]) => combo === chatKey(ctx.settings.chatKeys, id);

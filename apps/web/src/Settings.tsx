@@ -842,6 +842,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
           <Group title="입력">
             <Row title="메시지 전송 키" hint="‘Cmd/Ctrl+Enter’를 고르면 Enter는 줄바꿈이 됩니다. Shift+Enter는 항상 줄바꿈입니다.">
               <Dropdown label="메시지 전송 키" value={settings.chatSendKey} options={[{ value: 'enter', label: 'Enter' }, { value: 'mod-enter', label: 'Cmd/Ctrl+Enter' }]} onChange={value => set('chatSendKey', value as Settings['chatSendKey'])} /></Row>
+            <Row title="ADE에서 복사한 코드는 참조로 붙여넣기" hint="ADE 편집기에서 여러 줄을(또는 선택 없이 한 줄을) 복사하거나 파일 트리에서 파일을 복사한 뒤 채팅 입력창에 붙여넣으면 내용 대신 @경로#줄 참조가 들어갑니다. 원문은 Ctrl/⌘+Shift+V로 붙여넣습니다."><input type="checkbox" role="switch" aria-label="ADE에서 복사한 코드는 참조로 붙여넣기" checked={settings.chatPasteRefs} onChange={event => set('chatPasteRefs', event.target.checked)} /></Row>
           </Group>
           <Group title="새 채팅 기본값">
             <p className="setting-note">새 채팅에 적용됩니다. 단, 프로젝트에서 마지막으로 고른 권한 모드, 모델, Effort가 있으면 그 값이 우선합니다(Cursor의 모델/Effort 제외). 에이전트가 지원하는 권한 모드와 Effort만 반영되며(Cursor는 자동 모드가 없어 에이전트 모드로 시작), 채팅마다 입력창 아래에서 바꿀 수 있습니다.</p>

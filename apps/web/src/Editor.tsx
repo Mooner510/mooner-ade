@@ -5,6 +5,7 @@ import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
 import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-meters';
 import type { FileBuffer } from './file-buffer';
 import { TIPS_VERSION } from './tips';
+import { wireDiffEditor, wireFileEditor, type DiffSend } from './send-to-chat-monaco';
 
 // An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
 export type McpTrust = { server: string; tool?: string };
@@ -42,6 +43,8 @@ export type Settings = {
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
   chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatToolDisplay: 'summary' | 'detail'; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
   chatFileChipLabel: 'path' | 'name';
+  // Pasting text last copied in ADE's editor or file tree into a chat inserts a file reference instead (설정 › 채팅 › 입력).
+  chatPasteRefs: boolean;
   chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean; animateInBackground: boolean;
@@ -155,6 +158,7 @@ export const defaultSettings: Settings = {
   chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
   chatFileChipLabel: 'path',
+  chatPasteRefs: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
@@ -283,6 +287,7 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
       if (now.visible && !now.state.conflict && document.activeElement?.closest('.project-tree')) editor.focus();
       if (now.visible && now.focused) revealFileLocation(editor, buffer);
       cleanup = () => { live.current = null; change.dispose(); editor.dispose(); model.dispose(); };
+      const unwire = wireFileEditor(editor, host.current, buffer.path), close = cleanup; cleanup = () => { unwire(); close(); }; // 채팅으로 보내기
     });
     return () => { disposed = true; cleanup(); };
   }, [buffer, loaded]);
@@ -320,8 +325,10 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
   </>;
 }
 
-export function DiffView({ original, modified, path, settings, onLayoutChange, header, compact = false, minHeight = 60, onHeight }: {
+export function DiffView({ original, modified, path, settings, onLayoutChange, header, compact = false, minHeight = 60, onHeight, send }: {
   original: string; modified: string; path: string; settings: Settings; onLayoutChange(layout: DiffLayoutChoice): void;
+  /** Where the diff came from, for 채팅으로 보내기 (no `send`: the view offers nothing). */
+  send?: DiffSend;
   header?: ReactNode; compact?: boolean; minHeight?: number; onHeight?(height: number): void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -329,6 +336,7 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
   const sideBySide = !narrow && (settings.diffLayout === 'split' || (settings.diffLayout === 'auto' && !compact));
   const live = useRef<{ monaco: typeof Monaco; diff: Monaco.editor.IStandaloneDiffEditor; a: Monaco.editor.ITextModel; b: Monaco.editor.ITextModel } | null>(null);
   const latest = useRef({ original, modified, settings, sideBySide, onHeight }); latest.current = { original, modified, settings, sideBySide, onHeight };
+  const sendRef = useRef(send); sendRef.current = send;
   useEffect(() => {
     const box = host.current!;
     const measure = () => setNarrow(box.clientWidth <= 760);
@@ -369,6 +377,7 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       };
       box.addEventListener('pointerdown', onDown, true); box.addEventListener('pointerup', onUp, true);
       cleanup = () => { live.current = null; box.removeEventListener('pointerdown', onDown, true); box.removeEventListener('pointerup', onUp, true); sized?.dispose(); diff.dispose(); a.dispose(); b.dispose(); };
+      const unwire = wireDiffEditor(diff, box, () => sendRef.current), close = cleanup; cleanup = () => { unwire(); close(); }; // 채팅으로 보내기
     });
     return () => { disposed = true; cleanup(); };
   }, [path, compact, minHeight, settings.diffFoldUnchanged, settings.diffContextLines]);
