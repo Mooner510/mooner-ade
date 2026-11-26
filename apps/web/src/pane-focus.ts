@@ -3,8 +3,10 @@
 // So a key that moves the focus (Alt+Shift+]/[, pane numbers, the chat key, the next-attention key) also calls this after the render.
 
 // What to focus inside each kind of pane, first match wins: the chat's message box, the terminal, the editor's text, then any control.
+// An editor group whose diff is still loading has no editor yet: its open file's tab (the strip's one Tab stop, where ←/→ and Delete work),
+// never a control taken out of the Tab order such as a tab's close button (Enter there would close a file).
 const TARGETS = ['.chat-composer textarea[aria-label="메시지 입력"]', '.xterm-helper-textarea', '.monaco-editor textarea', '.launchers button', 'input:not([type=hidden]), textarea',
-  'button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'];
+  '[role=tab][aria-selected=true]', 'button:not(:disabled):not([tabindex="-1"]), [href], [tabindex]:not([tabindex="-1"])'];
 
 export function paneHost(id: string): HTMLElement | null {
   return typeof document === 'undefined' || !id ? null : document.querySelector<HTMLElement>(`.pane-content[data-pane-id="${CSS.escape(id)}"]`);
