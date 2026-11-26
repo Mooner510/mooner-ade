@@ -435,7 +435,8 @@ test('a built-in plugin keeps its storage in a plain file, so its start never se
   hosts[0].child.emit('message', { type: 'storage', value: { link: { port: 4321 } } });
   const file = path.join(root, 'data', 'agent-bus', 'storage.json');
   assert.equal(fs.readFileSync(file, 'utf8'), '{"link":{"port":4321}}');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Windows has no POSIX mode bits (stat always reports 0o666); the file there is protected by the profile folder's ACL.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(saves, 0);
   assert.equal(fs.existsSync(path.join(root, 'plugins.bin')), false);
   manager.setBuiltin('agent-bus', false); manager.setBuiltin('agent-bus', true);

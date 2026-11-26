@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 test('plugin panel renders documents as text and provides masked secret inputs', async t => {
   const require = createRequire(import.meta.url);
@@ -15,7 +16,7 @@ test('plugin panel renders documents as text and provides masked secret inputs',
     import { PluginPanel } from './PluginSettings';
     globalThis.window = { adeDesktop: { plugins: { action() {} } } };
     export const html = renderToStaticMarkup(<PluginPanel plugin={{ id:'example', folder:'example', name:'Example', state:'running', header:true, view:{ status:null, info:[], fields:[{key:'key',label:'API key',type:'password',value:'',placeholder:'',hint:''}], actions:[], document:{title:'Evidence',text:'<script>alert(1)</script>'} } }} wide={false} toggleWide={() => {}} onClose={() => {}} />);
-  `, loader: 'tsx', resolveDir: new URL('../apps/web/src/', import.meta.url).pathname }, bundle: true, jsx: 'automatic', platform: 'node', format: 'cjs', external: ['monaco-editor', 'monaco-editor/*'], outfile });
+  `, loader: 'tsx', resolveDir: fileURLToPath(new URL('../apps/web/src/', import.meta.url)) }, bundle: true, jsx: 'automatic', platform: 'node', format: 'cjs', external: ['monaco-editor', 'monaco-editor/*'], outfile });
   globalThis.innerWidth = 1200; globalThis.innerHeight = 800;
   globalThis.document = { addEventListener() {} };
   const { html } = require(outfile);

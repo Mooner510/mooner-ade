@@ -27,9 +27,12 @@ test('POSIX uses the login shell unless another listed one is chosen', () => {
 });
 
 test('an agent counts as installed once its command sits in any PATH directory, with Windows extensions', () => {
-  const files = new Set(['/home/me/.local/bin/claude', 'C:\\npm\\codex.cmd', 'C:\\npm\\cursor-agent']);
-  assert.deepEqual(missingAgents(['/usr/bin', '/home/me/.local/bin'], { platform: 'linux', isFile: file => files.has(file) }), ['codex', 'cursor']);
+  // missingAgents joins with path.join, which uses the host separator (backslashes when this test runs on Windows),
+  // so the fake file system compares paths with the separator normalized.
+  const files = new Set(['/home/me/.local/bin/claude', 'C:/npm/codex.cmd', 'C:/npm/cursor-agent']);
+  const isFile = file => files.has(file.replaceAll('\\', '/'));
+  assert.deepEqual(missingAgents(['/usr/bin', '/home/me/.local/bin'], { platform: 'linux', isFile }), ['codex', 'cursor']);
   assert.deepEqual(missingAgents([], { platform: 'linux', isFile: () => true }), ['claude', 'codex', 'cursor']);
-  // path.join uses the host separator, so only check the extension rule on Windows: a bare cursor-agent shim does not run there.
-  if (process.platform === 'win32') assert.deepEqual(missingAgents(['C:\\npm'], { platform: 'win32', isFile: file => files.has(file) }), ['claude', 'cursor']);
+  // A bare cursor-agent shim does not run on Windows, so only the .cmd one counts.
+  assert.deepEqual(missingAgents(['C:\\npm'], { platform: 'win32', isFile }), ['claude', 'cursor']);
 });
