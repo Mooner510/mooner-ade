@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { validateLayout } from '../apps/local-server/src/ui-state.js';
 
 // UI/UX 점검(0.6.0)에서 고친 레이아웃·접근성 결함이 되돌아오지 않게 지키는 스타일시트·마크업 규칙 검사. 브라우저 없이 소스를 읽는다.
 const read = name => readFile(new URL(`../apps/web/src/${name}`, import.meta.url), 'utf8');
@@ -106,4 +107,12 @@ test('여러 기기가 나눠 쓰는 탭 배치는 형식이 맞아야 저장되
   const server = await readFile(new URL('../apps/local-server/src/index.js', import.meta.url), 'utf8');
   assert.match(server, /case 'ui': case 'ui\/layout':/);
   assert.match(server, /broadcast\(project, \{ type: 'ui\/changed', paneTabs: next\.paneTabs/);
+});
+
+test('a console leaf names its plugin, and only a console leaf may', () => {
+  const tabs = leaf => [{ id: 't1', pane: leaf }];
+  assert.doesNotThrow(() => validateLayout(tabs({ id: 'c1', kind: 'console', plugin: 'admin-shell' })));
+  assert.throws(() => validateLayout(tabs({ id: 'c1', kind: 'console' })));
+  assert.throws(() => validateLayout(tabs({ id: 'c1', kind: 'console', plugin: '../x' })));
+  assert.throws(() => validateLayout(tabs({ id: 'c1', kind: 'terminal', plugin: 'admin-shell' })));
 });

@@ -17,6 +17,13 @@ ADE 0.6.3의 플러그인 계약을 API v1로 정의합니다. `plugin.json`의 
   [작업공간 요청 목록](../apps/plugin-api/v1/workspace-requests.json) 및 [응답·이벤트 형식](../apps/plugin-api/v1/workspace.js)이 기준입니다.
   앱 내부 수정과 계약을 복원하는 버그 수정은 같은 버전에 반영합니다. 호환되는 패키지를 제공하고 안정 릴리스에서 한 번 이상 예고한 뒤 종료합니다.
 
+| API | 지원 | 바뀐 것 |
+|---|---|---|
+| v1 | 지원 | ADE 0.6.3의 계약 |
+| v2 | 지원 | v1에 [콘솔 탭](#콘솔-탭-console-api-v2)(`console`)을 더함. 매니페스트 `console`, `init.features`의 `console`, `console` 메시지. 작업공간은 v1과 같음 ([스키마](../apps/plugin-api/v2/manifest.schema.json), [IPC](../apps/plugin-api/v2/ipc.schema.json)) |
+
+v2는 v1의 모듈을 다시 씁니다(`apps/plugin-api/v2/host.js`). v1을 종료하려면 v2가 쓰는 부분을 v2 폴더로 먼저 옮깁니다.
+
 ## 내장 플러그인
 
 앱에 함께 들어 있는 플러그인(`apps/desktop/builtin-plugins/<id>/`)입니다. 같은 플러그인 API로 만들어졌고 설정 → 플러그인에 **내장**
@@ -225,7 +232,7 @@ Hub가 출처이고, GitHub는 Hub를 모르는 옛 MoonerADE와 Hub에 로그�
 - 경로는 모두 플러그인 폴더 안의 상대 경로이고 `/`로 씁니다. `..`과 절대 경로, `:`(NTFS 대체 데이터 스트림)는 받지 않습니다.
 - `name`과 `description`은 승인 확인 창에 그대로 나오므로 제어 문자와 글자 방향을 바꾸는 문자를 쓸 수 없습니다.
   `name`에 있으면 받지 않고, `description`에서는 지웁니다(줄바꿈은 두 줄까지 남깁니다).
-- `terminal`, `mcp`, `workspace`, `feedback`, `header`, `icon`은 선택입니다.
+- `terminal`, `mcp`, `workspace`, `feedback`, `header`, `icon`은 선택입니다. API v2는 `console`(콘솔 탭)도 받습니다.
 - `icon`은 플러그인을 나타내는 SVG 파일 하나(플러그인 폴더 안, `.svg`, 32 KiB 이하)입니다. 설정 → 플러그인 목록과 상세 화면, 헤더 패널, 상단 바 버튼에 이 아이콘이 나옵니다.
   MoonerADE는 이 SVG를 모양(투명도)만 쓰는 마스크로 그리고 색은 주변 글자색으로 칠하므로, 앱의 다른 아이콘처럼 테마와 버튼 상태를 따릅니다.
   그래서 `viewBox="0 0 24 24"`, 채움 없이 선 굵기 1.7 정도의 선 아이콘으로 그리면 잘 어울립니다(선 색은 상관없습니다). 이미지로만 쓰여 SVG 안의 스크립트는 실행되지 않고 외부 파일도 읽지 않습니다.
@@ -323,6 +330,39 @@ lists: [{ id: 'phones', title: '페어링한 폰', empty: '아직 없습니다.'
   헤더 패널은 `view.panel`(작업)만 그립니다. 없으면 패널도 `view`를 그립니다. 설정은 설정 화면에, 매번 쓰는 작업은 패널에 나누세요.
 - `view.document: {title, text}`: 헤더 패널에서 표시하는 긴 원문입니다(제목 100자, 본문 65,536자). 코드나 HTML을 실행하지 않는
   일반 텍스트로 그립니다. 한도를 넘으면 일부만 잘라 보여 주지 않고 문서 전체를 거절합니다.
+
+### 콘솔 탭 (`console`, API v2)
+
+`"apiVersion": 2`와 `"console": true`를 선언한 플러그인은 작업 화면에 자기 콘솔 탭을 가질 수 있습니다. 실행 중이면 새 탭 메뉴와
+빈 탭 런처에 플러그인 이름이 나오고, 누르면 탭이 열립니다. 사람이 명령을 입력하면 플러그인이 실행하고 출력을 돌려보냅니다.
+승인 창에 "콘솔 탭" 권한이 표시됩니다. 예: 비공개 플러그인 저장소의 관리자 셸(`admin-shell`).
+
+- **데스크톱 창 전용입니다.** 요청과 출력은 MoonerADE main 프로세스와 그 창 사이(`ade:plugins:console`, `ade:plugins-console`)로만 오가고
+  로컬 서버를 지나지 않습니다. 그래서 원격 화면, 폰, 작업공간 세션(`workspace`)은 콘솔을 쓸 수 없고 탭에는 안내만 보입니다.
+  MCP나 터미널 PATH·환경 변수도 주지 않으므로 AI 에이전트가 쓸 수 있는 길이 아닙니다.
+- 탭은 화면 배치에 `{ kind: 'console', plugin: '<id>' }`로 저장되어 다시 열면 돌아옵니다. 지난 출력은 저장하지 않습니다.
+  탭을 닫으면 그 탭이 시작한 명령에 `TERM`을 보냅니다.
+- 화면은 출력을 일반 텍스트로 그립니다(ANSI 제거). 명령마다 1 MiB, 탭마다 최근 200개까지 보관합니다.
+
+MoonerADE → 플러그인
+
+| 메시지 | 뜻 |
+|---|---|
+| `{type:'console', op:'run', run, command}` | 명령 실행. `run`은 탭이 정하는 `[A-Za-z0-9_-]{1,64}`, `command`는 64 KiB 이하 |
+| `{type:'console', op:'signal', run, signal}` | `INT`(중지 버튼, 실행 중 Ctrl+C), `TERM`(탭 닫기), `KILL` |
+| `{type:'console', op:'password', run, value?, save?}` | `prompt`에 대한 답. `value`가 없으면 플러그인이 저장한 값을 씁니다. `save`는 `value`가 있을 때만 옵니다(1024자, 줄바꿈 없음) |
+
+플러그인 → MoonerADE
+
+| 메시지 | 뜻 |
+|---|---|
+| `{type:'console', run, op:'started'}` | 시작됨 |
+| `{type:'console', run, op:'out', fd, data}` | 출력. `fd`는 1(stdout) 또는 2(stderr, 흐리게 표시). `data`는 UTF-8 텍스트이며 64 KiB에서 자릅니다 |
+| `{type:'console', run, op:'prompt'}` | 비밀번호를 기다립니다. 탭에 가려진 입력칸이 뜨고, 사람이 누를 때만 `password`를 보냅니다 |
+| `{type:'console', run, op:'exit', code, signal, timedOut, durationMs}` | 끝. 탭에 종료 코드, 신호, 시간 초과와 걸린 시간을 보여 줍니다 |
+| `{type:'console', run, op:'error', message}` | 실행하지 못함(500자) |
+
+모양이 다른 메시지와 `console`을 선언하지 않은 플러그인의 메시지는 버립니다.
 
 ### 작업공간 (`workspace`)
 

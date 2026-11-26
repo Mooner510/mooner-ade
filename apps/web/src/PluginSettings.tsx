@@ -74,6 +74,8 @@ export type PluginInfo = {
   // A plugin that ships with the app: no approval, no "plugins on" switch, only its own on/off (`builtinEnabled`).
   builtin?: boolean; builtinEnabled?: boolean;
   header?: boolean;
+  // Declared `console` and running: it can be opened as a tab (ConsolePane).
+  console?: boolean;
   commands?: string[]; envPrefix?: string | null; env?: string[]; tools?: PluginTools | null;
   setup?: ManifestStep[]; update?: PluginUpdate | null;
 };
@@ -92,7 +94,12 @@ export type PluginsBridge = {
   // MoonerADE Hub: sign in with the browser, the market list, installing from it (the install asks in the desktop app's own dialog).
   signInHub?(): Promise<PluginsState>; cancelHubSignIn?(): Promise<PluginsState>; signOutHub?(): Promise<PluginsState>;
   hubCatalog?(options?: { force?: boolean }): Promise<PluginsState>; hubInstall?(id: string, expected?: PluginSelection): Promise<PluginsState>;
+  // A console tab (plugin API v2): requests to the plugin, and the events of the commands it runs. Desktop window only.
+  console?(id: string, request: ConsoleRequest): Promise<unknown>; consoleEvents?(listener: (event: ConsoleEvent) => void): () => void;
 };
+export type ConsoleRequest = { op: 'run'; run: string; command: string } | { op: 'signal'; run: string; signal: 'INT' | 'TERM' | 'KILL' } | { op: 'password'; run: string; value?: string; save?: boolean };
+export type ConsoleEvent = { plugin: string; run: string } & ({ op: 'started' } | { op: 'prompt' } | { op: 'out'; fd: 1 | 2; data: string }
+  | { op: 'exit'; code: number | null; signal: string | null; timedOut: boolean; durationMs: number | null } | { op: 'error'; message: string });
 const pathForFile = () => (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
 export const pluginsBridge = () => (window as unknown as { adeDesktop?: { plugins?: PluginsBridge } }).adeDesktop?.plugins ?? window.adeVerifyPlugins;
 const errorText = (error: Error) => error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');

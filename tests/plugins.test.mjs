@@ -54,7 +54,7 @@ function setup(t, { answers = [], toServer, onFeedback, probeMcp = async () => [
 
 test('manifests are checked strictly', () => {
   assert.equal(validManifest(manifest()).mcp.name, 'example_tools');
-  for (const bad of [{ apiVersion: 2 }, { id: 'Bad Id' }, { main: '../host.js' }, { main: '/etc/x.js' }, { main: 'C:/x.js' }, { main: 'a\\b.js' }, { main: 'host.sh' },
+  for (const bad of [{ apiVersion: 99 }, { id: 'Bad Id' }, { main: '../host.js' }, { main: '/etc/x.js' }, { main: 'C:/x.js' }, { main: 'a\\b.js' }, { main: 'host.sh' },
     { terminal: { envPrefix: 'PATH_' } }, { terminal: { envPrefix: 'ADE_X_' } }, { terminal: { envPrefix: 'lower_' } }, { mcp: { name: 'Bad-Name', script: 'bin/cli.js' } }, { mcp: { name: 'ok_name', script: 'bin/cli.js', args: ["it's"] } },
     // An NTFS alternate data stream is never hashed.
     { main: 'host.js:hidden.js' }, { mcp: { name: 'ok_name', script: 'bin/cli.js:x.js' } }, { terminal: { bin: 'bin:x' } },

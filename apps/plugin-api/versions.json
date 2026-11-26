@@ -1,4 +1,4 @@
 {
-  "supported": [{ "version": 1, "status": "supported" }],
+  "supported": [{ "version": 1, "status": "supported" }, { "version": 2, "status": "supported" }],
   "removed": []
 }

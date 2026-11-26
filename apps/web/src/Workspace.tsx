@@ -13,7 +13,7 @@ import type { ChatCtx } from './ChatPane';
 import { showCombo, type Block, type ChatState } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
 import { useHiddenAgents } from './installed-agents';
-import { chatAgent, Launchers, markSplit, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
+import { chatAgent, consolePlugin, Launchers, markSplit, Panes, type Agent, type AgentEventKind, type ClaudeCache, type EditorCtx, type TerminalBus } from './Panes';
 import { useShells, shellLabel } from './shells';
 import { LauncherMenu } from './LauncherMenu';
 import { launchersFor, type AgentMode } from './launchers';
@@ -603,6 +603,7 @@ ${where}`, [
     if (leaf.kind === 'editor') return leaf.active ? basename(leaf.active.startsWith('file:') ? leaf.active.slice(5) : leaf.active.split(':').pop() || leaf.active) : '편집기';
     if (leaf.kind === 'launcher') return '새 창';
     if (leaf.kind === 'chat') return titles[leaf.id] || `${leaf.agent === 'codex' ? 'Codex' : leaf.agent === 'cursor' ? 'Cursor' : 'Claude'} 채팅`;
+    if (leaf.kind === 'console') return pluginsState?.plugins.find(plugin => plugin.id === leaf.plugin)?.name ?? '콘솔';
     const title = titles[leaf.id] || fallbackTitle, cwd = project?.terminals.find(terminal => terminal.id === leaf.id)?.cwd;
     // Windows shells title themselves with their executable path; show just the program name.
     const clean = title && /^[A-Za-z]:[\\/]|^\//.test(title) ? basename(title.replace(/\\/g, '/')).replace(/\.exe$/i, '') : title;
@@ -773,7 +774,7 @@ ${where}`, [
   const savedAgent = (id: string) => sshSet.has(id) ? undefined : agentOf(id);
   const remember = (tree: Pane | null): Pane | null => leafList(tree).reduce<Pane | null>((next, leaf) => {
     if (leaf.kind === 'launcher') return next && remove(next, leaf.id);
-    if (leaf.kind === 'editor' || leaf.kind === 'chat' || !next) return next;
+    if (leaf.kind === 'editor' || leaf.kind === 'chat' || leaf.kind === 'console' || !next) return next;
     const cwd = cwds[leaf.id] ?? leaf.cwd, agent = savedAgent(leaf.id);
     return mapLeaf(next, leaf.id, item => ({ ...item, ...(cwd ? { cwd } : {}), agent }));
   }, tree);
@@ -839,6 +840,11 @@ ${where}`, [
   }
   async function openTerminalLeaf(anchorId: string, direction: 'row' | 'column' = 'row', path?: string, command = '') {
     if (chatAgent(command)) return addChatLeaf(anchorId, direction, path, chatAgent(command));
+    if (consolePlugin(command)) {
+      const leaf: Leaf = { id: newId(), kind: 'console', plugin: consolePlugin(command) }, current = activePane();
+      const anchor = leaves(current).includes(anchorId) ? anchorId : leaves(current)[0];
+      commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id); return;
+    }
     const agent = detectAgent(command);
     const result = await call<{ id: string; command?: string }>('terminal/open', { ...(path ? { path } : {}), ...(agent ? { agent, args: agentArgs(settings, agent) } : {}) });
     if (command) {
@@ -857,8 +863,8 @@ ${where}`, [
     markSplit(leaf.id); commitPane(!current || !anchor ? leaf : split(current, anchor, leaf, direction)); setFocusLeaf(leaf.id);
   }
   async function fillLauncher(id: string, command: string) {
-    if (chatAgent(command)) {
-      const tree = treeOf(id), leaf = chatLeaf(undefined, chatAgent(command));
+    if (chatAgent(command) || consolePlugin(command)) {
+      const tree = treeOf(id), leaf: Leaf = consolePlugin(command) ? { id: newId(), kind: 'console', plugin: consolePlugin(command) } : chatLeaf(undefined, chatAgent(command));
       if (tree) { commitFor(id, mapLeaf(tree, id, () => leaf)); setFocusLeaf(leaf.id); }
       return;
     }
@@ -1143,7 +1149,7 @@ ${where}`, [
     if (!settingsRef.current.feedbackAiContext) return undefined;
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     const appVersion = await desktop?.appInfo?.().then(info => info.version, () => undefined);
-    const kinds: Record<string, string> = { terminal: '터미널', editor: 'diff 편집기', chat: '채팅', launcher: '새 창' };
+    const kinds: Record<string, string> = { terminal: '터미널', editor: 'diff 편집기', chat: '채팅', launcher: '새 창', console: '플러그인 콘솔' };
     const paneName = (leaf: Leaf) => {
       if (leaf.kind === 'chat') return `${kinds.chat}(${leaf.agent ?? 'claude'})`;
       if (leaf.kind && leaf.kind !== 'terminal') return kinds[leaf.kind];
@@ -1330,7 +1336,7 @@ ${where}`, [
         <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
         <button ref={launcherButton} className="bar-button caret" data-tip={`새 탭 종류 선택 (${showAppKey(settings.appKeys, 'launcher')})`} aria-label="새 탭 종류 선택" aria-haspopup="dialog" aria-expanded={menuOpen} onPointerDown={event => { if (menuOpen) event.preventDefault(); }} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setMenuOpen(true); } }} onClick={() => { if (menuOpen) closeLauncherMenu(); else setMenuOpen(true); }}><Icon name="chevronDown" size={14} /></button>
         {menuOpen && <><button className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={closeLauncherMenu} />
-          <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
+          <LauncherMenu mode={settings.defaultMode} items={launchers} nudge={settings.chatTipPending} consoles={pluginsState?.plugins.filter(plugin => plugin.console && plugin.id).map(plugin => ({ id: plugin.id!, name: plugin.name, icon: <PluginIcon plugin={plugin} size={18} /> }))} onModeChange={onModeChange} onClose={closeLauncherMenu} onLaunch={command => { closeLauncherMenu(); run(() => launch(command, 'tab')); }} /></>}
       </div>
       <button type="button" className="icon-btn bar-icon" data-tip="프로젝트 파일 트리" aria-label="프로젝트 파일 트리" aria-pressed={treeOpen} onClick={() => setTreeOpen(value => !value)}>
         <svg className="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19V6a1 1 0 0 1 1-1h4l3 3m0 3V4h5l3 3v4m-5-3h2M3 19l3-8h15l-3 8Z" /></svg>

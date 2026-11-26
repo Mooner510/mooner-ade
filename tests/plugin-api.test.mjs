@@ -99,3 +99,46 @@ test('the packaging stage excludes an inactive API directory and checks bundled 
   fs.writeFileSync(path.join(builtin, 'demo', 'plugin.json'), JSON.stringify(manifest(1)));
   assert.throws(() => stagePluginApi(source, out, builtin), /excluded API v1/);
 });
+
+test('v2 adds the console tab: manifest, init features, events to the window and requests to the plugin', async t => {
+  const real = pluginApi.get(2);
+  assert.ok(real, 'v2 is supported');
+  assert.deepEqual(pluginApi.versions, [1, 2]);
+  assert.equal(validManifest({ ...manifest(2), console: true }).console, true);
+  assert.equal(validManifest({ ...manifest(1), console: true }).console, undefined, 'v1 never had a console');
+  assert.throws(() => validManifest({ ...manifest(2), console: 'yes' }), { code: 'PLUGIN_INVALID' });
+  assert.ok(real.host.encode({ type: 'init' }).features.includes('console'));
+  assert.ok(!pluginApi.get(1).host.encode({ type: 'init' }).features.includes('console'));
+  const { consoleEvent, consoleRequest } = real.host;
+  assert.deepEqual(consoleEvent({ run: 'r1', op: 'out', fd: 2, data: 'x', extra: 1 }), { run: 'r1', op: 'out', fd: 2, data: 'x' });
+  assert.equal(consoleEvent({ run: 'bad id', op: 'out', data: 'x' }), null);
+  assert.equal(consoleEvent({ run: 'r1', op: 'future' }), null);
+  assert.deepEqual(consoleEvent({ run: 'r1', op: 'exit', code: 0, signal: 'rm -rf', durationMs: 12.4 }), { run: 'r1', op: 'exit', code: 0, signal: null, timedOut: false, durationMs: 12 });
+  assert.deepEqual(consoleRequest({ op: 'run', run: 'r1', command: 'uptime' }), { type: 'console', op: 'run', run: 'r1', command: 'uptime' });
+  assert.deepEqual(consoleRequest({ op: 'password', run: 'r1', save: true }), { type: 'console', op: 'password', run: 'r1' }, 'save only with a typed value');
+  assert.throws(() => consoleRequest({ op: 'password', run: 'r1', value: 'a\nb' }));
+  assert.throws(() => consoleRequest({ op: 'signal', run: 'r1', signal: 'STOP' }));
+  assert.throws(() => consoleRequest({ op: 'run', run: 'r1', command: '' }));
+
+  // Through the manager: only a running plugin that declared `console` gets requests, and only its events reach onConsole.
+  const dir = directory(t), sent = [], events = [];
+  for (const [id, extra] of [['shell', { console: true }], ['plain', {}]]) {
+    fs.mkdirSync(path.join(dir, id));
+    fs.writeFileSync(path.join(dir, id, 'host.js'), '');
+    fs.writeFileSync(path.join(dir, id, 'plugin.json'), JSON.stringify({ ...manifest(2), id, workspace: false, ...extra }));
+  }
+  const children = new Map();
+  const manager = createPluginManager({ dir: directory(t), builtinDir: dir, dataRoot: directory(t), store: { state: { builtin: {} } }, onConsole: event => events.push(event),
+    spawnHost({ id }) { const child = Object.assign(new EventEmitter(), { connected: true, send: message => sent.push([id, message]) }); children.set(id, child); return child; } });
+  t.after(() => manager.close());
+  manager.rescan();
+  for (const child of children.values()) child.emit('message', { type: 'ready' });
+  const snapshot = manager.snapshot();
+  assert.deepEqual(snapshot.plugins.map(item => [item.id, item.console]), [['plain', false], ['shell', true]]);
+  manager.consoleRequest('shell', { op: 'run', run: 'r1', command: 'id' });
+  assert.deepEqual(sent.filter(([, message]) => message.type === 'console'), [['shell', { type: 'console', op: 'run', run: 'r1', command: 'id' }]]);
+  assert.throws(() => manager.consoleRequest('plain', { op: 'run', run: 'r1', command: 'id' }), { code: 'PLUGIN_NO_CONSOLE' });
+  children.get('shell').emit('message', { type: 'console', run: 'r1', op: 'out', fd: 1, data: 'uid=1000\n' });
+  children.get('plain').emit('message', { type: 'console', run: 'r1', op: 'out', fd: 1, data: 'not declared' });
+  assert.deepEqual(events, [{ plugin: 'shell', run: 'r1', op: 'out', fd: 1, data: 'uid=1000\n' }]);
+});

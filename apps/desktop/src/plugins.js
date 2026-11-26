@@ -89,6 +89,8 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
   const firstCheckMs = Number(process.env.ADE_PLUGIN_UPDATE_TEST_FIRST_MS);
   const manager = createPluginManager({
     dir, builtinDir, dataRoot: path.join(userData, 'plugin-data'), stagingRoot, store, spawnHost, ask, nodeBinary, terminalNode, appVersion: version,
+    // A console tab's output goes to the window only: never to the local server, so no remote screen or phone sees it.
+    onConsole: event => { const window = getWindow(); if (window && !window.isDestroyed()) window.webContents.send('ade:plugins-console', event); },
     onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp,
     github, hub, clientId: githubClientId(), openExternal,
     probeCredential: async () => {
@@ -109,6 +111,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     approve: folder => manager.approve(String(folder)),
     revoke: (id, options) => manager.revoke(String(id), { forget: options?.forget === true }),
     restart: id => manager.restart(String(id)),
+    console: (id, request) => { manager.consoleRequest(String(id), request); return {}; },
     action: (id, action, values, item) => manager.action(String(id), String(action), values, typeof item === 'string' ? item : undefined),
     setMcp: (id, change) => manager.setMcp(String(id), { ...(typeof change?.tool === 'string' && { tool: change.tool }), enabled: change?.enabled === true }),
     refreshTools: id => manager.refreshTools(String(id)),

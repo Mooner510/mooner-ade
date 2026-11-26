@@ -120,7 +120,8 @@ export function validateLayout(paneTabs, invalid = () => { throw fault('INVALID_
     if ('id' in value) {
       if (typeof value.id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(value.id) || ids.has(value.id)) invalid();
       ids.add(value.id); if (ids.size > 32) invalid();
-      if (value.kind !== undefined && !['terminal', 'editor', 'launcher', 'chat'].includes(value.kind)) invalid();
+      if (value.kind !== undefined && !['terminal', 'editor', 'launcher', 'chat', 'console'].includes(value.kind)) invalid();
+      if (value.kind === 'console' ? typeof value.plugin !== 'string' || !/^[a-z0-9][a-z0-9-]{1,39}$/.test(value.plugin) : value.plugin !== undefined) invalid();
       if (value.cwd !== undefined && (typeof value.cwd !== 'string' || value.cwd.length > 8192)) invalid();
       if (value.agent !== undefined && !['claude', 'codex', 'cursor'].includes(value.agent)) invalid();
       if (value.kind === 'editor') {

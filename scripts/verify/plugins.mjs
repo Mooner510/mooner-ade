@@ -31,6 +31,8 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
   }
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto }); store.load();
   let revision = 0, closed = false;
+  // Console tab events wait here until the page polls for them (one test tab at a time).
+  let consoleEvents = [];
   const pending = new Map();
   function ask(options) {
     if (closed || pending.size >= 8) return Promise.resolve(options.cancelId ?? 1);
@@ -46,7 +48,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
   const hub = createHubClient({ store, ...(env.ADE_HUB_URL && { baseUrl: env.ADE_HUB_URL }) });
   const manager = createPluginManager({
     dir, builtinDir: path.resolve(import.meta.dirname, '../../apps/desktop/builtin-plugins'), dataRoot: path.join(root, 'plugin-data'), store, ask, nodeBinary: process.execPath, appVersion,
-    onChange: () => { revision++; }, onTerminal, onFeedback, toServer, github, hub, clientId: githubClientId(),
+    onChange: () => { revision++; }, onConsole: event => { if (consoleEvents.length < 5000) consoleEvents.push(event); }, onTerminal, onFeedback, toServer, github, hub, clientId: githubClientId(),
     probeCredential: async () => { const accounts = await machineAccounts(); const found = accounts.ghAvailable ? null : await machineToken(); return { ...accounts, via: found?.via ?? null }; },
     spawnHost({ dir: cwd, main }) {
       const hostEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !/^(ADE_|VERIFY_|ELECTRON_)/.test(name)));
@@ -61,7 +63,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
   watcher.on('error', () => watcher.close());
   const handlers = {
     state: () => ({ ...manager.snapshot(), testSession: true }),
-    poll: input => ({ revision, ...(input.revision !== revision && { state: handlers.state() }), confirmations: [...pending.values()].map(({ id, options, expiresAt }) => ({ id, options, expiresAt })) }),
+    poll: input => ({ revision, ...(input.revision !== revision && { state: handlers.state() }), console: consoleEvents.splice(0), confirmations: [...pending.values()].map(({ id, options, expiresAt }) => ({ id, options, expiresAt })) }),
     confirm: input => { const request = pending.get(input.id); if (!request) throw new Error('확인 요청이 만료됐습니다.'); request.finish(input.accept === true ? 0 : request.options.cancelId ?? 1); return {}; },
     setEnabled: input => manager.setEnabled(input.args?.[0] === true),
     setBuiltin: input => manager.setBuiltin(String(input.args?.[0]), input.args?.[1] === true),
@@ -69,6 +71,7 @@ export function createVerifyPlugins({ dataRoot, verifyOut, appVersion, env = pro
     approve: input => manager.approve(String(input.args?.[0])),
     revoke: input => manager.revoke(String(input.args?.[0]), { forget: input.args?.[1]?.forget === true }),
     restart: input => manager.restart(String(input.args?.[0])),
+    console: input => { manager.consoleRequest(String(input.args?.[0]), input.args?.[1]); return {}; },
     action: input => { const [id, action, values, item] = input.args ?? []; return manager.action(String(id), String(action), values, typeof item === 'string' ? item : undefined); },
     setMcp: input => manager.setMcp(String(input.args?.[0]), input.args?.[1] ?? {}),
     refreshTools: input => manager.refreshTools(String(input.args?.[0])),

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Icon, IconButton } from './Icon';
 import type { AgentMode, launchersFor } from './launchers';
 
@@ -10,7 +10,8 @@ export function LauncherModes({ mode, onChange, nudge }: { mode: AgentMode; onCh
   </div>;
 }
 
-export function LauncherMenu({ mode, items, onModeChange, onLaunch, onClose, nudge }: { mode: AgentMode; items: ReturnType<typeof launchersFor>; onModeChange(mode: AgentMode): void; onLaunch(command: string): void; onClose(): void; nudge?: boolean }) {
+// `consoles`: running plugins with a console tab (plugin API v2), opened with `ade:console:<id>`.
+export function LauncherMenu({ mode, items, onModeChange, onLaunch, onClose, nudge, consoles = [] }: { mode: AgentMode; items: ReturnType<typeof launchersFor>; onModeChange(mode: AgentMode): void; onLaunch(command: string): void; onClose(): void; nudge?: boolean; consoles?: { id: string; name: string; icon: ReactNode }[] }) {
   const menu = useRef<HTMLDivElement>(null), providers = items.filter(item => item.id !== 'shell'), shell = items.find(item => item.id === 'shell');
   useEffect(() => { menu.current?.querySelector<HTMLButtonElement>('[aria-pressed=true]')?.focus(); }, []);
   const row = (item: typeof items[number]) => <button key={item.id} type="button" className="launcher-menu-item" onClick={() => onLaunch(item.command)}>
@@ -24,6 +25,10 @@ export function LauncherMenu({ mode, items, onModeChange, onLaunch, onClose, nud
     <LauncherModes mode={mode} onChange={onModeChange} nudge={nudge} />
     {providers.length > 0 && <div className="launcher-menu-providers" role="group" aria-label={mode === 'chat' ? 'Chat으로 열기' : 'CLI로 열기'}>{providers.map(row)}</div>}
     {shell && <div className="launcher-menu-shell">{row(shell)}</div>}
+    {consoles.length > 0 && <div className="launcher-menu-shell">{consoles.map(plugin => <button key={plugin.id} type="button" className="launcher-menu-item" onClick={() => onLaunch(`ade:console:${plugin.id}`)}>
+      <span className="launcher-icon">{plugin.icon}</span><span className="launcher-copy"><strong>{plugin.name}</strong><small>콘솔</small></span>
+      <span className="launcher-arrow" aria-hidden="true"><Icon name="arrowRight" size={14} /></span>
+    </button>)}</div>}
   </div>;
 }
 
