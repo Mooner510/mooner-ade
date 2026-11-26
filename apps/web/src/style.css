@@ -89,7 +89,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .recent-remove:hover { color: var(--fg); }
 .recent-remove-modal { width: min(440px, 94vw); padding: 20px; overflow-wrap: anywhere; }
 .recent-remove-modal h2 { margin-top: 0; font-size: 16px; }
-.recent-remove-modal .actions { justify-content: flex-end; }
+.recent-remove-modal .actions { justify-content: flex-end; position: sticky; bottom: -20px; margin-bottom: -20px; padding-bottom: 20px; background: var(--overlay); }
 /* project picker: favorites/recent on the left, the way to add a project (tabs) on the right, actions in a footer.
    Spacing: 24px around the card, 20px between title, body and footer, and the same 26px on both sides of the column divider. */
 .welcome-card.picker { width: min(920px, 100%); }
@@ -138,6 +138,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .picker-target { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .picker-target code { color: var(--fg); }
 /* footer: the tab's action sits beside 닫기, so the buttons stay put while the form above changes */
+.project-modal .picker-actions { position: sticky; bottom: 0; margin-bottom: -18px; padding-bottom: 18px; background: var(--bg); } /* the 열기/닫기 row stays in reach in a short window */
 .picker-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .welcome-card .picker-actions button { min-width: 80px; height: 36px; padding: 0 18px; }
 .welcome-card .picker-form .folder-field button:not(.primary), .welcome-card .picker-actions button:not(.primary) { border: 1px solid var(--border-strong); background: var(--raised); }
@@ -470,18 +471,18 @@ body.resizing .right-panel { transition: none; }
 summary { cursor: pointer; }
 
 /* quick input */
-.quick-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 0; background: #0005; }
+.quick-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 12px; background: #0005; }
 .quick { width: min(640px, 100%); background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
-.quick { outline: 0; }
-.quick-head { padding: 14px 16px 8px; }
+.quick { outline: 0; display: flex; flex-direction: column; max-height: 100%; } /* a short window: the list (and a long note) scroll inside, nothing runs off the screen */
+.quick-head { padding: 14px 16px 8px; flex: 0 1 auto; min-height: 0; overflow: auto; }
 .quick-head p { margin: 0; overflow-wrap: anywhere; }
 .quick-title { font-size: 13px; font-weight: 600; color: var(--fg); }
 .quick-message { font-size: 13px; line-height: 1.55; color: var(--fg); }
 .quick-note { margin-top: 4px !important; font-size: 12.5px; line-height: 1.55; white-space: pre-line; color: var(--muted); }
-.quick input { width: 100%; border-radius: 0; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 11px 16px; outline: 0; background: transparent; font-size: 14px; }
+.quick input { flex: none; width: 100%; border-radius: 0; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 11px 16px; outline: 0; background: transparent; font-size: 14px; }
 .quick input::placeholder { color: var(--faint); }
 .quick-head + ul { padding-top: 2px; }
-.quick ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
+.quick ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; flex: 0 1 auto; min-height: 0; }
 .quick li { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; cursor: pointer; border-radius: 6px; }
 .quick li > .icon { align-self: center; flex: none; }
 .quick ul:has(> li > .icon) > li:not(.none, :has(> .icon))::before { content: ""; flex: 0 0 16px; }
@@ -726,7 +727,8 @@ body.resizing .xterm-host { pointer-events: none; }
 body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); background: var(--raised); box-shadow: inset 0 2px 0 var(--accent); }
 .settings-drag { cursor: move; user-select: none; touch-action: none; }
 .settings { display: flex; height: 100%; }
-.settings-nav { width: 180px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: 14px 10px; background: var(--bg); border-right: 1px solid var(--border); }
+.settings-nav { width: 180px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: 14px 10px; background: var(--bg); border-right: 1px solid var(--border); min-height: 0; overflow-y: auto; }
+@media (min-width: 761px) { .settings-nav > button:last-child { position: sticky; bottom: -14px; flex: none; background: var(--bg); } } /* a short window scrolls the list; 기본값으로 stays in reach */
 .settings-nav h2 { margin: 0 6px 10px; font-size: 14px; }
 .settings-nav button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; color: var(--muted); }
 .settings-nav button[aria-pressed=true] { color: var(--fg); background: var(--selected); }
@@ -1143,9 +1145,11 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-github-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
 .plugin-github-open[data-linked] .plugin-github-dot { background: var(--add); }
 .plugin-github-modal { width: min(480px, 94vw); padding: 0; overflow: hidden; }
+.plugin-github-modal[open] { display: flex; flex-direction: column; }
+.plugin-github-modal > header { flex: none; }
 .plugin-github-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 10px; }
 .plugin-github-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.plugin-github-body { word-break: keep-all; overflow-wrap: break-word; display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; }
+.plugin-github-body { word-break: keep-all; overflow-wrap: break-word; display: flex; flex-direction: column; gap: 12px; padding: 0 18px 18px; max-height: 80dvh; overflow: auto; flex: 1 1 auto; min-height: 0; }
 .plugin-github-body > p { margin: 0; }
 .plugin-github-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--plugin-line); border-radius: 12px; background: var(--plugin-card); }
 .plugin-github-status > .icon { flex: none; color: var(--tone); }
@@ -1186,7 +1190,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .key-edit button { background: none; border: 0; color: inherit; cursor: pointer; padding: 0; display: inline-flex; }
 .key-edit .kbd-edit:focus-visible { outline: 1px solid var(--accent); border-radius: 4px; }
 .shortcut-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-@media (max-width: 640px) { .settings { flex-direction: column; } .settings-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav h2, .settings-nav .spacer { display: none; } }
+@media (max-width: 760px) { .settings { flex-direction: column; } .settings-nav { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav h2, .settings-nav .spacer { display: none; } }
 .file-glyph { flex: none; display: block; object-fit: contain; }
 
 /* Sidebar rows mirror working, completion and unanswered questions. */
@@ -1507,7 +1511,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .tour-tasks li.ok .tour-check { border-color: var(--add); background: var(--add); color: var(--bg); }
 .tour-coach .tour-feedback { min-height: 1.4em; margin-top: -2px; color: var(--muted); font-size: 12px; }
 .tour-coach .tour-feedback.ok { color: var(--add); }
-.tour-coach footer { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; width: 100%; }
+.tour-coach footer { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; width: auto; margin: -6px -16px -14px; padding: 6px 16px 14px; position: sticky; bottom: -14px; background: var(--overlay); } /* like .setup footer: 다음/건너뛰기 stay visible when the card scrolls */
+.tour-coach.hero footer { margin: -6px -28px -26px; padding: 6px 28px 26px; bottom: -26px; }
 .tour-coach footer button, .setup footer button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 12px; }
 .tour-coach.hero footer .primary { padding: 6px 14px; font-size: 13px; }
 .tour-coach footer .primary:disabled { opacity: .45; cursor: default; }
@@ -2977,7 +2982,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .feedback-mode.off { --tone: var(--warn); }
 /* While picking what to capture the inbox steps aside, so whatever it covered can be picked and appears in the shot. */
 .feedback-capturing .right-panel.feedback-side { visibility: hidden; }
-.feedback-capture { position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; overflow: hidden; background: transparent; color: var(--fg); cursor: crosshair; }
+.feedback-capture { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; overflow: hidden; background: transparent; color: var(--fg); cursor: crosshair; }
 /* Element picking has its own pointer: a crosshair whose centre is a small square (what gets picked), outlined so it reads on light and dark. */
 .feedback-capture.mode-element { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M13 2v7M13 17v7M2 13h7M17 13h7' stroke='black' stroke-width='4' opacity='.55'/%3E%3Cpath d='M13 2v7M13 17v7M2 13h7M17 13h7' stroke='white' stroke-width='2'/%3E%3Crect x='9' y='9' width='8' height='8' rx='1.5' stroke='black' stroke-width='3.5' opacity='.55'/%3E%3Crect x='9' y='9' width='8' height='8' rx='1.5' stroke='white' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E") 13 13, crosshair; }
 /* The tip beside the pointer: what is picked, its size and level, and what ↑ (parent) and ↓ (child) would pick. */
@@ -2999,7 +3004,7 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 .feedback-capture-bar { position: fixed; top: 12px; left: 50%; translate: -50% 0; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); cursor: default; }
 .feedback-capture-bar button { display: inline-flex; align-items: center; gap: 4px; }
 .feedback-capture-hint { padding: 0 8px; color: var(--muted); font-size: 12px; }
-dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; }
+dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; }
 .feedback-annotate-head { padding: 10px 12px; gap: 6px; border-bottom: 1px solid var(--border); }
 .feedback-annotate-head > strong { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feedback-annotate-head > button, .feedback-tools button { display: inline-flex; align-items: center; gap: 4px; }
@@ -3008,7 +3013,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .feedback-swatch i { display: block; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #0004; }
 .feedback-swatch[aria-pressed=true] i { outline: 2px solid var(--fg); outline-offset: 1px; }
 .feedback-annotate-stage { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 12px; background: var(--bg); }
-.feedback-annotate-stage canvas { max-width: 100%; max-height: calc(100vh - 190px); cursor: crosshair; touch-action: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); }
+.feedback-annotate-stage canvas { max-width: 100%; max-height: calc(100dvh - 190px); cursor: crosshair; touch-action: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--border); }
 .feedback-annotate-actions { padding: 10px 12px; border-top: 1px solid var(--border); }
 .feedback-annotate-actions .hint { padding: 0; font-size: 12px; }
 /* feedback send queue */
@@ -3485,7 +3490,7 @@ dialog.git-dialog.wide { width: min(680px, 94vw); }
 .git-dialog h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
 .git-dialog-body { display: flex; flex-direction: column; gap: 10px; }
 .git-dialog-body p { margin: 0; line-height: 1.5; }
-.git-dialog .actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.git-dialog .actions { display: flex; align-items: center; gap: 8px; margin: 8px 0 -14px; padding: 8px 0 14px; position: sticky; bottom: 0; background: var(--overlay); } /* buttons stay in reach when a short window scrolls the dialog */
 .git-dialog .actions .spacer { flex: 1; }
 .git-dialog .actions button { padding: 5px 14px; }
 .git-dialog button.danger { color: #fff; background: var(--del); border-color: var(--del); }
