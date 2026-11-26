@@ -12,7 +12,7 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 
 ## 화면과 작업
 
-- 왼쪽 프로젝트 사이드바에서 프로젝트·탭을 선택합니다. Shift+드래그로 분할 pane을 별도 탭으로 떼어낼 수 있습니다. 폴더 아래 ＋ 또는 상단 새 탭 버튼으로 터미널을 추가합니다.
+- 왼쪽 프로젝트 사이드바에서 프로젝트·탭을 선택합니다. Shift+드래그로 분할 pane을 별도 탭으로 떼어낼 수 있습니다. 폴더 아래 ＋ 또는 상단 새 탭 버튼으로 터미널을 추가합니다. 사이드바의 탭·pane 줄에 포커스한 채 `F2`는 이름 바꾸기, `Delete`는 닫기(X 버튼처럼 설정과 관계없이 먼저 확인), `Alt+↑/↓`는 순서 이동입니다.
 - 빈 상태에서는 사용자 홈 폴더를 엽니다. **프로젝트 열기**에서 경로를 입력하거나, 데스크톱 폴더 선택·GitHub 클론을 사용할 수 있습니다.
 - 사이드바의 프로젝트를 우클릭하면 **탐색기(Finder)에서 폴더 열기**, **파일 열기…**(프로젝트 파일을 이름으로 찾아 고름), 그리고 이 컴퓨터에서 감지된 편집기로 프로젝트 열기(VS Code·Insiders·Cursor·Windsurf·VSCodium·Zed·JetBrains 제품)를 고를 수 있습니다. 편집기는 설치 폴더와 PATH에서 찾으며 서버가 직접 실행합니다. 마지막에 쓴 편집기가 목록 맨 위에 옵니다.
 - Chat 모드 답변의 `[[file:src/app.ts:42]]` 형식은 파일 아이콘이 붙은 칩으로 보이고(폴더는 `[[file:src/]]`), 누르면 링크처럼 먼저 물은 뒤 편집기·탐색기 위치 열기·경로 복사 중에서 고릅니다. 프로젝트 안의 경로는 프로젝트(워크트리 채팅은 그 워크트리) 기준 상대 경로로 씁니다. 프로젝트 밖(형제 저장소 등)도 칩으로 쓰며, 프로젝트 기준 `[[file:../other/a.zip]]`나 절대 경로를 열 수 있습니다. 열기만 하고 읽거나 쓰지 않으며, 네트워크 경로(`\\서버\공유`)는 거절합니다. 백틱은 사용자가 글자로 적어 달라고 할 때만 씁니다. 새로 만든 Claude·Codex 채팅은 첫 메시지 때 이 형식을 쓰라는 안내를 시스템 프롬프트로 받습니다(`chat-prompt.js`). 시스템 프롬프트를 바꾸면 대화 전체가 프롬프트 캐시를 놓치므로 이미 세션이 있던 채팅에는 넣지 않고, Cursor는 시스템 프롬프트 채널이 없어 적용되지 않습니다(경로가 칩이 되지 않고 평문으로 보임).
@@ -50,18 +50,18 @@ macOS 첫 실행은 `apps/desktop/dist/electron-<version>/MoonerADE.app`을 생�
 | `mod+Shift+T` | 새 터미널 탭 |
 | `mod+Shift+N` | 새 탭에서 CLI 실행 선택 |
 | `mod+Shift+W` / `mod+Alt+Shift+W` | 탭 / 포커스 pane 닫기 |
-| `Alt+]` / `Alt+[` / `Alt+1…9` | 다음 / 이전 / N번째 탭 |
+| `Alt+]` / `Alt+[` / `Alt+1…9` | 다음 / 이전 / N번째 탭 (9는 마지막) |
 | `Ctrl+PageDown` / `Ctrl+PageUp` | 다음 / 이전 탭 |
-| `mod+Shift+\` / `mod+Alt+\` | 좌우 / 상하 분할 |
+| `Ctrl+D` / `Ctrl+Shift+D` | 좌우 / 상하 분할 (macOS도 Ctrl) |
 | `mod+Shift+Enter` | pane 최대화 전환 |
-| `Alt+Shift+]` / `Alt+Shift+[` | 다음 / 이전 pane 포커스 이동 |
+| `Alt+Shift+]` / `Alt+Shift+[` | 다음 / 이전 pane 포커스 이동 (최대화 중이면 옮겨 간 pane이 최대화됨) |
 | `Ctrl+Alt+←/→` | 채팅 입력창에서 이전 / 다음 모델 |
 | `Ctrl+Alt+↑/↓` | 채팅 입력창에서 Effort 올리기 / 내리기 |
 | `mod+Shift+G` / `mod+,` | Git 커밋 그래프 / 설정 |
 | `mod+Alt+F` | 피드백 요청 패널 전환 |
 | `mod+Alt+Shift+F` | 피드백용 화면 캡쳐 시작 |
 
-터미널에 포커스가 있을 때 일반 Ctrl 조합은 기본적으로 셸·CLI로 전달하지만, 분할(Ctrl+D·Ctrl+Shift+D)과 Ctrl+PageUp/PageDown은 터미널에서도 앱 동작으로 실행합니다. 터미널에 ^D(EOF)를 보내려면 `Ctrl+Alt+D`(설정에서 변경) 또는 명령 팔레트의 "터미널에 ^D(EOF) 보내기"를 씁니다. 설정 > 단축키의 "터미널에서도" 체크로 키마다 앱이 가져갈지 셸에 줄지 고를 수 있습니다(`settings.termKeys`). Alt+W는 CLI 입력으로 남겨 둡니다. (Windows PowerShell은 PSReadLine이 Ctrl+D를 기본으로 연결하지 않아, ADE 터미널이 시작할 때 `DeleteCharOrExit`로 연결합니다. 프로필이 이미 지정했다면 건드리지 않습니다.) 사용자가 설정에서 직접 지정한 단축키는 기본키보다 우선합니다.
+터미널에 포커스가 있을 때 일반 Ctrl 조합은 기본적으로 셸·CLI로 전달하지만, 분할(Ctrl+D·Ctrl+Shift+D)과 Ctrl+PageUp/PageDown은 터미널에서도 앱 동작으로 실행합니다. 터미널에 ^D(EOF)를 보내려면 `Ctrl+Alt+D`(설정에서 변경) 또는 명령 팔레트의 "터미널에 ^D(EOF) 보내기"를 씁니다. 설정 > 단축키의 "터미널에서도" 체크로 키마다 앱이 가져갈지 셸에 줄지 고를 수 있습니다(`settings.termKeys`). Alt+W는 CLI 입력으로 남겨 둡니다. ADE 편집기(Monaco) 안에서는 Shift·Alt·⌘ 없는 `Ctrl+글자` 단축키를 앱이 가져가지 않고 편집기에 넘깁니다(예: `Ctrl+D`는 분할이 아니라 다음 일치 항목 선택). macOS에서는 채팅 입력창 같은 텍스트 칸에서도 `Ctrl+글자`가 macOS 편집 키(`Ctrl+D` 앞 글자 삭제, `Ctrl+A`/`Ctrl+E` 줄 처음/끝 등)로 남습니다. Windows의 채팅 입력창에서는 `Ctrl+D`가 그대로 분할입니다. 프로젝트가 하나도 열려 있지 않은 첫 화면에서도 명령 팔레트, 프로젝트 열기(폴더 선택), 설정, 피드백 요청·화면 캡쳐 단축키는 동작하고, 팔레트에는 그때 쓸 수 있는 명령만 나옵니다. (Windows PowerShell은 PSReadLine이 Ctrl+D를 기본으로 연결하지 않아, ADE 터미널이 시작할 때 `DeleteCharOrExit`로 연결합니다. 프로필이 이미 지정했다면 건드리지 않습니다.) 사용자가 설정에서 직접 지정한 단축키는 기본키보다 우선합니다.
 
 ### 글자 편집
 

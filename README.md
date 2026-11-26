@@ -92,7 +92,7 @@ RTX HDR 프로필을 되돌리려면 관리자 PowerShell에서 실행합니다.
 | `mod+Shift+T` | 새 탭 |
 | `mod+Shift+N` | 새 탭에서 실행할 도구 고르기 |
 | `mod+Shift+P` / `F1` | 명령 팔레트 |
-| `mod+Shift+\` / `mod+Alt+\` | 터미널 좌우 / 상하 분할 |
+| `Ctrl+D` / `Ctrl+Shift+D` | 좌우 / 상하 분할 (macOS도 Ctrl, 편집기 안의 `Ctrl+D`는 편집기 몫) |
 | `mod+Shift+Enter` | 현재 칸 최대화 / 복원 |
 | `mod+Shift+G` | Git 커밋 그래프 |
 | `mod+,` | 설정 |
