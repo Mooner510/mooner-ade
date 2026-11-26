@@ -16,6 +16,7 @@ import { basename, findLeaf, isLeaf, leafList, type Leaf, type Pane } from './ap
 import { useHiddenAgents } from './installed-agents';
 import { pickGreeting } from './chat-model';
 import { DiffView, FileEditor, terminalFontStack, type DiffLayoutChoice, type Settings } from './Editor';
+import { useTerminalSend } from './send-to-chat-terminal';
 import { FileIcon } from './FileIcon';
 import type { FileBuffer } from './file-buffer';
 import { Icon, IconButton, SplitButton, type IconName } from './Icon';
@@ -184,6 +185,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const mobile = useMobile(), ctrlArmed = useRef(false), [ctrl, setCtrl] = useState(false);
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
   const cachesRef = useRef(caches); cachesRef.current = caches;
+  const sendMenu = useTerminalSend(host, term, { title: titles[id], cwd: cwds[id], rightClickPaste: settings.rightClickPaste }); // 채팅으로 보내기
   useEffect(() => {
     const terminal = new Terminal({ ...xtermOptions(settings), allowProposedApi: true,
       // xterm's default OSC 8 link handler asks via confirm() and then opens a blank window it navigates afterwards, which the desktop
@@ -663,6 +665,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
         <IconButton icon={zoomed ? 'minimize' : 'maximize'} tip="header" label={zoomed ? '원래 크기로' : '최대화'} keys={showAppKey(settings.appKeys, 'zoom')} onClick={() => onZoom(id)} />
         <IconButton icon="x" label="터미널 종료" onClick={() => onClose(id)} /></span></div>
     <div ref={host} className="xterm-host" />
+    {sendMenu}
     {mobile && !exited && <div className="term-keys" role="toolbar" aria-label="터미널 보조 키" onPointerDown={event => event.preventDefault() /* keep the keyboard and focus on the terminal */}>
       {TERMINAL_KEYS.map(key => <button key={key.id} type="button" aria-label={key.aria} aria-pressed={key.ctrl ? ctrl : undefined}
         onClick={() => {
@@ -707,7 +710,7 @@ function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
   const [value, setValue] = useState<{ original: string; modified: string } | null>(null), [error, setError] = useState('');
   useEffect(() => { ctx.loadDiff(kind, full).then(setValue, cause => setError(String(cause.message || cause))); }, [kind, full, ctx.gitVersion]);
   if (error) return <div className="empty">{error}</div>;
-  return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} onLayoutChange={ctx.onDiffLayoutChange} /> : <div className="empty">불러오는 중…</div>;
+  return value ? <DiffView original={value.original} modified={value.modified} path={path} settings={ctx.settings} onLayoutChange={ctx.onDiffLayoutChange} send={{ file: { path, base: 'repo' }, rev: kind }} /> : <div className="empty">불러오는 중…</div>;
 }
 
 // A file tab shows a dot where the close button is while its buffer has edits that are not on disk (like VS Code); pointing at it brings the close button back.

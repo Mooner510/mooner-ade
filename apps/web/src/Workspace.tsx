@@ -44,6 +44,7 @@ import { runPalette, type PaletteEntry, type PaletteHost } from './palette';
 import { focusInPanes, focusPane } from './pane-focus';
 import { pickChat } from './attention-nav';
 import { swapLeaves } from './tree-nav';
+import { sendToChat, setActiveRoots, type SendGet, type SendHost } from './send-to-chat';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
@@ -1270,6 +1271,21 @@ ${where}`, [
     { id: 'plugins', label: '플러그인 설정 열기', icon: 'plugin', run: onOpenPlugins },
     ...headerPlugins.map((plugin): Command => ({ id: `plugin:${plugin.id}`, label: `플러그인 패널: ${plugin.name}`, icon: 'plugin', run: () => togglePlugin(plugin.id!) })),
   ];
+  // ---- 채팅으로 보내기 (send-to-chat.ts): the key, the palette and the context menus all end here ----
+  const sendRoots = () => { const current = refs.project.current; return { project: current?.root ?? root, repo: (current?.repositories.find(repo => repo.id === refs.repository.current) ?? current?.repositories[0])?.path }; };
+  const sendHost: SendHost = {
+    tabs: () => refs.paneTabs.current, activeTab: () => refs.activeTab.current, focus: () => refs.focus.current, roots: sendRoots,
+    reveal: (tabId, chatId) => { if (refs.activeTab.current !== tabId) selectTab(tabId); setZoom(value => value && value !== chatId ? '' : value); setFocusLeaf(chatId); },
+    // No chat yet: a new one with the first agent that is not hidden, beside the pane the selection came from (the selection stays in view).
+    openChat: () => { setZoom(''); addChatLeaf(refs.focus.current, 'row', undefined, (['claude', 'codex', 'cursor'] as const).find(agent => !hiddenAgents.includes(agent)) ?? 'claude'); return refs.focus.current; }
+  };
+  const sendHostRef = useRef(sendHost); sendHostRef.current = sendHost;
+  useEffect(() => { if (active) setActiveRoots(sendRoots()); }, [active, project, gitRepositoryId]);
+  useEffect(() => {
+    const onSend = (event: Event) => { if (refs.active.current) run(() => sendToChat(sendHostRef.current, (event as CustomEvent<{ get: SendGet }>).detail.get)); };
+    window.addEventListener('ade:send-to-chat', onSend);
+    return () => window.removeEventListener('ade:send-to-chat', onSend);
+  }, []);
   const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', icon: 'plus', run: () => newTab() },
     ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
@@ -1299,6 +1315,7 @@ ${where}`, [
     { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', icon: 'graph', run: toggleGit },
     { id: 'feedback', label: '피드백 요청', icon: 'feedback', run: toggleFeedback },
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', icon: 'captureWindow', run: startCapture },
+    { id: 'sendToChat', label: '선택 영역을 채팅으로 보내기', icon: 'send', run: () => sendToChat(sendHostRef.current) },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', icon: 'branch', run: switchBranch },

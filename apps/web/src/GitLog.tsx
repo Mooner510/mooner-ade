@@ -5,6 +5,8 @@ import { DiffView, type Settings } from './Editor';
 import { FileIcon } from './FileIcon';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
+import { registerSendSource, requestSendToChat, type SendGet } from './send-to-chat';
+import { useActionKeys } from './shortcuts';
 import type { Ask } from './views';
 import { closeAll, PopupMenu, type MenuEntry } from './GitMenu';
 import { BranchesPane, TagGlyph } from './GitBranches';
@@ -176,6 +178,15 @@ export function GitLog(props: GitLogProps) {
   useEffect(() => { if (data && !selected.length && data.head.sha && layout) { const row = rowOfHash(data.head.sha); if (row >= 0) { setSelected([data.head.sha]); setLead(data.head.sha); anchor.current = data.head.sha; } } }, [data?.signature, layout]);
   const selectedRows = selected.map(rowOfHash).filter(row => row >= 0).sort((a, b) => a - b);
   const selection = selectedRows.map(row => graph!.commits[layout!.commitAt[row]]);
+  // 채팅으로 보내기: the selected commits, with their patch (the message names them by `git show` instead when it is long).
+  const sendCommits = (list: Commit[]): SendGet => async () => {
+    if (!list.length) return null;
+    const patch = demo || list.length > 20 ? undefined : await call<{ patch: string }>('git/patch', { shas: [...list].reverse().map(commit => commit.h) }).then(value => value.patch, () => undefined);
+    return { kind: 'commits', commits: list.map(commit => ({ sha: commit.h, subject: commit.s })), patch };
+  };
+  const sendSelection = useRef(selection); sendSelection.current = selection;
+  const sendKeys = useActionKeys('sendToChat');
+  useEffect(() => { const el = table.current; if (el) return registerSendSource(el, () => sendCommits(sendSelection.current)(), '보낼 커밋을 먼저 선택하세요.'); }, []);
 
   // ---- details ----
   const cache = useRef(new Map<string, Details>()), [detailsTick, setDetailsTick] = useState(0);
@@ -353,6 +364,7 @@ export function GitLog(props: GitLogProps) {
     return [
       { label: '리비전 번호 복사', icon: 'copy', keys: 'Ctrl+Alt+Shift+C', run: () => copyText(selection.map(commit => commit.h).join(' ')) },
       { label: '패치 만들기 (클립보드로)', icon: 'patch', run: () => { if (demo) { demo.note('실제 저장소에서는 패치가 클립보드로 복사됩니다.'); return; } void call<{ patch: string }>('git/patch', { shas: oldestFirst.map(commit => commit.h) }).then(value => { copyText(value.patch); notify(`커밋 ${selection.length}개의 패치를 복사했습니다.`); }, fail); } },
+      { label: '채팅으로 보내기', icon: 'send', keys: sendKeys, run: () => requestSendToChat(sendCommits(selection)) },
       { label: '체리픽', icon: 'cherry', disabled: merges || !data?.head.sha, hint: merges ? '머지 커밋 체리픽 불가' : undefined, run: () => void op({ op: 'cherry-pick', shas: oldestFirst.map(commit => commit.h) }, '체리픽', `커밋 ${selection.length}개를 체리픽했습니다.`) },
       'separator',
       one && (branches.length ? { label: '체크아웃', icon: 'branch', items: [...branches.map(ref => ({ label: ref.name, icon: 'branch' as IconName, run: () => void checkout(ref) })), 'separator' as const, { label: `리비전 '${short(one.h)}'`, run: () => void checkout(one.h) }] }
@@ -807,7 +819,7 @@ function DiffPreview({ spec, call, settings, setSettings, demo }: { spec: string
   useEffect(() => { if (demo) { setValue({ original: 'const port = 3000;\n', modified: 'const port = Number(process.env.PORT ?? 3000);\n', note: '' }); return; } let live = true; loadSpec(call, spec).then(next => { if (live) setValue(next); }, cause => { if (live) setError(String(cause?.message ?? cause)); }); return () => { live = false; }; }, [spec]);
   const path = spec.replace(/^diff:[^:]*:/, '').split('\t')[0];
   return <div className="git-preview">{error ? <p className="git-error">{error}</p> : !value ? <p className="hint">불러오는 중…</p> : value.note && value.original === value.modified ? <p className="hint">{value.note}</p>
-    : <DiffView original={value.original} modified={value.modified} path={path} settings={settings} onLayoutChange={diffLayout => setSettings(previous => ({ ...previous, diffLayout }))} />}</div>;
+    : <DiffView original={value.original} modified={value.modified} path={path} settings={settings} onLayoutChange={diffLayout => setSettings(previous => ({ ...previous, diffLayout }))} send={demo ? undefined : { file: { path, base: 'repo' }, rev: spec.split(':')[1] }} />}</div>;
 }
 
 // ---- details ----

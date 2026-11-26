@@ -1,0 +1,13 @@
+/* 채팅으로 보내기 and paste-as-reference (send-to-chat.ts, chat-send-ui.tsx). */
+
+/* The notice under the composer's other one-line notes after a paste became a reference: the way back to the text. */
+.chat-command-args.chat-paste-ref { align-items: center; }
+.chat-paste-ref button { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.chat-paste-ref button:hover, .chat-paste-ref button:focus-visible { text-decoration: underline; }
+
+/* "Nothing to send": a short line at the bottom of the window, gone after a moment. */
+.send-note { position: fixed; left: 50%; bottom: 44px; translate: -50% 0; z-index: 100; max-width: min(520px, 90vw); padding: 7px 12px; border: 1px solid var(--border-strong);
+  border-radius: 8px; background: var(--raised); color: var(--fg); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow); pointer-events: none;
+  animation: send-note 2.6s var(--ease-out) forwards; }
+@keyframes send-note { 0% { opacity: 0; translate: -50% 6px; } 8% { opacity: 1; translate: -50% 0; } 85% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .send-note { animation-timing-function: linear; } }
