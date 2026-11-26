@@ -188,7 +188,8 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .bar-button em.warn { background: var(--warn); }
 .bar-button.error-tab.hot { color: var(--error); }
 .error-count { font: 600 12px/1 var(--mono); color: var(--error); font-variant-numeric: tabular-nums; }
-.floating-error-tab { position: fixed; z-index: 36; top: 8px; right: 12px; }
+/* Both corner buttons keep clear of the Windows window controls (the same reserve as .tabbar and .changelog-close); the error one sits beside the feedback one. .bar-button sets position: relative further down, so the error one needs both classes. */
+.bar-button.floating-error-tab { position: fixed; z-index: 36; top: 8px; right: calc(52px + var(--win-edge)); }
 /* Right-hand header tools as one joined group (same frame as the split button "새 탭 ⌄"): hairline dividers tell the buttons apart without loose gaps. */
 .bar-tools { display: inline-flex; align-items: stretch; flex: none; height: 28px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); -webkit-app-region: no-drag; app-region: no-drag; }
 .bar-tools > button { position: relative; height: auto; min-width: 30px; width: auto; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 0; color: var(--muted); background: transparent; transition: background .12s, color .12s; }
@@ -491,6 +492,8 @@ summary { cursor: pointer; }
 .quick li.none { color: var(--muted); cursor: default; }
 
 /* dialogs */
+/* What the window controls cover: Windows overlay buttons on the right (--win-edge wide), macOS traffic lights on the left (--win-left), and the bar they sit in (--win-top). 0 in a plain browser and on a phone. */
+:root { --win-top: max(env(titlebar-area-height, 0px), var(--desktop-titlebar-height, 0px)); --win-left: max(0px, env(titlebar-area-x, var(--desktop-controls-width, 0px))); --win-edge: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))); }
 dialog { color: var(--fg); background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 12px; padding: 0; box-shadow: var(--shadow); }
 dialog::backdrop { background: #0009; }
 /* The status-bar section leaves the real bar undimmed so edits show there as they happen. */
@@ -1464,7 +1467,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 @keyframes demo-press { 40% { scale: .82; } }
 
 /* coach card */
-.tour-coach { position: fixed; z-index: 60; -webkit-app-region: no-drag; app-region: no-drag; width: min(320px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto;
+.tour-coach { position: fixed; z-index: 60; -webkit-app-region: no-drag; app-region: no-drag; width: min(320px, calc(100vw - 32px)); max-height: calc(100dvh - 2 * max(16px, calc(var(--win-top) + 4px))); overflow-y: auto;
   display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--overlay); box-shadow: var(--shadow);
   transition: left .4s var(--ease-out), top .4s var(--ease-out); animation: fade-in .2s var(--ease-out); }
 .tour-coach[popover] { right: auto; bottom: auto; margin: 0; color: inherit; } /* above the settings window; undo the popover UA box */
@@ -1977,8 +1980,8 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-shrinking { display: inline-flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 12px; color: var(--muted); }
 .chat-attachments .chat-attachment-remove:hover { background: var(--raised); color: var(--fg); }
 .chat-attachments .chat-attachment-remove .icon { font-size: 12px !important; line-height: 1; }
-dialog.image-modal { padding: 0; border: 0; background: transparent; box-shadow: none; max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px); overflow: visible; }
-dialog.image-modal img { display: block; max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px); border-radius: 8px; cursor: zoom-out; }
+dialog.image-modal { padding: 0; border: 0; background: transparent; box-shadow: none; max-width: calc(100vw - 48px); max-height: calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))); overflow: visible; }
+dialog.image-modal img { display: block; max-width: calc(100vw - 48px); max-height: calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))); border-radius: 8px; cursor: zoom-out; }
 dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; background: var(--overlay); border: 1px solid var(--border-strong); }
 .chat-commands { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); z-index: 20; }
 .chat-commands button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 6px; text-align: left; color: var(--fg); }
@@ -2107,7 +2110,7 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 /* mermaid-render.ts: the measuring host. Fixed, so it adds nothing to the page's scroll area; hidden, so nothing paints while it renders. */
 .mermaid-measure { position: fixed; top: 0; left: 0; right: 0; visibility: hidden; pointer-events: none; overflow: hidden; }
 
-dialog.mermaid-modal { position: fixed; inset: 0; margin: auto; width: min(1100px, calc(100vw - 32px)); height: min(780px, calc(100dvh - 32px)); overflow: hidden; }
+dialog.mermaid-modal { position: fixed; inset: 0; margin: auto; width: min(1100px, calc(100vw - 32px)); height: min(780px, calc(100dvh - 2 * max(16px, calc(var(--win-top) + 4px)))); overflow: hidden; }
 dialog.mermaid-modal[open] { display: flex; flex-direction: column; }
 .mermaid-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--border); }
 .mermaid-modal-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -2587,10 +2590,10 @@ button.chat-chip:hover { transform: translateY(-1px); }
 /* Session statistics. Series colours = slots 1-4 of the validated categorical palette (light and dark steps), in fixed order: input, output, cache read, cache write. */
 dialog:is(.chat-stats, .usage-review) {
   --stats-pad: 20px;
-  width: min(1020px, calc(100vw - 48px)); height: min(820px, calc(100dvh - 48px));
+  width: min(1020px, calc(100vw - 48px)); height: min(820px, calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))));
   max-width: none; max-height: none; margin: auto; padding: 0; overflow: hidden; background: var(--surface);
 }
-dialog.chat-stats { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; width: min(940px, calc(100vw - 48px)); height: auto; max-height: calc(100dvh - 48px); }
+dialog.chat-stats { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; width: min(940px, calc(100vw - 48px)); height: auto; max-height: calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))); }
 dialog:is(.chat-stats, .usage-review)[open] { display: flex; flex-direction: column; }
 :root[data-scheme=light] dialog.chat-stats { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
 dialog:is(.chat-stats, .usage-review) > header { flex: none; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 2px var(--stats-pad); border-bottom: 1px solid var(--border); background: var(--raised); }
@@ -2996,11 +2999,14 @@ dialog.plan-modal footer { border-top: 1px solid var(--border); } .plan-actions 
 /* A box touching the top edge has no room above it: the label moves inside. */
 .feedback-capture-box.label-in > span { top: 4px; left: 4px; }
 .feedback-capture-box > span { position: absolute; left: -2px; top: -24px; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--accent-fg); background: var(--accent); }
-.feedback-capture-bar { position: fixed; top: 12px; left: 50%; translate: -50% 0; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); cursor: default; }
+.feedback-capture, .feedback-capture * { -webkit-app-region: no-drag; app-region: no-drag; }
+.feedback-capture-bar { position: fixed; top: max(12px, calc(var(--win-top) + 4px)); left: 50%; translate: -50% 0; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: center; padding: 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); cursor: default; }
 .feedback-capture-bar button { display: inline-flex; align-items: center; gap: 4px; }
 .feedback-capture-hint { padding: 0 8px; color: var(--muted); font-size: 12px; }
 dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; }
 .feedback-annotate-head { padding: 10px 12px; gap: 6px; border-bottom: 1px solid var(--border); }
+/* The big window starts below the bar the window controls sit in (the width rule above stays as it is). */
+dialog.feedback-annotate[open] { max-height: calc(100dvh - 2 * max(16px, calc(var(--win-top) + 4px))); }
 .feedback-annotate-head > strong { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feedback-annotate-head > button, .feedback-tools button { display: inline-flex; align-items: center; gap: 4px; }
 .feedback-tools { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; }
@@ -3021,7 +3027,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 @container (max-width: 380px) { .feedback-queue-chip { display: none; } }
 
 /* feedback inbox on the no-project screen */
-.welcome-feedback-button { position: fixed; top: 8px; right: 12px; z-index: 21; -webkit-app-region: no-drag; app-region: no-drag; }
+.welcome-feedback-button { position: fixed; top: 8px; right: calc(12px + var(--win-edge)); z-index: 21; -webkit-app-region: no-drag; app-region: no-drag; }
 .welcome > .welcome-feedback { position: fixed; z-index: 20; top: 48px; bottom: 6px; right: 6px; width: min(480px, 92%); display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .welcome > .welcome-feedback.wide { width: calc(100% - 12px); }
 /* The one tooltip (tooltip.ts): replaces the browser's title tooltip everywhere and the data-tip of IconButton. Top layer, so above dialogs and never clipped; :popover-open beats the default popover box. */
@@ -3097,7 +3103,7 @@ dialog.feedback-annotate[open] { width: min(1100px, calc(100vw - 32px)); max-hei
 .changelog.closing[open] { animation: fade-out .14s cubic-bezier(.4, 0, 1, 1) forwards; }
 .changelog::before { content: ""; position: absolute; inset: 0 0 auto 0; height: var(--bar); -webkit-app-region: drag; app-region: drag; }
 .changelog-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
-.changelog-close { position: absolute; top: 8px; right: calc(var(--edge) + 12px); z-index: 3; -webkit-app-region: no-drag; app-region: no-drag; }
+.changelog-close { position: absolute; top: calc(8px + env(safe-area-inset-top, 0px)); right: calc(var(--edge) + 12px); z-index: 3; -webkit-app-region: no-drag; app-region: no-drag; }
 .changelog-main { flex: 1; min-height: 0; display: flex; position: relative; }
 .changelog-nav { width: 220px; flex: none; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 2px; padding: calc(var(--bar) + 10px) 10px 10px; overflow-y: auto; border-right: 1px solid var(--border); }
 .changelog-nav button { display: flex; align-items: center; gap: 6px; padding: 7px 10px; text-align: left; color: var(--muted); }
@@ -3679,8 +3685,8 @@ dialog.usage-review > header .spacer { flex: 1; }
 .review-token-list dd { margin: 3px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .usage-detail > .usage-more, .m-usage-section .usage-more { margin-top: 8px; align-self: flex-start; }
 @media (max-width: 760px) {
-  dialog:is(.chat-stats, .usage-review) { --stats-pad: 12px; width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
-  dialog.usage-review { height: calc(100dvh - 16px); }
+  dialog:is(.chat-stats, .usage-review) { --stats-pad: 12px; width: calc(100vw - 16px); max-height: calc(100dvh - 2 * max(8px, calc(var(--win-top) + 4px))); }
+  dialog.usage-review { height: calc(100dvh - 2 * max(8px, calc(var(--win-top) + 4px))); }
   .review-charts { grid-template-columns: 1fr; }
   .stats-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-flow: row; }
   .stats-tile:nth-child(3n + 1) { border-left: 0; }
