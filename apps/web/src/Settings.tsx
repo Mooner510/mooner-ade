@@ -5,6 +5,7 @@ import { agentNames, chatStatusLayout, defaultSettings, restoreDefaultSettings, 
 import { APP_THEMES, themeById, type ThemeId } from './themes';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
+import { chatKeyGroup } from './chat-key-guide';
 import { Icon, IconButton, type IconName } from './Icon';
 import { HubSignIn, PluginSettings, pluginsBridge, usePluginUpdateCount, usePluginsState } from './PluginSettings';
 import { useShells } from './shells';
@@ -896,7 +897,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
 function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(settings: Settings): void }) {
   const query = useContext(settingsQuery);
   const [editing, setEditing] = useState(''), [note, setNote] = useState('');
-  const definitions = [...appKeyDefs.map(def => ({ ...def, scope: 'appKeys' as const })), ...chatKeyDefs.map(def => ({ ...def, group: '채팅 모드 (입력창에서)', scope: 'chatKeys' as const }))];
+  const definitions = [...appKeyDefs.map(def => ({ ...def, scope: 'appKeys' as const })), ...chatKeyDefs.map(def => ({ ...def, group: chatKeyGroup(def.id), scope: 'chatKeys' as const }))];
   const current = (def: typeof definitions[number]) => def.scope === 'appKeys' ? appKey(settings.appKeys, def.id)! : chatKey(settings.chatKeys, def.id as typeof chatKeyDefs[number]['id']);
   const inTerminal = (def: typeof definitions[number]) => settings.termKeys?.[def.id] ?? appKeyInTerminalByDefault(settings, def.id);
   const same = (combo: string, keys: string) => combo === keys || (Boolean(combo) && Boolean(keys) && combosOverlap(combo, keys));
