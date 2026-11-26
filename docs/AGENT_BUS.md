@@ -69,7 +69,7 @@ Cursor 채팅 ─┘  list_peers/send_message└──────────�
 
 **절차**(MCP 서버 지침에 요약이 들어갑니다):
 1. `merge_check`로 준비된 채팅, 서로 충돌하는 쌍, 추천 순서를 봅니다.
-2. 채팅마다 자기 작업을 커밋합니다. 다른 채팅에는 `request_peer` `commit`.
+2. 채팅마다 자기 작업을 커밋합니다. 다른 채팅에는 `request_peer` `commit`. (worktree에 들어간 채팅은 평소에는 스스로 커밋하지 않고 변경을 남겨 두며, 사람이 '원본으로 합치기'에서 커밋합니다. 이 단계의 커밋은 사람이 통합을 맡겼을 때입니다.)
 3. 추천 순서대로 한 번에 하나씩, 각 채팅이 `merge_my_worktree`로 자기 worktree를 합칩니다.
 4. 두 채팅이 충돌하면 한쪽(통합 담당)이 `integrate_worktrees`로 상대 브랜치를 자기 worktree에 merge하고, 충돌을 풀어 커밋한 뒤 `merge_my_worktree`. 원본과 충돌하면 원본 브랜치를 자기 worktree에 `git merge`(rebase·squash 금지)로 받아 풀고 다시 합칩니다. 그러면 원본 쪽은 fast-forward가 되어 반쯤 된 merge가 원본에 남지 않습니다.
 5. 합친 뒤 원본이 앞서 나간 다른 채팅에는 `request_peer` `sync`.

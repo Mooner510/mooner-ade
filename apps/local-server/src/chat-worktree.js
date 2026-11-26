@@ -283,7 +283,7 @@ export async function moveClaudeSession({ configDir, sessionId, from, to }) {
 // conversation point at the other folder now.
 export function moveNote(phase, info, previous) {
   return phase === 'enter'
-    ? `[ADE] The user moved this chat into an isolated git worktree. From now on work only in ${info.cwd ?? info.path} (branch ${info.branch}); files mentioned earlier under ${previous} are at the same relative paths here. Commit your work on this branch; do not squash or rebase. The user merges it back from ADE.\n\n`
+    ? `[ADE] The user moved this chat into an isolated git worktree. From now on work only in ${info.cwd ?? info.path} (branch ${info.branch}); files mentioned earlier under ${previous} are at the same relative paths here. Do not commit on your own: leave your changes uncommitted, the user reviews them and commits them when merging the worktree back from ADE. Commit only when the user asks you to (also in an agent-bus integration the user asked for), on this branch, never squashing or rebasing.\n\n`
     : `[ADE] The user moved this chat out of its git worktree back to ${info.originCwd ?? info.origin}. From now on work there; paths mentioned earlier under ${previous} are at the same relative paths here.\n\n`;
 }
 

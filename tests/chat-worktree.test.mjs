@@ -205,4 +205,7 @@ test('moving a Claude session copies its transcript to the new folder and keeps 
 test('the note to the agent names the new folder and branch', () => {
   assert.match(moveNote('enter', { cwd: '/w/x', branch: 'ade/chat-1' }, '/repo'), /\/w\/x.*ade\/chat-1.*\/repo/s);
   assert.match(moveNote('exit', { originCwd: '/repo' }, '/w/x'), /back to \/repo/);
+  // Entering is no request to commit: the agent leaves its changes for the user's merge unless the user asks for a commit.
+  assert.match(moveNote('enter', { cwd: '/w/x', branch: 'ade/chat-1' }, '/repo'), /Do not commit on your own.*Commit only when the user asks/s);
+  assert.doesNotMatch(moveNote('enter', { cwd: '/w/x', branch: 'ade/chat-1' }, '/repo'), /Commit your work/);
 });
