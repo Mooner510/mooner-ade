@@ -40,6 +40,13 @@ import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
 import { can, isRemote } from './transport';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
+import { CardKey, ChatDiscover, GuideTextView, useCardBinding, useCardLabels, useKeyName, usePaneKeys, type CardActions, type CardKeyBinding, type CardKeyLabels } from './ChatKeys';
+import { ChatFind } from './ChatFind';
+import { lastAnswer, lastCode, turnJumpTarget, type ThreadAction } from './chat-keys';
+import { slashMenu, loadRecentSlash, recordSlashUse } from './chat-slash';
+import { composerPlaceholder, HINTS, idleCompactOffer } from './chat-hints';
+import { toast } from './toast';
+import type { MutableRefObject } from 'react';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
 // `reconnect` after the socket came back, which makes the pane ask the server for what it missed.
@@ -858,16 +865,18 @@ function BtwCardRow({ item, enter }: { item: Extract<Item, { kind: 'btw' }>; ent
 // ExitPlanMode: the plan is the thing being decided, so it gets room to read (tall body, larger type) and a full-size dialog
 // that carries the same decision buttons. The footer stays outside the scroll area, so the answer is never scrolled away.
 type PlanAnswer = { mode?: string; message?: string; allowTool?: boolean; permanent?: boolean };
-function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: string[]; choices?: boolean; onAnswer(allow: boolean, answer?: PlanAnswer): void; onBack?(): void }) {
+// `keys`: the key labels when this card answers to the pane's keys; `revise`: bumped by the key that opens 수정 요청….
+function PlanActions({ modes, choices = true, onAnswer, onBack, keys, revise = 0 }: { modes: string[]; choices?: boolean; onAnswer(allow: boolean, answer?: PlanAnswer): void; onBack?(): void; keys?: CardKeyLabels; revise?: number }) {
   const [revising, setRevising] = useState(false), [note, setNote] = useState(''), feedback = note.trim();
+  const revised = useRef(revise); useEffect(() => { if (revise !== revised.current) { revised.current = revise; setRevising(true); } }, [revise]);
   if (revising) return <footer className="plan-revise">
     <label htmlFor="plan-feedback">{choices ? '어떻게 고치면 좋을지 알려 주세요' : '다음 메시지로 어떻게 고칠지 알려 주세요'}</label>
     <textarea id="plan-feedback" autoFocus rows={3} maxLength={4000} value={note} placeholder="예: 2단계는 기존 API를 유지하는 쪽으로 다시 설계해 주세요. 테스트 계획도 추가해 주세요."
-      onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
+      onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } else if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); setRevising(false); } }} />
     <div className="plan-actions">
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
       <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
-      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>{choices ? '의견 보내고 다시 계획' : '의견 보내고 다음 메시지로'}</button>
+      <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>{choices ? '의견 보내고 다시 계획' : '의견 보내고 다음 메시지로'}<CardKey label={keys && 'Ctrl/⌘+Enter'} /></button>
     </div>
   </footer>;
   // Like Claude Code: two ways to approve, differing only in the permission mode the run continues in. Auto (the CLI decides) is the default
@@ -876,15 +885,17 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   // Cursor's plan has no permission mode to pick. A revision is the next user message, not a mode choice.
   if (!choices) return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)} title="계획을 반려하고, 적은 내용을 다음 메시지로 보냅니다.">수정 요청…</button>
+    {keys && !onBack && <span className="card-key-note"><kbd>Esc</kbd> 거부하고 중단</span>}
+    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)} title="계획을 반려하고, 적은 내용을 다음 메시지로 보냅니다.">수정 요청…<CardKey label={keys?.more} /></button>
     <button type="button" className="secondary" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
-    <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인</button>
+    <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인<CardKey label={keys?.allow} /></button>
   </footer>;
   return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…</button>
-    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="파일 편집 자동 허용, 명령 실행 확인">편집 허용으로 승인</button>
-    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="CLI 자동 승인 판단">자동 모드로 승인</button>}
+    {keys && !onBack && <span className="card-key-note"><kbd>Esc</kbd> 거부하고 중단</span>}
+    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…<CardKey label={keys?.more} /></button>
+    <button type="button" className={auto ? undefined : 'primary'} onClick={() => onAnswer(true, { mode: 'acceptEdits' })} title="파일 편집 자동 허용, 명령 실행 확인">편집 허용으로 승인<CardKey label={auto ? keys?.allowMore : keys?.allow} /></button>
+    {auto && <button type="button" className="primary" onClick={() => onAnswer(true, { mode: 'auto' })} title="CLI 자동 승인 판단">자동 모드로 승인<CardKey label={keys?.allow} /></button>}
   </footer>;
 }
 // The dialog of a long plan lists its `##` sections down the side (the one in view is lit) so it can be jumped through; the card itself is just the plan.
@@ -901,7 +912,7 @@ function usePlanSpy(count: number) {
   return { body, active, onScroll, go };
 }
 // The plan reads top to bottom as written (no folding, no section chips); the title sits in the header and the decision stays under the body.
-function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: string[]; choices?: boolean; onAnswer(allow: boolean, always: boolean, answers?: undefined, extra?: PlanAnswer): void }) {
+function PlanCard({ plan, modes, choices, onAnswer, keys, order, onInterrupt }: { plan: string; modes: string[]; choices?: boolean; onAnswer(allow: boolean, always: boolean, answers?: undefined, extra?: PlanAnswer): void; keys?: CardKeyBinding; order?: string; onInterrupt?(): void }) {
   const played = usePlayedEntrance();
   const [open, setOpen] = useState(false), lines = plan.split('\n').length;
   const { title, sections } = useMemo(() => planSections(plan), [plan]);
@@ -909,11 +920,15 @@ function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: str
   const titledAt = sections.flatMap((section, index) => section.title ? [index] : []), outline = titledAt.length > 2 && lines > 40;
   const dialog = usePlanSpy(sections.length);
   const decide = (allow: boolean, extra?: PlanAnswer) => onAnswer(allow, false, undefined, extra);
-  return <div className="chat-approval chat-plan" {...played} role="alertdialog" aria-label="계획 검토">
-    <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong></span><span className="plan-title" data-tip-overflow="">{title ? inline(title) : '이 계획대로 진행할까요?'}</span>
+  // The pane's keys: the primary approval, the other approval (편집 허용 when auto is the primary), 수정 요청…, and Esc refuses and stops like the approval card.
+  const [revise, setRevise] = useState(0), root = useRef<HTMLDivElement>(null), auto = choices !== false && modes.includes('auto');
+  useCardBinding(keys, { allow: () => decide(true, choices === false ? undefined : { mode: auto ? 'auto' : 'acceptEdits' }), allowMore: auto ? () => decide(true, { mode: 'acceptEdits' }) : undefined,
+    more: () => setRevise(value => value + 1), deny: () => { decide(false); onInterrupt?.(); }, focus: () => root.current?.querySelector<HTMLElement>('footer button')?.focus() });
+  return <div ref={root} className="chat-approval chat-plan" {...played} data-keys-target={keys && order ? '' : undefined} role="alertdialog" aria-label="계획 검토">
+    <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong>{order && <span className="chat-card-order">{order}</span>}</span><span className="plan-title" data-tip-overflow="">{title ? inline(title) : '이 계획대로 진행할까요?'}</span>
       <span className="plan-head-end"><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="maximize" label="크게 보기" onClick={() => setOpen(true)} /></span></header>
     <div className="chat-plan-body"><Markdown text={body} /></div>
-    <PlanActions modes={modes} choices={choices} onAnswer={decide} />
+    <PlanActions modes={modes} choices={choices} onAnswer={decide} keys={open ? undefined : keys?.labels} revise={revise} />
     {open && <Modal className="plan-modal" labelledBy="plan-title" onClose={() => setOpen(false)}>
       <header><span className="plan-label"><Icon name="plan" size={15} /><strong>계획 검토</strong></span><h2 id="plan-title">{title ? inline(title) : '이 계획대로 진행할까요?'}</h2>
         <span className="plan-head-end"><IconButton icon="copy" label="계획 복사" onClick={() => copyText(plan)} /><IconButton icon="x" label="닫기" onClick={() => setOpen(false)} /></span></header>
@@ -923,7 +938,7 @@ function PlanCard({ plan, modes, choices, onAnswer }: { plan: string; modes: str
           {sections.map((section, index) => <section key={index} data-plan-section>{section.title && <h2>{section.title}</h2>}<Markdown text={section.body} /></section>)}
         </div>
       </div>
-      <PlanActions modes={modes} choices={choices} onAnswer={decide} onBack={() => setOpen(false)} />
+      <PlanActions modes={modes} choices={choices} onAnswer={decide} onBack={() => setOpen(false)} keys={keys?.labels} revise={revise} />
     </Modal>}
   </div>;
 }
@@ -962,7 +977,8 @@ export function BlockedCard({ items, onAllow }: { items: BlockedAction[]; onAllo
     </footer>
   </div>;
 }
-export function ApprovalCard({ approval, modes, settings, claude, asker, askerColor, onAnswer, onInterrupt, trust }: { approval: Approval; modes: string[]; settings: Settings; claude?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void; trust?(entry: McpTrust): void }) {
+// `keys`: this is the card the pane's keys answer (the oldest waiting one, ChatKeys.tsx); `order`: "1/3" when several wait.
+export function ApprovalCard({ approval, modes, settings, claude, asker, askerColor, onAnswer, onInterrupt, trust, keys, order }: { approval: Approval; modes: string[]; settings: Settings; claude?: boolean; asker?: SubAgent; askerColor?: string; onAnswer(allow: boolean, always: boolean, answers?: Record<string, string[]>, extra?: PlanAnswer): void; onInterrupt(): void; trust?(entry: McpTrust): void; keys?: CardKeyBinding; order?: string }) {
   const played = usePlayedEntrance();
   const [menu, setMenu] = useState<{ right: number; bottom: number } | null>(null), caret = useRef<HTMLButtonElement>(null), list = useRef<HTMLDivElement>(null), menuOpen = menu !== null;
   useEffect(() => { if (menuOpen) list.current?.querySelector('button')?.focus(); }, [menuOpen]);
@@ -970,28 +986,31 @@ export function ApprovalCard({ approval, modes, settings, claude, asker, askerCo
   const toggleMenu = () => setMenu(open => { const box = caret.current?.getBoundingClientRect(); return open || !box ? null : { right: window.innerWidth - box.right, bottom: window.innerHeight - box.top + 6 }; });
   // The menu next to 허용 (which allows this request only): this chat keeps allowing the tool (Claude; the other agents' own session allow), or an MCP tool / server is trusted for good in the settings.
   const trustAnd = (entry: McpTrust) => { setMenu(null); trust?.(entry); onAnswer(true, false); };
-  if (approval.questions?.length) return <QuestionCard questions={approval.questions} title={approval.tool === 'AskUserQuestion' ? '질문' : approval.tool} onAnswer={onAnswer} onInterrupt={onInterrupt} />;
+  if (approval.questions?.length) return <QuestionCard questions={approval.questions} title={approval.tool === 'AskUserQuestion' ? '질문' : approval.tool} onAnswer={onAnswer} onInterrupt={onInterrupt} keys={keys} order={order} />;
   // Claude's ExitPlanMode and Cursor's create_plan ('계획 승인') read the same; only Claude picks the mode it continues in.
-  if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} />;
+  if ((approval.tool === 'ExitPlanMode' || approval.tool === '계획 승인') && typeof approval.input?.plan === 'string') return <PlanCard plan={approval.input.plan} modes={modes} choices={approval.tool === 'ExitPlanMode'} onAnswer={onAnswer} keys={keys} order={order} onInterrupt={onInterrupt} />;
   const cwd = useContext(CwdContext), input = approval.input ?? {}, canAlways = approval.suggestions.length > 0, hasMenu = claude || canAlways || (!!approval.mcp && !!trust), summary = toolSummary(approval.tool, input, cwd), filePath = String(input.file_path ?? '');
   const written = approval.tool === 'Write' && typeof input.content === 'string' ? input.content : null;
   // The same diff view as the Edit tool card (only what changes, coloured), not the whole old text as removed and the new as added.
   const changed = approval.tool === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string' ? { from: input.old_string as string, to: input.new_string as string } : null;
-  return <div className="chat-approval" {...played} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
-    <header><Icon name="alert" size={15} /><strong>{approval.tool}</strong><span>실행하려면 허용이 필요합니다</span>
+  // The pane's keys (never a plain Enter): allow once, allow for the session, open the ▾ menu (MCP trust), Esc refuses and stops; Tab from nowhere lands on 거부.
+  const allowSession = claude || canAlways ? () => { setMenu(null); claude ? onAnswer(true, false, undefined, { allowTool: true }) : onAnswer(true, true); } : undefined, root = useRef<HTMLDivElement>(null);
+  useCardBinding(keys, { allow: () => onAnswer(true, false), allowMore: allowSession, more: hasMenu ? () => { if (!menuOpen) toggleMenu(); } : undefined, deny: () => { onAnswer(false, false); onInterrupt(); }, focus: () => root.current?.querySelector<HTMLElement>('footer button')?.focus() });
+  return <div ref={root} className="chat-approval" {...played} data-keys-target={keys && order ? '' : undefined} role="alertdialog" aria-label={`${approval.tool} 실행 승인`}>
+    <header><Icon name="alert" size={15} /><strong>{approval.tool}</strong><span>실행하려면 허용이 필요합니다</span>{order && <span className="chat-card-order">{order}</span>}
       {asker && <span className="chat-approval-agent" style={dotStyle(askerColor)}><i className="chat-agent-dot" /><span className="chat-agent-type">{asker.type}</span><span className="chat-approval-agent-name"><b>{asker.description || '서브에이전트'}</b>의 요청</span></span>}</header>
     <div className="chat-approval-body">{SHELLS[approval.tool] ? <>{typeof input.description === 'string' && input.description && <p className="chat-approval-desc">{input.description}</p>}<CodeBlock code={String(input.command ?? '')} lang={SHELLS[approval.tool]} /></> : written === null && changed === null && <p className="chat-approval-line">{summary}</p>}
       {approval.tool === 'NotebookEdit' && notebookCell(input) && <div className="chat-approval-preview"><CodeBlock code={clip(notebookCell(input)!.code)} lang={notebookCell(input)!.label} syntax={notebookCell(input)!.syntax} /></div>}
       {written !== null && <div className="chat-approval-preview"><CodeBlock code={clip(written)} lang={writeLabel(summary, written, approval.exists)} syntax={filePath} /></div>}
       {changed !== null && <div className="chat-approval-diff"><ChatDiff named from={changed.from} to={changed.to} path={filePath || 'edit'} settings={settings} /></div>}</div>
     <footer>
-      <button type="button" onClick={() => { onAnswer(false, false); onInterrupt(); }} title="거부하고 응답을 중단합니다">거부</button>
+      <button type="button" onClick={() => { onAnswer(false, false); onInterrupt(); }} title="거부하고 응답을 중단합니다 (Esc)">거부<CardKey label={keys?.labels.deny} /></button>
       <div className="approve-split">
-        <button type="button" className="primary" onClick={() => onAnswer(true, false)}>허용</button>
-        {hasMenu && <button type="button" ref={caret} className="primary approve-caret" aria-label="허용 방식 선택" aria-haspopup="menu" aria-expanded={menuOpen} onClick={toggleMenu}><Icon name="chevronDown" size={14} /></button>}
+        <button type="button" className="primary" onClick={() => onAnswer(true, false)} title={keys ? `이번 한 번 허용 (${keys.labels.allow})` : undefined}>허용<CardKey label={keys?.labels.allow} /></button>
+        {hasMenu && <button type="button" ref={caret} className="primary approve-caret" aria-label="허용 방식 선택" title={keys ? `허용 방식 선택 (${keys.labels.more})` : undefined} aria-haspopup="menu" aria-expanded={menuOpen} onClick={toggleMenu}><Icon name="chevronDown" size={14} /></button>}
         {menu && createPortal(<><button type="button" className="context-dismiss" aria-label="메뉴 닫기" tabIndex={-1} onClick={() => setMenu(null)} />
           <div ref={list} className="menu approve-menu" role="menu" style={menu} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null); } }}>
-            {(claude || canAlways) && <button type="button" role="menuitem" onClick={() => { setMenu(null); claude ? onAnswer(true, false, undefined, { allowTool: true }) : onAnswer(true, true); }}>이 세션에서 허용</button>}
+            {(claude || canAlways) && <button type="button" role="menuitem" onClick={() => { setMenu(null); claude ? onAnswer(true, false, undefined, { allowTool: true }) : onAnswer(true, true); }}>이 세션에서 허용{keys && <kbd>{keys.labels.allowMore}</kbd>}</button>}
             {approval.mcp && trust && <>
               <button type="button" role="menuitem" onClick={() => trustAnd({ server: approval.mcp!.server, tool: approval.mcp!.tool })}>이 도구 신뢰</button>
               <button type="button" role="menuitem" onClick={() => trustAnd({ server: approval.mcp!.server })}>이 MCP 신뢰</button>
@@ -1309,7 +1328,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => { if (busy) setAnswered(true); }, [busy]);
   // One pointer at a time in the whole app, after the cards (notices.ts).
   const hint = useTipNotice(`hint:${leaf.id}`, focused && visible && view.ready ? hintCandidates(ctx.settings, [
-    ['keymodel', picked === 'keymodel'], ['keyeffort', picked === 'keyeffort'], ['keymode', picked === 'keymode'], ['keystash', picked === 'keystash'],
+    ['keymodel', picked === 'keymodel'], ['keyeffort', picked === 'keyeffort'], ['keymode', picked === 'keymode'], ['keystash', picked === 'keystash'], ['keyturn', picked === 'keyturn'],
     ['tocli', view.state.status === 'idle'], ['stats', answered && agent === 'claude' && view.state.sessionId && view.state.status === 'idle'],
   ]) : []);
   const pickedBy = (name: string) => (done: unknown) => { if (done !== false) setPicked(name); };
@@ -1566,14 +1585,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const slashQuery = /^\/([^\s/]*)$/.exec(text), [slashOff, setSlashOff] = useState(false);
   // Escape dismisses the slash menu without deleting the draft; typing away from `/…` opens it again.
   useEffect(() => { if (!slashQuery) setSlashOff(false); }, [slashQuery === null]);
-  const slash = slashOff ? null : slashQuery, matches = slash ? available.filter(item => {
-    const query = slash[1].toLowerCase();
-    const name = item.name.toLowerCase();
-    // Loaded and runnable, but not offered as a completion unless typed out in full (it shadowed `/clear`).
-    if (MENU_HIDDEN.has(name) && name !== query) return false;
-    if (!query) return true;
-    return name.startsWith(query) || name.split(':').some(part => part.startsWith(query));
-  }).slice(0, 16) : [];
+  // `/` alone: ADE's handy commands first, then this user's recent ones, then the rest; a typed name is the plain prefix match (chat-slash.ts). MENU_HIDDEN: loaded and runnable,
+  // but not offered as a completion unless typed out in full (it shadowed `/clear`).
+  const [recentSlash, setRecentSlash] = useState(loadRecentSlash);
+  const slash = slashOff ? null : slashQuery, matches = slash ? slashMenu(available, slash[1], { agent, recent: recentSlash, hidden: MENU_HIDDEN }) : [];
   const commandDraft = useMemo(() => {
     if (matches.length > 0) return null;
     const match = /^\/([\w:.-]+)(?:\s.*)?$/.exec(text);
@@ -1796,10 +1811,17 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const message = shellInput?.kind === 'escaped' ? shellInput.text.trim() : typed;
     if (!message && !images.length) return;
     const command = /^\/([\w:-]+)(?:\s+(.*))?$/s.exec(message);
+    if (command) setRecentSlash(recordSlashUse(command[1]));
     if (command && LOCAL.some(item => item.name === command[1])) { setText(''); setCompact(true); clearChatDevDraft(ctx.projectId, id); try { await runLocal(command[1], (command[2] ?? '').trim()); } catch (cause) { ctx.fail(cause); } return; }
     // Cold (or nearly) prompt cache on a filled, not-cleared context: confirm before the whole context is re-read; cancel keeps the draft.
     const cache = view.state.cache, warning = agent === 'claude' && !busy && !queue.length && !queueSending && !message.startsWith('/') && shown.length && cache ? cacheSendWarning(cache, Date.now(), { enabled: ctx.settings.cacheSendWarn, minutes: ctx.settings.cacheSendWarnMinutes, working: false }) : undefined;
-    if (warning?.tokens && await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기', icon: 'send' }]) !== 'yes') return;
+    if (warning?.tokens) {
+      // Right when a cold cache costs something, the question also offers what avoids it next time (only while that is off for this chat).
+      const offer = idleCompactOffer({ agent, tips: ctx.settings.tips, idleCompactOn: view.state.idleCompact?.on });
+      const choice = await ctx.pick(cacheSendWarningText(warning), [{ id: 'no', label: '취소' }, { id: 'yes', label: '그래도 보내기', icon: 'send' }, ...(offer ? [{ id: 'idle', label: '보내고, 다음부터 자동 압축', icon: 'compress' as const, detail: '/idlecompact on: 캐시가 식기 전에 이 채팅을 압축해 둡니다' }] : [])]);
+      if (choice === 'idle') void ctx.call<IdleCompactInfo>('chat/idlecompact', { id, value: true }).then(result => note(idleCompactNote(result, ctx.settings.idleCompactMinK)), ctx.fail);
+      else if (choice !== 'yes') return;
+    }
     // The login was switched (silently) after the chat's last turn: the first message on the other one asks, like a model change does.
     const authWarning = message.startsWith('/') ? undefined : authSendWarning(view.state, { working: busy || queue.length > 0 || queueSending });
     if (authWarning) {
@@ -1936,6 +1958,41 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Border box, not contentRect: the docked drawer's padding-right shrinks the content box, which would flip it back to "over" and loop.
   // Wide enough: the drawer sits beside the thread; narrower, it covers the thread's right side.
   const drawerDocked = paneWidth >= DRAWER_DOCK, drawerWidth = drawerDocked ? Math.round(Math.min(460, paneWidth * 0.42)) : Math.min(440, Math.max(0, paneWidth - 24));
+  // ---- Keys of the pane outside the message box: the waiting card (oldest first) and moving through the conversation (ChatKeys.tsx, chat-keys.ts) ----
+  const keyName = useKeyName(ctx.settings.chatKeys), cardLabels = useCardLabels(ctx.settings.chatKeys), cardActions = useRef<MutableRefObject<CardActions> | null>(null);
+  const cardBinding = useMemo<CardKeyBinding>(() => ({ labels: cardLabels, register: (actions, on) => { if (on) cardActions.current = actions; else if (cardActions.current === actions) cardActions.current = null; } }), [cardLabels]);
+  const [find, setFind] = useState(0), lastJump = useRef<{ key: string; at: number } | null>(null);
+  // Previous/next request from where the reader is (or from the last jump while the smooth scroll is still on its way); older pages load when the top is reached.
+  const jumpTurn = (dir: -1 | 1, retried = false) => {
+    const root = scroller.current; if (!root) return;
+    const nodes = [...root.querySelectorAll<HTMLElement>('[data-user-key]')], edge = root.getBoundingClientRect().top, last = lastJump.current;
+    const from = last && Date.now() - last.at < 700 ? nodes.findIndex(node => node.dataset.userKey === last.key) : -1;
+    const at = turnJumpTarget(nodes.map(node => (node.closest('.chat-turn') ?? node).getBoundingClientRect().top - edge), dir, from >= 0 ? from : null);
+    hintSeen('keyturn');
+    if (at === null) {
+      if (dir < 0 && hiddenRef.current > 0 && !retried) { showEarlier(); requestAnimationFrame(() => requestAnimationFrame(() => jumpTurn(dir, true))); }
+      else if (dir > 0) { lastJump.current = null; jumpToEnd(); }
+      return;
+    }
+    lastJump.current = { key: nodes[at].dataset.userKey ?? '', at: Date.now() };
+    release(); nodes[at].scrollIntoView({ behavior: calm() ? 'auto' : 'smooth', block: 'start' }); syncPin();
+  };
+  const runThread = (action: ThreadAction) => {
+    const root = scroller.current;
+    if (action === 'turnPrev' || action === 'turnNext') jumpTurn(action === 'turnPrev' ? -1 : 1);
+    else if (action === 'bottom') { lastJump.current = null; jumpToEnd(); }
+    else if (action === 'top') { if (!root) return; release(); setTurnLimit(limit => Math.max(limit, turns.length)); requestAnimationFrame(() => root.scrollTo({ top: 0, behavior: calm() ? 'auto' : 'smooth' })); }
+    else if (action === 'pageUp' || action === 'pageDown') { if (!root) return; if (action === 'pageUp') release(); root.scrollBy({ top: (action === 'pageUp' ? -1 : 1) * root.clientHeight * 0.85, behavior: calm() ? 'auto' : 'smooth' }); }
+    else if (action === 'find') setFind(value => value + 1);
+    else { const copied = action === 'copyAnswer' ? lastAnswer(turns, agentIds) : lastCode(turns); if (copied) copyText(copied); else toast('block', action === 'copyAnswer' ? '복사할 답변이 없습니다' : '복사할 코드 블록이 없습니다'); }
+  };
+  const composerKey = usePaneKeys({ pane: paneRef, active: focused && visible, cardId: view.approvals[0]?.requestId ?? '', overrides: ctx.settings.chatKeys, card: cardActions, onThread: runThread });
+  // A card answered while focus was nowhere (the composer had stepped aside for it): the message box takes focus back, still folded, so typing just goes on.
+  const hadCard = useRef(false), hasCard = view.approvals.length > 0;
+  useEffect(() => {
+    const had = hadCard.current; hadCard.current = hasCard;
+    if (had && !hasCard && focused && visible && (!document.activeElement || document.activeElement === document.body)) { autoFocus.current = true; box.current?.focus({ preventScroll: true }); autoFocus.current = false; }
+  }, [hasCard]);
   // What the running turn is doing right now, for the status row under it ('' = thinking).
   const activityLabel = useMemo(() => {
     if (!busy || !lastTurn) return '';
@@ -2007,7 +2064,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { windowBlurred.current = false; readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchStart={event => { touchFrom.current = event.touches[0]?.clientY ?? null; }} onTouchMove={event => { windowBlurred.current = false; onTouchMove(event); }} onTouchEnd={settleAtBottom} onTouchCancel={settleAtBottom}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
       onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) { windowBlurred.current = false; readingTool.current = false; } if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.pointerType === 'mouse' && event.target === event.currentTarget) { windowBlurred.current = false; readingTool.current = false; release(); } }}>
-      {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
+      {find > 0 && <div className="chat-find-wrap"><ChatFind thread={thread} scroller={scroller} version={`${view.items.length}:${view.items.at(-1)?.key}:${turnLimit}:${view.state.status}`} hidden={hiddenTurns} focusKey={find} onLoadAll={() => setTurnLimit(turns.length)} onReveal={release} onClose={() => { setFind(0); box.current?.focus({ preventScroll: true }); }} /></div>}
+      {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" title={`요청한 내용으로 이동 (${keyName('turnPrev')})`} onClick={() => { jumpToUser(pin.key); setPicked('keyturn'); }}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {hiddenTurns > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>이전 대화 {hiddenTurns}개 더 보기</button>}
@@ -2017,12 +2075,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
-    {hint === 'keymodel' && <Hint title="모델은 단축키로도 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelNext'))}</kbd>, <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'modelPrev'))}</kbd>로 다음/이전 모델로 넘어가요.</>} onDone={() => hintSeen('keymodel')} />}
-    {hint === 'keyeffort' && <Hint title="Effort도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortUp'))}</kbd>로 올리고 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'effortDown'))}</kbd>로 내려요.</>} onDone={() => hintSeen('keyeffort')} />}
-    {hint === 'keymode' && <Hint title="권한 모드도 단축키로 바꿀 수 있어요" text={<>입력창에서 <kbd>{showCombo('shift+tab')}</kbd>을 누를 때마다 다음 모드로 넘어가요.</>} onDone={() => hintSeen('keymode')} />}
-    {hint === 'keystash' && <Hint wide title="쓰던 입력은 보관해 둘 수 있어요" text={<>지우는 대신 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 보관하고, 다른 요청을 보낸 뒤 <kbd>{showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}</kbd>로 다시 꺼내요.</>} onDone={() => hintSeen('keystash')} />}
-    {hint === 'tocli' && <Hint title="언제든 CLI로 전환할 수 있어요" text="이 버튼을 누르면 지금 대화를 터미널(CLI)에서 그대로 이어가요. 익숙한 CLI 화면이 필요할 때 써 보세요." onDone={() => hintSeen('tocli')} />}
-    {hint === 'stats' && <Hint title="이번 세션의 통계를 볼 수 있어요" text="토큰, 비용, 도구 사용과 컨텍스트가 어떻게 늘었는지 이 버튼에서 한눈에 확인해요." onDone={() => hintSeen('stats')} />}
+    {hint && HINTS[hint] && <Hint wide={HINTS[hint].wide} title={HINTS[hint].title} text={<GuideTextView text={HINTS[hint].text} keyName={keyName} />} onDone={() => hintSeen(hint)} />}
     {statsOpen && <ChatStatsModal id={id} title={title || agentLabel} agent={agent} call={ctx.call} costUsd={state.costUsd} onClose={() => setStatsOpen(false)} />}
     {resumeOpen && <ResumeModal agent={agent} exclude={id} call={ctx.call} onClose={() => setResumeOpen(false)} onPick={choice => void pickResume(choice)} />}
     {modelsOpen && <ModelsModal current={modelValue(selectedModel, aliases)} call={ctx.call} agent={agent} id={id} fallback={catalog} aliases={aliases} settings={ctx.settings} onSettingsChange={ctx.onSettingsChange} onClose={() => setModelsOpen(false)} onPick={value => { setModelsOpen(false); void chooseModel(value).catch(ctx.fail); }} />}
@@ -2030,9 +2083,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div><div className="chat-empty"><h2><span className="chat-empty-mark"><Icon name={agent} size={32} /></span><span className="chat-empty-text">{greeting.split(/(?<=[.?!])\s+/).map(line => <span key={line}>{line}</span>)}</span></h2></div></div>
     </div>
     <div className="chat-dock">
-      {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" onClick={jumpToEnd}><Icon name="arrowDown" size={16} /></button>}
+      {away && <button type="button" className="chat-jump" aria-label="맨 아래로 이동" title={`맨 아래로 (${keyName('threadBottom')})`} onClick={() => { jumpToEnd(); setPicked('keyturn'); }}><Icon name="arrowDown" size={16} /></button>}
       {showTracker && <AgentTracker list={tracked} colors={agentColors} opened={openedAgent?.id ?? null} waiting={waitingAgents} onOpen={key => setAgentOpen(current => current === key ? null : key)} onHide={() => setTrackerHidden(lastTurnKey)} />}
-      {view.approvals.map(approval => <ApprovalCard key={approval.requestId} approval={approval} modes={modes} settings={ctx.settings} claude={agent === 'claude'} trust={agent === 'codex' ? undefined : entry => ctx.onSettingsChange({ ...ctx.settings, mcpTrust: { ...ctx.settings.mcpTrust, [agent]: addTrust(ctx.settings.mcpTrust[agent], entry) } })} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
+      {view.approvals.map((approval, index) => <ApprovalCard key={approval.requestId} keys={index === 0 && focused ? cardBinding : undefined} order={view.approvals.length > 1 ? `${index + 1}/${view.approvals.length}` : undefined} approval={approval} modes={modes} settings={ctx.settings} claude={agent === 'claude'} trust={agent === 'codex' ? undefined : entry => ctx.onSettingsChange({ ...ctx.settings, mcpTrust: { ...ctx.settings.mcpTrust, [agent]: addTrust(ctx.settings.mcpTrust[agent], entry) } })} asker={agentsValue.agents.get(askingAgents.get(approval.requestId) ?? '')} askerColor={agentColors.get(askingAgents.get(approval.requestId) ?? '')} onAnswer={(allow, always, answers, extra) => answer(approval, allow, always, answers, extra)} onInterrupt={() => interrupt()} />)}
       {!view.approvals.length && asyncQuestions.length > 0 && <QuestionCard key={asyncQuestions[0].id} questions={asyncQuestions} submitting={sendingQuestion} onAnswer={answerAsyncQuestion} />}
       {agent === 'claude' && view.approvals.length === 0 && view.blocked && <BlockedCard items={Object.values(view.blocked)} onAllow={allowBlocked} />}
       {queue.length > 0 && <div className="chat-queue"><div role="status">{sendQueueLabel(queue)}</div>
@@ -2051,8 +2104,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       {/* On the start screen only the usage item stays (API Usage / Plan Usage), where the meter sits once the chat has turns. */}
       <div className="chat-status-slot"><div><ChatStatusLine settings={ctx.settings} context={{ state, share }} only={empty ? ['share'] : undefined} onSettings={() => ctx.onOpenSettings(agent)} onAuth={auth => void setChat({ id, auth }).catch(ctx.fail)} onLimit={limit => ctx.call('chat/limit', { id, limit })} /></div></div>
       {/* While a card waits for an answer (plan, permission, question) the card is the input: the composer steps aside and comes back as it was. */}
-      <div ref={composer} className={`chat-composer${hint === 'keystash' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-shell={isShellDraft(text) || undefined} data-feedback-region="채팅 입력창">
-        {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt}>
+      <div ref={composer} className={`chat-composer${hint === 'keystash' || hint === 'keyturn' ? ' hint-anchor' : ''}`} hidden={view.approvals.length > 0} data-compact={oneLine || undefined} data-shell={isShellDraft(text) || undefined} data-feedback-region="채팅 입력창">
+        {matches.length > 0 && <ul className="chat-commands" role="listbox" aria-label="슬래시 명령">{matches.map((item, index) => <li key={item.name} role="option" aria-selected={index === menuAt} data-group-start={index === 0 || matches[index - 1].group !== item.group ? item.group : undefined}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); complete(item.name); }}>
             <span className="chat-command-head"><b>/{item.name}</b>{item.hint && <code className="chat-command-hint">{item.hint}</code>}</span>
             {item.description && <span className="chat-command-desc">{item.description}</span>}
@@ -2075,12 +2128,13 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <div className="chat-input-row">
         <div className={`chat-input-field${commandHead ? ' has-command' : ''}`}>
         {commandHead && <div className="chat-input-mirror" aria-hidden ref={inputMirror}><span className="chat-input-command">{commandHead}</span>{`${text.slice(commandHead.length)} `}</div>}
-        <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={oneLine && busy && !stash ? (foldIn ? '응답 중, 입력해 끼워 넣기' : agent === 'cursor' ? '응답을 끊고 바로 보내기' : '응답이 끝나면 순서대로 보냅니다') : stash ?`보관된 입력이 있습니다 (${showCombo(chatKey(ctx.settings.chatKeys, 'stash'))}로 복원)` : busy ? foldIn ? `${ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}: 지금 끼워 넣기, Tab: 끝난 뒤 보내기` : agent === 'cursor' ? 'Enter: 응답을 끊고 바로 보내기, Tab: 끝난 뒤 보내기' : '응답이 끝난 뒤 순서대로 전송합니다' : '작업을 설명하거나 질문하세요, !명령으로 셸 실행'} aria-label="메시지 입력" disabled={!view.ready && !openError}
+        <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={composerPlaceholder({ oneLine, busy, stash: Boolean(stash), foldIn, agent, modSend: ctx.settings.chatSendKey === 'mod-enter', tips: ctx.settings.tips, turns: turns.length }, keyName)} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { const next = shellBang(text) + event.target.value; if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(next); setCaret(event.target.selectionStart + shellBang(next).length); }} onSelect={event => setCaret(event.currentTarget.selectionStart + shellBang(text).length)}
           onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } }}
           onKeyDown={event => {
             if (event.nativeEvent.isComposing) return;
+            if (composerKey(event)) return; // previous/next request, top/bottom, find, copy (chat-keys.ts threadKeyInComposer decides when the text's own editing comes first)
             const modSend = ctx.settings.chatSendKey === 'mod-enter';
             const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
             const combo = comboOf(event.nativeEvent), keyOf = (id: Parameters<typeof chatKey>[1]) => combo === chatKey(ctx.settings.chatKeys, id);
@@ -2160,7 +2214,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       </div>
       </div>
       <div className="chat-start-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
-        <button type="button" className="chat-resume" disabled={!view.ready || resuming || busy} onClick={() => void resume()}><Icon name="refresh" size={16} />{resuming ? '불러오는 중…' : '이전 대화 불러오기'}</button></div></div>
+        <button type="button" className="chat-resume" disabled={!view.ready || resuming || busy} onClick={() => void resume()}><Icon name="refresh" size={16} />{resuming ? '불러오는 중…' : '이전 대화 불러오기'}</button>
+        {ctx.settings.tips && <ChatDiscover agent={agent} recent={recentSlash} keyName={keyName} onInsert={value => { setText(value); requestAnimationFrame(() => box.current?.focus()); }} />}</div></div>
     </div>
     <div className="chat-bottom-space" aria-hidden="true" />
     {providers.length > 1 && <div className="chat-start-slot chat-provider-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
