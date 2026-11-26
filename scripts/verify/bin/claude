@@ -106,6 +106,18 @@ if (!stream) {
       result(`stream ${n}`); return;
     }
     if (text.includes('e2e-echo')) { say('echo: ' + text); result(); return; }
+    // Turn change card and file Rewind (chat-snapshots.js): `fsedit write <path> <text>; delete <path>` changes files in the working folder the way
+    // a Bash tool would, after the turn's start snapshot (ctl.json {"fsms":N}, default 1.5 s), and answers with a uuid so Rewind can pick that answer.
+    if (text.startsWith('fsedit ')) {
+      await wait(ctl().fsms ?? 1500);
+      for (const command of text.slice(7).split(';').map(item => item.trim()).filter(Boolean)) {
+        const [verb, name = '', ...rest] = command.split(' '), file = path.join(process.cwd(), name);
+        if (verb === 'write') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, rest.join(' ').replace(/\\n/g, '\n') + '\n'); }
+        if (verb === 'delete') fs.rmSync(file, { force: true, recursive: true });
+      }
+      send({ type: 'assistant', uuid: crypto.randomUUID(), message: { id: 'm' + Date.now(), content: [{ type: 'text', text: 'done: ' + text.slice(7) }], usage: { input_tokens: 10, output_tokens: 5 } } });
+      result(); return;
+    }
     // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
     // Feedback checks: a ```ui form (the next-step choice), plan-limit reports whose rounded share keeps moving, and a reply with unbreakable tokens. ctl.json {"slowms":N} makes a `slow` turn last.
     if (text.includes('uiformslow')) { say('느린 선택지입니다.' + '\n\n' + '```ui' + '\n' + JSON.stringify(['form', '다음 단계', '선택 보내기', ['radio', 'plan', '방향', 'slow 느리게 처리', '메뉴로 이동']]) + '\n' + '```'); result(); return; } // the chosen answer contains `slow`: a turn that lasts (ctl.json slowms)
