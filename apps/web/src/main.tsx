@@ -528,7 +528,7 @@ function Shell() {
     { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', run: () => actions.current.cycle(-1) },
-    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: index === 8 ? '마지막 프로젝트' : `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
   // With an agent, Settings opens on that agent's AI 툴 tab (where its API key is).

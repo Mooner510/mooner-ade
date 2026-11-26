@@ -1184,7 +1184,7 @@ ${where}`, [
     { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', icon: 'externalLink', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
     { id: 'nextTab2', label: '다음 탭', hidden: true, run: () => cyclePaneTab(1) },
     { id: 'prevTab2', label: '이전 탭', hidden: true, run: () => cyclePaneTab(-1) },
-    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: index === 8 ? '마지막 탭' : `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
     { id: 'splitRight', label: '오른쪽으로 분할', icon: 'splitH', run: () => splitTerminal(refs.focus.current, 'row') },
     { id: 'splitDown', label: '아래로 분할', icon: 'splitV', run: () => splitTerminal(refs.focus.current, 'column') },
     { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', icon: 'terminal', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },

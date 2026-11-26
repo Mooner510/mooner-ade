@@ -84,7 +84,7 @@ test('a plain Ctrl+letter stays with the editor everywhere, and with any text fi
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outfile = join(directory, 'field.cjs');
   await build({ stdin: { contents: `export * from './shortcuts';`, resolveDir }, bundle: true, platform: 'node', format: 'cjs', outfile });
-  const { appKey, keyBelongsToField, keyPlace, matches } = require(outfile);
+  const { appKey, appKeyDefs, keyBelongsToField, keyPlace, matches } = require(outfile);
   const key = (code, modifiers = {}) => ({ code, key: code, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...modifiers });
   const ctrlD = key('KeyD', { ctrlKey: true });
   // Monaco's Ctrl+D (add next match) is not taken by the split key, on Windows or macOS.
@@ -102,6 +102,10 @@ test('a plain Ctrl+letter stays with the editor everywhere, and with any text fi
   }
   // Without a DOM (or for a non-element target) the place is "other".
   assert.equal(keyPlace(null), 'other');
+  // The ninth tab/project key goes to the last one, and the label says so.
+  assert.equal(appKeyDefs.find(def => def.id === 'tab9').label, '마지막 탭으로 이동');
+  assert.equal(appKeyDefs.find(def => def.id === 'project9').label, '마지막 프로젝트로 이동');
+  assert.equal(appKeyDefs.find(def => def.id === 'tab8').label, '8번 탭으로 이동');
 });
 
 test('app shortcut overrides survive persistence validation; malformed values are rejected', () => {
