@@ -936,6 +936,8 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 12px; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 0; cursor: pointer; transition: background .12s; }
 .plugin-row:hover { background: var(--hover); }
 .plugin-row-update { flex: none; display: inline-flex; cursor: default; }
+.plugin-row-updated { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; color: var(--add); animation: pop-in .2s var(--ease-out); }
+.plugin-row-updated > .icon { flex: none; }
 .plugin-row-update .plugin-button { min-height: 0; height: 28px; padding: 0 10px; gap: 5px; font-size: 12px; }
 .plugin-row:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 .plugin-row > .icon:last-child { flex: none; color: var(--faint); transition: translate .18s var(--ease-out), color .12s; }
@@ -1136,7 +1138,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 .plugin-update-policy strong, .plugin-update-policy small { display: block; }
 .plugin-update-policy small { margin-top: 2px; color: var(--muted); }
 .plugin-update-policy:popover-open { width: min(295px, calc(100vw - 24px)); }
-.plugin-list .plugin-callout { margin-top: 4px; }
+.plugin-list .plugin-callout { margin: 0 12px 11px; }
 
 /* GitHub account for private plugin repositories: a toolbar button that opens a modal. */
 .plugin-github-open { position: relative; }

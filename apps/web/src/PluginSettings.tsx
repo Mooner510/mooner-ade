@@ -236,7 +236,9 @@ export function pluginUpdateCount(state: PluginsState | null | undefined) {
 }
 export const usePluginUpdateCount = () => pluginUpdateCount(usePluginsState());
 // Plugins that need the user come first; the rest keep the folder order.
-const needsUser = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid', 'incompatible'].includes(plugin.state) || plugin.apiStatus === 'deprecated' || Boolean(plugin.update?.available) || setupLeft(plugin) > 0;
+// "Needs the user" here is what the plugin itself is waiting for (approval, a failure, setup). An available update is not part of it: the list must not reorder when one is installed.
+const needsAction = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid', 'incompatible'].includes(plugin.state) || plugin.apiStatus === 'deprecated' || setupLeft(plugin) > 0;
+const needsUser = (plugin: PluginInfo) => needsAction(plugin) || Boolean(plugin.update?.available);
 
 // ---- the setup guide ---------------------------------------------------------------------------------------------
 // One list from what MoonerADE knows (approved, running) and what the plugin declared (plugin.json `setup`) and reports
@@ -331,6 +333,12 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     const off = bridge.onState(value => setState(value));
     return () => { live = false; off(); };
   }, [bridge]);
+  // The "updated" mark on a row is a moment's confirmation, not something to leave standing.
+  useEffect(() => {
+    if (!notice || notice.error || notice.step !== 'update') return;
+    const timer = setTimeout(() => setNotice(current => current === notice ? null : current), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   // Searching shows the matching plugins, not a detail page left open.
   useEffect(() => { if (query.trim()) setSelected(null); }, [query]);
   // Going to a detail page or back starts at the top of the scrolling settings body (not on the first render).
@@ -370,7 +378,7 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   </div>;
 
   const global = noticeFor('global');
-  const plugins = [...state.plugins].sort((a, b) => Number(needsUser(b)) - Number(needsUser(a)));
+  const plugins = [...state.plugins].sort((a, b) => Number(needsAction(b)) - Number(needsAction(a)));
   const shown = plugins.filter(plugin => matches([plugin.name, plugin.description, ...(plugin.commands ?? []), plugin.mcp ?? '', ...(plugin.tools?.list ?? []).map(tool => `${tool.name} ${tool.title}`)].join(' ')));
   const filtering = query.trim() !== '';
   const working = Boolean(busy);
@@ -410,9 +418,10 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => {
     const result = noticeFor(plugin.folder);
+    const updated = result?.step === 'update' && !result.error;
     return <li key={plugin.folder}>
-      <PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!, plugin.update?.sha256 && plugin.update.latest ? { version: plugin.update.latest, apiVersion: plugin.update.apiVersion, sha256: plugin.update.sha256 } : undefined))} />
-      {result?.step === 'update' && <Callout tone={result.error ? 'error' : 'ok'}>{result.text}</Callout>}
+      <PluginRow plugin={plugin} busy={busy} updated={updated} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!, plugin.update?.sha256 && plugin.update.latest ? { version: plugin.update.latest, apiVersion: plugin.update.apiVersion, sha256: plugin.update.sha256 } : undefined))} />
+      {result?.step === 'update' && result.error && <Callout tone="error">{result.text}</Callout>}
     </li>;
   })}</ul>;
 
@@ -484,7 +493,7 @@ function StatePill({ state, label }: { state: State; label?: string }) {
 }
 
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
-function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; onOpen(): void; onUpdate(): void }) {
+function PluginRow({ plugin, busy, updated, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; updated: boolean; onOpen(): void; onUpdate(): void }) {
   const left = plugin.state === 'incompatible' ? 0 : setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
   const updateStatus = plugin.update?.status;
   const updating = busy === `${plugin.folder}:update` || updateStatus === 'downloading' || updateStatus === 'installing';
@@ -504,6 +513,7 @@ function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; bus
     {canUpdate && <span className="plugin-row-update" onClick={event => event.stopPropagation()}>
       <BusyButton className="primary" busy={Boolean(busy) || updating || updateStatus === 'checking'} running={updating} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
     </span>}
+    {updated && <span className="plugin-row-updated" role="status"><Icon name="check" size={14} />업데이트 완료</span>}
     <StatePill state={plugin.state} label={plugin.state === 'incompatible' ? apiStatusLabel(plugin.apiStatus) : undefined} />
     <Icon name="chevronRight" size={16} />
   </div>;
