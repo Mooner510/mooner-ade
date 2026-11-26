@@ -1,3 +1,4 @@
+import { pluginApi as pluginRegistry } from '../../plugin-api/active.js';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
@@ -14,7 +15,7 @@ import { listIdes, openPath, resolveIdeTarget } from './ide.js';
 import { codexAuthenticated } from './agents.js';
 import { createClientErrorLog } from './client-error.js';
 import { fault, text, readText, serial } from './files.js';
-import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveProjectEntries, openProjectMedia, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
+import { copyProjectEntries, createProjectEntry, deleteProjectEntries, moveDroppedFiles, moveProjectEntries, openProjectMedia, projectDirectory, readProjectFile, writeProjectFile } from './project-files.js';
 import { createTipClaims, validateUi, validateLayout, validateAppState, validAgentArgs } from './ui-state.js';
 import { discoverRepositories } from './repositories.js';
 import { commitDetails, commitFile, commitPatch, compareFiles, pathCommits, readLog, runOperation } from './git-log.js';
@@ -43,7 +44,7 @@ import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { createRemoteUi, listFolders } from './remote-ui.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
 import { createChatTextStore } from './chat-text.js';
-import { MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
+import { MAX_CHAT_IMAGES, MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
 import { signatureGuard } from './agent-signature.js';
 import { claudeBusy } from './claude-busy.js';
 import { createWakaTime, PULSE } from './wakatime.js';
@@ -271,7 +272,8 @@ async function writeJson(file, value) {
 function send(socket, value) {
   if (socket.readyState !== 1) return;
   if (socket.bufferedAmount > 4 * 1024 * 1024) return socket.close(1013, 'Reconnect to replay');
-  socket.send(JSON.stringify(value));
+  const outgoing = socket.workspaceContract ? socket.workspaceContract.event(value) : value;
+  if (outgoing) socket.send(JSON.stringify(outgoing));
 }
 // Every outbound message carries its project so a socket subscribed to several projects can route it.
 function broadcast(project, value) { for (const socket of clients) if (socket.projects.has(project.id)) send(socket, { ...value, projectId: project.id }); }
@@ -1218,7 +1220,7 @@ async function route(action, input, project) {
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
       const images = Array.isArray(input.images) ? input.images : [];
       const mimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-      if (images.length > 4 || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > MAX_IMAGE_BASE64 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', '이미지는 4장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.');
+      if (images.length > MAX_CHAT_IMAGES || images.some(image => !image || !mimes.includes(image.mime) || typeof image.data !== 'string' || image.data.length > MAX_IMAGE_BASE64 || !/^[A-Za-z0-9+/=]+$/.test(image.data))) throw fault('INVALID_INPUT', `이미지는 ${MAX_CHAT_IMAGES}장 이하의 PNG/JPEG/GIF/WebP만 보낼 수 있습니다.`);
       // Small JPEG thumbnails the chat shows in the thread (the full images only go to the agent). Anything malformed is just dropped.
       const previews = (Array.isArray(input.previews) ? input.previews : []).slice(0, images.length).filter(url => typeof url === 'string' && url.length <= MAX_PREVIEW_CHARS && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(url));
       chat.setInteractiveUi(input.interactiveUi);
@@ -1701,16 +1703,16 @@ wss.on('connection', socket => {
 });
 // Workspace sessions of plugins that declared the `workspace` permission (docs/PLUGINS.md). The app relays them over IPC; a
 // session joins `clients` like a window does, so it gets the same broadcasts, and its requests go through the same handlers.
-const PLUGIN_SESSIONS = 16, PLUGIN_TERMINALS = 8, PLUGIN_BUFFER = 8 * 1024 * 1024;
+const PLUGIN_BUFFER = 8 * 1024 * 1024;
 const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{1,39}$/, SESSION_ID = /^[\w-]{1,64}$/;
-const pluginSessions = new Map(); // `${plugin}\0${session}` -> client
+const pluginSessions = new Map(); // `${plugin}\0${generation}\0${session}` -> client
 const toApp = (value, done) => { if (verifyPlugins) { verifyPlugins.fromServer(value); done?.(); } else if (process.connected) process.send(value, done); else done?.(); };
 const pluginTerminals = plugin => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy === plugin && !terminal.exited).length, 0);
-function openPluginSession(plugin, session) {
-  const key = `${plugin}\0${session}`;
+function openPluginSession(address, key, workspaceContract) {
+  const { plugin, apiVersion, generation } = address;
   let pending = 0, closed = false;
   const client = {
-    plugin,
+    plugin, apiVersion, generation, workspaceContract,
     projects: new Set(),
     get readyState() { return closed ? 3 : 1; },
     // Bytes handed to the IPC channel and not yet written; a session that stops reading is closed, as a slow window is.
@@ -1718,13 +1720,13 @@ function openPluginSession(plugin, session) {
     send(text) {
       if (closed) return;
       pending += text.length;
-      toApp({ type: 'plugin/workspace', plugin, op: 'message', session, text }, () => { pending -= text.length; });
+      toApp({ ...address, op: 'message', text }, () => { pending -= text.length; });
     },
     close() {
       if (closed) return;
       closed = true;
       clients.delete(client); pluginSessions.delete(key); releaseSizes(client);
-      toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
+      toApp({ ...address, op: 'closed' });
     }
   };
   pluginSessions.set(key, client); clients.add(client);
@@ -1739,34 +1741,49 @@ async function projectWorktree(project, requested) {
   }
   return null;
 }
-async function pluginApi(plugin, action, input) {
+async function pluginApi(client, action, input) {
+  const { plugin, workspaceContract } = client;
   if (typeof action !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) throw fault('INVALID_INPUT', '잘못된 요청입니다.');
-  if (action === 'terminal/open' && pluginTerminals(plugin) >= PLUGIN_TERMINALS) throw fault('TERMINAL_LIMIT', `플러그인은 터미널을 최대 ${PLUGIN_TERMINALS}개까지 열 수 있습니다.`);
-  const value = await route(action, input, projects.get(input.projectId));
+  const request = workspaceContract.request(action, input);
+  if (!request) throw fault('NOT_FOUND', '이 플러그인 API 버전에서는 지원하지 않는 작업입니다.', 404);
+  const max = workspaceContract.limits.terminals;
+  if (action === 'terminal/open' && pluginTerminals(plugin) >= max) throw fault('TERMINAL_LIMIT', `플러그인은 터미널을 최대 ${max}개까지 열 수 있습니다.`);
+  const value = await route(action, request, projects.get(request.projectId));
   if (action === 'terminal/open' && value?.id) {
     const terminal = projects.get(input.projectId)?.terminals.get(value.id);
     if (terminal) terminal.openedBy = plugin;
   }
-  return value;
+  return workspaceContract.result(action, value);
 }
 function pluginWorkspace(message) {
-  const { plugin, op, session } = message;
-  if (!PLUGIN_ID.test(plugin ?? '')) return;
-  if (op === 'close-all') { for (const client of [...pluginSessions.values()]) if (client.plugin === plugin) client.close(); return; }
+  const { plugin, op, session, apiVersion, generation } = message;
+  const contract = pluginRegistry.get(apiVersion)?.workspace;
+  if (!contract || !PLUGIN_ID.test(plugin ?? '') || !SESSION_ID.test(generation ?? '')) return;
+  if (op === 'close-all') {
+    for (const client of [...pluginSessions.values()]) if (client.plugin === plugin && client.generation === generation) client.close();
+    return;
+  }
   if (!SESSION_ID.test(session ?? '')) return;
-  const key = `${plugin}\0${session}`, client = pluginSessions.get(key);
+  const address = { type: 'plugin/workspace', plugin, apiVersion, generation, session };
+  const key = `${plugin}\0${generation}\0${session}`;
+  const client = pluginSessions.get(key);
+  if (client && client.apiVersion !== apiVersion) return;
   if (op === 'open') {
-    if (client) return; // already open
-    if ([...pluginSessions.values()].filter(item => item.plugin === plugin).length >= PLUGIN_SESSIONS) return toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
-    openPluginSession(plugin, session);
+    if (client) return;
+    const sessions = [...pluginSessions.values()].filter(item => item.plugin === plugin).length;
+    if (sessions >= contract.limits.sessions) return toApp({ ...address, op: 'closed' });
+    openPluginSession(address, key, contract);
   } else if (op === 'close') client?.close();
-  else if (op === 'send') { if (client) void handleClientMessage(client, message.message); }
-  else if (op === 'api') {
+  else if (op === 'send' && client) {
+    const input = client.workspaceContract.clientMessage(message.message);
+    if (input) void handleClientMessage(client, input);
+    else send(client, { type: 'error', projectId: message.message?.projectId, error: { code: 'INVALID_INPUT', message: '지원하지 않는 메시지입니다.' } });
+  } else if (op === 'api') {
     const id = message.id;
     if (!Number.isSafeInteger(id)) return;
-    const reply = result => toApp({ type: 'plugin/workspace', plugin, op: 'api-result', session, id, ...result });
+    const reply = result => toApp({ ...address, op: 'api-result', id, ...result });
     if (!client) return reply({ ok: false, error: { code: 'NOT_FOUND', message: '세션이 없습니다.' } });
-    pluginApi(plugin, message.action, message.input ?? {}).then(value => reply({ ok: true, value: value ?? null }), error => reply({ ok: false, error: errorValue(error) }));
+    pluginApi(client, message.action, message.input ?? {}).then(value => reply({ ok: true, value: value ?? null }), error => reply({ ok: false, error: errorValue(error) }));
   }
 }
 // Keeps a plugin session that stopped reading from piling up output in this process.
@@ -1974,6 +1991,14 @@ function fromApp(message) {
     busyReport().then(answer, error => answer({ busy: true, reasons: [{ project: '', terminal: '', kind: 'unknown', detail: error.message }] }));
   }
   else if (message?.type === 'plugins/terminal') configurePlugins(message.config);
+  else if (message?.type === 'files/drop') {
+    const input = message.input;
+    const project = projects.get(input?.projectId);
+    const reply = result => process.send?.({ type: 'files/drop-result', id: message.id, result });
+    if (!project || closing) reply({ ok: false, error: '프로젝트를 먼저 여세요.' });
+    else moveDroppedFiles(project.runtime.workspace, input).then(
+      value => reply({ ok: true, value }), error => reply({ ok: false, error: errorValue(error).message }));
+  }
   else if (message?.type === 'feedback/status' && message.status && typeof message.status === 'object') {
     const status = message.status;
     pluginFeedback = status.ok === true

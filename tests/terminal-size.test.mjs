@@ -133,15 +133,15 @@ async function boot(t) {
   // A plugin workspace session, as the app relays it for a phone.
   const session = async name => {
     const messages = [];
-    child.send({ type: 'plugin/workspace', plugin: 'example', op: 'open', session: name });
-    const send = value => child.send({ type: 'plugin/workspace', plugin: 'example', op: 'send', session: name, message: { projectId: project.id, ...value } });
+    child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'test-host', op: 'open', session: name });
+    const send = value => child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'test-host', op: 'send', session: name, message: { projectId: project.id, ...value } });
     const pump = setInterval(() => {
       for (let index = ipc.length - 1; index >= 0; index--) if (ipc[index].op === 'message' && ipc[index].session === name) messages.push(JSON.parse(ipc.splice(index, 1)[0].text));
     }, 10);
     t.after(() => clearInterval(pump));
     send({ type: 'subscribe' });
     await wait(messages, message => message.type === 'snapshot');
-    return { messages, send, close: () => child.send({ type: 'plugin/workspace', plugin: 'example', op: 'close', session: name }), until: (predicate, ms) => wait(messages, predicate, ms) };
+    return { messages, send, close: () => child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'test-host', op: 'close', session: name }), until: (predicate, ms) => wait(messages, predicate, ms) };
   };
   return { api, projectId: project.id, connect, session };
 }

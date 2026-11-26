@@ -207,3 +207,74 @@ async function deleteEntries(workspace, { paths }) {
   for (const file of names(paths)) targets.push(await inner(workspace, file));
   for (const target of targets) await fs.rm(target, { recursive: true, force: true });
 }
+
+// Only the desktop IPC handler can supply native drop sources.
+export const moveDroppedFiles = (workspace, input) => save(() => moveDrops(workspace, input));
+async function moveDrops(workspace, { paths, dir, dirty = [] }) {
+  const folder = await targetOf(workspace, dir);
+  if (!(await lstat(folder))?.isDirectory()) throw fault('INVALID_INPUT', '폴더 경로를 지정하세요.');
+  const root = await fs.realpath(workspace.root);
+  const pathKey = file => path.sep === '\\' ? file.toLowerCase() : file;
+  const dirtyPaths = new Set(dirty.map(file => pathKey(path.resolve(root, file))));
+  const steps = [], seen = new Set(), sources = new Set();
+
+  for (const file of names(paths)) {
+    if (!path.isAbsolute(file) || file.includes('\0') || file.length > 8192 ||
+        (path.sep === '\\' && (/^[\\/]{2}[?.][\\/]/.test(file) || file.slice(path.parse(file).root.length).includes(':')))) {
+      throw fault('INVALID_INPUT', '파일 경로가 올바르지 않습니다.');
+    }
+    const entry = await fs.lstat(file, { bigint: true });
+    if (!entry.isFile()) throw fault('INVALID_INPUT', `일반 파일만 옮길 수 있습니다: ${path.basename(file)}`);
+    const source = await fs.realpath(file);
+    if (sources.has(source)) continue;
+    sources.add(source);
+    const name = path.basename(source), relative = path.relative(root, source);
+    const from = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? null : relative.split(path.sep).join('/');
+    if (from !== null) await inner(workspace, from);
+    const to = dir === '.' ? name : `${dir}/${name}`;
+    const dest = await inner(workspace, to);
+    if (!path.relative(source, dest)) continue;
+    if (dirtyPaths.has(pathKey(source))) throw fault('FILE_DIRTY', `저장하지 않은 변경 사항이 있습니다. 먼저 저장하세요: ${name}`, 409);
+    if (seen.has(dest) || await lstat(dest)) throw taken(to);
+    seen.add(dest);
+    steps.push({ source, dest, from, to, entry });
+  }
+
+  const moved = [];
+  for (const { source, dest, from, to, entry } of steps) {
+    try {
+      await inner(workspace, to);
+      await moveDroppedFile(source, dest, entry);
+      moved.push({ from, to });
+    } catch (error) {
+      // The source of the failed step stays put. Report completed steps so the tree and editor tabs can follow them.
+      return { moved, error: error.code === 'EEXIST' ? taken(to).message : error.message };
+    }
+  }
+  return { moved };
+}
+
+async function moveDroppedFile(source, dest, entry) {
+  const unchanged = async () => signature(await fs.lstat(source, { bigint: true })) === signature(entry);
+  const changed = () => fault('FILE_CHANGING', `파일이 변경되는 중입니다: ${path.basename(source)}`, 409);
+  if (!await unchanged()) throw changed();
+  let copied = false;
+  try {
+    await fs.link(source, dest);
+  } catch (error) {
+    if (!['EXDEV', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM'].includes(error.code)) throw error;
+    await fs.copyFile(source, dest, constants.COPYFILE_EXCL);
+    copied = true;
+  }
+  try {
+    const current = await fs.lstat(source, { bigint: true });
+    // Linking changes ctime even though the contents are unchanged.
+    if (copied ? signature(current) !== signature(entry) : current.dev !== entry.dev || current.ino !== entry.ino) throw changed();
+    if (copied) await fs.utimes(dest, Number(entry.atimeMs) / 1000, Number(entry.mtimeMs) / 1000);
+    await fs.unlink(source);
+  } catch (error) {
+    await fs.unlink(dest).catch(() => {});
+    throw error;
+  }
+}

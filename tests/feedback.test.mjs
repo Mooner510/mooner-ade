@@ -313,10 +313,10 @@ async function boot(t, env = {}) {
   };
   // The API as a plugin workspace session reaches it (same route() as the window).
   let ids = 0;
-  child.send({ type: 'plugin/workspace', plugin: 'example', op: 'open', session: 's' });
+  child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'test-host', op: 'open', session: 's' });
   const api = async (action, input = {}) => {
     const id = ++ids;
-    child.send({ type: 'plugin/workspace', plugin: 'example', op: 'api', session: 's', id, action, input });
+    child.send({ type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: 'test-host', op: 'api', session: 's', id, action, input });
     const reply = await until(message => message.type === 'plugin/workspace' && message.op === 'api-result' && message.id === id);
     if (!reply.ok) throw Object.assign(new Error(reply.error.message), { code: reply.error.code });
     return reply.value;

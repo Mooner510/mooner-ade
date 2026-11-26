@@ -19,6 +19,7 @@ import { graphColor, javaHash } from './git-graph';
 import { usageMeterCatalog, type UsageProvider } from './usage-meters';
 import { accentChoices } from './Setup';
 import { trustLabel } from './mcp-trust';
+import { countdownPositionOptions, updatesBridge, type CountdownPosition } from './AppUpdate';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean; lastSignature?: string }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -37,13 +38,33 @@ function FeedbackAvailabilityRow() {
 
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null), [systemCa, setSystemCa] = useState<boolean | null>(null);
+  const [autoDownload, setAutoDownload] = useState<boolean | null>(null), [savingDownload, setSavingDownload] = useState(false);
+  const [countdownPosition, setCountdownPosition] = useState<CountdownPosition | null>(null), [savingPosition, setSavingPosition] = useState(false);
   const [signature, setSignature] = useState('');
   const hubState = usePluginsState();
   useEffect(() => { void desktop()?.appInfo?.().then(info => { setVersion(info.dev ? `${info.version} (dev)` : info.version); setSignature(info.lastSignature ?? ''); }, () => {}); void desktop()?.getBetaUpdates?.().then(setBeta, () => {}); void desktop()?.getSystemCa?.().then(setSystemCa, () => {}); }, []);
+  const updates = updatesBridge();
+  useEffect(() => {
+    void updates?.getAutoDownload().then(setAutoDownload, () => {});
+    void updates?.getCountdownPosition?.().then(setCountdownPosition, () => {});
+  }, [updates]);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
     <Row title="현재 버전" hint="새 버전은 자동으로 확인하며, 찾으면 종료할 때 또는 바로 설치할 수 있습니다."><span>{version || '—'}</span></Row>
     {signature && <Row title="최근 다운로드 서명"><span>{signature}</span></Row>}
+    {updates && autoDownload !== null && <Row title="업데이트 자동 다운로드" hint="새 버전을 먼저 내려받고 적용할 시점을 묻습니다. 끄면 내려받기 전에 묻습니다.">
+      <input type="checkbox" role="switch" aria-label="업데이트 자동 다운로드" checked={autoDownload} disabled={savingDownload} onChange={event => {
+        setSavingDownload(true);
+        void updates.setAutoDownload(event.target.checked).then(setAutoDownload, () => {}).finally(() => setSavingDownload(false));
+      }} />
+    </Row>}
+    {updates && countdownPosition && <Row title="업데이트 카운트다운 위치" hint="업데이트로 다시 시작할 때 카운트다운을 표시할 위치입니다.">
+      <Dropdown label="업데이트 카운트다운 위치" value={countdownPosition} options={countdownPositionOptions} locked={savingPosition ? '저장 중…' : undefined} onChange={value => {
+        if (savingPosition) return;
+        setSavingPosition(true);
+        void updates.setCountdownPosition(value as CountdownPosition).then(setCountdownPosition, () => {}).finally(() => setSavingPosition(false));
+      }} />
+    </Row>}
     {beta !== null && <Row title="베타 업데이트 받기" hint="정식 버전이 아닌 개발 버전도 받습니다. 정식 버전보다 불안정할 수 있습니다.">
       <input type="checkbox" role="switch" aria-label="베타 업데이트 받기" checked={beta} onChange={event => { const next = event.target.checked; setBeta(next); void desktop()!.setBetaUpdates!(next).then(setBeta, () => setBeta(!next)); }} />
     </Row>}
@@ -679,7 +700,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
               </span>
               <input type="color" value={settings.accentColor || themeById(settings.theme).vars['--accent']} aria-label="강조 색 직접 고르기" onChange={event => set('accentColor', event.target.value)} />
             </Row>
-            <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널을 어둡게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
+            <Row title="비활성 pane 흐리게" hint="포커스가 없는 터미널, 채팅, 편집기를 흐리게 표시합니다." preview="dim">{toggle('dimInactivePanes')}</Row>
             {typeof desktop()?.setZoom === 'function' && <Row title="화면 배율" hint="앱 전체 크기를 바꿉니다. (80–150%) 터미널 글꼴 크기는 아래 터미널에서 정합니다." preview="zoom">{number('uiZoom', 80, 150, 5)}</Row>}
             <Row title="사이드바 접기" hint="프로젝트 사이드바를 아이콘만 보이는 좁은 막대로 줄입니다. 단축키로도 바꿀 수 있습니다." preview="sidebar">{toggle('sidebarCompact')}</Row>
             <Row title="백그라운드에서도 애니메이션 유지" hint="끄면 창이 포커스를 잃었을 때 반복 애니메이션(로딩 표시 등)을 멈춰 CPU/GPU 사용을 줄입니다. 켜면 다른 앱을 보는 동안에도 계속 움직입니다.">{toggle('animateInBackground')}</Row>

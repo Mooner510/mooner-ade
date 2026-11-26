@@ -228,16 +228,18 @@ export function createGithub({ api = GITHUB_API, web = GITHUB_WEB, credential = 
     // { repo, tag, version, asset, sha256, sums: {name: sha256}, via }. `version` comes from the release's versions.json
     // (plugin id -> version, for a repository that releases several plugins together), else the asset name's {version},
     // else the tag. Throws when no release has it, or when it has no checksum to check the download against.
-    async latest(source, id) {
+    async latest(source, id, { apiVersions, inspect } = {}) {
       const found = await credential(), auth = found?.token ?? null, via = found?.via ?? null, repo = source.github;
       const releases = await json(`${base}/repos/${repo}/releases?per_page=30`, auth, '업데이트를 확인', via, repo);
       if (!Array.isArray(releases)) throw fail('GitHub의 응답이 올바르지 않습니다.', 'HTTP');
+      const candidates = [];
+      let unavailable = false;
       for (const release of releases) {
         if (!release || release.draft || release.prerelease) continue;
         const assets = (Array.isArray(release.assets) ? release.assets : []).filter(item => item && Number.isSafeInteger(item.id) && typeof item.name === 'string').map(cleanAsset);
-        let asset = null, named = null;
-        for (const item of assets) { const match = matchAsset(source.asset, item.name); if (match) { asset = item; named = match.version; break; } }
-        if (!asset) continue;
+        const legacy = assets.map(asset => ({ asset, match: matchAsset(source.asset, asset.name) })).find(entry => entry.match);
+        const catalogAsset = apiVersions && assets.find(item => item.name === 'plugin-releases.json');
+        if (!legacy && !catalogAsset) continue;
         const tag = String(release.tag_name ?? '').slice(0, 100);
         const sumsAsset = assets.find(item => item.name === 'SHA256SUMS');
         let sums = new Map();
@@ -246,27 +248,65 @@ export function createGithub({ api = GITHUB_API, web = GITHUB_WEB, credential = 
           if (digestOf(sumsAsset) && digestOf(sumsAsset) !== sha256(data)) throw fail(`${repo}의 SHA256SUMS가 손상되었습니다.`, 'CHECKSUM');
           sums = parseSums(data.toString('utf8'));
         }
-        let version = null;
-        const versionsAsset = assets.find(item => item.name === 'versions.json');
-        if (versionsAsset) {
-          const data = await fetchAsset(repo, versionsAsset, auth, via, 256 * 1024), actual = sha256(data);
-          const expected = sums.get('versions.json') ?? digestOf(versionsAsset);
-          if (!expected || expected !== actual) throw fail(`${repo}의 versions.json을 확인할 수 없습니다(SHA256SUMS와 맞지 않음).`, 'CHECKSUM');
-          let versions;
-          try { versions = JSON.parse(data.toString('utf8')); } catch { throw fail(`${repo}의 versions.json이 올바르지 않습니다.`, 'HTTP'); }
-          if (typeof versions?.[id] === 'string') version = versionText(versions[id]);
+        const checksum = asset => {
+          const expected = sums.get(asset.name) ?? null, digest = digestOf(asset);
+          if (!expected && !digest) throw fail(`${asset.name}의 체크섬이 없습니다.`, 'NO_CHECKSUM');
+          if (expected && digest && expected !== digest) throw fail(`${asset.name}의 SHA256SUMS와 GitHub의 체크섬이 다릅니다.`, 'CHECKSUM');
+          return expected ?? digest;
+        };
+        const verifiedJson = async asset => {
+          const expected = checksum(asset), data = await fetchAsset(repo, asset, auth, via, 256 * 1024);
+          if (expected !== sha256(data)) throw fail(`${repo}의 ${asset.name}이 체크섬과 맞지 않습니다.`, 'CHECKSUM');
+          try { return JSON.parse(data.toString('utf8')); } catch { throw fail(`${repo}의 ${asset.name}이 올바르지 않습니다.`, 'HTTP'); }
+        };
+        const candidate = (asset, version, apiVersion) => {
+          const sidecar = assets.find(item => item.name === asset.name + '.sig');
+          return { repo, tag, version, asset, sha256: checksum(asset), via, ...(sidecar && { sidecar }), ...(apiVersion !== undefined && { apiVersion }) };
+        };
+        if (catalogAsset) {
+          const catalog = await verifiedJson(catalogAsset);
+          if (!Array.isArray(catalog?.plugins) || catalog.plugins.length > 500) throw fail('plugin-releases.json이 올바르지 않습니다.', 'HTTP');
+          const seen = new Set();
+          for (const entry of catalog.plugins) {
+            if (entry?.id !== id) continue;
+            const version = versionText(entry.version), apiVersion = entry.apiVersion;
+            const asset = assets.find(item => item.name === entry.asset && /\.zip$/i.test(item.name));
+            const key = JSON.stringify([apiVersion, version]);
+            if (!version || !asset || !Number.isSafeInteger(apiVersion) || apiVersion < 1 || seen.has(key)) throw fail(`${id}의 배포 정보가 올바르지 않습니다.`, 'HTTP');
+            seen.add(key);
+            if (apiVersions.includes(apiVersion)) candidates.push(candidate(asset, version, apiVersion));
+            else unavailable = true;
+          }
+          if (seen.size) continue;
         }
-        version ??= named ?? versionText(tag);
+        if (!legacy) continue;
+        const { asset, match } = legacy;
+        const versionsAsset = assets.find(item => item.name === 'versions.json');
+        const versions = versionsAsset ? await verifiedJson(versionsAsset) : null;
+        const version = (typeof versions?.[id] === 'string' ? versionText(versions[id]) : null) ?? match.version ?? versionText(tag);
         if (!version) throw fail(`${repo}의 릴리스 ${tag || '(태그 없음)'}에서 플러그인 버전을 알 수 없습니다.`, 'NO_VERSION');
-        const expected = sums.get(asset.name) ?? null, digest = digestOf(asset);
-        if (!expected && !digest) throw fail(`${repo}의 릴리스 ${tag}에 ${asset.name}의 체크섬(SHA256SUMS)이 없어 받지 않습니다.`, 'NO_CHECKSUM');
-        if (expected && digest && expected !== digest) throw fail(`${asset.name}의 SHA256SUMS와 GitHub의 체크섬이 다릅니다. 받지 않습니다.`, 'CHECKSUM');
-        const sidecar = assets.find(item => item.name === asset.name + '.sig');
-        return { repo, tag, version, asset, sha256: expected ?? digest, via, ...(sidecar && { sidecar }) };
+        const entry = candidate(asset, version);
+        if (!apiVersions) return entry;
+        candidates.push(entry);
       }
-      throw fail(`${repo}의 릴리스에서 ${source.asset}을(를) 찾지 못했습니다.`, 'MISSING');
+      candidates.sort((a, b) => compareVersions(b.version, a.version));
+      for (const entry of candidates) {
+        if (entry.apiVersion !== undefined) return entry;
+        if (!inspect) {
+          if (apiVersions?.includes(1)) return entry;
+          unavailable = true;
+          continue;
+        }
+        const data = await fetchAsset(repo, entry.asset, auth, via), actual = sha256(data);
+        if (actual !== entry.sha256) throw fail(`${entry.asset.name}의 체크섬이 올바르지 않습니다.`, 'CHECKSUM');
+        const identity = await inspect(data);
+        if (identity.id !== id || versionText(identity.version) !== entry.version) throw fail('다운로드한 플러그인이 릴리스 정보와 다릅니다.', 'PLUGIN_ZIP');
+        if (apiVersions.includes(identity.apiVersion)) return { ...entry, apiVersion: identity.apiVersion };
+        unavailable = true;
+      }
+      if (unavailable) throw fail('지원하는 플러그인 API 버전의 릴리스가 없습니다.', 'PLUGIN_API_UNSUPPORTED');
+      throw fail(`${repo} 릴리스에 ${source.asset} 파일이 없습니다.`, 'MISSING');
     },
-    // The asset of latest(), checked against the checksum latest() found: { data, sha256 }.
     async download(found) {
       const credentialNow = await credential();
       const data = await fetchAsset(found.repo, found.asset, credentialNow?.token ?? null, credentialNow?.via ?? null);

@@ -111,7 +111,7 @@ async function setup(t, { current, beta = false, releases, shell = SHELL, answer
   const electron = globalThis.__adeElectron = { version: current, appPath, messages: [], errors: [], quits: 0, onMessage: options => answer(options, electron, github) };
   process.env.ADE_UPDATE_URL = github.url;
   const updater = await import(`../apps/desktop/src/updater.js?case=${id}`);
-  const check = (extra = {}) => updater.checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: ASSET, window: null, beta, manual: false, getBusy, beforeRestart: () => {}, ...extra });
+  const check = (extra = {}) => updater.checkForUpdate({ repo: 'Mooner510/mooner-ade', asset: ASSET, window: null, beta, manual: false, autoDownload: false, getBusy, beforeRestart: () => {}, ...extra });
   const tree = () => fs.readdirSync(root, { recursive: true }).sort().map(name => { const file = path.join(root, name); return `${name}:${fs.statSync(file).isFile() ? sha(fs.readFileSync(file)) : 'dir'}`; });
   return { check, github, electron, updater, root, before: tree(), tree };
 }
@@ -447,4 +447,24 @@ test('with work an update would cut off, all three buttons stay and the work is 
   const [prompt] = ctx.electron.messages;
   assert.deepEqual(prompt.buttons, [PROMPT_ON_QUIT, PROMPT_NOW, PROMPT_LATER]);
   assert.match(prompt.detail, /중단됩니다[\s\S]*Claude가 작업 중/);
+});
+
+test('automatic download prepares the update before asking and Later does not apply it on quit', { skip }, async t => {
+  const ctx = await setup(t, {
+    current: '0.5.12', releases: [release('v0.6.0')], getBusy: async () => ({ busy: false, reasons: [] }),
+    answer: (options, _electron, github) => {
+      assert.deepEqual(zipRequests(github), [`/assets/${APP_ASSET}`], 'the prompt follows the download');
+      assert.deepEqual(options.buttons, [PROMPT_ON_QUIT, PROMPT_NOW, PROMPT_LATER]);
+      return button(PROMPT_LATER)(options);
+    },
+  });
+  assert.equal(await ctx.check({ autoDownload: undefined }), 'staged', 'automatic download is enabled by default');
+  assert.deepEqual(ctx.updater.updateStatus(), { kind: 'ready', version: '0.6.0', onQuit: false });
+  assert.equal(await ctx.updater.applyStagedUpdate(), false);
+  assert.equal(ctx.electron.quits, 0);
+  assert.deepEqual(ctx.tree(), ctx.before);
+  assert.equal(await ctx.check(), 'staged');
+  assert.equal(zipRequests(ctx.github).length, 1);
+  ctx.updater.discardPendingUpdate();
+  assert.deepEqual(updateDirs(), []);
 });

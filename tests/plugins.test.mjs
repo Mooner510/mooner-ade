@@ -318,16 +318,20 @@ test('workspace requests and answers are relayed under the plugin id, and end wi
   // Another plugin's id or a bad session never goes out.
   child.emit('message', { type: 'workspace', op: 'open', session: '../x', plugin: 'other' });
   child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 'x', action: 'recent' });
+  const { generation } = server[0];
+  assert.match(generation, /^[a-f0-9-]+$/);
+  const address = { type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation };
   assert.deepEqual(server, [
-    { type: 'plugin/workspace', plugin: 'example', op: 'open', session: 's1' },
-    { type: 'plugin/workspace', plugin: 'example', op: 'api', session: 's1', id: 7, action: 'recent', input: { x: 1 } },
-    { type: 'plugin/workspace', plugin: 'example', op: 'send', session: 's1', message: { type: 'subscribe', projectId: 'p' } }
+    { ...address, op: 'open', session: 's1' },
+    { ...address, op: 'api', session: 's1', id: 7, action: 'recent', input: { x: 1 } },
+    { ...address, op: 'send', session: 's1', message: { type: 'subscribe', projectId: 'p' } }
   ]);
 
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'api-result', session: 's1', id: 7, ok: true, value: [{ root: '/p' }] });
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: '{"type":"snapshot"}' });
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'closed', session: 's1' });
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'nobody', op: 'closed', session: 's1' });
+  manager.fromServer({ ...address, op: 'api-result', session: 's1', id: 7, ok: true, value: [{ root: '/p' }] });
+  manager.fromServer({ ...address, op: 'message', session: 's1', text: '{"type":"snapshot"}' });
+  manager.fromServer({ ...address, op: 'closed', session: 's1' });
+  manager.fromServer({ ...address, plugin: 'nobody', op: 'closed', session: 's1' });
+  manager.fromServer({ ...address, generation: 'old-host', op: 'closed', session: 's1' });
   assert.deepEqual(child.sent.filter(message => message.type === 'workspace'), [
     { type: 'workspace', op: 'api-result', session: 's1', id: 7, ok: true, value: [{ root: '/p' }] },
     { type: 'workspace', op: 'message', session: 's1', text: '{"type":"snapshot"}' },
@@ -339,26 +343,28 @@ test('workspace requests and answers are relayed under the plugin id, and end wi
   // A crashed host's sessions are closed on the server.
   server.length = 0;
   child.exit(1);
-  assert.deepEqual(server, [{ type: 'plugin/workspace', plugin: 'example', op: 'close-all' }]);
+  assert.deepEqual(server, [{ ...address, op: 'close-all' }]);
   assert.equal(hosts.length, 1);
 });
 
 test('a stopped host closes its sessions, and a host that stops reading loses the session', async t => {
   const { child, server, manager } = await workspaceHost(t, manifest({ workspace: true }));
+  child.emit('message', { type: 'workspace', op: 'open', session: 's1' });
+  const address = { type: 'plugin/workspace', plugin: 'example', apiVersion: 1, generation: server.shift().generation };
   child.held = [];
   const big = 'x'.repeat(5 * 1024 * 1024);
-  for (let index = 0; index < 2; index++) manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
+  for (let index = 0; index < 2; index++) manager.fromServer({ ...address, op: 'message', session: 's1', text: big });
   assert.equal(server.length, 0);
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
-  assert.deepEqual(server, [{ type: 'plugin/workspace', plugin: 'example', op: 'close', session: 's1' }]);
+  manager.fromServer({ ...address, op: 'message', session: 's1', text: big });
+  assert.deepEqual(server, [{ ...address, op: 'close', session: 's1' }]);
   // Once the host reads again the backlog drains.
   for (const done of child.held.splice(0)) done?.();
   child.held = null;
-  manager.fromServer({ type: 'plugin/workspace', plugin: 'example', op: 'message', session: 's1', text: big });
+  manager.fromServer({ ...address, op: 'message', session: 's1', text: big });
   assert.equal(server.length, 1);
 
   manager.revoke('example');
-  assert.deepEqual(server.at(-1), { type: 'plugin/workspace', plugin: 'example', op: 'close-all' });
+  assert.deepEqual(server.at(-1), { ...address, op: 'close-all' });
   assert.equal(child.sent.at(-1).type, 'shutdown');
 });
 

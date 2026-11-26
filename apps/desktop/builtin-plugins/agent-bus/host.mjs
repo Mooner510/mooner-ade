@@ -85,13 +85,13 @@ function listen(port) {
 
 // ---- the settings page ---------------------------------------------------------------------------------------------------
 const STATUS = { delivered: '전달함', queued: '대기 중', failed: '실패', rejected: '거부함' };
-const REASON = { rate: '전송 한도', hops: '연쇄 한도', timeout: '시간 초과', closed: '채팅이 닫힘' };
+const REASON = { rate: '전송 한도', timeout: '시간 초과', closed: '채팅이 닫힘' };
 const clock = at => new Date(at).toTimeString().slice(0, 8);
 function view() {
   const { stats, history } = bus.snapshot();
   const recent = [...history].reverse().slice(0, 12).map(entry => ({
     label: `${clock(entry.at)} ${AGENT_NAMES[entry.from.agent] ?? entry.from.agent} → ${entry.to ? AGENT_NAMES[entry.to.agent] ?? entry.to.agent : '—'}`.slice(0, 60),
-    value: [STATUS[entry.status] ?? entry.status, REASON[entry.reason] ?? entry.reason, entry.length ? `${entry.length}자` : '', entry.hop ? `답장 ${entry.hop}단계` : '', entry.preview].filter(Boolean).join(', ')
+    value: [STATUS[entry.status] ?? entry.status, REASON[entry.reason] ?? entry.reason, entry.length ? `${entry.length}자` : '', entry.preview].filter(Boolean).join(', ')
   }));
   return {
     status: { tone: 'ok', text: `실행 중, 전달 ${stats.delivered}건, 대기 ${stats.queued}건, 실패 ${stats.failed}건, 거부 ${stats.rejected}건` },

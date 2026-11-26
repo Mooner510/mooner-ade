@@ -19,16 +19,23 @@ app.whenReady().then(async () => { try {
   if (!process.env.SHOW) { w.setOpacity(0); w.setIgnoreMouseEvents(true); }
   w.showInactive(); await w.loadURL(TARGET);
   const js = s => w.webContents.executeJavaScript(s);
-  const until = async (expr, what) => { for (let i = 0; i < 100; i++) { if (await js(expr)) return; await sleep(100); } throw new Error('timeout: ' + what); };
+  const until = async (expr, what) => { for (let i = 0; i < 250; i++) { if (await js(expr)) return; await sleep(100); } throw new Error('timeout: ' + what); };
   if (sc.startsWith('ade')) {
     // ADE pauses its loops in a window that is not in use (data-blurred, from document.hasFocus()). This harness often cannot take OS focus
     // from the app in front, so it tells the page it is the window in use: the foreground case. FOCUS lines still report the real OS focus.
     if (!process.env.REAL_FOCUS) await js("Document.prototype.hasFocus = () => true; document.documentElement.removeAttribute('data-blurred'); dispatchEvent(new Event('focus'))");
     await sleep(4000); await js(click('알겠어요')); await sleep(500);
     if (sc.includes('chat')) { await until(has('Chat 모드'), 'Chat 모드'); await js(click('Chat 모드')); await sleep(600); await js(click('Claude')); await until(`!!document.querySelector('textarea[aria-label="메시지 입력"]')`, 'chat composer'); await sleep(2000); }
-    if (sc.includes('turn')) { // the fake claude holds a turn that says "slow" (ctl slowms)
-      await js(`document.querySelector('textarea[aria-label="메시지 입력"]').focus()`); w.webContents.insertText('slow');
-      await sleep(200); w.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' }); w.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' }); await until(`!!document.querySelector('.chat-send.stop')`, 'running turn'); await sleep(1000);
+    if (sc.includes('turn')) { // fake claude "slow" (ctl slowms); frame-cost may have started the turn via API (PERF_SLOW_VIA_API) before the window loads
+      if (process.env.PERF_SLOW_VIA_API) {
+        const pid = JSON.stringify(process.env.PERF_PROJECT_ID), id = JSON.stringify(process.env.PERF_CHAT_ID || 'frame-cost-turn');
+        await js(`(async()=>{const o=location.origin; const post=(a,b)=>fetch('/api/'+a,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json',Origin:o},body:JSON.stringify(b)}); await post('chat/open',{projectId:${pid},id:${id},agent:'claude',show:true}); await post('chat/send',{projectId:${pid},id:${id},text:'slow'});})()`);
+        await sleep(500);
+      } else {
+        await js(`document.querySelector('textarea[aria-label="메시지 입력"]').focus()`); w.webContents.insertText('slow');
+        await sleep(200); w.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' }); w.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      }
+      await until(`!!document.querySelector('.chat-send.stop')`, 'running turn'); await sleep(1000);
     }
     if (sc.includes('spinner')) await js(SPINNER);
   }

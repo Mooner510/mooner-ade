@@ -8,6 +8,8 @@ import { copyText } from './toast';
 
 type Entry = { name: string; folder: boolean };
 type Move = { from: string; to: string };
+type DroppedMove = { from: string | null; to: string };
+type DesktopDrop = (files: File[], projectId: string, dir: string, dirty: string[]) => Promise<{ moved: DroppedMove[]; error?: string }>;
 // What the tree asks of the workspace: its dialogs, which open files have unsaved edits, tabs that follow a moved file, and a nudge for the open listings to reload.
 export type TreeHost = {
   confirm(message: string): Promise<boolean>; input(title: string, initial?: string): Promise<string | null>;
@@ -100,8 +102,8 @@ function Directory({ path, depth, ctx }: { path: string; depth: number; ctx: Tre
   </div>;
 }
 
-export function ProjectTree({ root, visible, open, expanded, setExpanded, onClose, call, watch, onOpen, host }: {
-  root: string; visible: boolean; open: boolean; expanded: Set<string>; setExpanded: Dispatch<SetStateAction<Set<string>>>;
+export function ProjectTree({ projectId, root, visible, open, expanded, setExpanded, onClose, call, watch, onOpen, host }: {
+  projectId: string; root: string; visible: boolean; open: boolean; expanded: Set<string>; setExpanded: Dispatch<SetStateAction<Set<string>>>;
   onClose(): void; call: TreeContext['call']; watch: TreeContext['watch']; onOpen(path: string): void; host: TreeHost;
 }) {
   // `selection` is the row with the keyboard focus (the "lead"); `picked` is everything selected, as the rows draw it. The same facts live in `live` too so a handler that
@@ -254,6 +256,20 @@ export function ProjectTree({ root, visible, open, expanded, setExpanded, onClos
       }
     });
   }
+  const moveDroppedFiles = (window as unknown as { adeDesktop?: { moveDroppedFiles?: DesktopDrop } }).adeDesktop?.moveDroppedFiles;
+  async function transferDrop(files: File[], dest: string) {
+    if (!moveDroppedFiles || !files.length) return;
+    await attempt(async () => {
+      if (!(await confirm(`${where(dest)}(으)로 이동할까요?\n${listOf(files.map(file => file.name))}`))) return;
+      const { moved, error } = await moveDroppedFiles(files, projectId, dest, host.dirty(['.']));
+      if (moved.length) {
+        const localMoves = moved.filter((move): move is Move => move.from !== null);
+        if (localMoves.length) host.moved(localMoves);
+        reveal(moved.map(move => move.to), false, dest, moved.flatMap(({ from, to }) => from === null ? [to] : [from, to]));
+      }
+      if (error) setNotice(error);
+    });
+  }
   async function remove(sources: string[]) {
     const list = topLevel(sources.filter(path => path !== '.'));
     if (!list.length) return;
@@ -333,11 +349,12 @@ export function ProjectTree({ root, visible, open, expanded, setExpanded, onClos
   };
 
   // ---- drag and drop: a move always asks first; Option/Alt copies instead ----
-  const clearDrag = () => {
+  const clearHover = () => {
     const { hover } = live.current;
     clearTimeout(hover.timer); hover.path = '';
-    live.current.drag = null; setDropOn('');
+    setDropOn('');
   };
+  const clearDrag = () => { live.current.drag = null; clearHover(); };
   function dragStart(event: DragEvent, path: string) {
     const state = live.current;
     if (!state.picked.has(path)) { pick([path]); state.anchor = path; }
@@ -347,12 +364,13 @@ export function ProjectTree({ root, visible, open, expanded, setExpanded, onClos
   }
   function dragOver(event: DragEvent, path: string, folder: boolean) {
     const state = live.current;
-    if (!state.drag) return;
+    if (!state.drag && !(moveDroppedFiles && event.dataTransfer.types.includes('Files'))) return;
     event.stopPropagation();
     const dest = folder ? path : parentOf(path);
-    if (!droppable(state.drag, dest, event.altKey)) { setDropOn(''); return; }
+    if (state.drag && !droppable(state.drag, dest, event.altKey)) { clearHover(); return; }
     event.preventDefault();
-    event.dataTransfer.dropEffect = event.altKey ? 'copy' : 'move';
+    // Keep the native source intact while the confirmation is open. The app performs the move itself.
+    event.dataTransfer.dropEffect = !state.drag || event.altKey ? 'copy' : 'move';
     setDropOn(dest);
     // A closed folder under the pointer opens after a moment, so the drop can go deeper.
     const hover = state.hover, target = folder ? path : '';
@@ -363,11 +381,13 @@ export function ProjectTree({ root, visible, open, expanded, setExpanded, onClos
   }
   function drop(event: DragEvent, path: string, folder: boolean) {
     const paths = live.current.drag;
-    if (!paths) return;
+    const files = moveDroppedFiles && !paths ? [...event.dataTransfer.files] : [];
+    if (!paths && !files.length) { clearHover(); return; }
     event.preventDefault(); event.stopPropagation();
     const dest = folder ? path : parentOf(path), copy = event.altKey;
     clearDrag();
-    if (droppable(paths, dest, copy)) void transfer(paths, dest, copy, true);
+    if (!paths) void transferDrop(files, dest);
+    else if (droppable(paths, dest, copy)) void transfer(paths, dest, copy, true);
   }
 
   const ctx: TreeContext = { expanded, selected, picked, cut: new Set(clip?.cut ? clip.paths : []), dropOn, select, toggle, press, click, menu: (event, path, folder) => openMenu(event, path, folder), dragStart, dragOver, drop, dragEnd: clearDrag,
@@ -441,8 +461,8 @@ export function ProjectTree({ root, visible, open, expanded, setExpanded, onClos
     {expanding && <div className="project-tree-message" role="status">폴더 펼치는 중…</div>}
     {notice && <div className="project-tree-message project-tree-notice" role="alert" title="눌러서 닫기" onClick={() => setNotice('')}>{notice}</div>}
     <div className="project-tree-list" role="tree" aria-label="프로젝트 파일 트리" aria-busy={expanding} aria-multiselectable="true" ref={rootRow} onKeyDown={navigate}
-      onContextMenu={event => openMenu(event, null)} onDragOver={event => { if (live.current.drag) dragOver(event, '.', true); }} onDrop={event => drop(event, '.', true)}
-      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropOn(''); }}>
+      onContextMenu={event => openMenu(event, null)} onDragOver={event => dragOver(event, '.', true)} onDrop={event => drop(event, '.', true)}
+      onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHover(); }}>
       <TreeRow path="." name={basename(root)} folder depth={0} ctx={ctx} />
     </div>
     {menu && <PopupMenu x={menu.x} y={menu.y} items={closeAll(menuItems(menu), closeMenu)} label="파일 메뉴" onClose={closeMenu} />}

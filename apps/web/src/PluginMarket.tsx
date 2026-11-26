@@ -28,9 +28,10 @@ export const grantList = (grants: HubGrants) => (Object.keys(GRANT_LABEL) as (ke
 
 function Entry({ plugin, busy, run, bridge }: { plugin: HubPlugin; busy: string; run: Run; bridge: PluginsBridge }) {
   const key = `market:${plugin.id}`, working = Boolean(busy), grants = grantList(plugin.grants);
-  const install = () => run(key, () => bridge.hubInstall!(plugin.id));
+  const install = () => run(key, () => bridge.hubInstall!(plugin.id, plugin.sha256 ? { version: plugin.version, apiVersion: plugin.apiVersion, sha256: plugin.sha256 } : undefined));
   let action: ReactNode;
   if (plugin.reserved) action = <span className="plugin-pill" data-tone="info" title="기본 플러그인 ID와 충돌"><i aria-hidden="true" />설치할 수 없음</span>;
+  else if (plugin.apiStatus === 'unsupported' || plugin.apiStatus === 'removed') action = <span className="plugin-pill" data-tone="warn"><i aria-hidden="true" />{plugin.apiStatus === 'removed' ? '지원 종료' : 'API 미지원'}</span>;
   else if (plugin.installed && plugin.updateAvailable) action = <Button className="primary" busy={working} running={busy === key} icon="download" onClick={install}>업데이트 v{plugin.version}</Button>;
   else if (plugin.installed) action = <span className="plugin-pill" data-tone="ok"><i aria-hidden="true" />설치됨</span>;
   else action = <Button className="primary" busy={working} running={busy === key} icon="download" onClick={install}>설치</Button>;
@@ -38,6 +39,8 @@ function Entry({ plugin, busy, run, bridge }: { plugin: HubPlugin; busy: string;
     <span className="plugin-mark"><Icon name="plugin" size={18} /></span>
     <span className="plugin-row-text">
       <span className="plugin-row-name"><strong>{plugin.name}</strong><span className="plugin-version">v{plugin.version}</span>
+        {plugin.apiVersion != null && <span className="plugin-tag">API v{plugin.apiVersion}</span>}
+        {plugin.apiStatus === 'deprecated' && <span className="plugin-tag" data-tone="warn">지원 종료 예정</span>}
         {plugin.installed && plugin.updateAvailable && <span className="plugin-tag" data-tone="info">지금 v{plugin.installed.version}</span>}
         <span className="plugin-tag">{sizeText(plugin.size)}</span></span>
       {plugin.description && <span className="plugin-row-desc plugin-market-desc">{plugin.description}</span>}

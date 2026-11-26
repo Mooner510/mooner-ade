@@ -2,6 +2,7 @@
 // JPEG and WebP drop quality first (same pixels). PNG has no quality knob, so it scales down just enough. A GIF over the cap
 // becomes one JPEG of its first frame: a canvas cannot keep the animation.
 
+export const MAX_CHAT_IMAGES = 6;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_IMAGE_BASE64 = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);
 
