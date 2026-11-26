@@ -5,7 +5,8 @@ import { DiffView, type Settings } from './Editor';
 import { FileIcon } from './FileIcon';
 import { Icon, IconButton, type IconName } from './Icon';
 import { copyText } from './toast';
-import type { Ask } from './views';
+import type { Ask, GitChange } from './views';
+import { EMPTY_TREE, workingFiles, workingKey, workingTotals, type WorkingFile } from './working-changes';
 import { closeAll, PopupMenu, type MenuEntry } from './GitMenu';
 import { BranchesPane, TagGlyph } from './GitBranches';
 import { BranchDialog, ConflictsDialog, LocalChangesDialog, MessageDialog, opName, PushDialog, RebaseDialog, ResetDialog, TagDialog } from './GitDialogs';
@@ -19,10 +20,12 @@ import {
 export type GitLogProps = {
   call: Call; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; visible: boolean; ask: Ask; fail(cause: unknown): void;
   onClose(): void; onChanged(): void; openDiff(spec: string): void; repoKey: string; controls?: ReactNode; unavailable?: string;
+  // What `git/status` reports for the repository on screen: the side pane lists it ("커밋 안 된 변경") while no commit is selected.
+  changes?: GitChange[];
   // the tutorial's sample history: no server, and actions only explain themselves
   demo?: { data: LogData; details: Record<string, Details>; note(text: string): void };
 };
-type FileChange = { status: string; path: string; original?: string };
+type FileChange = { status: string; path: string; original?: string; added?: number; deleted?: number; untracked?: boolean };
 export type Details = { sha: string; parents: string[]; author: string; email: string; authorTime: number; committer: string; committerEmail: string; commitTime: number; message: string; files: FileChange[] };
 type Filters = { text: string; regex: boolean; matchCase: boolean; branches: string[]; users: string[]; since: number | null; until: number | null; paths: string[] };
 type Notice = { id: number; text: string; kind: 'info' | 'warn' | 'error'; actions?: { label: string; run(): void }[] };
@@ -33,7 +36,7 @@ const ROW = 22, LANE = 16, RADIUS = 4;
 const REF_COLORS = { head: 'var(--git-ref-head)', local: 'var(--git-ref-local)', remote: 'var(--git-ref-remote)', tag: 'var(--git-ref-tag)' };
 const short = (hash: string) => hash.slice(0, 8);
 const clip = (name: string) => name.length > 22 ? `${name.slice(0, 10)}..${name.slice(-10)}` : name;
-const STATUS: Record<string, string> = { A: '추가', M: '수정', D: '삭제', R: '이름 변경', C: '복사', T: '형식 변경' };
+const STATUS: Record<string, string> = { A: '추가', M: '수정', D: '삭제', R: '이름 변경', C: '복사', T: '형식 변경', U: '충돌' };
 
 export function GitLog(props: GitLogProps) {
   const { call, settings, setSettings, visible, ask, fail, demo } = props;
@@ -195,6 +198,15 @@ export function GitLog(props: GitLogProps) {
     call<{ files: FileChange[] }>('git/compare', { from: compare.from, ...(compare.to ? { to: compare.to } : {}) }).then(value => { if (live) setCompareFiles(value.files); }, cause => { if (live) { fail(cause); setCompare(null); } });
     return () => { live = false; };
   }, [compare]);
+  // Uncommitted files (untracked ones too), refetched whenever what status reports or HEAD moves, while the drawer is shown.
+  const [localFiles, setLocalFiles] = useState<WorkingFile[] | null>(null);
+  const localHead = data?.head.sha ?? null, localKey = props.changes && data && !demo ? workingKey(props.changes, localHead) : '';
+  useEffect(() => {
+    if (!localKey || !visible) return;
+    let live = true;
+    call<{ files: FileChange[] }>('git/compare', { from: localHead || EMPTY_TREE }).then(value => { if (live) setLocalFiles(workingFiles(value.files, props.changes ?? [], localHead)); }, () => { if (live) setLocalFiles(null); });
+    return () => { live = false; };
+  }, [localKey, visible]);
 
   // ---- operations ----
   const changed = () => { void load(true); props.onChanged(); };
@@ -555,7 +567,9 @@ export function GitLog(props: GitLogProps) {
   const one = selection.length === 1 ? selection[0] : null;
   void detailsTick;
   const oneDetails = one ? cache.current.get(one.h) : undefined;
+  const showLocal = Boolean(props.changes && !demo && !compare && !selection.length);
   const files: (FileChange & { spec: string; commit?: string })[] = useMemo(() => {
+    if (showLocal) return localFiles ?? [];
     if (compare) return (compareFiles ?? []).map(file => ({ ...file, spec: `diff:${compare.from}..${compare.to ?? ''}:${file.path}${file.original ? `\t${file.original}` : ''}` }));
     const map = new Map<string, FileChange & { spec: string; commit?: string }>();
     for (const commit of selection.slice(0, 20)) {
@@ -564,10 +578,10 @@ export function GitLog(props: GitLogProps) {
     }
     return [...map.values()].sort((a, b) => a.path.localeCompare(b.path));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compare, compareFiles, selection.map(commit => commit.h).join(','), detailsTick]);
+  }, [compare, compareFiles, selection.map(commit => commit.h).join(','), detailsTick, showLocal, localFiles]);
   const [fileSel, setFileSel] = useState('');
   const previewSpec = settings.gitDiffPreview ? files.find(file => file.spec === fileSel)?.spec ?? files[0]?.spec ?? '' : '';
-  const loadingFiles = compare ? compareFiles === null : selection.slice(0, 20).some(commit => !cache.current.has(commit.h));
+  const loadingFiles = showLocal ? localFiles === null && Boolean(props.changes?.length) : compare ? compareFiles === null : selection.slice(0, 20).some(commit => !cache.current.has(commit.h));
   const containing = useMemo(() => one && fullGraph ? containingRefs(fullGraph, fullGraph.index.get(one.h) ?? -1) : [], [one?.h, fullGraph]);
   const [allBranches, setAllBranches] = useState(false);
 
@@ -664,13 +678,15 @@ export function GitLog(props: GitLogProps) {
           <div className="git-changes">
             <div className="git-pane-head">
               {compare ? <><Icon name="diff" size={14} /><b title={compare.title}>{compare.title}</b><IconButton icon="x" label="비교 닫기" onClick={() => setCompare(null)} /></>
+                : showLocal ? <><b title="HEAD와 작업 트리의 차이 (새 파일 포함, 읽기 전용)">커밋 안 된 변경</b>{files.length > 0 && <small>{files.length}개</small>}<LocalTotals files={localFiles ?? []} /></>
                 : <><b>{selection.length > 1 ? `커밋 ${selection.length}개의 변경` : '변경된 파일'}</b>{files.length > 0 && <small>{files.length}개</small>}</>}
               <span className="spacer" />
+              {props.changes && !demo && !showLocal && <IconButton icon="edit" label="커밋 안 된 변경 보기" onClick={() => { setCompare(null); setSelected([]); }} />}
               <IconButton icon="folder" label="폴더로 묶기" pressed={settings.gitFilesByDir} className={settings.gitFilesByDir ? 'on' : ''} onClick={() => set('gitFilesByDir', !settings.gitFilesByDir)} />
               <IconButton icon="info" label="커밋 세부 정보 보기" pressed={settings.gitDetails} className={settings.gitDetails ? 'on' : ''} onClick={() => set('gitDetails', !settings.gitDetails)} />
               <IconButton icon="diff" label="Diff 미리 보기" pressed={settings.gitDiffPreview} className={settings.gitDiffPreview ? 'on' : ''} onClick={() => set('gitDiffPreview', !settings.gitDiffPreview)} />
             </div>
-            <ChangedFiles files={files} byDir={settings.gitFilesByDir} selected={fileSel} loading={loadingFiles && !files.length} empty={!selection.length && !compare ? '커밋을 선택하세요.' : '변경된 파일이 없습니다.'}
+            <ChangedFiles files={files} byDir={settings.gitFilesByDir} selected={fileSel} loading={loadingFiles && !files.length} empty={showLocal ? '커밋 안 된 변경이 없습니다.' : !selection.length && !compare ? '커밋을 선택하세요.' : '변경된 파일이 없습니다.'}
               onSelect={setFileSel} onOpen={spec => demo ? demo.note('실제 앱에서는 편집기 영역의 diff 탭으로 열립니다.') : props.openDiff(spec)} />
           </div>
           {previewSpec && <DiffPreview key={previewSpec} spec={previewSpec} call={call} settings={settings} setSettings={setSettings} demo={Boolean(demo)} />}
@@ -784,6 +800,7 @@ function ChangedFiles({ files, byDir, selected, loading, empty, onSelect, onOpen
   const item = (file: FileChange & { spec: string }, depth: number, label: string) => <div key={file.spec} role="treeitem" tabIndex={-1} aria-selected={selected === file.spec} className={`git-file ${selected === file.spec ? 'selected' : ''}`} style={{ paddingLeft: 8 + depth * 14 }}
     title={`${STATUS[file.status] ?? file.status}${file.original ? `\n원래 경로: ${file.original}` : ''}\n더블클릭: diff 열기`} onClick={() => onSelect(file.spec)} onDoubleClick={() => onOpen(file.spec)}>
     <FileIcon name={basename(file.path)} size={14} /><span className={`git-file-name s-${file.status}`}>{label}</span>{!byDir && file.path.includes('/') && <small>{file.path.slice(0, file.path.lastIndexOf('/'))}</small>}{file.original && <small>← {basename(file.original)}</small>}
+    {file.untracked && <small className="git-file-new">새 파일</small>}{(file.added || file.deleted) ? <span className="git-file-counts">{file.added ? <ins>+{file.added}</ins> : null}{file.deleted ? <del>−{file.deleted}</del> : null}</span> : null}
   </div>;
   const onKey = (event: React.KeyboardEvent) => {
     const at = files.findIndex(file => file.spec === selected);
@@ -799,6 +816,12 @@ function ChangedFiles({ files, byDir, selected, loading, empty, onSelect, onOpen
       <Icon name={closed.has(dir) ? 'chevronRight' : 'chevronDown'} size={13} /><Icon name="folder" size={13} />{dir}<small>{list.length}</small></div> : null,
     ...(closed.has(dir) ? [] : list.map(file => item(file, dir ? 1 : 0, basename(file.path))))
   ])}</div>;
+}
+
+// "커밋 안 된 변경" header: the line counts status knows (a file inside a new folder has none yet).
+function LocalTotals({ files }: { files: WorkingFile[] }) {
+  const { added, deleted } = workingTotals(files);
+  return added || deleted ? <span className="git-file-counts">{added ? <ins>+{added}</ins> : null}{deleted ? <del>−{deleted}</del> : null}</span> : null;
 }
 
 // The diff of one changed file, beside the list ("Show Diff Preview").

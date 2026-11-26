@@ -1304,7 +1304,7 @@ ${where}`, [
       onDoubleClick={() => setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 }))}
       onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); } }} />
     <GitLog call={call} settings={settings} setSettings={setSettings} visible={active && gitOpen} ask={ask} fail={report} onClose={() => setGitOpen(false)} onChanged={() => run(refreshGit)}
-      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
+      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined} changes={git.changes}
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);

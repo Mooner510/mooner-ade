@@ -183,7 +183,14 @@ export async function commitDetails(runtime, input = {}) {
 export async function compareFiles(runtime, input = {}) {
   const from = await revision(runtime, input.from), to = input.to ? await revision(runtime, input.to) : null;
   const diff = await git(runtime, ['diff', '-z', '-M', '--name-status', '--no-ext-diff', '--no-textconv', from, ...(to ? [to] : []), '--'], { max: 64 * 1024 * 1024 });
-  return { files: parseNameStatus(diff.stdout) };
+  const files = parseNameStatus(diff.stdout);
+  // `git diff <commit>` leaves out files git does not track yet: against the working tree they are added files too (ignored ones stay out).
+  if (!to) {
+    const known = new Set(files.map(file => file.path));
+    const untracked = await git(runtime, ['ls-files', '--others', '--exclude-standard', '-z'], { ok: false, max: 64 * 1024 * 1024 });
+    for (const file of untracked.stdout.split('\0').filter(item => item && !item.endsWith('/') && !known.has(item)).slice(0, 5000)) files.push({ status: 'A', path: file, untracked: true });
+  }
+  return { files };
 }
 // A commit as a patch (Create Patch): `git format-patch` output, oldest first for several commits.
 export async function commitPatch(runtime, input = {}) {
@@ -195,7 +202,7 @@ export async function commitPatch(runtime, input = {}) {
 // Both sides of one file in a commit, for the diff tab. Binary or oversized content comes back empty with a reason.
 export async function commitFile(runtime, input = {}) {
   const id = input.working ? null : hash(input.sha), file = text(input.path, '경로', 4096), original = input.original ? text(input.original, '경로', 4096) : file;
-  const parent = input.working ? hash(input.parent, '비교 커밋') : input.parent ? hash(input.parent, '부모 커밋') : await git(runtime, ['rev-parse', '--verify', '-q', `${id}^`], { ok: false }).then(result => result.exitCode === 0 ? result.stdout.trim() : null);
+  const parent = input.working ? await revision(runtime, input.parent) : input.parent ? hash(input.parent, '부모 커밋') : await git(runtime, ['rev-parse', '--verify', '-q', `${id}^`], { ok: false }).then(result => result.exitCode === 0 ? result.stdout.trim() : null);
   const read = async (rev, name) => {
     if (!rev) return { content: '' };
     const result = await git(runtime, ['--literal-pathspecs', 'show', `${rev}:${name}`], { ok: false, max: 4 * 1024 * 1024 }).catch(() => null);
