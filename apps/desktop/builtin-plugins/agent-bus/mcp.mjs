@@ -48,8 +48,8 @@ async function call(name, args) {
     return text({ you: me, peers, ...(peers.length ? {} : { note: 'No other agent chat is open (or taking part). Ask the user to open one.' }) });
   }
   if (name === 'send_message') {
-    const { results, hop } = await ask({ op: 'send', to: args?.to, message: args?.message });
-    return text({ results, ...(hop ? { replyDepth: hop } : {}), note: 'Replies, if any, arrive later as new messages in this chat.' });
+    const { results } = await ask({ op: 'send', to: args?.to, message: args?.message });
+    return text({ results, note: 'Replies, if any, arrive later as new messages in this chat.' });
   }
   throw Object.assign(new Error(`Unknown tool: ${name}`), { rpc: -32602 });
 }

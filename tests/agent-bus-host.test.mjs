@@ -71,7 +71,7 @@ test('the host serves the MCP server over loopback, reaches the chats through it
 
   // The settings page: a bad value is refused with its reason; a good one applies at once and is saved.
   const values = Object.fromEntries(view.fields.map(field => [field.key, field.value]));
-  assert.match((await host.act('save', { ...values, maxHops: '99' })).error, /정수/);
+  assert.match((await host.act('save', { ...values, maxLength: '99' })).error, /정수/);
   assert.equal((await host.act('save', { ...values, maxLength: '1000', autoApprove: 'false' })).ok, true);
   assert.equal(host.log.filter(message => message.type === 'terminal').at(-1).autoApprove, false, 'a changed auto-approval is offered to the chats again');
   assert.equal(host.log.filter(message => message.type === 'storage').at(-1).value.settings.maxLength, 1000);
