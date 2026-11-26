@@ -1,6 +1,7 @@
 import { AppKeysContext, appKey, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
 import { QuickInput, type QuickRequest } from './QuickInput';
 import { installTooltips } from './tooltip';
+import { dragStartsOnButton, notePress } from './drag-guard';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
@@ -648,7 +649,8 @@ function Shell() {
           // below the folder name still moves the project instead of being refused and flying back.
           const projectSource = {
             draggable: true,
-            onDragStart: (event: React.DragEvent<HTMLElement>) => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
+            onPointerDownCapture: notePress,
+            onDragStart: (event: React.DragEvent<HTMLElement>) => { if (dragStartsOnButton(event)) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
             onDragEnd: () => { setProjectDrag(''); setProjectDrop(null); }
           };
           const projectTarget = {
@@ -714,7 +716,7 @@ function Shell() {
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
                 const startDrag = (event: React.DragEvent, pane?: string) => {
-                  if (event.target instanceof Element && event.target.closest('button')) { event.preventDefault(); return; }
+                  if (dragStartsOnButton(event)) { event.preventDefault(); return; }
                   event.stopPropagation(); setMenu(null);
                   event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane || tab.id);
                   setDrag({ root: entry.root, id: tab.id, ...(pane ? { pane } : {}) });
@@ -722,6 +724,7 @@ function Shell() {
                 const endDrag = () => { setDrag(null); setDropAt(null); };
                 const dnd = {
                   draggable: true,
+                  onPointerDownCapture: notePress,
                   onDragStart: (event: React.DragEvent) => startDrag(event),
                   onDragEnd: endDrag,
                   onDragOver: (event: React.DragEvent<HTMLLIElement>) => {
@@ -763,8 +766,9 @@ function Shell() {
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
-                      draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
+                      draggable onPointerDownCapture={notePress} onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id, true), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
+
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
