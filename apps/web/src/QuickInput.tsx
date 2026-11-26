@@ -21,6 +21,8 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
   const [value, setValue] = useState(request.initial || '');
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null), box = useRef<HTMLDivElement>(null);
+  // Where the keyboard was when this opened (a sidebar row, a terminal): a cancel puts it back there instead of leaving it on the page body.
+  const opener = useRef(typeof document === 'undefined' ? null : document.activeElement as HTMLElement | null);
   const source = request.kind === 'pick' ? request.source : undefined, [version, setVersion] = useState(0);
   useEffect(() => source?.subscribe?.(() => setVersion(current => current + 1)), [source]);
   const searchable = request.kind === 'pick' && (Boolean(source) || request.items.length >= SEARCH_FROM), typed = request.kind === 'input' || searchable;
@@ -37,7 +39,14 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
   useEffect(() => setIndex(0), [value]);
   // Arrow keys past the visible rows of a long list keep the chosen row in view.
   useEffect(() => { box.current?.querySelector('li.selected')?.scrollIntoView({ block: 'nearest' }); }, [index]);
-  const finish = (result: string | null) => { onClose(); request.resolve(result); };
+  const finish = (result: string | null) => {
+    onClose(); request.resolve(result);
+    const back = opener.current;
+    if (result === null && back && back !== document.body) requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if ((!now || now === document.body) && back.isConnected && !back.closest('[hidden], [inert]')) back.focus({ preventScroll: true });
+    });
+  };
   const title = request.title;
   // The title is always a heading above the field/list (never a placeholder). A short one is bold; a sentence (a warning, a question) is plain text, and
   // whatever follows its first line is the muted detail.
