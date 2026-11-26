@@ -306,7 +306,7 @@ test('"나중에" is not asked again by the timer until the app restarts, a manu
   const askedFirst = ctx.github.requests.length;
   assert.equal(await ctx.check(), 'declined');
   assert.equal(prompts(ctx.electron).length, 1, 'the second background check is silent');
-  assert.deepEqual(ctx.github.requests.slice(askedFirst), ['/repos/Mooner510/mooner-ade/releases/latest'], 'and does not even fetch the manifest');
+  assert.deepEqual(ctx.github.requests.slice(askedFirst), ['/Mooner510/mooner-ade/releases/latest'], 'it only reads the github.com redirect: no API request and no manifest');
   assert.equal(await ctx.check({ manual: true }), 'declined');
   assert.equal(prompts(ctx.electron).length, 2, 'the settings button asks again');
   ctx.github.releases.unshift(release('v0.6.1'));
@@ -453,7 +453,7 @@ test('automatic download prepares the update before asking and Later does not ap
   const ctx = await setup(t, {
     current: '0.5.12', releases: [release('v0.6.0')], getBusy: async () => ({ busy: false, reasons: [] }),
     answer: (options, _electron, github) => {
-      assert.deepEqual(zipRequests(github), [`/assets/${APP_ASSET}`], 'the prompt follows the download');
+      assert.deepEqual(zipRequests(github), [`/assets/v0.6.0/${APP_ASSET}`], 'the prompt follows the download');
       assert.deepEqual(options.buttons, [PROMPT_ON_QUIT, PROMPT_NOW, PROMPT_LATER]);
       return button(PROMPT_LATER)(options);
     },
