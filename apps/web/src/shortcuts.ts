@@ -44,6 +44,21 @@ export function appKeyInTerminal(settings: { appKeys?: Record<string, string>; t
   return event.metaKey || (event.ctrlKey && event.shiftKey) || event.altKey || !!settings?.appKeys?.[id] || !!appKeyDefs.find(def => def.id === id)?.term;
 }
 // The same decision for the settings list, which has no event: a combo that is just Ctrl+key is the shell's by default.
+// Where a key was typed, for keyBelongsToField: inside a Monaco editor, in a plain text field (chat box, input), or anywhere else.
+export type KeyPlace = 'editor' | 'text' | 'other';
+export function keyPlace(target: EventTarget | null): KeyPlace {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return 'other';
+  if (target.closest('.monaco-editor')) return 'editor';
+  const textInput = target instanceof HTMLInputElement && !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(target.type);
+  return target instanceof HTMLTextAreaElement || textInput || (target instanceof HTMLElement && target.isContentEditable) ? 'text' : 'other';
+}
+// Does a plain Ctrl+letter (no Shift, Alt or ⌘) stay with the field instead of running an app key? In the editor it is Monaco's own key
+// (Ctrl+D adds the next match to the selection). On macOS every text field uses it for Cocoa editing (Ctrl+D deletes forward, Ctrl+A/E
+// line start/end), and the app's mod there is ⌘, so only Ctrl-bound keys are given up. Elsewhere, Windows' chat box included, the app keeps it.
+export function keyBelongsToField(event: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }, place: KeyPlace, mac: boolean): boolean {
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !/^Key[A-Z]$/.test(event.code)) return false;
+  return place === 'editor' || (place === 'text' && mac);
+}
 export function appKeyInTerminalByDefault(settings: { appKeys?: Record<string, string> } | undefined, id: string): boolean {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const combo = normalizeCombo(appKey(settings?.appKeys, id) ?? '').replace('mod+', mac ? 'meta+' : 'ctrl+');

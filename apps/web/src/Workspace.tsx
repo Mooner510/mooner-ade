@@ -1,4 +1,4 @@
-import { appKey, appKeyInTerminal, matches, showAppKey } from './shortcuts';
+import { appKey, appKeyInTerminal, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isLeaf, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
@@ -1217,6 +1217,8 @@ ${where}`, [
       if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
       // In a terminal, plain Ctrl+key stays with the shell unless the key is meant to work there or the user said so (settings.termKeys, per key).
       if (inTerminal && !appKeyInTerminal(settingsRef.current, command.id, event)) return;
+      // In the editor (and in any text field on macOS) a plain Ctrl+letter is the field's own key, e.g. Monaco's Ctrl+D.
+      if (!inTerminal && keyBelongsToField(event, keyPlace(event.target), mac)) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);
