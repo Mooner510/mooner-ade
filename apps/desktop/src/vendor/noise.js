@@ -212,3 +212,39 @@ export const pairingPsk = secret => hkdf(hash(Buffer.from('mooner-ade pair v1'))
 export const sameKey = (a, b) => Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.length === b.length && timingSafeEqual(a, b);
 // Binds the handshake to the protocol version, the pattern, the transport and the host, so none can be swapped in transit.
 export const prologue = ({ pattern, transport, hostId }) => Buffer.from(`mooner-ade.v1|${pattern}|${transport}|${hostId}`, 'utf8');
+
+// A short number both screens show when a device asks to connect without a QR code (mode `request`): the PC's key and the
+// asking device's key, as each side sees them. The device computes it from the PC key it connected with, and the approving
+// phone from the PC key it pinned when it paired, so a Hub that swapped either key in transit shows a different number.
+export function safetyCode(hostKey, deviceKey) {
+  const digits = String(hash(Buffer.from('mooner-ade request v1'), hostKey, deviceKey).readUInt32BE(0) % 1_000_000).padStart(6, '0');
+  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+}
+
+// Push notifications: Noise K (one way, both static keys known: -> s, <- s / -> e, es, ss). The PC seals with its host key to
+// the phone's static key pinned at pairing, so the Hub and FCM carry ciphertext only, and the phone opens it only with the key
+// of a PC it paired (the `ss` token proves which PC sent it). There is no reply, so no forward secrecy for the sender's key.
+const PUSH_PROTOCOL = 'Noise_K_25519_AESGCM_SHA256';
+function pushState(hostId, hostKey, phoneKey) {
+  const state = new SymmetricState(PUSH_PROTOCOL);
+  state.mixHash(prologue({ pattern: 'push', transport: 'fcm', hostId }));
+  state.mixHash(hostKey); state.mixHash(phoneKey);
+  return state;
+}
+// `host` is the PC's key pair, `phoneKey` the phone's static public key. Returns e (32 bytes) followed by the sealed payload.
+export function sealPush({ hostId, host, phoneKey, payload, e = keyPair() }) {
+  const state = pushState(hostId, host.publicKey, phoneKey);
+  state.mixHash(e.publicKey);
+  state.mixKey(dh(e, phoneKey));
+  state.mixKey(dh(host, phoneKey));
+  return Buffer.concat([e.publicKey, state.encryptAndHash(payload)]);
+}
+// The phone's side (here for tests and the shared vectors; the app has its own implementation).
+export function openPush({ hostId, hostKey, phone, message }) {
+  if (message.length < DHLEN + TAGLEN) throw noiseError('메시지가 너무 짧습니다.');
+  const e = message.subarray(0, DHLEN), state = pushState(hostId, hostKey, phone.publicKey);
+  state.mixHash(e);
+  state.mixKey(dh(phone, e));
+  state.mixKey(dh(phone, hostKey));
+  return state.decryptAndHash(message.subarray(DHLEN));
+}

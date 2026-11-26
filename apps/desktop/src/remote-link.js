@@ -7,9 +7,11 @@
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { DEFAULT_HUB_URL } from './hub-client.js';
-import { createChannel, createHandshake, fingerprint, keyPair, pairingPsk, prologue } from './vendor/noise.js';
+import { createChannel, createHandshake, fingerprint, keyPair, pairingPsk, prologue, safetyCode } from './vendor/noise.js';
 
 const SUBPROTOCOL = 'mooner-ade.v1';
+// REQUEST_MS: a connection request waits for its owner's phone (the PC gives up after 10 minutes).
+const REQUEST_MS = 11 * 60_000;
 const HANDSHAKE_MS = 10_000, HELLO_MS = 10_000, PAIR_MS = 180_000, OPEN_MS = 30_000, CALL_MS = 60_000, PING_MS = 30_000, IDLE_MS = 90_000;
 const MAX_FAILURES = 40;
 const HOST_ID = /^[\w-]{1,64}$/;
@@ -261,7 +263,9 @@ export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL ||
     return response;
   }
 
-  let enrolling = null;
+  let enrolling = null, requesting = null;
+  // The PCs' keys as the Hub listed them (GET /v1/hosts), to ask one to connect without a QR code. Not trusted: both screens show a code.
+  const listedKeys = new Map();
   const keyOf = () => { const stored = state().key; if (!stored) throw signedOut(); return keyPair(b64(stored.privateKey)); };
   // The key's hash as the Hub shows it for a PC (hex of the first 16 bytes of SHA-256 over the raw key).
   const keyHash = key => createHash('sha256').update(key).digest('hex').slice(0, 32);
@@ -327,10 +331,11 @@ export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL ||
       const own = String(hostname() ?? '').slice(0, 80);
       const listed = (Array.isArray(body?.hosts) ? body.hosts : []).filter(item => typeof item?.id === 'string' && HOST_ID.test(item.id)).map(item => {
         const known = paired.find(host => host.hostId === item.id);
+        if (typeof item.key === 'string' && b64(item.key).length === 32) listedKeys.set(item.id, item.key);
         return { hostId: item.id, name: String(item.name ?? '').slice(0, 80) || 'PC', self: Boolean(own) && String(item.name ?? '').slice(0, 80) === own, platform: String(item.platform ?? '').slice(0, 20), online: item.online === true, paired: Boolean(known), scope: known?.scope ?? null,
-          fingerprint: known?.fingerprint ?? null, keyChanged: Boolean(known && typeof item.keyHash === 'string' && item.keyHash !== keyHash(b64(known.key))), inAccount: true };
+          fingerprint: known?.fingerprint ?? null, keyChanged: Boolean(known && typeof item.keyHash === 'string' && item.keyHash !== keyHash(b64(known.key))), inAccount: true, canRequest: listedKeys.has(item.id) };
       });
-      const extra = paired.filter(host => !listed.some(item => item.hostId === host.hostId)).map(host => ({ hostId: host.hostId, name: host.name, self: false, platform: '', online: false, paired: true, scope: host.scope, fingerprint: host.fingerprint, keyChanged: false, inAccount: false }));
+      const extra = paired.filter(host => !listed.some(item => item.hostId === host.hostId)).map(host => ({ hostId: host.hostId, name: host.name, self: false, platform: '', online: false, paired: true, scope: host.scope, fingerprint: host.fingerprint, keyChanged: false, inAccount: false, canRequest: false }));
       return [...listed, ...extra];
     },
 
@@ -361,6 +366,53 @@ export function createRemoteClient({ store, baseUrl = process.env.ADE_HUB_URL ||
         save({ ...state(), hosts: [...state().hosts.filter(item => item.hostId !== host.hostId), host] });
         return { hostId: host.hostId, name: host.name, scope: host.scope };
       } finally { try { socket?.close(1000); } catch { /* closed */ } }
+    },
+    // ---- asking to connect without a QR code: the PC's owner (at that PC, or on a phone paired there with control) approves ----
+    // requestStart → { code, name }: the code this PC computes from the PC key it connected with and its own key. The approving side
+    // shows the code it computes from the key it pinned; a Hub that swapped a key makes the two differ. requestWait → the pairing.
+    async requestStart(hostId, scope = 'control') {
+      if (!state().tokens) throw signedOut();
+      const listed = listedKeys.get(hostId);
+      if (!listed) throw fail('PC 목록을 다시 불러온 뒤 시도하세요.', 'NOT_LISTED');
+      this.requestCancel();
+      const key = keyOf(), hostKey = b64(listed), code = safetyCode(hostKey, key.publicKey);
+      const current = requesting = { hostId, hostKey, socket: null, io: null, channel: null, ping: null, cancelled: false };
+      try {
+        current.socket = await dial(`${origin.replace(/^http/, 'ws')}/v1/connect/${hostId}?mode=request`, { protocols: [SUBPROTOCOL], headers: { Authorization: `Bearer ${await accessToken()}` } });
+        current.io = attach(current.socket);
+        await current.io.opened().catch(error => { throw fail(error.close === 409 ? '그 PC가 꺼져 있거나 원격 접속이 꺼져 있습니다.' : 'PC에 연결하지 못했습니다. PC가 켜져 있고 원격 접속이 켜져 있는지 확인하세요.', 'HUB_REFUSED'); });
+        current.channel = await handshake({ socket: current.socket, io: current.io, hostId, hostKey, key, mode: 'request', psk: null });
+        sealer(current.socket, current.channel)({ t: 'request', name: name(), scope: scope === 'view' ? 'view' : 'control' });
+        const pending = await firstMessage(current.io, current.channel, message => message.t === 'request-pending', HELLO_MS).catch(error => {
+          throw typeof error.code === 'number' ? fail(error.reason === 'busy' ? '그 PC에 대기 중인 요청이 많습니다. 잠시 뒤 다시 시도하세요.' : 'PC가 연결 요청을 받지 않았습니다. PC의 원격 접속 플러그인을 업데이트하세요.', 'DENIED') : error;
+        });
+        // The PC computed it from the keys it sees; a different number means the keys were not the same on both ends.
+        if (pending.code !== code) throw fail('확인 코드가 PC와 다릅니다. 연결이 중간에서 바뀌었을 수 있어 중단했습니다.', 'HOST_KEY');
+        // Kept alive while the owner answers (the PC closes a silent connection after 90 s).
+        current.ping = setInterval(() => { try { sealer(current.socket, current.channel)({ t: 'ping' }); } catch { /* closing */ } }, PING_MS);
+        return { code, hostId };
+      } catch (error) { this.requestCancel(); throw error; }
+    },
+    async requestWait() {
+      const current = requesting;
+      if (!current?.channel) throw fail('연결 요청을 먼저 시작하세요.', 'NOT_STARTED');
+      try {
+        const answer = await firstMessage(current.io, current.channel, message => message.t === 'paired' || message.t === 'pair-denied', REQUEST_MS).catch(error => {
+          throw fail(current.cancelled ? '연결 요청을 취소했습니다.' : '연결 요청이 승인되지 않았습니다. 다시 요청하세요.', current.cancelled ? 'CANCELLED' : 'DENIED');
+        });
+        if (answer.t !== 'paired') throw fail('연결 요청이 거부되었습니다.', 'DENIED');
+        const host = { hostId: current.hostId, name: String(answer.host?.name ?? '').slice(0, 80) || 'PC', key: current.hostKey.toString('base64'), scope: answer.scope === 'control' ? 'control' : 'view', fingerprint: fingerprint(current.hostKey), pairedAt: now() };
+        save({ ...state(), hosts: [...state().hosts.filter(item => item.hostId !== host.hostId), host] });
+        return { hostId: host.hostId, name: host.name, scope: host.scope };
+      } finally { if (requesting === current) this.requestCancel(); }
+    },
+    // Closing the connection withdraws the request on the PC.
+    requestCancel() {
+      const current = requesting;
+      if (!current) return;
+      requesting = null; current.cancelled = true;
+      clearInterval(current.ping);
+      try { current.socket?.close(1000); } catch { /* closed */ }
     },
     forget(hostId) { save({ ...state(), hosts: state().hosts.filter(host => host.hostId !== hostId) }); },
     pairedHost: hostId => state().hosts.find(host => host.hostId === hostId) ?? null,

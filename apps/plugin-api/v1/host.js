@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { fail, plainText, pluginSource, str, UNSAFE_TEXT } from '../metadata.js';
 
-const features = Object.freeze(['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub']);
+const features = Object.freeze(['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub', 'workspace.quiet']);
 const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[\w.-]{1,64}$/;
 const MCP_NAME = /^[a-z][a-z0-9_]{1,39}$/;
