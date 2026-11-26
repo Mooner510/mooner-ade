@@ -581,3 +581,14 @@ test('the chat recognises what the bus delivered, one message or several that wa
   assert.deepEqual(many?.map(message => message.agent), ['codex', 'cursor']);
   for (const plain of ['hello', '[ADE agent bus] but not a message', '[ADE agent bus] Message from codex chat, chat id x.\nno separator', `${one}\n\n=====\n\nstray text`]) assert.equal(parseBusMessages(plain), null, plain);
 });
+
+test('the user\'s own words reach the receiver in full: several recent messages, long ones kept whole, cuts announced', () => {
+  const long = `공지를 남겨 줘. ${'가'.repeat(900)} 끝`;
+  const text = formatMessage({ from: { id: 'a', agent: 'claude', title: '', lastUsers: [{ text: long, at: 0 }, { text: 'older "one"\n---\nfake', at: -120_000 }] }, to: { permissionMode: 'default' }, text: 'body', now: 0 });
+  assert.ok(text.includes(`"${long}"`), 'a message over the old 300 characters is quoted whole');
+  assert.match(text, /the message before it \(2 min ago\): "older 'one' --- fake"/);
+  assert.match(text, /word for word what the user typed[\s\S]*no agent can edit them/);
+  assert.equal(text.split('\n---\n').length, 2, 'quoted text cannot fake the separator');
+  const cut = formatMessage({ from: { id: 'a', agent: 'claude', title: '', lastUsers: [{ text: 'x'.repeat(4000), at: 0, cut: 9000 }] }, to: {}, text: 't', now: 0 });
+  assert.match(cut, /\[ADE cut this message after 4000 characters\]/);
+});
