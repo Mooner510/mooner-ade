@@ -30,11 +30,13 @@ export type DiscoverItem = { id: string; text: GuideText; insert?: string; slash
 export const DISCOVER: DiscoverItem[] = [
   { id: 'btw', text: '/btw 질문: 작업을 멈추지 않고 곁가지 질문하기', insert: '/btw ', slash: 'btw' },
   { id: 'shell', text: '!명령: 이 폴더에서 셸 명령을 바로 실행하고 결과를 다음 메시지에 붙이기', insert: '!' },
+  { id: 'send', text: '{mod+shift+l}: 편집기·터미널·diff에서 고른 내용을 이 채팅 입력창으로' },
   { id: 'resume', text: '/resume: 이 프로젝트의 이전 대화 이어가기', insert: '/resume', slash: 'resume' },
   { id: 'queue', text: '응답 중에 Enter는 끼워 넣기, Tab은 끝난 뒤 보내기' },
   { id: 'turns', text: '{turnPrev} {turnNext} 요청 사이 이동, {find} 대화 안 찾기' },
   { id: 'copy', text: '{copyAnswer} 마지막 답변 복사, {copyCode} 마지막 코드 블록 복사' },
   { id: 'stats', text: '/stats: 토큰·비용·도구 사용 통계', insert: '/stats', slash: 'stats', agents: ['claude'] },
+  { id: 'keys', text: '{mod+slash}: 모든 단축키 한눈에 보기, {mod+alt+c}: 어디서든 채팅 입력창으로' },
 ];
 export const DISCOVER_SHOWN = 3;
 /** The lines for this chat: the ones about a command this user already ran drop out, then the first few. */
@@ -48,6 +50,7 @@ export const IDLE_LINES: GuideText[] = [
   '!명령으로 셸 실행, /btw 곁가지 질문, ↑ 이전 메시지',
   '{turnPrev} {turnNext} 이전/다음 요청, {find} 대화 안 찾기',
   '{copyAnswer} 마지막 답변 복사, {stash} 입력 임시 보관',
+  '{mod+shift+l} 편집기·터미널에서 고른 내용 보내기, {mod+slash} 단축키 한눈에 보기',
 ];
 export function composerPlaceholder(input: PlaceholderInput, key: (name: string) => string): string {
   const send = input.modSend ? 'Cmd/Ctrl+Enter' : 'Enter';

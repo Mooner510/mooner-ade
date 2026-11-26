@@ -3,7 +3,8 @@
 // fixedKeys: one entry per line, so other teams can add theirs and a merge only interleaves lines. `keys` is a combo ("mod+s", shown as
 // Ctrl+S or ⌘S) or plain text ("↑ / ↓"); " / " separates alternatives.
 import { appKey, appKeyDefs } from './shortcuts';
-import { chatKey, chatKeyDefs, showCombo } from './chat-model';
+import { showCombo } from './chat-model';
+import { chatKeyGuide } from './chat-key-guide';
 
 export type FixedKey = { group: string; keys: string; label: string };
 export const fixedKeys: FixedKey[] = [
@@ -29,13 +30,6 @@ export const fixedKeys: FixedKey[] = [
   { group: '터미널', keys: 'ctrl+v', label: '붙여넣기 (이미지는 파일 경로로)' },
   { group: '터미널', keys: 'shift+enter', label: 'CLI에서 줄바꿈' },
   { group: '터미널', keys: 'tab', label: 'Claude 작업 중: 입력을 후속 대기열에 넣기' },
-  { group: '채팅 입력창', keys: 'enter', label: '보내기 (설정에서 Ctrl+Enter로 바꿀 수 있음)' },
-  { group: '채팅 입력창', keys: 'shift+enter', label: '줄바꿈' },
-  { group: '채팅 입력창', keys: 'tab', label: '응답 중: 끝난 뒤 보내기 대기열에 넣기' },
-  { group: '채팅 입력창', keys: 'shift+tab', label: '권한 모드 바꾸기' },
-  { group: '채팅 입력창', keys: 'escape', label: '메뉴 닫기, 응답 중단, 입력창 나가기' },
-  { group: '채팅 입력창', keys: 'arrowup / arrowdown', label: '보낸 메시지 다시 불러오기' },
-  { group: '채팅 입력창', keys: '/ / @', label: '슬래시 명령 / 파일 언급' },
   { group: 'Git 커밋 그래프', keys: 'shift+escape', label: '닫기' },
   { group: '크기 조절 막대 (포커스)', keys: '화살표', label: '크기 조절' },
   { group: '크기 조절 막대 (포커스)', keys: 'enter / home', label: '더블클릭과 같은 동작 / 기본 크기' },
@@ -61,7 +55,8 @@ export function keyGuideGroups(settings: { appKeys?: Record<string, string>; cha
     const combo = appKey(settings.appKeys, def.id);
     if (combo) add(def.group, true, { keys: [showGuideKey(combo, onMac)], label: def.label });
   }
-  for (const def of chatKeyDefs) add('채팅 입력창 (바꿀 수 있음)', true, { keys: [showGuideKey(chatKey(settings.chatKeys, def.id), onMac)], label: def.label });
+  // The chat's keys come from chat-key-guide.ts (its bindable keys with the user's choices, then its fixed ones), grouped like 설정 › 단축키.
+  for (const entry of chatKeyGuide(settings.chatKeys)) add(entry.group, !!entry.id, { keys: entry.id ? [showGuideKey(entry.keys, onMac)] : splitKeys(entry.keys, onMac), label: entry.label });
   for (const item of fixedKeys) add(item.group, false, { keys: splitKeys(item.keys, onMac), label: item.label });
   const needle = query.trim().toLowerCase();
   return [...groups.values()].map(group => !needle || group.title.toLowerCase().includes(needle) ? group

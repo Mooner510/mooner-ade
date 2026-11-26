@@ -159,12 +159,12 @@ test('placeholder by situation, with the user\'s keys and nothing extra when tip
   assert.equal(composerPlaceholder({ ...base, busy: true, oneLine: true }, keys), '응답 중, 입력해 끼워 넣기');
   assert.equal(composerPlaceholder({ ...base, busy: true, foldIn: false, agent: 'cursor' }, keys), 'Enter: 응답을 끊고 바로 보내기, Tab: 끝난 뒤 보내기, Esc: 중단');
   assert.equal(composerPlaceholder({ ...base, stash: true, turns: 3 }, keys), '보관된 입력이 있습니다 (<stash>로 복원)');
-  const idle = [1, 2, 3, 4].map(turns => composerPlaceholder({ ...base, turns }, keys));
-  assert.equal(new Set(idle.slice(0, 3)).size, 3, 'each finished turn shows the next line');
-  assert.equal(idle[3], idle[0]);
+  const lines = IDLE_LINES.length, idle = Array.from({ length: lines + 1 }, (_, index) => composerPlaceholder({ ...base, turns: index + 1 }, keys));
+  assert.equal(new Set(idle.slice(0, lines)).size, lines, 'each finished turn shows the next line');
+  assert.equal(idle[lines], idle[0]);
   assert.ok(idle.some(line => line.includes('<turnPrev>')) && idle.every(line => !line.includes('{')));
   assert.equal(composerPlaceholder({ ...base, tips: false, turns: 2 }, keys), '작업을 설명하거나 질문하세요, !명령으로 셸 실행');
-  assert.equal(IDLE_LINES.length, 3);
+  assert.ok(IDLE_LINES.length >= 3);
 });
 
 test('hint, start-screen and guide texts only name keys that exist', async t => {
@@ -175,8 +175,8 @@ test('hint, start-screen and guide texts only name keys that exist', async t => 
     for (const name of named(text)) assert.ok(ids.has(name) || name.includes('+'), `${name} in "${text}"`);
   assert.deepEqual(guideParts('a {stash} b', name => `K:${name}`), [{ text: 'a ' }, { key: 'K:stash' }, { text: ' b' }]);
   assert.equal(guideLine('{shift+tab} 순환', name => name.toUpperCase()), 'SHIFT+TAB 순환');
-  assert.deepEqual(discoverFor('claude', []).map(item => item.id), ['btw', 'shell', 'resume']);
-  assert.deepEqual(discoverFor('claude', ['btw', 'resume']).map(item => item.id), ['shell', 'queue', 'turns'], 'a command already used drops out');
+  assert.deepEqual(discoverFor('claude', []).map(item => item.id), ['btw', 'shell', 'send']);
+  assert.deepEqual(discoverFor('claude', ['btw', 'resume']).map(item => item.id), ['shell', 'send', 'queue'], 'a command already used drops out');
   assert.ok(!discoverFor('codex', [], DISCOVER, 99).some(item => item.id === 'stats'));
   const guide = chatKeyGuide({ find: 'alt+f' });
   assert.equal(guide.find(entry => entry.id === 'find').keys, 'alt+f');

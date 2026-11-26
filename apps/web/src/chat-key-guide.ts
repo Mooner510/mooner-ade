@@ -24,6 +24,8 @@ export const CHAT_FIXED_KEYS: KeyGuideEntry[] = [
   { group: CHAT_KEY_GROUPS.input, label: '보낸 메시지 기록', keys: '↑ / ↓' },
   { group: CHAT_KEY_GROUPS.input, label: '대기 중인 메시지 되돌리기', keys: 'shift+arrowup' },
   { group: CHAT_KEY_GROUPS.input, label: '셸 명령 실행', keys: '!명령' },
+  { group: CHAT_KEY_GROUPS.input, label: '슬래시 명령 / 파일 언급', keys: '/ / @' },
+  { group: CHAT_KEY_GROUPS.input, label: '원문으로 붙여넣기 (ADE에서 복사한 코드도 참조 대신 원문)', keys: 'mod+shift+v' },
   { group: CHAT_KEY_GROUPS.thread, label: '대화 한 화면 위/아래 (입력창이 한 줄일 때도)', keys: 'pageup / pagedown' },
   { group: CHAT_KEY_GROUPS.thread, label: '찾기: 다음 / 이전 / 닫기', keys: 'enter / shift+enter / escape' },
   { group: CHAT_KEY_GROUPS.card, label: '거부하고 응답 중단', keys: 'escape' },
