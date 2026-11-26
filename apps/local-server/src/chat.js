@@ -29,6 +29,7 @@ import { createChatTextStore } from './chat-text.js';
 import { readLastLines } from './file-util.js';
 import { evaluateLimit, limitOptions, limitView, normalizeLimit, POLL_MS } from './chat-limit.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
+import { createTurnSnapshots } from './chat-snapshots.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -381,7 +382,25 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const last = lastUnansweredUser();
     return Boolean(last?.text?.trim() && !last.images);
   }
+  // Turn snapshots (chat-snapshots.js): the work folder as a git commit when a turn starts and ends, for the turn's change card and Rewind's
+  // file restore. The folder is read at every snapshot (the agent can move into a worktree). Off with ADE_TURN_SNAPSHOTS=0.
+  const workFolder = () => state.cwd || meta.worktreePath || cwd;
+  const turnSnaps = process.env.ADE_TURN_SNAPSHOTS === '0' ? null : createTurnSnapshots({ chatId: id, folder: workFolder, emit: event => emit(event), events: () => events });
+  // The turn's last main-thread answer, which the change card hangs under and Rewind names.
+  const lastAnswer = () => {
+    for (let at = events.length - 1; at >= 0; at--) {
+      const event = events[at];
+      if (event.kind === 'message' && !event.parentToolUseId && event.role !== 'user') return { uuid: event.uuid, messageId: event.id };
+      if (event.kind === 'user' || event.kind === 'divider') break;
+    }
+    return {};
+  };
+  let snapTurn = false;
+  const noteTurnEdge = () => { if (!turnSnaps || closed || turnOpen === snapTurn) return; snapTurn = turnOpen; if (turnOpen) turnSnaps.turnStarted(); else void turnSnaps.turnEnded(lastAnswer()); };
+  const snapFault = error => { throw error?.reason ? fault(`SNAPSHOT_${String(error.reason).toUpperCase().replace(/-/g, '_')}`, error.message, 409) : error; };
+  const answerOf = uuid => ({ uuid, messageId: events.find(event => event.kind === 'message' && event.uuid === uuid)?.id });
   const setStatus = () => {
+    noteTurnEdge();
     state.status = closed ? 'closed' : approvals.size ? 'attention' : turnOpen ? 'working' : 'idle'; state.pending = approvals.size; syncLimitPoll(); publish();
     // An idle Claude or Codex child holds a few hundred MB; the conversation resumes from its session id, so it can go.
     // Cursor's process takes several seconds to start, so it stays for the life of the chat. Closing the chat still stops it.
@@ -1486,21 +1505,41 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       }
       return { events: through(kept, selected), meta: { agent, cwd, worktree: meta.worktree, worktreePath: meta.worktreePath, configDir: meta.configDir, sessionId: meta.sessionId, resumeAt: agent === 'codex' ? events[at].turnId : uuid, fork: true, model: meta.model, effort: meta.effort, addDirs: meta.addDirs, permissionMode: meta.permissionMode, mediaBlocks: meta.mediaBlocks || undefined, colorChips: meta.colorChips || undefined } };
     },
-    // Rewind: drop everything after one assistant message. The next message starts a fork of the session at that point (conversation only; files Claude already changed stay).
-    async rewind(uuid) {
+    // Rewind: drop everything after one assistant message. The next message starts a fork of the session at that point. With `files`, the work folder's files
+    // first go back to the end of that turn (chat-snapshots.js); without it, files the agent already changed stay.
+    async rewind(uuid, { files = false } = {}) {
       live();
       if (agent === 'cursor') await cursorSnapshot;
       if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 되돌릴 수 있습니다.', 409);
       const snapshot = this.branchSnapshot(uuid);
+      // Files first: a restore that cannot start (no snapshot, the current state unreadable) throws before the conversation changes.
+      if (files && !turnSnaps) throw fault('CHAT_UNSUPPORTED', '턴 스냅샷이 꺼져 있어 파일을 되돌릴 수 없습니다.', 409);
+      const restored = files ? await turnSnaps.rewindFiles(answerOf(uuid)).catch(snapFault) : null;
       restart();
       if (agent === 'cursor') {
         const sessionId = await forkCursorSession({ checkpoint: snapshot.meta.cursorCheckpoint, cwd, configDir: cursorDirOf() });
         meta.sessionId = state.sessionId = sessionId;
-        emit({ kind: 'rewind', uuid }); await saveMeta(); setStatus(); return;
+        emit({ kind: 'rewind', uuid, ...(restored && { files: true }) }); if (restored) emit({ kind: 'file_rewind', uuid, ...restored }); await saveMeta(); setStatus(); return restored;
       }
       meta.resumeAt = snapshot.meta.resumeAt; meta.fork = true;
-      emit({ kind: 'rewind', uuid }); await saveMeta(); setStatus();
+      emit({ kind: 'rewind', uuid, ...(restored && { files: true }) }); if (restored) emit({ kind: 'file_rewind', uuid, ...restored }); await saveMeta(); setStatus();
+      return restored;
     },
+    // Rewind's dialog: whether that point's files can come back, and which files that writes and removes (nothing is changed).
+    rewindPreview(uuid) { live(); return turnSnaps ? turnSnaps.preview(answerOf(uuid)) : { available: false, reason: '턴 스냅샷이 꺼져 있습니다.' }; },
+    // "파일 되돌리기 취소": the files go back to the snapshot kept just before that restore (`seq`: the restore's file_rewind event).
+    async undoFileRewind(seq, { preview = false } = {}) {
+      live();
+      if (!turnSnaps) throw fault('CHAT_UNSUPPORTED', '턴 스냅샷이 꺼져 있습니다.', 409);
+      if (!Number.isSafeInteger(seq)) throw fault('INVALID_INPUT', '취소할 되돌리기를 확인하세요.');
+      if (preview) return turnSnaps.undoPreview(seq);
+      if (turnOpen || approvals.size) throw fault('CHAT_BUSY', '응답이 끝난 뒤 되돌릴 수 있습니다.', 409);
+      const done = await turnSnaps.undo(seq).catch(snapFault);
+      emit({ kind: 'file_rewind', undo: seq, ...done }); setStatus();
+      return done;
+    },
+    // One file of a turn's change card, both sides, for the editor's diff tab.
+    turnFile(input) { live(); if (!turnSnaps) throw fault('CHAT_UNSUPPORTED', '턴 스냅샷이 꺼져 있습니다.', 409); return turnSnaps.file(input).catch(snapFault); },
     // Chat -> terminal: only while nothing runs. The child is ended (and waited for), so the session has a single writer again when the terminal resumes it.
     async handoff({ force = false } = {}) {
       live();
@@ -1577,6 +1616,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 2000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
       }
       await cursorSnapshot;
+      if (forget) await turnSnaps?.forget().catch(() => {}); else await turnSnaps?.close(); // a forgotten chat's snapshot refs go with it
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
