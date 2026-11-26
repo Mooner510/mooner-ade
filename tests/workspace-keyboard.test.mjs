@@ -122,7 +122,7 @@ test('new keys: defaults avoid the reserved combos and every palette command can
   assert.equal(keyOf('pane9'), 'alt+shift+9');
   // Kept free for the chat and send-to-chat teams.
   for (const reserved of ['mod+enter', 'mod+shift+enter', 'alt+arrowup', 'alt+arrowdown', 'mod+f', 'mod+home', 'mod+end', 'mod+shift+l', 'mod+l', 'mod+alt+l'])
-    for (const def of appKeyDefs) if (def.keys && def.id !== 'zoom') assert.ok(!combosOverlap(def.keys, reserved), `${def.id} takes ${reserved}`);
+    for (const def of appKeyDefs) if (def.keys && def.id !== 'zoom' && !(def.id === 'sendToChat' && reserved === 'mod+shift+l')) assert.ok(!combosOverlap(def.keys, reserved), `${def.id} takes ${reserved}`);
   // Commands with no default have '' (shown as nothing) and can be bound; the server accepts the ids.
   for (const id of ['renameTab', 'moveTabUp', 'moveTabDown', 'detachPane', 'preset', 'equalize', 'branch', 'theme', 'tutorial', 'toggleTree', 'errors', 'usage', 'changelog', 'plugins', 'openFile', 'movePaneTo', 'mergeTab', 'swapPane', 'newclaude', 'splitcursor']) {
     const def = appKeyDefs.find(item => item.id === id);
