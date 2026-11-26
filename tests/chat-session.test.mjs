@@ -698,12 +698,15 @@ test('worktree cwd survives restart and is retained when the chat is forgotten',
   await session.set({ worktree: true });
   await session.send('first'); await until(() => session.state().status === 'idle');
   assert.notEqual(session.cwd, directory);
-  assert.ok((await git('worktree', 'list', '--porcelain')).stdout.includes(session.cwd));
+  // git prints forward slashes on Windows too.
+  const slashes = text => text.replaceAll('\\', '/').toLowerCase();
+  const listed = async folder => slashes((await git('worktree', 'list', '--porcelain')).stdout).includes(slashes(folder));
+  assert.ok(await listed(session.cwd));
   const cwd = session.cwd, restored = await reopen();
   assert.equal(restored.cwd, cwd);
   await restored.send('restored'); await until(() => restored.state().status === 'idle');
   await restored.close({ forget: true });
-  assert.ok((await git('worktree', 'list', '--porcelain')).stdout.includes(cwd));
+  assert.ok(await listed(cwd));
 });
 
 

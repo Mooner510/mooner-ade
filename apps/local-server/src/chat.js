@@ -22,13 +22,13 @@ import { IDLE_LEAD, idleCompactDue, idleCompactOn, idleCompactSkip } from './cha
 import { readSessionCache } from './claude-cache.js';
 import { chatEventStats, eventWeightSince, subagentExtra, withSubagents } from './chat-stats.js';
 import { readClaudeDefaults } from './claude-defaults.js';
-import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
 import { createChatTextStore } from './chat-text.js';
 import { readLastLines } from './file-util.js';
 import { evaluateLimit, limitOptions, limitView, normalizeLimit, POLL_MS } from './chat-limit.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
+import { createChatWorktree, detectWorktree, moveClaudeSession, moveNote, readOwnWorktree, samePath, worktreeStatus, writeOwnWorktree } from './chat-worktree.js';
 
 const ID = /^[a-zA-Z0-9-]{1,128}$/;
 const MAX_LINE = 8 * 1024 * 1024, KEEP_EVENTS = 4000, IDLE_MS = 10 * 60_000;
@@ -116,6 +116,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // apiKey: this chat's CLI runs on an API key (Settings > AI 툴, or the user's own environment), not the CLI login. The UI then shows "API Usage"
   // instead of a share of the plan's limits. Read from what the child is launched with, so it follows the setting from the next start on.
   state.cwd = meta.worktreePath ?? cwd; // the folder the CLI runs in: the UI shows file paths under it as relative paths
+  state.worktreeInfo = null; // the git worktree this chat works in or keeps, with its status (refreshWorktree, chat-worktree.js)
   const usesApiKey = launch => Boolean(agent === 'claude' ? launch.ANTHROPIC_API_KEY : agent === 'codex' ? launch[CODEX_KEY_ENV] : launch.CURSOR_API_KEY);
   // A chat made before the choice existed keeps what it runs on now: a later change of the setting for new chats must not move it.
   if (meta.auth !== 'login' && meta.auth !== 'key') meta.auth = usesApiKey({ ...process.env, ...(typeof env === 'function' ? env(undefined) : env) }) ? 'key' : 'login';
@@ -417,7 +418,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         ...(state.capabilities.tokens && { tokens: true }), ...(state.capabilities.cost && { cost: true }) };
       if (agent === 'cursor' && state.model && state.capabilities.configOptions?.length) cursorModelCache?.note({ model: state.model, catalog: state.capabilities.catalog, configOptions: state.capabilities.configOptions });
     }
-    else if (event.kind === 'worktree') { if (typeof event.path === 'string') state.cwd = event.path; }
+    else if (event.kind === 'worktree') { if (typeof event.path === 'string' && (event.phase === 'enter' || event.phase === 'exit')) state.cwd = event.path; }
     else if (event.kind === 'settings') {
       if (event.permissionMode !== undefined && !(cursorModeHold && event.permissionMode !== cursorModeHold)) state.permissionMode = event.permissionMode;
       if (event.effort !== undefined && (cursorModelHold === null || cursorSurfaceLive)) state.effort = event.effort;
@@ -705,6 +706,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       emit(event);
       if (surfaceSuppressed) return;
       if (moved) { emit(moved); publish(); }
+      // Where the agent works after a worktree move, or a resumed Claude that reports another folder than it was started in (it re-entered one).
+      if (moved) void refreshWorktree();
+      else if (event.kind === 'session' && agent === 'claude' && typeof event.cwd === 'string' && event.cwd && !samePath(event.cwd, state.cwd)) { state.cwd = event.cwd; void refreshWorktree({ announce: true }); }
+      if (event.kind === 'result') void refreshWorktree();
       if (cliMode !== undefined) { void saveMeta().catch(reportStorage); publish(); }
       noteBackgroundActivity(event);
       if (event.kind === 'message' && event.usage && !event.parentToolUseId && agent === 'claude') { nextMessage(event.id); turnUsage = { ...event.usage, output: Math.max(event.usage.output, turnUsage?.output ?? 0) }; refreshCacheSoon(); publishSoon(); }
@@ -801,6 +806,66 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
 
   // A mode this app asked the CLI for (the picker, "always allow" on an edit): the CLI's report of it is not the agent changing mode, so it gets no line in the thread.
   const worktreeCalls = new Map(); // EnterWorktree/ExitWorktree tool calls waiting for their result, which says where the CLI went
+  // ---- the chat's git worktree (chat-worktree.js) ----
+  // state.worktreeInfo: the worktree the agent works in now (`inside`), or else the one this chat made and keeps (worktree.json in its folder).
+  // `managed`: ADE made it for this chat, so ADE can move the chat in and out; one the agent made itself (Claude's EnterWorktree) is left to the agent.
+  let worktreeNote = '', worktreeChain = Promise.resolve();
+  const takeWorktreeNote = () => { const note = worktreeNote; worktreeNote = ''; return note; };
+  function refreshWorktree({ announce = false } = {}) {
+    worktreeChain = worktreeChain.catch(() => {}).then(async () => {
+      if (closed) return state.worktreeInfo;
+      const own = await readOwnWorktree(root), here = await detectWorktree(state.cwd).catch(() => null);
+      const kept = here ?? (own ? await detectWorktree(own.path).catch(() => null) : null);
+      const managed = Boolean(own && kept && samePath(own.path, kept.path)), before = state.worktreeInfo;
+      const status = kept ? await worktreeStatus({ ...kept, base: kept.base || own?.base }).catch(() => null) : null;
+      state.worktreeInfo = kept ? { ...kept, inside: Boolean(here), managed, originCwd: managed ? own.originCwd : kept.origin, status } : null;
+      // The agent went in or out on its own and no tool result said so (a resumed Claude that re-entered its worktree): one line in the thread.
+      if (announce && !samePath(before?.inside ? before.path : '', here?.path ?? '')) emit({ kind: 'worktree', phase: here ? 'enter' : 'exit', path: state.cwd, ...(here?.branch && { branch: here.branch }), ...(before?.inside && { from: before.path }), by: 'agent' });
+      publish();
+      return state.worktreeInfo;
+    });
+    return worktreeChain;
+  }
+  // Moves a chat that is not doing anything to another folder (into its worktree or back to where it came from). The child is ended, and the
+  // session follows: Claude's transcript is copied to the new folder's project (its `--resume` looks there), Cursor's is copied to a new ACP
+  // session for that folder, Codex resumes its thread with the new cwd. Nothing the agent wrote is deleted.
+  async function relocate(nextCwd, { phase, worktreePath, branch, starting = false }) {
+    live();
+    // `starting`: the first message is starting the chat in its worktree (startNow), so there is no child and no session yet; its own turn is open.
+    if (!starting && (turnOpen || approvals.size || steers.size || configuring)) throw fault('CHAT_BUSY', '응답이 끝난 뒤 옮길 수 있습니다.', 409);
+    if (state.liveTasks.length) throw fault('CHAT_BACKGROUND', '백그라운드 작업이 끝난 뒤 옮길 수 있습니다.', 409);
+    if (child) {
+      const proc = dropChild();
+      await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 3000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
+      if (proc.exitCode === null && !proc.signalCode) throw fault('CHAT_SWITCH_FAILED', '에이전트를 종료하지 못해 옮기지 않았습니다.', 500);
+    }
+    const sessionId = state.sessionId ?? meta.sessionId, previous = cwd;
+    if (sessionId && agent === 'claude') await moveClaudeSession({ configDir: configDirOf(), sessionId, from: previous, to: nextCwd });
+    if (sessionId && agent === 'cursor') {
+      await cursorSnapshot;
+      const store = await cursorStorePath(sessionId, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } });
+      if (store) { const next = await forkCursorSession({ checkpoint: store, cwd: nextCwd, configDir: cursorDirOf() }); meta.sessionId = state.sessionId = next; }
+    }
+    cwd = state.cwd = nextCwd; meta.worktreePath = worktreePath;
+    if (sessionId) worktreeNote = moveNote(phase, { cwd: nextCwd, path: worktreePath, branch, originCwd: nextCwd }, previous);
+    emit({ kind: 'worktree', phase, path: nextCwd, ...(branch && { branch }), from: previous, by: 'user' });
+    await saveMeta(); setStatus();
+    return refreshWorktree();
+  }
+  // Into this chat's worktree: the one it already keeps, else a new one made from the folder the chat is in.
+  async function enterWorktreeNow({ starting = false } = {}) {
+    let own = await readOwnWorktree(root);
+    if (own && !(await detectWorktree(own.path).catch(() => null))) { await writeOwnWorktree(root, null); own = null; }
+    if (!own) {
+      const made = await createChatWorktree({ directory, id, cwd });
+      own = { path: made.path, cwd: made.cwd, originCwd: made.originCwd, branch: made.branch, base: made.base };
+      await writeOwnWorktree(root, own);
+      emit({ kind: 'worktree', phase: 'create', path: made.path, branch: made.branch, base: made.base, by: 'user' });
+    }
+    if (samePath(cwd, own.cwd)) return refreshWorktree();
+    // A chat with nothing said yet just changes folder: there is no session to carry over and no child worth keeping.
+    return relocate(own.cwd, { phase: 'enter', worktreePath: own.path, branch: own.branch, starting });
+  }
   let lastMainModel, lastLimit; // the model the last main-thread reply came from; the last plan-limit report shown
   let ownMode; // ponytail: cleared when the report arrives or the request ends; a report that never comes could hide one later change to the same mode
   let prePlanMode = meta.prePlanMode ?? 'default'; // kept in meta so a plan approved after reopening goes back to the mode before it
@@ -828,12 +893,9 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     if (agent !== 'cursor' && !state.sessionId && !meta.sessionId) { meta.mediaBlocks = true; meta.colorChips = true; }
     // A new Claude chat runs on the account the project's allowed .envrc names (what its terminals use) and keeps it; an old chat keeps the folder its history is in.
     if (agent === 'claude' && account && !meta.configDir && !meta.sessionId) { const dir = await account().catch(() => ''); if (dir) { meta.configDir = dir; await saveMeta(); } }
-    if (agent !== 'claude' && meta.worktree && !meta.worktreePath) {
-      const target = path.join(directory, 'worktrees', `chat-${id}`);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await createLocalRuntime({ root: cwd }).git.createWorktree(target, `ade/chat-${id}`);
-      meta.worktreePath = target; cwd = state.cwd = target; await saveMeta();
-    }
+    // "Start in a worktree" picked before the first message: ADE makes it for every agent (Claude too, instead of its own --worktree, whose folder
+    // ADE would not know), so the folder, branch and origin are known. The request is used up: the next start must not ask the CLI for another.
+    if (meta.worktree && !meta.worktreePath && !meta.sessionId) { meta.worktree = state.worktree = false; await enterWorktreeNow({ starting: true }); }
     // Without a pick the CLI would follow ~/.claude/settings.json at every (re)start, so a change made in another project (or a terminal `/model`) would silently
     // switch this conversation on its next resume. The model and Effort it is running with are pinned to the chat instead.
     if (agent === 'claude') { let pinned = false; if (!meta.model && state.model) { meta.model = state.model; pinned = true; } if (meta.effort === undefined && state.effort && state.capabilities.efforts.includes(state.effort)) { meta.effort = state.effort; pinned = true; } if (pinned) await saveMeta(); }
@@ -1200,7 +1262,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (turnOpen) throw fault('CHAT_BUSY', '이전 응답이 끝난 뒤 보내세요.', 409);
       state.error = null; turnOpen = true; reopened = false; turnSeq += 1; stopIdleCompact();
       // What the user ran with `!` since their last message goes ahead of this one (the thread still shows only what they typed).
-      const sendText = takeShellContext(text) + text, shells = shellTaken;
+      const sendText = takeShellContext(text) + takeWorktreeNote() + text, shells = shellTaken;
       const codexCompact = agent === 'codex' && /^\/compact\s*$/.test(text);
       if (codexCompact) { emit({ kind: 'delta', phase: 'compacting', active: true }); setStatus(); }
       // The message is shown right away; starting the process, a model change still in flight, or the previous turn's checkpoint must not delay it.
@@ -1542,6 +1604,21 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     tokenPrice() { return costPerUnit; },
     // Codex and Cursor have no dollar transcript. The plan-share meter is the token weight their usage events accumulated since each window opened.
     spendSince(since) { return eventWeightSince(logFile, events, since); },
+    // The chat's worktree (chat-worktree.js): read, move in and out, and forget it once it is removed. Git work on it is in the routes (chat-worktree-routes.js).
+    worktreeInfo() { return state.worktreeInfo; },
+    refreshWorktree() { return refreshWorktree(); },
+    async enterWorktree() { live(); return enterWorktreeNow(); },
+    async leaveWorktree() {
+      live();
+      const own = await readOwnWorktree(root);
+      if (!own || !samePath(cwd, own.cwd)) {
+        if ((await refreshWorktree())?.inside) throw fault('AGENT_WORKTREE', '에이전트가 직접 들어간 worktree입니다. 에이전트에게 나오라고 요청하세요(Claude: ExitWorktree).', 409);
+        return state.worktreeInfo;
+      }
+      return relocate(own.originCwd, { phase: 'exit', worktreePath: undefined });
+    },
+    async forgetWorktree(details = {}) { await writeOwnWorktree(root, null); emit({ kind: 'worktree', phase: 'remove', ...details }); return refreshWorktree(); },
+    noteWorktree(event) { emit({ kind: 'worktree', ...event }); return refreshWorktree(); },
     sessionRef() { return { agent, sessionId: state.sessionId ?? meta.sessionId ?? null, configDir: meta.configDir, cwd, worktreePath: meta.worktreePath, costUsd: typeof state.costUsd === 'number' ? state.costUsd : null }; },
     // Esc on a queued steering message: the CLI withdraws it if the running turn has not taken it in yet (cancel_async_message).
     async cancelSteer() {
@@ -1582,6 +1659,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
     }
   };
+  void refreshWorktree(); // what the thread shows from the start: the worktree the chat is in or keeps
   return chatApi;
 }
 
