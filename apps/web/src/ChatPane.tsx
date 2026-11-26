@@ -749,6 +749,7 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
     || (finalItem?.blocks.filter((block): block is Extract<Block, { type: 'text' }> => block.type === 'text').map(block => block.text).join('\n\n') ?? '');
   // While the turn runs its steps are plain rows in the thread; once it is over each stretch of them is boxed under its own "과정" header, so an opened process is clearly one unit.
   const rows: ReactNode[] = [];
+  let answerEnd = -1; // the rows up to the turn's last assistant row: the change card goes right under them, above system lines said after the answer
   for (const part of parts) {
     if (part.kind === 'item') { rows.push(<Message key={part.key} item={part.item} onRecover={onRecover} recovering={recovering} />); continue; }
     const group = groups[groupAt.get(part.key) ?? -1] as ProcessGroup | undefined, folded = group ? foldedOf(group) : false;
@@ -765,20 +766,21 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
       rows.push(<div key={`bundle:${part.key}`} className={`chat-row${group ? ' in-process' : ''}${lastOfGroup ? ' process-last' : ''}`} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
         <div><ToolBundle parts={members} results={results} settings={settings} running={working && !settled} plainThinking={plainThinking} flat={settled && run.tools < FLAT_RUN_MAX} /></div>
       </div>);
+      answerEnd = rows.length;
       continue;
     }
     rows.push(<div key={part.key} className={`chat-row${group ? ' in-process' : ''}${group && part.key === flat[group.end - 1].key ? ' process-last' : ''}${part.item.sub ? ' sub' : ''}`} data-tool={(part.block.type === 'tool_use' && !(isAgentTool(part.block.name) && agentIds.has(part.block.id))) || undefined} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
       <div><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={working && !settled} plainThinking={plainThinking} enter={part.item.fresh} /></div>
     </div>);
+    answerEnd = rows.length;
   }
   const allowActions = !bare && finalItem && turnAllowsMessageActions(items);
   const artifacts = bare ? [] : artifactsOf(items.flatMap(item => item.kind === 'assistant' ? item.blocks : []), results);
   const changes = bare || !settled ? undefined : turnChangesIn(items); // files changed during the turn (TurnChanges.tsx)
   return <div className="chat-turn">
     {lead && <Message item={lead} />}
-    {rows}
+    {changes ? [...rows.slice(0, answerEnd >= 0 ? answerEnd : rows.length), <TurnChangesCard key="turn-changes" changes={changes} />, ...rows.slice(answerEnd >= 0 ? answerEnd : rows.length)] : rows}
     {artifacts.map(artifact => <ArtifactCard key={`${artifact.toolUseId}:${artifact.problem ?? artifact.url}`} artifact={artifact} />)}
-    {changes && <TurnChangesCard changes={changes} />}
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
       {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
