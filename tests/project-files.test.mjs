@@ -250,8 +250,13 @@ test('tree operations cannot reach the project folder itself, a link out of it, 
   await mkdir(path.join(dir, '.git')); await writeFile(path.join(dir, '.git', 'HEAD'), 'ref');
   await writeFile(path.join(dir, 'keep.txt'), 'K');
   await mkdir(path.join(dir, 'sub')); await mkdir(path.join(dir, 'real')); await writeFile(path.join(dir, 'real', 'f.txt'), 'F');
-  await symlink(outside, path.join(dir, 'link'));
-  await symlink(path.join(outside, 'secret.txt'), path.join(dir, 'flink'));
+  // 'junction' makes a directory link without the privilege a symlink needs on Windows (it is ignored elsewhere). A link to a
+  // file has no junction form and needs that privilege, so on Windows without it only the folder link is covered.
+  await symlink(outside, path.join(dir, 'link'), 'junction');
+  const fileLink = await symlink(path.join(outside, 'secret.txt'), path.join(dir, 'flink')).then(() => true, error => {
+    if (process.platform === 'win32' && error.code === 'EPERM') return false;
+    throw error;
+  });
   const list = async at => (await readdir(at)).sort();
   const before = await list(dir);
 
@@ -265,7 +270,7 @@ test('tree operations cannot reach the project folder itself, a link out of it, 
   assert.deepEqual(await list(dir), before);
 
   // A path through a link is refused (the link itself too: the tree never lists links, and what they point to stays out of reach).
-  for (const via of ['link/secret.txt', 'link/new.txt', 'flink/x']) {
+  for (const via of ['link/secret.txt', 'link/new.txt', ...(fileLink ? ['flink/x'] : [])]) {
     await assert.rejects(deleteProjectEntries(workspace, { paths: [via] }), /./, via);
     await assert.rejects(createProjectEntry(workspace, { path: via, folder: false }), /./, via);
     await assert.rejects(moveProjectEntries(workspace, { moves: [{ from: 'keep.txt', to: via }] }), /./, via);
@@ -274,9 +279,14 @@ test('tree operations cannot reach the project folder itself, a link out of it, 
   await assert.rejects(copyProjectEntries(workspace, { paths: ['keep.txt'], dir: 'link' }), /./);
   assert.deepEqual(await list(outside), ['secret.txt']);
   // A copied folder keeps its links as links, so nothing from outside is pulled in.
-  await symlink(outside, path.join(dir, 'real', 'out'));
-  await copyProjectEntries(workspace, { paths: ['real'], dir: 'sub' });
-  assert.equal((await lstat(path.join(dir, 'sub', 'real', 'out'))).isSymbolicLink(), true);
+  await symlink(outside, path.join(dir, 'real', 'out'), 'junction');
+  // fs.cp re-creates a link with a plain symlink call, which Windows refuses without the symlink privilege (fileLink is false then),
+  // so copying a folder that holds a link fails closed there with EPERM instead of copying it.
+  if (fileLink) {
+    await copyProjectEntries(workspace, { paths: ['real'], dir: 'sub' });
+    assert.equal((await lstat(path.join(dir, 'sub', 'real', 'out'))).isSymbolicLink(), true);
+  } else await assert.rejects(copyProjectEntries(workspace, { paths: ['real'], dir: 'sub' }), { code: 'EPERM' });
+  assert.deepEqual(await list(outside), ['secret.txt']);
   await assert.rejects(deleteProjectEntries(workspace, { paths: ['link'] }), /./);
   await deleteProjectEntries(workspace, { paths: ['sub'] });
   assert.deepEqual(await list(outside), ['secret.txt'], 'deleting never follows a link');
