@@ -1279,7 +1279,11 @@ export function pendingAsyncQuestions(items: Item[], dismissed: ReadonlySet<stri
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [
   { id: 'effortUp', label: 'Effort 올리기', keys: 'ctrl+alt+arrowup' }, { id: 'effortDown', label: 'Effort 내리기', keys: 'ctrl+alt+arrowdown' },
-  { id: 'modelNext', label: '다음 모델로 전환', keys: 'ctrl+alt+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'ctrl+alt+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
+  { id: 'modelNext', label: '다음 모델로 전환', keys: 'ctrl+alt+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'ctrl+alt+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' },
+  // Chat-wide keys (chat-keys.ts): the approval/plan/question card while one waits, and moving through the conversation. Matched with shortcuts.ts `matches`, so `mod` is ⌘ on a Mac.
+  { id: 'cardAllow', label: '카드: 허용 / 승인 / 답변 보내기', keys: 'mod+enter' }, { id: 'cardAllowMore', label: '카드: 이 세션에서 허용 / 편집 허용으로 승인', keys: 'mod+alt+enter' }, { id: 'cardMore', label: '카드: 허용 방식 메뉴 / 계획 수정 요청', keys: 'alt+enter' },
+  { id: 'turnPrev', label: '이전 요청으로 이동', keys: 'alt+arrowup' }, { id: 'turnNext', label: '다음 요청으로 이동', keys: 'alt+arrowdown' }, { id: 'threadTop', label: '대화 맨 위로', keys: 'mod+home' }, { id: 'threadBottom', label: '대화 맨 아래로', keys: 'mod+end' },
+  { id: 'find', label: '대화 안 찾기', keys: 'mod+f' }, { id: 'copyAnswer', label: '마지막 답변 복사', keys: 'mod+shift+c' }, { id: 'copyCode', label: '마지막 코드 블록 복사', keys: 'mod+alt+c' }
 ] as const;
 export type ChatKeyId = typeof chatKeyDefs[number]['id'];
 export const chatKey = (overrides: Record<string, string> | undefined, id: ChatKeyId) => overrides?.[id] || chatKeyDefs.find(def => def.id === id)!.keys;
@@ -1294,6 +1298,7 @@ export function showCombo(combo: string): string {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const names: Record<string, string> = mac ? { meta: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' } : { meta: 'Win', ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' };
   const keyNames: Record<string, string> = { backquote: '`', backslash: '\\', comma: ',', period: '.', slash: '/', semicolon: ';', quote: "'", equal: '=', minus: '-', bracketleft: '[', bracketright: ']' };
+  combo = combo.replace(/(^|\+)mod(?=\+)/, mac ? '$1meta' : '$1ctrl'); // a default bound with `mod` shows as this platform's key
   return combo.split('+').map(part => names[part] ?? keyNames[part] ?? (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
 }
 
