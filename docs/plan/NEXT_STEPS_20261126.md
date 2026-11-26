@@ -8,29 +8,18 @@
 | --- | --- |
 | mooner-ade | #181(원격 연결 요청), #182(플러그인 API v1 외), #183(콘솔 탭, API v2), #184~#187(툴팁, Esc와 백그라운드 서브에이전트, 문서, 업데이트 테스트) 머지. 릴리스 안 함(최신 태그 v0.6.3) |
 | mooner-ade-plugins | #27, #28, #29 머지. **v0.8.0 릴리스 완료**: server-shell 0.4.0(v1), remote 0.6.0(v1), admin-shell 0.1.0(v2), 데몬 |
-| mooner-ade-hub | #21(PKCE, 푸시, 연결 요청)과 #22(플러그인 카탈로그 API 버전별 제공, 기기 연결 화면)가 master에 머지됨. **배포 안 함**(2026-11-27에 `POST /v1/push`가 404) |
+| mooner-ade-hub | #21(PKCE, 푸시, 연결 요청)과 #22(플러그인 카탈로그 API 버전별 제공, 기기 연결 화면)가 master에 머지됨. **배포됨**(2026-11-27 02:27 KST, 이미지 `c434e0d`, 시작 로그에 `push notifications enabled`와 `project=roufin`, `POST /v1/push`가 401) |
 | mooner-webapps | #47 머지, 폰 앱 릴리스 안 함(최신 `ade-v0.2.1`, versionCode 3) |
 
-## 1. Hub 배포 (FCM 키 + migration 00007)
-
-절차는 `docs/tests/261126_1934_원격승인_푸시_마무리/GUIDE.md`의 "1. Hub"를 따른다. 요약은 아래와 같다.
-
-1. 서비스 계정 키를 만든다(`roufin` 프로젝트, 역할은 FCM API Admin 하나).
-2. `project secret set mooner-ade-hub/api FCM_SERVICE_ACCOUNT_JSON`
-3. `sudo project deploy mooner-ade-hub/api`
-4. 확인: 시작 로그에 `push notifications enabled`가 있고, `POST /v1/push`가 401을 돌려준다(배포 전에는 404).
-
-#22가 같이 실린다. 이 배포 전에는 Hub가 v1 플러그인 목록만 주므로(ADE는 이미 `?apiVersions=1,2`를 보낸다) admin-shell은 zip으로만 설치된다.
-
-## 2. 폰 앱 릴리스 (mooner-webapps)
+## 1. 폰 앱 릴리스 (mooner-webapps)
 
 1. `google-services.json`을 둔다. 커밋하지 않는다.
 2. `versionCode`와 `versionName`을 올린다.
 3. 서명 빌드를 한다.
 
-자세한 내용은 위 GUIDE의 "2. 릴리스"를 본다. 플러그인은 이미 v0.8.0에 나와 있으므로 따로 낼 필요가 없다.
+자세한 내용은 위 GUIDE의 "릴리스"를 본다. 플러그인은 이미 v0.8.0에 나와 있으므로 따로 낼 필요가 없다.
 
-## 3. ADE 릴리스
+## 2. ADE 릴리스
 
 1. 버전을 정한다(사용자가 정한다). 현재는 0.6.3이고, 노트에 쓸 수 있는 새 기능은 업데이트 백그라운드 받기와 트리 파일 끌어 놓기 정도다. minor이면 `intro`(새 hue와 tagline)가 필요하다.
 2. 노트를 쓴다. `apps/web/src/changelog.json`에 항목을 넣고 master에 머지한다. `git log v0.6.3..master`로 변경을 확인한다.
@@ -39,7 +28,7 @@
 
 admin-shell(API v2)은 이 릴리스가 나와야 설치된다. 0.6.3은 API v2 플러그인을 거절한다. 어떤 버전으로 내든 master의 API v2 지원은 함께 나간다.
 
-## 4. 서버에 관리자 셸 데몬 설치
+## 3. 서버에 관리자 셸 데몬 설치
 
 admin-shell 플러그인이 접속할 `mooner` 계정 데몬이다. 자세한 내용은 mooner-ade-plugins `docs/ADMIN_SHELL.md`에 있다.
 
@@ -62,6 +51,6 @@ admin-shell 플러그인이 접속할 `mooner` 계정 데몬이다. 자세한 �
    - `sudo true`를 실행하면 비밀번호 바가 나오고, 입력하면 종료 코드 0이 나온다.
    - 중지(Ctrl+C)가 동작한다.
 
-## 5. 실기기 확인
+## 4. 실기기 확인
 
-1번과 2번이 끝나면 mooner-webapps `apps/ade/docs/DEVICE_TEST_CHECKLIST.md`의 "푸시 알림과 연결 요청" 항목을 확인한다. 확인할 것은 FCM 수신, PKCE 로그인 복귀, 생체 인증 승인이다. 모두 통과하면 `docs/tests/261126_1934_원격승인_푸시_마무리/`를 지운다.
+폰 앱 릴리스(1번)가 끝나면 mooner-webapps `apps/ade/docs/DEVICE_TEST_CHECKLIST.md`의 "푸시 알림과 연결 요청" 항목을 확인한다. 확인할 것은 FCM 수신, PKCE 로그인 복귀, 생체 인증 승인이다. 모두 통과하면 `docs/tests/261126_1934_원격승인_푸시_마무리/`를 지운다.
