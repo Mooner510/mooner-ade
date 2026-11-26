@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { freePort, pickPort, relayProxy } from '../scripts/verify/phone-relay.mjs';
+import { field } from '../scripts/verify/phone-rig.mjs';
 
 const guard = fileURLToPath(new URL('../scripts/verify/loopback-only.cjs', import.meta.url));
 const echoServer = async () => {
@@ -84,4 +85,18 @@ test('loopback-only.cjs lets loopback connections through', async () => {
       socket.on('error', error => { console.log('error ' + error.code); process.exit(1); });`], { encoding: 'utf8' });
     assert.equal(out.trim(), 'hi');
   } finally { server.close(); }
+});
+
+// hubApprove reads the Hub's own form with field(): a regex that quietly stopped matching (a `\b` that had become a backspace character) sent `csrf=undefined`, and the Hub answered 403.
+test('field reads an input value by name from the Hub form, and nothing for a missing one', () => {
+  const html = '<form method="post"><input type="hidden" name="csrf" value="a_b-c"><input type="hidden" name="code" value=""><input id="name" name="name" required></form>';
+  assert.equal(field(html, 'csrf'), 'a_b-c');
+  assert.equal(field(html, 'code'), '');
+  assert.equal(field(html, 'name'), undefined, 'an input without a value attribute');
+  assert.equal(field(html, 'other'), undefined);
+});
+
+test('the rig source holds no control characters (an escape that turned into one breaks a regex silently)', () => {
+  const source = readFileSync(fileURLToPath(new URL('../scripts/verify/phone-rig.mjs', import.meta.url)), 'utf8');
+  assert.equal(/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(source), false);
 });
