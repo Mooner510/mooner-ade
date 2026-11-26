@@ -11,18 +11,19 @@ test('sidebar native mouse dragging and context menu', { skip: !process.env.ADE_
   const viteRequire = createRequire(require.resolve('vite', { paths: ['apps/web'] }));
   const { build } = viteRequire('esbuild');
   const bundle = await build({
-    entryPoints: ['apps/web/src/main.tsx'], bundle: true, write: false, jsx: 'automatic', format: 'iife', nodePaths: ['apps/web/node_modules'],
+    entryPoints: ['apps/web/src/main.tsx'], bundle: true, write: false, jsx: 'automatic', format: 'iife', define: { 'import.meta.env.DEV': 'false' }, nodePaths: ['apps/web/node_modules'],
     plugins: [{ name: 'sidebar-fixtures', setup(build) {
       build.onResolve({ filter: /^\.\/Workspace$/ }, () => ({ path: fileURLToPath(new URL('./fixtures/sidebar-drag/workspace.jsx', import.meta.url)) }));
-      build.onResolve({ filter: /^\.\/(api|Editor|Settings|views|sound|Panes|Tutorial)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
+      build.onResolve({ filter: /^\.\/(api|Editor|Settings|views|sound|Panes|Tutorial|FileIcon)$/ }, args => ({ path: args.path, namespace: 'fixture' }));
       build.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: {
-        './api': `export const basename = path => path.split('/').pop(); export async function api(name) { if (name === 'app/state') return { openProjects: [{root:'/fixture', id:'project'}], activeProjectId:'project' }; if (name === 'recent') return []; return {}; }`,
-        './Editor': `export const defaultSettings = { sidebarWidth:252, statusItems:[], theme:'dark', onboarded:true, tourVersion:2 }; export const TOUR_VERSION = 2; export const migrateSettings = saved => ({ ...defaultSettings, ...saved }); export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' };`,
+        './api': `export const basename = path => path.split('/').pop(); export class ApiError extends Error {}; export const chooseFolder = async () => ''; export async function api(name) { if (name === 'app/state') return { openProjects: [{root:'/fixture', id:'project'}], activeProjectId:'project' }; if (name === 'recent') return []; return {}; }`,
+        './Editor': `export const defaultSettings = { sidebarWidth:252, statusItems:[], theme:'dark', onboarded:true, tourVersion:2 }; export const TOUR_VERSION = 2; export const migrateSettings = saved => ({ ...defaultSettings, ...saved }); export const agentNames = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor CLI' }; export const syncMonacoTheme = () => {}; export const DiffView = () => null; export const usageHue = () => 0; export const chatStatusLayout = () => []; export const colorize = text => text;`,
         './Panes': `export const CacheTimer = () => null;`,
-        './Settings': `export const SettingsModal = () => null;`,
-        './views': `export const Modal = () => null;`,
+        './Settings': `export const SettingsModal = () => null; export const lookHover = () => {}; export const LookPreview = () => null; export const statusSamples = []; export const ThemePicker = () => null;`,
+        './views': `export const Modal = () => null; export const Dropdown = () => null; export const ModelLabel = () => null; export const AppVersion = () => null;`,
         './sound': `export const playSound = () => {};`,
-        './Tutorial': `export const Tutorial = () => null;`
+        './Tutorial': `export const Tutorial = () => null;`,
+        './FileIcon': `export const FileIcon = () => null;`
       }[path] }));
       build.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'css' }));
     } }], outdir: '/tmp/ade-sidebar-test'
@@ -148,21 +149,21 @@ test('sidebar native mouse dragging and context menu', { skip: !process.env.ADE_
     await reset(); await mouse('mouseMoved', await point('.group-pane'));
     const p = await point('.group-pane .ptab-close');
     await mouse('mousePressed', p); await mouse('mouseReleased', p);
-    assert.deepEqual(await evaluate('calls'), [['closePane', 'one']]);
+    assert.deepEqual(await evaluate('calls'), [['closePane', 'one', true]]);
     await reset(); await mouse('mouseMoved', await point('.group-pane'));
     await start('.group-pane .ptab-close .icon');
     assert.equal(await evaluate('!!document.querySelector(".pane-drop-zone")'), false);
     await mouse('mouseReleased', { x: 500, y: 300 });
     assert.deepEqual(await mutations(), []);
   });
-  await t.test('right-click menu offers the same moves', async () => {
+  await t.test('right-click menu offers the everyday actions', async () => {
     await reset();
     const p = await point('.group-pane:nth-child(2)');
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'right', buttons: 2, clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'right', buttons: 0, clickCount: 1 }); await settle();
     assert.equal(await evaluate('!!document.querySelector(".tab-menu")'), true);
-    await evaluate('[...document.querySelectorAll(".tab-menu button")].find(b=>b.textContent.includes("아래 탭으로 옮기기")).click()'); await settle();
-    assert.deepEqual(await mutations(), [['movePane', 'group', 'two', 'other', 'merge']]);
+    await evaluate('[...document.querySelectorAll(".tab-menu button")].find(b=>b.textContent.includes("새 탭으로 분리")).click()'); await settle();
+    assert.deepEqual(await mutations(), [['movePane', 'group', 'two', null, 'after']]);
     assert.equal(await evaluate('!!document.querySelector(".tab-menu")'), false);
   });
 });
