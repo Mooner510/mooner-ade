@@ -260,7 +260,7 @@ MoonerADE → 플러그인
 
 | 메시지 | 뜻 |
 |---|---|
-| `{type:'init', apiVersion, id, appVersion, dataDir, storage, features}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값. `features`는 이 MoonerADE가 아는 추가 기능(`view.setup`, `view.lists`, `updates`, `hub`)이고, 없으면 그 전 MoonerADE입니다. `hub`는 `source.hub`를 아는 MoonerADE입니다 |
+| `{type:'init', apiVersion, id, appVersion, dataDir, storage, features}` | 시작. `dataDir`은 `<userData>/plugin-data/<id>`(0700). `storage`는 지난번에 저장한 값. `features`는 이 MoonerADE가 아는 추가 기능(`view.setup`, `view.lists`, `updates`, `hub`, `workspace.quiet` 등)이고, 없으면 그 전 MoonerADE입니다. `hub`는 `source.hub`를 아는 MoonerADE입니다 |
 | `{type:'action', id, action, values, item?}` | 설정 화면에서 버튼을 눌렀습니다. `values`는 입력칸 값, `item`은 목록(`view.lists`) 항목의 버튼일 때 그 항목의 `id` |
 | `{type:'confirm-result', id, ok}` | 확인 창 결과 |
 | `{type:'workspace', ...}` | 작업공간 세션의 응답과 출력(아래 [작업공간](#작업공간-workspace)) |
@@ -317,7 +317,7 @@ lists: [{ id: 'phones', title: '페어링한 폰', empty: '아직 없습니다.'
 
 | 메시지 | 뜻 |
 |---|---|
-| `{type:'workspace', op:'open', session}` | 세션을 엽니다. `session`은 `[A-Za-z0-9_-]{1,64}`로 플러그인이 정합니다 |
+| `{type:'workspace', op:'open', session, quiet?}` | 세션을 엽니다. `session`은 `[A-Za-z0-9_-]{1,64}`로 플러그인이 정합니다. `quiet: true`는 사람이 기다리지 않는 플러그인 자신의 세션(예: 알림을 보내려고 에이전트 상태만 지켜보기)이라 자동 업데이트의 "작업 중"에 세지 않습니다(`init.features`의 `workspace.quiet`) |
 | `{type:'workspace', op:'close', session}` | 세션을 닫습니다 |
 | `{type:'workspace', op:'api', session, id, action, input}` | 화면의 API와 같은 작업을 실행합니다(예: `recent`, `app/state`, `project/open`, `snapshot`, `terminal/open`, `terminal/close`). `id`는 정수 |
 | `{type:'workspace', op:'send', session, message}` | 화면이 보내는 것과 같은 메시지를 보냅니다(예: `{type:'subscribe', projectId}`, `{type:'terminal/input', projectId, id, data}`, `{type:'terminal/resize', …}`). 터미널 크기는 [터미널 크기](#터미널-크기) |
@@ -344,7 +344,7 @@ MoonerADE → 플러그인
 - 플러그인 하나가 세션을 16개, 터미널을 8개까지 열 수 있습니다.
 - 알림을 읽지 않아 쌓이면 그 세션을 닫습니다.
 - 플러그인이 멈추거나 종료되면 그 플러그인의 세션을 모두 닫습니다.
-- 세션이 열려 있는 동안 자동 업데이트는 작업 중으로 보고 기다립니다.
+- 세션이 열려 있는 동안 자동 업데이트는 작업 중으로 보고 기다립니다. `quiet`로 연 세션은 세지 않습니다.
 
 #### 터미널 크기
 

@@ -37,6 +37,8 @@ import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
 import type { QuickItem } from './QuickInput';
 import { busAgentName, parseBusMessages } from './bus-message';
+import { filePaths } from './upload';
+import { can, isRemote } from './transport';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
@@ -1520,6 +1522,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     requestAnimationFrame(() => { box.current?.focus(); const at = shownDraft(before).length; box.current?.setSelectionRange(at, at); });
   };
   useEffect(() => setMenuAt(0), [slash?.[1], mention?.[1]]);
+  // In another PC's window (or the phone) an @path names a file on that PC. A file of this device is sent there first: the `@word`
+  // gives way to the file picker, and the copy's path comes back as the mention (attach → mentionFiles).
+  const localPick = mentionOpen && isRemote && can('files/upload');
+  const pickLocal = () => {
+    const next = text.slice(0, mentionAt) + text.slice(caret);
+    setText(next); setCaret(mentionAt);
+    fileInput.current?.click();
+  };
 
   // /clear ends the child: a background subagent still running in it is asked about first, and the server is told it was agreed to.
   // false when cancelled at the background-task question.
@@ -1725,13 +1735,11 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     else if (busy || queue.length || queueSending) setQueue(items => [...items, { text: body, images: attachments, draft: text }]);
     else if (!await transmit(body, attachments)) restoreDraft(text, attachments);
   }
-  // Files that are not images go into the message as `@path` (the agent reads them itself). The desktop shell knows a dropped file's path; a browser
-  // sends the file to the server (up to 8MB) and mentions that copy.
+  // Files that are not images go into the message as `@path` (the agent reads them itself): the dropped file's own path, or the copy
+  // the server keeps when this window cannot name one (a browser, or another PC's window: filePaths).
   async function mentionFiles(files: File[]) {
-    const pathForFile = (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
     try {
-      const paths = pathForFile ? files.map(file => pathForFile(file)).filter(Boolean)
-        : await Promise.all(files.map(async file => (await ctx.call<{ path: string }>('files/upload', { name: file.name, data: (await fileData(file)).data })).path));
+      const paths = await filePaths(files, ctx.call);
       if (!paths.length) return;
       setText(current => `${current}${current && !/\s$/.test(current) ? ' ' : ''}${paths.map(path => /\s/.test(path) ? `@"${path}"` : `@${path}`).join(' ')} `);
       toastAttached(paths.length); box.current?.focus();
@@ -1966,12 +1974,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
             <span className="chat-command-head"><b>/{item.name}</b>{item.hint && <code className="chat-command-hint">{item.hint}</code>}</span>
             {item.description && <span className="chat-command-desc">{item.description}</span>}
           </button></li>)}</ul>}
-        {mentions.length > 0 && <ul className="chat-commands" role="listbox" aria-label="파일 언급">{mentions.map((file, index) => <li key={file} role="option" aria-selected={index === menuAt}>
+        {(mentions.length > 0 || localPick) && <ul className="chat-commands" role="listbox" aria-label="파일 언급">{mentions.map((file, index) => <li key={file} role="option" aria-selected={index === menuAt}>
           <button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); pickMention(file); }}>
             <FileIcon name={file.replace(/\/$/, '').split('/').pop()!} folder={file.endsWith('/')} size={16} />
             <span className="chat-command-head"><b>{file.replace(/\/$/, '').split('/').pop()}{file.endsWith('/') ? '/' : ''}</b></span>
             <span className="chat-command-desc">{file.replace(/[^/]*\/?$/, '')}</span>
-          </button></li>)}</ul>}
+          </button></li>)}
+          {localPick && <li role="option" aria-selected={false}><button type="button" tabIndex={-1} onMouseDown={event => { event.preventDefault(); pickLocal(); }}>
+            <Icon name="file" size={16} />
+            <span className="chat-command-head"><b>내 기기에서 파일 선택</b></span>
+          </button></li>}</ul>}
         {isShellDraft(text) && <p className="chat-command-args chat-shell-mode" role="status"><code>!</code><span>셸 모드: {ctx.settings.chatSendKey === 'mod-enter' ? 'Cmd/Ctrl+Enter' : 'Enter'}로 터미널 명령어 실행</span></p>}
         {commandDraft && <p className="chat-command-args stacked" role="status"><code>{commandDraft.hint}</code>{commandDraft.description ? <span>{commandDraft.description}</span> : null}</p>}
         {shrinking > 0 && <div className="chat-attachments"><span className="chat-shrinking" role="status"><i className="chat-spin" aria-hidden="true" />이미지를 5MB 아래로 줄이는 중…</span></div>}

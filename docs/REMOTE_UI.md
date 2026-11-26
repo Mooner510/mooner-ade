@@ -68,7 +68,9 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
 ### 쓰는 법
 
 1. 사이드바 아래쪽(또는 프로젝트가 없는 첫 화면)의 **다른 PC에 접속**을 누르고 **로그인**한다. 브라우저에서 코드가 같은지 확인하고 승인한다(Hub 기기 종류 `desktop`, 이 PC만의 새 키).
-2. 접속할 PC의 설정 → 플러그인 → 원격 접속에서 **기기 추가**(보기만 또는 제어)를 눌러 나온 `moonerade://pair?…` 링크를 복사해, 이 대화상자에 붙여넣고 **확인** → 두 PC에 보이는 지문이 같은지 비교하고 **연결 요청**을 누른다. 그 PC의 확인 창에서 승인하면 끝난다.
+2. 목록에서 아직 연결하지 않은 PC의 **연결 요청**을 누른다. 대화상자에 6자리 확인 코드가 뜬다. 그 PC의 확인 창이나 그 PC에 제어 권한으로 연결된 폰(푸시 알림 → 승인 시트, 생체 인증)에서 코드가 같은지 보고 승인하면 끝난다. 10분 안에 답이 없거나 거부되면 아무것도 저장하지 않는다.
+   - 코드는 양쪽이 각자 계산한다(SHA-256(`"mooner-ade request v1"` ‖ PC 키 ‖ 이 PC 키)). 이 PC는 Hub 목록의 PC 키로 연결하고, 그 PC가 계산해 돌려준 코드가 자기 것과 다르면 바로 중단한다. 승인하는 쪽은 자기가 고정한 PC 키로 계산하므로, Hub가 키를 바꿔치면 코드가 달라진다.
+   - 링크 방식도 그대로 쓸 수 있다. 접속할 PC의 설정 → 플러그인 → 원격 접속에서 **기기 추가**(보기만 또는 제어)를 눌러 나온 `moonerade://pair?…` 링크를 복사해, 이 대화상자에 붙여넣고 **확인** → 두 PC에 보이는 지문이 같은지 비교하고 **연결 요청**을 누른다. 그 PC의 확인 창에서 승인하면 끝난다.
 3. 목록에서 **접속**을 누르면 그 PC의 ADE가 새 창에 뜬다. 창 제목은 `<PC 이름> — Remote`이고, **앱 전체에 초록 테두리**가 있어 이 PC의 ADE와 구분된다(모달 뒤 배경에도 같은 테두리가 그려진다). 창은 PC마다 하나이고, 닫아도 이 ADE는 계속 켜져 있다.
 
 ### 구조 (`apps/desktop/src`)
@@ -81,13 +83,15 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
 
 ### 웹 UI
 
+- 원격 창에는 이 PC의 파일 경로가 없다(`pathForFile` 없음). 터미널에 파일을 끌어 놓거나 채팅 `@` 목록의 **내 기기에서 파일 선택**으로 고른 파일은 `files/upload`로 그 PC에 올리고, 돌아온 그 PC의 경로를 쓴다(`upload.ts`). 터미널에 붙이는 경로의 따옴표는 그 PC의 OS(`hello.host.platform`)를 따른다. 올린 파일은 붙여넣은 이미지와 함께 오래되면 지워진다(`prunePastes`).
+
 - `transport.ts`가 `AdeRemoteNative.client`로 `html[data-remote-client="phone"|"desktop"]`를 설정한다. 폰 전용(한글 웹폰트 생략)은 `phone`일 때만 적용하고, 데스크톱 창은 PC와 같은 폰트를 쓴다.
 - 초록 테두리는 `style.css`(`:root[data-remote-client="desktop"]`)의 고정색 `--remote-green`이다. 테마나 강조색이 바꾸지 못한다. 폰에는 그리지 않는다.
 - 호스트 쪽 `remoteApi` 허용 목록이 창 단위 작업(`project/close`, `app/state` 쓰기, `ui`, `dialog/folder`)을 막는 것은 폰과 같다. 폴더 선택은 `remote-folder.tsx`.
 
 ### 검증
 
-- 단위: `tests/remote-link.test.mjs`(가짜 Hub와 가짜 상대 PC), `tests/remote-ui-proxy.test.mjs`(실제 `remote-ui.js`가 호스트), `tests/remote-bridge.test.mjs`, `tests/noise.test.mjs`.
+- 단위: `tests/remote-link.test.mjs`(가짜 Hub와 가짜 상대 PC, 연결 요청의 승인·거부·취소·코드 불일치), `tests/remote-ui-proxy.test.mjs`(실제 `remote-ui.js`가 호스트), `tests/remote-bridge.test.mjs`, `tests/noise.test.mjs`.
 - 실제 앱: `node scripts/verify/t-remote-pc.mjs --plugins <mooner-ade-plugins>`. 격리된 Electron(별도 `ADE_USER_DATA_DIR`·`ADE_DATA_DIR`·`HOME`, Chromium mock keychain, 브라우저 없음)이 이 PC, 일회용 ADE 서버와 가짜 Hub가 다른 PC 역할이다. 로그인, 페어링, 창, 초록 테두리(모달 포함), 네트워크 차단, 프로젝트·터미널 열기, 닫기, 연결 해제를 확인한다. `apps/web/dist`가 필요하다(`pnpm --filter @mooner/ade-web build`).
 
 ## 폰 종단 테스트 (실제 폰, 지문·실제 Hub 로그인·AI 사용 없이)

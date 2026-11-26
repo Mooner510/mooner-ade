@@ -388,7 +388,7 @@ test('plugins are told which features this MoonerADE has, and a list button send
   const env = setup(t, { latest: { version: '1.0.0' } });
   approve(env);
   const child = env.hosts[0].child;
-  assert.deepEqual(child.sent[0].features, ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub']);
+  assert.deepEqual(child.sent[0].features, ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub', 'workspace.quiet']);
   child.emit('message', { type: 'ready' });
   const pending = env.manager.action('demo', 'remove', { device: '1' }, 'dev-1');
   const sent = child.sent.at(-1);

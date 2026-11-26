@@ -1595,9 +1595,11 @@ server.on('upgrade', (request, socket, head) => {
 // any local user could read them), are removed after a day, and the folder is kept under a size cap, oldest first.
 const pasteDir = path.join(dataRoot, 'paste');
 const PASTE_TTL_MS = 24 * 60 * 60_000, PASTE_TOTAL_BYTES = 256 * 1024 * 1024;
+// What savePaste wrote: pasted images (`paste-<uuid>.<ext>`) and files sent by a window that cannot name a local path (`upload-<uuid>-<name>`).
+const PASTE_NAME = /^(?:paste-[\w-]+\.\w+|upload-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-.+)$/;
 async function prunePastes(incoming = 0) {
   const entries = await fs.readdir(pasteDir, { withFileTypes: true }).catch(() => []);
-  const files = (await Promise.all(entries.filter(entry => entry.isFile() && /^paste-[\w-]+\.\w+$/.test(entry.name)).map(async entry => {
+  const files = (await Promise.all(entries.filter(entry => entry.isFile() && PASTE_NAME.test(entry.name)).map(async entry => {
     const file = path.join(pasteDir, entry.name);
     return fs.stat(file).then(stat => ({ file, size: stat.size, mtimeMs: stat.mtimeMs }), () => null);
   }))).filter(Boolean).sort((a, b) => a.mtimeMs - b.mtimeMs);
@@ -1706,11 +1708,13 @@ const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{1,39}$/, SESSION_ID = /^[\w-]{1,64}$/;
 const pluginSessions = new Map(); // `${plugin}\0${session}` -> client
 const toApp = (value, done) => { if (verifyPlugins) { verifyPlugins.fromServer(value); done?.(); } else if (process.connected) process.send(value, done); else done?.(); };
 const pluginTerminals = plugin => [...projects.values()].reduce((sum, project) => sum + [...project.terminals.values()].filter(terminal => terminal.openedBy === plugin && !terminal.exited).length, 0);
-function openPluginSession(plugin, session) {
+// `quiet`: a session the plugin keeps for itself (no person waits on it, e.g. watching agents to notify a phone); it does not
+// count as work in progress for the update restart (busyReport).
+function openPluginSession(plugin, session, quiet = false) {
   const key = `${plugin}\0${session}`;
   let pending = 0, closed = false;
   const client = {
-    plugin,
+    plugin, quiet,
     projects: new Set(),
     get readyState() { return closed ? 3 : 1; },
     // Bytes handed to the IPC channel and not yet written; a session that stops reading is closed, as a slow window is.
@@ -1758,7 +1762,7 @@ function pluginWorkspace(message) {
   if (op === 'open') {
     if (client) return; // already open
     if ([...pluginSessions.values()].filter(item => item.plugin === plugin).length >= PLUGIN_SESSIONS) return toApp({ type: 'plugin/workspace', plugin, op: 'closed', session });
-    openPluginSession(plugin, session);
+    openPluginSession(plugin, session, message.quiet === true);
   } else if (op === 'close') client?.close();
   else if (op === 'send') { if (client) void handleClientMessage(client, message.message); }
   else if (op === 'api') {
@@ -1883,7 +1887,7 @@ sshTimer.unref();
 async function busyReport() {
   const live = [...projects.values()].flatMap(project => [...project.terminals].filter(([, terminal]) => !terminal.exited).map(([id, terminal]) => ({ project, id, terminal })));
   // A plugin's workspace session in the middle of work would lose it to a restart just like a terminal would.
-  const reasons = [...pluginSessions.values()].map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
+  const reasons = [...pluginSessions.values()].filter(client => !client.quiet).map(client => ({ project: '', terminal: client.plugin, kind: 'plugin' }));
   // A chat turn is a child of this server, so any restart (update or dev reload) ends it; an idle chat resumes from its session id and costs nothing.
   // Unless it runs in the pty-host: then it goes on through the restart like a terminal.
   const chats = [...projects.values()].flatMap(project => [...project.chats].map(([id, chat]) => ({ project, id, chat })));

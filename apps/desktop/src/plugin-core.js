@@ -14,7 +14,7 @@ import { CHECK_EVERY_MS, DEFAULT_UPDATE_MODE, FIRST_CHECK_MS, HUB_CHECK_EVERY_MS
 export const PLUGIN_API = 1;
 // What this MoonerADE understands beyond the apiVersion 1 basics; sent in `init` so a plugin can tell. `hub`: plugin.json
 // `source.hub` (updates and installs from MoonerADE Hub).
-export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub'];
+export const PLUGIN_FEATURES = ['view.setup', 'view.lists', 'view.document', 'view.password', 'view.folder', 'header', 'updates', 'hub', 'workspace.quiet'];
 const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ITEM_ID = /^[\w.-]{1,64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,39}$/;
@@ -886,7 +886,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!manifest.workspace || !SESSION_ID.test(message.session ?? '')) return;
     const { op, session } = message, base = { type: 'plugin/workspace', plugin: manifest.id, op, session };
     const reply = value => { if (host.child?.connected) host.child.send({ type: 'workspace', session, ...value }); };
-    if (op === 'open' || op === 'close') { if (!toServer(base) && op === 'open') reply({ op: 'closed' }); }
+    if (op === 'open' || op === 'close') { if (!toServer(op === 'open' && message.quiet === true ? { ...base, quiet: true } : base) && op === 'open') reply({ op: 'closed' }); }
     else if (op === 'send') { if (message.message && typeof message.message === 'object') toServer({ ...base, message: message.message }); }
     else if (op === 'api') {
       if (!Number.isSafeInteger(message.id)) return;

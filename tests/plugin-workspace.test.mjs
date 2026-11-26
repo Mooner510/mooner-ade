@@ -68,6 +68,16 @@ test('a plugin session lists projects, opens a terminal, types into it and reads
   assert.equal((await busy()).reasons.filter(reason => reason.kind === 'plugin').length, 0);
 });
 
+test('a quiet session (the plugin\'s own, nobody waits on it) does not hold back an update restart', async t => {
+  const { send, api, busy } = await boot(t);
+  send('open', { session: 'watch', quiet: true });
+  assert.equal((await api('watch', 'app/state')).ok, true);
+  assert.equal((await busy()).reasons.filter(reason => reason.kind === 'plugin').length, 0);
+  send('open', { session: 'person' });
+  assert.equal((await api('person', 'app/state')).ok, true);
+  assert.equal((await busy()).reasons.filter(reason => reason.kind === 'plugin').length, 1);
+});
+
 test('sessions are limited per plugin and close-all ends every session of that plugin', async t => {
   const { send, until, api, messages } = await boot(t);
   for (let index = 0; index < 17; index++) send('open', { session: `s${index}` });

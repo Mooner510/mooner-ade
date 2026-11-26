@@ -3541,11 +3541,13 @@ dialog.remote-pc[open] { display: flex; }
 .remote-pc-account { display: flex; align-items: center; justify-content: space-between; color: var(--muted); }
 .remote-pc-code { font: 600 22px/1.2 var(--mono); letter-spacing: .08em; }
 .remote-pc-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; }
-.remote-pc-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.remote-pc-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
 .remote-pc-list li + li { border-top: 1px solid var(--border); }
 .remote-pc-list li > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
-.remote-pc-list li > div:last-child { display: flex; gap: 6px; flex-shrink: 0; }
+.remote-pc-list li > div:nth-child(2) { display: flex; gap: 6px; flex-shrink: 0; }
 .remote-pc-list small { color: var(--muted); }
+.remote-pc-asking { flex-basis: 100%; }
+.remote-pc-asking p { margin: 0 0 4px; }
 .remote-pc-list .remote-pc-on { color: var(--add); }
 .remote-pc-empty { color: var(--muted); }
 .remote-pc-warn, .remote-pc-error { color: var(--error); }

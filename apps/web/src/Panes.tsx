@@ -1,5 +1,6 @@
 import { TERMINAL_KEYS, useMobile, withCtrl } from './mobile';
-import { remoteHaptic } from './transport';
+import { can, remoteHaptic } from './transport';
+import { filePaths, quoteShellPath } from './upload';
 import { showAppKey } from './shortcuts';
 import { terminalEditKey } from './terminal-keys';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
@@ -167,7 +168,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
   const visibleRef = useRef(visible), sshRef = useRef(isSsh), replayScroll = useRef(false), scrollAfterReplay = useRef<() => void>(() => {});
   visibleRef.current = visible; sshRef.current = isSsh;
   const term = useRef<Terminal | null>(null), webglRef = useRef<WebglAddon | null>(null), centerRef = useRef<() => void>(() => {}), notifyResizeRef = useRef<() => void>(() => {}), layoutRef = useRef<() => void>(() => {});
-  const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking };
+  const callbacks = useRef({ send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking, chat }); callbacks.current = { send, followUpInput, confirmSend, onSplit, onTitle, onAgent, agentOf, onAgentEvent, onAgentResolved, onAgentWorking, chat };
   const settingsRef = useRef(settings); settingsRef.current = settings;
   const mobile = useMobile(), ctrlArmed = useRef(false), [ctrl, setCtrl] = useState(false);
   // The effect below only depends on [id, bus], so the send warning reads the latest cache through a ref.
@@ -208,19 +209,20 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
       });
     };
     const pasteHost = host.current!; pasteHost.addEventListener('paste', pasteImage, true);
-    // Files dropped from the OS are typed as shell-quoted absolute paths, like Terminal.app; only the desktop shell can resolve them.
-    const pathForFile = (window as unknown as { adeDesktop?: { pathForFile?(file: File): string } }).adeDesktop?.pathForFile;
-    const quotePath = (path: string) => /Windows/.test(navigator.userAgent) ? (/[\s&()^%!,;=]/.test(path) ? `"${path}"` : path) : path.replace(/[\s'"\\$`!&|;()<>*?[\]{}#~^]/g, '\\$&');
+    // Files dropped from the OS are typed as shell-quoted absolute paths, like Terminal.app: the file's own path in the desktop shell, or
+    // the copy the server keeps when this window cannot name one (another PC's window, whose terminals run on that PC; a browser).
+    const dropAllowed = can('files/upload');
     const dragFiles = (event: DragEvent) => {
-      if (!pathForFile || !event.dataTransfer?.types.includes('Files')) return;
+      if (!dropAllowed || !event.dataTransfer?.types.includes('Files')) return;
       event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy';
     };
     const dropFiles = (event: DragEvent) => {
-      if (!pathForFile || !event.dataTransfer?.files.length) return;
+      if (!dropAllowed || !event.dataTransfer?.files.length) return;
       event.preventDefault(); event.stopPropagation();
-      const paths = Array.from(event.dataTransfer.files, file => pathForFile(file)).filter(Boolean);
-      if (!paths.length) return;
-      terminal.paste(paths.map(quotePath).join(' ') + ' '); terminal.focus(); toastAttached(paths.length);
+      void filePaths(Array.from(event.dataTransfer.files), callbacks.current.chat.call).then(paths => {
+        if (!paths.length) return;
+        terminal.paste(paths.map(quoteShellPath).join(' ') + ' '); terminal.focus(); toastAttached(paths.length);
+      }, cause => callbacks.current.chat.fail(cause));
     };
     // Right-click pastes the clipboard instead of opening the browser menu (the desktop shell has none of its own for the terminal).
     const rightClick = (event: MouseEvent) => {
