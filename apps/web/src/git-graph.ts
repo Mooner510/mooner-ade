@@ -6,6 +6,7 @@
 // - edges are straight segments from row centre to row centre; an edge 30 rows or longer is cut to short arrows unless long edges are shown;
 // - a branch's colour comes from the name of the ref at its head, so a branch keeps its colour across refreshes.
 // Pure functions only (no React, no DOM), so the layout can be tested in Node.
+import { parseTurnRevision } from './turn-changes.ts';
 
 export type Commit = { h: string; p: string[]; an: string; ae: string; at: number; ct: number; s: string; cn?: string; ce?: string };
 export type RefKind = 'local' | 'remote' | 'tag';
@@ -391,6 +392,9 @@ export async function loadSpec(call: Call, spec: string) {
   const match = /^diff:([^:]*):(.*)$/s.exec(spec);
   if (!match) throw new Error('알 수 없는 diff입니다.');
   const [, rev, rest] = match, [path, original] = rest.split('\t');
+  // A chat turn's change card (turn-changes.ts): both sides come from that chat's turn snapshots.
+  const turn = parseTurnRevision(rev);
+  if (turn) return call<{ original: string; modified: string; note: string }>('chat/turn-file', { id: turn.chat, from: turn.from, to: turn.to, path, original });
   if (rev.includes('..')) {
     const [from, to] = rev.split('..');
     return call<{ original: string; modified: string; note: string }>('git/commit-file', to ? { sha: to, parent: from, path, original } : { working: true, parent: from, path, original });

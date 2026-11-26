@@ -702,6 +702,7 @@ function TerminalPane({ id, send, followUpInput, confirmSend, bus, visible, live
 // `diff:<revision>:<path>[\t<old path>]`, opened from the Git tool window: a commit, `a..b` (two commits) or `a..` (against the working tree).
 const diffParts = (spec: string) => { const [, kind, ...rest] = spec.split(':'), [path, original] = rest.join(':').split('\t'); return { kind, path, original, full: rest.join(':') }; };
 const revisionLabel = (kind: string) => {
+  if (kind.startsWith('turn@')) return '턴 변경'; // a chat turn's change card (turn-changes.ts)
   const [from, to] = kind.split('..');
   return !kind.includes('..') ? kind.slice(0, 8) : to ? `${from.slice(0, 7)}..${to.slice(0, 7)}` : `${from.slice(0, 7)} ↔ 작업 트리`;
 };

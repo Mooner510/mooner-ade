@@ -46,4 +46,5 @@ macOS의 기본 데이터 경로는 `~/Library/Application Support/mooner-ade`, 
 | `CURSOR_APP_SUPPORT` | OS별 Cursor 앱 데이터 경로 | IDE 로그인 DB(`state.vscdb`) 위치 |
 | `CURSOR_ACCESS_TOKEN` / `CURSOR_REFRESH_TOKEN` | 없음 | Cursor 사용량 API용 JWT. 설정 시 Keychain 읽기 생략 |
 | `CURSOR_IDE_AUTH` | 꺼짐 | `1`이면 macOS에서 Cursor **앱** 로그인(`state.vscdb` + Safe Storage)을 쓴다. Keychain 확인 창이 뜰 수 있음. 기본은 `cursor-agent login`의 CLI Keychain만 사용 |
+| `ADE_TURN_SNAPSHOTS` | 켜짐 | `0`이면 채팅 턴 스냅샷(턴별 변경 카드, Rewind의 파일 되돌리기)을 만들지 않는다. [채팅 기능 정리](CHAT_MODE_FEATURES.md) §15 |
 | `CURSOR_STORE_CONTEXT` | 켜짐 | `0`이면 Cursor 채팅의 컨텍스트 사용률을 Cursor 세션 저장소(`~/.cursor`)에서 읽지 않는다. [채팅 기능 정리](CHAT_MODE_FEATURES.md) §11 |

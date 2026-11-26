@@ -26,6 +26,7 @@ import { GitLog } from './GitLog';
 import { ProjectTree, type TreeHost } from './ProjectTree';
 import { FileBuffer, type FileLocation } from './file-buffer';
 import { loadSpec } from './git-graph';
+import { OPEN_DIFF_EVENT } from './TurnChanges';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
 import { copyText } from './toast';
 import { COLOR_COPY_EVENT, colorCopyFormats, type ColorCopyTarget } from './color-chip';
@@ -415,6 +416,11 @@ ${where}`, [
     }
     setFocusLeaf(id);
   }
+  // A chat turn's change card asks for a diff tab (TurnChanges.tsx): only this project's workspace opens it.
+  useEffect(() => {
+    const open = (event: Event) => { const detail = (event as CustomEvent<{ projectId: string; spec: string }>).detail; if (detail?.projectId === projectId && typeof detail.spec === 'string' && detail.spec.startsWith('diff:')) { preloadMonaco(); setZoom(''); openEditorTab(detail.spec); } };
+    window.addEventListener(OPEN_DIFF_EVENT, open); return () => window.removeEventListener(OPEN_DIFF_EVENT, open);
+  });
   function openProjectFile(path: string, location?: FileLocation) {
     const spec = `file:${path}`;
     if (location) fileBuffer(path).requestLocation(location);
@@ -1428,7 +1434,7 @@ ${where}`, [
         else if (event.key === 'Home') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: 380 })); }
       }} />
     <GitLog call={call} settings={settings} setSettings={setSettings} visible={active && gitOpen} ask={ask} fail={report} onClose={() => setGitOpen(false)} onChanged={() => run(refreshGit)}
-      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
+      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined} changes={git.changes}
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);

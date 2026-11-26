@@ -40,6 +40,7 @@ import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
 import { useChatPasteRefs, useChatSendTarget } from './chat-send-ui';
 import { joinPath } from './chat-send';
+import { FilePlanDialog, FileRewindRow, rewindChanges, TurnChangesCard, turnChangesIn, TurnFilesContext } from './TurnChanges';
 import { can, isRemote } from './transport';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 import { CardKey, ChatDiscover, GuideTextView, useCardBinding, useCardLabels, useKeyName, usePaneKeys, type CardActions, type CardKeyBinding, type CardKeyLabels } from './ChatKeys';
@@ -771,10 +772,12 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
   }
   const allowActions = !bare && finalItem && turnAllowsMessageActions(items);
   const artifacts = bare ? [] : artifactsOf(items.flatMap(item => item.kind === 'assistant' ? item.blocks : []), results);
+  const changes = bare || !settled ? undefined : turnChangesIn(items); // files changed during the turn (TurnChanges.tsx)
   return <div className="chat-turn">
     {lead && <Message item={lead} />}
     {rows}
     {artifacts.map(artifact => <ArtifactCard key={`${artifact.toolUseId}:${artifact.problem ?? artifact.url}`} artifact={artifact} />)}
+    {changes && <TurnChangesCard changes={changes} />}
     {allowActions && <div className="chat-msg-actions">{answer.trim() && <IconButton icon="copy" label="응답 복사" size={13} onClick={() => copyText(answer)} />}
       {(finalItem.uuid || !onBranch) && <IconButton icon="branch" disabled={!onBranch} label={onBranch ? '여기서 분기 (새 탭에서 이 지점부터 이어가기)' : '이 CLI는 과거 지점 분기를 지원하지 않습니다'} size={13} onClick={() => onBranch?.(finalItem.uuid!)} />}
       {(finalItem.uuid || !onRewind) && <IconButton icon="undo" disabled={!onRewind} label={onRewind ? '여기로 되돌리기 (이후 대화 삭제)' : '이 CLI는 과거 지점 복원을 지원하지 않습니다'} size={13} onClick={() => onRewind?.(finalItem.uuid!)} />}
@@ -847,6 +850,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
   if (item.kind === 'usage') return <UsageCardRow item={item} enter={enter} />;
   if (item.kind === 'btw') return <BtwCardRow item={item} enter={enter} />;
   if (item.kind === 'shell') return <ShellCardRow item={item} enter={enter} />;
+  if (item.kind === 'file_rewind') return <FileRewindRow item={item} enter={enter} />;
   return null;
 });
 function McpCardRow({ enter }: { enter?: true }) {
@@ -1497,7 +1501,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     syncPin();
   };
   const branch = useCallback((uuid: string) => void ctxRef.current.branchChat(id, uuid, leaf.cwd).catch(ctxRef.current.fail), [id, leaf.cwd]);
-  const rewind = useCallback((uuid: string) => void ctxRef.current.pick('여기로 되돌릴까요? 이후 대화는 사라지고 에이전트가 이미 바꾼 파일은 그대로입니다.', [{ id: 'yes', label: '되돌리기', icon: 'undo' }]).then(choice => choice === 'yes' ? ctxRef.current.call('chat/rewind', { id, uuid }) : undefined).catch(ctxRef.current.fail), [id]);
+  // Rewind asks in a dialog that can also put the files back (TurnChanges.tsx FilePlanDialog).
+  const [rewindAsk, setRewindAsk] = useState('');
+  const rewind = useCallback((uuid: string) => setRewindAsk(uuid), []);
+  const turnFiles = useMemo(() => ({ chatId: id, projectId: ctx.projectId, busy, call: (action: string, input?: object) => ctxRef.current.call(action, input), fail: (cause: unknown) => ctxRef.current.fail(cause) }), [id, ctx.projectId, busy]);
   const jumpToEnd = () => { const element = scroller.current; if (!element) return; readingTool.current = false; stick.current = true; setAway(false); element.scrollTo({ top: element.scrollHeight, behavior: calm() ? 'auto' : 'smooth' }); };
 
   const note = (message: string) => apply(view => ({ ...view, items: [...view.items, { kind: 'note', key: `n${Date.now()}${Math.random()}`, text: message, local: true, fresh: true }] }));
@@ -2077,7 +2084,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {hiddenTurns > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>이전 대화 {hiddenTurns}개 더 보기</button>}
-        {renderedTurns.map((items, index) => { const current = index === renderedTurns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
+        <TurnFilesContext.Provider value={turnFiles}>{renderedTurns.map((items, index) => { const current = index === renderedTurns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}</TurnFilesContext.Provider>
+        {rewindAsk && <FilePlanDialog mode={{ kind: 'rewind', uuid: rewindAsk, changes: rewindChanges(view.items, rewindAsk) }} ctx={turnFiles} onClose={() => setRewindAsk('')} />}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activityLabel || (state.configuring ? '설정을 적용하는 중' : '')} />}
         {view.steers.map(item => { const bus = parseBusMessages(item.text); return bus ? <div className="chat-msg user" key={item.uuid}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div> : <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링, 반영 대기 중' : '스티어링, ↑ 수정, Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>; })}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}

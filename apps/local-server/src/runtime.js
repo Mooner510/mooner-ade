@@ -72,7 +72,7 @@ async function cachedFilters(cwd, env) {
   return filters;
 }
 
-async function gitEnv(cwd, env, args) {
+export async function gitEnv(cwd, env, args) {
   const filters = NO_CONTENT.has(args[0]) ? [] : await cachedFilters(cwd, env);
   const overrides = [...GIT_TRUSTED_REPO_CONFIG, ...filters.map(key => [key, ''])];
   const result = { ...env, GIT_CONFIG_COUNT: String(overrides.length) };
