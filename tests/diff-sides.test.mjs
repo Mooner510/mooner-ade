@@ -20,3 +20,13 @@ test('the patch of a new or deleted file has only its own lines (Monaco names th
   assert.equal(unifiedPatch('g.txt', 'gone\n', '', [{ originalStartLineNumber: 1, originalEndLineNumber: 2, modifiedStartLineNumber: 1, modifiedEndLineNumber: 1 }], 3),
     '--- a/g.txt\n+++ b/g.txt\n@@ -1,1 +0,0 @@\n-gone');
 });
+
+test('a turn diff sent to the chat names the two snapshot commits, not the tab id', async () => {
+  const { formatForChat, gitCommandFor } = await import('../apps/web/src/chat-send.ts');
+  const from = 'f'.repeat(40), to = 'd'.repeat(40), rev = `turn@9be6afc8-89cc-4468-b2eb-b979ea72d686@${from}..${to}`;
+  assert.equal(gitCommandFor(rev, 'a.txt'), `git diff ${'f'.repeat(12)} ${'d'.repeat(12)} -- a.txt`);
+  assert.equal(gitCommandFor(`turn@chat@..${to}`, 'a.txt'), `git diff 4b825dc642cb ${'d'.repeat(12)} -- a.txt`, 'no start snapshot: against the empty tree');
+  const text = formatForChat({ kind: 'diff', file: { path: 'a.txt', base: 'repo' }, rev, patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-a\n+b', ranges: [{ start: 1, end: 1 }] }, { project: '/p', repo: '/p' }, '/p');
+  assert.match(text, /채팅 턴 스냅샷 fffffff\.\.ddddddd/);
+  assert.doesNotMatch(text, /turn@/);
+});

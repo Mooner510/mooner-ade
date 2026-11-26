@@ -92,13 +92,21 @@ export function shorten(text: string, { maxLines = 400, head = 80, tail = 300, m
 }
 
 /** The git command that shows a diff tab's change, so a large one can be named instead of pasted. */
-export function gitCommandFor(rev: DiffRev, path: string): string {
+// A chat turn's change card opens `turn@<chat>@<from>..<to>` (turn-changes.ts parseTurnRevision): the two snapshots are commits in the
+// repository, so the agent is given those (the empty tree when the turn had no start snapshot), never the tab's own id.
+const TURN_REV = /^turn@[A-Za-z0-9-]{1,128}@([0-9a-f]{40,64})?\.\.([0-9a-f]{40,64})$/;
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const gitRev = (rev: DiffRev) => { const turn = TURN_REV.exec(rev); return turn ? `${turn[1] ?? EMPTY_TREE}..${turn[2]}` : rev; };
+export function gitCommandFor(tabRev: DiffRev, path: string): string {
+  const rev = gitRev(tabRev);
   const quoted = /[\s"'$`]/.test(path) ? `"${path.replace(/(["\\$`])/g, '\\$1')}"` : path;
   if (!rev.includes('..')) return `git show ${rev.slice(0, 12)} -- ${quoted}`;
   const [from, to] = rev.split('..');
   return to ? `git diff ${from.slice(0, 12)} ${to.slice(0, 12)} -- ${quoted}` : `git diff ${from.slice(0, 12)} -- ${quoted}`;
 }
-const revLabel = (rev: DiffRev) => {
+const revLabel = (tabRev: DiffRev) => {
+  const rev = gitRev(tabRev);
+  if (TURN_REV.test(tabRev)) { const [from, to] = rev.split('..'); return `채팅 턴 스냅샷 ${from.slice(0, 7)}..${to.slice(0, 7)}`; }
   if (!rev.includes('..')) return `커밋 ${rev.slice(0, 7)}`;
   const [from, to] = rev.split('..');
   return to ? `${from.slice(0, 7)}..${to.slice(0, 7)}` : `${from.slice(0, 7)} ↔ 작업 트리`;
