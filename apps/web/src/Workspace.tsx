@@ -1100,8 +1100,11 @@ ${where}`, [
     }
   }
   function moveFocus(step: number) {
-    const ids = leaves(activePane());
-    if (ids.length) setFocusLeaf(ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length]);
+    const ids = leaves(activePane()); if (!ids.length) return;
+    const next = ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length];
+    setFocusLeaf(next);
+    // While a pane is maximized the maximize moves with the focus (like tmux), so the focus never lands on a pane that is off screen.
+    setZoom(value => value ? next : value);
   }
   async function closeFocused() {
     const leaf = findLeaf(activePane(), refs.focus.current); if (!leaf) return;
