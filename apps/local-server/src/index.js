@@ -896,7 +896,7 @@ async function route(action, input, project) {
     const scope = input.scope === 'all' ? [...projects.values()] : project ? [project] : [];
     return scope.flatMap(item => [...item.chats.entries()].map(([id, chat]) => {
       const state = chat.state();
-      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, sessionId: state.sessionId || '', title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: chat.agent === 'cursor' && state.runEverything === true ? 'bypassPermissions' : state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null };
+      return { id, projectId: item.id, project: path.basename(item.root), agent: chat.agent, sessionId: state.sessionId || '', title: state.chatTitle || '', status: state.status, cwd: chat.cwd, permissionMode: chat.agent === 'cursor' && state.runEverything === true ? 'bypassPermissions' : state.permissionMode, lastUser: chat.lastUserInstruction?.() ?? null, lastUsers: chat.recentUserInstructions?.() ?? [] };
     }));
   }
   if (action === 'recent/remove') {
