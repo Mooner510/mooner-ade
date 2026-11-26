@@ -31,7 +31,7 @@ writeFileSync(join(otherData, 'app-state.json'), JSON.stringify({ version: 1, op
 const other = await boot({ data: otherData });
 cleanups.push(() => other.stop());
 const summary = scopeSummary('control');
-const calls = [], forwards = new Set();
+const calls = [], forwards = new Set(), typed = [];
 const hub = await fakeHub(t, {
   hostName: 'Other PC', hello: { ...summary, host: { id: 'host-1', name: 'Other PC', platform: process.platform } },
   api: async (action, input) => {
@@ -51,6 +51,7 @@ const hub = await fakeHub(t, {
       socket.on('message', data => { const text = String(data); if (!text.startsWith('{"type":"fs",')) session.send({ t: 'ws', message: JSON.parse(text) }); });
       forwards.add(socket);
     }
+    typed.push(JSON.stringify(message));
     const clean = JSON.stringify(remoteMessage(message, 'control'));
     if (session.hostSocket.readyState === 1) session.hostSocket.send(clean); else session.queue.push(clean);
   }
@@ -102,6 +103,21 @@ try {
     assert(done.account === '무너', JSON.stringify(done));
     assert(hub.state.enrollBody.kind === 'desktop', `kind ${hub.state.enrollBody.kind}`);
   });
+  await check('ask to connect without a link: the dialog shows the code the PC computed, and the PC is paired once approved', async () => {
+    hub.state.answerRequest = null;
+    await main.ev('const button = document.querySelector(".welcome-remote") ?? [...document.querySelectorAll("button")].find(item => item.getAttribute("aria-label") === "다른 PC에 접속"); if (!button) throw new Error("no 다른 PC에 접속 button"); button.click();');
+    await main.waitFor('[...document.querySelectorAll(".remote-pc-list button")].some(item => item.textContent === "연결 요청")');
+    await main.ev('[...document.querySelectorAll(".remote-pc-list button")].find(item => item.textContent === "연결 요청").click();');
+    const code = await main.waitFor('document.querySelector(".remote-pc-asking .remote-pc-code")?.textContent');
+    assert(/^\d{3} \d{3}$/.test(code), `code ${code}`);
+    assert(hub.state.requests.length === 1 && hub.state.requests[0].scope === 'control', JSON.stringify(hub.state.requests));
+    hub.state.sessions.at(-1).send({ t: 'paired', scope: 'control', host: { id: 'host-1', name: 'Other PC' } });
+    await main.waitFor('[...document.querySelectorAll(".remote-pc-list button")].some(item => item.textContent === "접속") && !document.querySelector(".remote-pc-asking")');
+    const hosts = await main.ev(`return await ${remote('hosts()')}`);
+    assert(hosts[0]?.paired && hosts[0].scope === 'control', JSON.stringify(hosts));
+    await main.ev('[...document.querySelectorAll(".remote-pc footer button")].find(item => item.textContent === "닫기").click();');
+    await main.waitFor('!document.querySelector(".remote-pc")');
+  });
   await check('pair with the link the other PC made (it approves in the fake)', async () => {
     const offer = await main.ev(`return await ${remote(`offer(${JSON.stringify(hub.pairLink())})`)}`);
     assert(offer.hostFingerprint === hub.hostFingerprint() && offer.myFingerprint, JSON.stringify(offer));
@@ -145,6 +161,13 @@ try {
     await until(() => calls.includes('terminal/open'), 10000, 200).catch(() => { throw new Error(`terminal/open never reached the other PC; calls ${calls.slice(-8).join(',')}`); });
     assert(forwards.size >= 1, 'the window never opened the events stream');
     await until(async () => (await other.api('snapshot', { projectId: other.projectId })).terminals?.length > 0 || (await other.api('snapshot', { projectId: other.projectId })).tabs?.length > 0, 10000, 300);
+  });
+  await check('a file dropped on the terminal goes up to the other PC and its path there is typed', async () => {
+    await win.ev('const data = new DataTransfer(); data.items.add(new File(["hello"], "note one.txt", { type: "text/plain" })); const target = document.querySelector(".xterm"); for (const type of ["dragover", "drop"]) target.dispatchEvent(new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }));');
+    await until(() => calls.includes('files/upload'), 10000, 200).catch(() => { throw new Error(`files/upload never reached the other PC; calls ${calls.slice(-8).join(',')}`); });
+    // What the window types into the terminal on the other PC: the copy's path there (the server makes the name shell-safe).
+    await until(() => typed.some(item => /terminal\/input.*\/paste\/upload-[\w-]+-note_one\.txt /.test(item)), 15000, 200)
+      .catch(() => { throw new Error(`the path was not typed: ${typed.slice(-3).join(' | ').slice(-400)}`); });
   });
   await check('a modal keeps the frame on its backdrop', async () => {
     await win.ev('const dialog = document.createElement("dialog"); dialog.id = "probe"; dialog.textContent = "x"; document.body.append(dialog); dialog.showModal();');

@@ -92,7 +92,7 @@ MoonerADE 안드로이드 앱(`mooner-webapps/apps/ade`)은 PC가 이 화면을 
 ### 검증
 
 - 단위: `tests/remote-link.test.mjs`(가짜 Hub와 가짜 상대 PC, 연결 요청의 승인·거부·취소·코드 불일치), `tests/remote-ui-proxy.test.mjs`(실제 `remote-ui.js`가 호스트), `tests/remote-bridge.test.mjs`, `tests/noise.test.mjs`.
-- 실제 앱: `node scripts/verify/t-remote-pc.mjs --plugins <mooner-ade-plugins>`. 격리된 Electron(별도 `ADE_USER_DATA_DIR`·`ADE_DATA_DIR`·`HOME`, Chromium mock keychain, 브라우저 없음)이 이 PC, 일회용 ADE 서버와 가짜 Hub가 다른 PC 역할이다. 로그인, 페어링, 창, 초록 테두리(모달 포함), 네트워크 차단, 프로젝트·터미널 열기, 닫기, 연결 해제를 확인한다. `apps/web/dist`가 필요하다(`pnpm --filter @mooner/ade-web build`).
+- 실제 앱: `node scripts/verify/t-remote-pc.mjs --plugins <mooner-ade-plugins>`. 격리된 Electron(별도 `ADE_USER_DATA_DIR`·`ADE_DATA_DIR`·`HOME`, Chromium mock keychain, 브라우저 없음)이 이 PC, 일회용 ADE 서버와 가짜 Hub가 다른 PC 역할이다. 로그인, 대화상자의 연결 요청(확인 코드 표시와 승인 뒤 페어링), 링크 페어링, 창, 초록 테두리(모달 포함), 네트워크 차단, 프로젝트·터미널 열기, 터미널에 끌어 놓은 파일의 업로드와 그 PC 경로 입력, 닫기, 연결 해제를 확인한다. `apps/web/dist`가 필요하다(`pnpm --filter @mooner/ade-web build`).
 
 ## 폰 종단 테스트 (실제 폰, 지문·실제 Hub 로그인·AI 사용 없이)
 
