@@ -716,7 +716,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     if (!manifest.workspace || !SESSION_ID.test(message.session ?? '')) return;
     const { op, session } = message, base = { ...workspaceAddress(host), op, session };
     const reply = value => { if (host.child?.connected) sendHost(host, { type: 'workspace', session, ...value }); };
-    if (op === 'open' || op === 'close') { if (!toServer(base) && op === 'open') reply({ op: 'closed' }); }
+    if (op === 'open' || op === 'close') { if (!toServer(op === 'open' && message.quiet === true ? { ...base, quiet: true } : base) && op === 'open') reply({ op: 'closed' }); }
     else if (op === 'send') { if (message.message && typeof message.message === 'object') toServer({ ...base, message: message.message }); }
     else if (op === 'api') {
       if (!Number.isSafeInteger(message.id)) return;

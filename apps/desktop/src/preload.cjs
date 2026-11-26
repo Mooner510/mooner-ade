@@ -27,7 +27,7 @@ const remoteCall = name => async (...args) => {
   if (!answer?.ok) throw Object.assign(new Error(answer?.error?.message ?? '요청이 실패했습니다.'), { code: answer?.error?.code ?? 'REMOTE_FAILED' });
   return answer.value;
 };
-const remote = Object.fromEntries(['state', 'signInStart', 'signInWait', 'signInCancel', 'signOut', 'hosts', 'offer', 'pair', 'forget', 'open'].map(name => [name, remoteCall(name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`))]));
+const remote = Object.fromEntries(['state', 'signInStart', 'signInWait', 'signInCancel', 'signOut', 'hosts', 'offer', 'pair', 'requestStart', 'requestWait', 'requestCancel', 'forget', 'open'].map(name => [name, remoteCall(name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`))]));
 const updates = {
   getAutoDownload: () => ipcRenderer.invoke('ade:get-auto-download-updates'),
   setAutoDownload: enabled => ipcRenderer.invoke('ade:set-auto-download-updates', enabled === true),

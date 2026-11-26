@@ -47,6 +47,9 @@ export function setupRemote({ userData, getWindow, trusted, iconPath, background
   handle('hosts', () => remote.hosts());
   handle('offer', link => remote.offer(text(link)));
   handle('pair', link => remote.pair(text(link)));
+  handle('request-start', (hostId, scope) => remote.requestStart(text(hostId), scope === 'view' ? 'view' : 'control'));
+  handle('request-wait', () => remote.requestWait());
+  handle('request-cancel', () => remote.requestCancel());
   handle('forget', hostId => { const open = windows.get(text(hostId)); open?.window.close(); remote.forget(text(hostId)); });
   handle('open', hostId => openHost(text(hostId)));
 

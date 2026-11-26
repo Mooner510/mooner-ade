@@ -3,7 +3,7 @@
 // socket the fake answers it itself as the PC does (a Noise responder with the plugin's session protocol), which is all the client sees.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { createChannel, createHandshake, fingerprint, keyPair, pairingPsk, prologue } from '../apps/desktop/src/vendor/noise.js';
+import { createChannel, createHandshake, fingerprint, keyPair, pairingPsk, prologue, safetyCode } from '../apps/desktop/src/vendor/noise.js';
 
 const { WebSocketServer } = createRequire(new URL('../apps/local-server/package.json', import.meta.url))('ws');
 
@@ -20,7 +20,7 @@ export async function fakeHub(t, { approve = true, ...first } = {}) {
   const defaults = { hostId: 'host-1', hostName: '작업 PC', api: () => ({}), onWs: null, hello: { api: ['snapshot', 'ui/manifest', 'ui/file'], messages: ['subscribe'], features: [] }, scope: 'control' };
   const makeHost = (spec, own) => {
     const host = { ...defaults, ...spec, hostKey: keyPair(), secret: Buffer.alloc(32, hosts.size + 7) };
-    Object.assign(own, { online: true, closeNext: null, sessions: [], pairings: [], connects: 0, knownKeys: new Set() });
+    Object.assign(own, { online: true, closeNext: null, sessions: [], pairings: [], requests: [], answerRequest: 'approve', connects: 0, knownKeys: new Set() });
     host.state = own;
     host.pairLink = () => `moonerade://pair?v=1&k=${b64url(host.hostKey.publicKey)}&h=${host.hostId}&t=${b64url(host.secret)}&n=${encodeURIComponent(host.hostName)}`;
     host.hostFingerprint = () => fingerprint(host.hostKey.publicKey);
@@ -54,7 +54,7 @@ export async function fakeHub(t, { approve = true, ...first } = {}) {
     if (url.pathname === '/v1/me' && request.method === 'DELETE') { state.signedOut++; return json(response, 204, {}); }
     if (url.pathname === '/v1/hosts') {
       if (!authed) return json(response, 401, { error: { code: 'token-expired', message: 'expired' } });
-      return json(response, 200, { hosts: [...hosts.values()].map(host => ({ id: host.hostId, name: host.hostName, platform: 'darwin', version: '0.7.0', keyHash: keyHash(host.hostKey.publicKey), online: host.state.online, lastSeenAt: 1 })) });
+      return json(response, 200, { hosts: [...hosts.values()].map(host => ({ id: host.hostId, name: host.hostName, platform: 'darwin', version: '0.7.0', keyHash: keyHash(host.hostKey.publicKey), key: host.hostKey.publicKey.toString('base64'), online: host.state.online, lastSeenAt: 1 })) });
     }
     json(response, 404, { error: { code: 'not-found', message: 'not found' } });
   });
@@ -97,6 +97,16 @@ export async function fakeHub(t, { approve = true, ...first } = {}) {
         else if (message.t === 'pair') {
           mine.pairings.push(message);
           if (mine.denyPair) { send({ t: 'pair-denied' }); ws.close(4003, 'denied'); } else { mine.knownKey = sess.clientKey; mine.knownKeys.add(Buffer.from(sess.clientKey).toString('base64')); send({ t: 'paired', scope, host: { id: hostId, name: hostName } }); setTimeout(() => ws.close(1000), 50); }
+        } else if (message.t === 'request') {
+          // A connection request: the code from the keys this PC sees, then the owner's answer ('approve', 'deny', or null: never).
+          mine.requests.push(message);
+          send({ t: 'request-pending', code: mine.requestCode ?? safetyCode(hostKey.publicKey, sess.clientKey) });
+          const answer = mine.answerRequest;
+          if (answer) setTimeout(() => {
+            if (answer === 'deny') { send({ t: 'pair-denied' }); ws.close(4003, 'denied'); return; }
+            mine.knownKeys.add(Buffer.from(sess.clientKey).toString('base64'));
+            send({ t: 'paired', scope: message.scope, host: { id: hostId, name: hostName } }); setTimeout(() => ws.close(1000), 50);
+          }, 30);
         } else if (message.t === 'ws') onWs?.(message.message, sess);
         else if (message.t === 'ping') send({ t: 'pong' });
         else if (message.t === 'api') {

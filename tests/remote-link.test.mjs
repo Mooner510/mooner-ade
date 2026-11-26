@@ -108,6 +108,36 @@ test('pairing refused by the PC, or with a wrong secret, stores nothing', async 
   assert.deepEqual(store.value.hosts, []);
 });
 
+test('a connection request without a link: the code matches the PC, the approval pins the PC with the scope asked for', async t => {
+  const { hub, client, store } = await signedIn(t);
+  const [listed] = await client.hosts();
+  assert.equal(listed.canRequest, true);
+  hub.state.answerRequest = null;
+  const started = await client.requestStart('host-1', 'view');
+  assert.match(started.code, /^\d{3} \d{3}$/);
+  assert.deepEqual(hub.state.requests.map(item => [item.name, item.scope]), [['ADE · test', 'view']]);
+  hub.state.sessions.at(-1).send({ t: 'paired', scope: 'view', host: { id: 'host-1', name: '작업 PC' } });
+  assert.deepEqual(await client.requestWait(), { hostId: 'host-1', name: '작업 PC', scope: 'view' });
+  assert.equal(store.value.hosts[0].key, hub.hostKey.publicKey.toString('base64'));
+});
+
+test('a connection request that is denied, cancelled, or answered with another code stores nothing', async t => {
+  const { hub, client, store } = await signedIn(t);
+  await client.hosts();
+  hub.state.answerRequest = 'deny';
+  await client.requestStart('host-1');
+  await assert.rejects(client.requestWait(), { code: 'DENIED' });
+  hub.state.answerRequest = null;
+  await client.requestStart('host-1');
+  const waiting = client.requestWait();
+  client.requestCancel();
+  await assert.rejects(waiting, { code: 'CANCELLED' });
+  hub.state.requestCode = '000 000';
+  await assert.rejects(client.requestStart('host-1'), { code: 'HOST_KEY' });
+  await assert.rejects(client.requestWait(), { code: 'NOT_STARTED' });
+  assert.deepEqual(store.value.hosts, []);
+});
+
 test('a paired PC answers api calls, forwards ws messages both ways and reports its state', async t => {
   const { hub, client } = await paired(t, { hub: { api: (action, input) => action === 'snapshot' ? { echoed: input } : (() => { throw Object.assign(new Error('없음'), { code: 'NOT_FOUND' }); })() } });
   const events = [], messages = [];
