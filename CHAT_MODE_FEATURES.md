@@ -40,7 +40,7 @@ ChatPane.tsx  ──WebSocket/RPC──▶  chat.js (세션·상태·저장)  �
 | 과거 지점 되돌리기(Rewind) | ✅ | ✅ | 완료 응답의 복원 기록이 있을 때 지원 |
 | 이미지 입력 | ✅ | ✅ (모델별) | ✅ (ACP가 허용할 때) |
 | 추가 작업 폴더(`--add-dir`) | ✅ (최대 8개) | ✅ | ❌ |
-| 워크트리 격리 (서버 옵션, 화면 컨트롤 없음 — §20) | ✅ | ✅ | ✅ |
+| 워크트리 격리(시작·진입·나가기·합치기·해제, §20) | ✅ | ✅ | ✅ |
 | 비용(USD) 표시 | ✅ | 미제공 | ACP 보고 또는 API 키·계정별 조건부 조회 |
 | 토큰 집계 | ✅ | ✅ | ACP 보고 또는 API 키·계정별 조건부 조회 |
 | 컨텍스트 사용률 | ✅ | ✅ (사용량 이벤트 수신 후) | ✅ (실험적: CLI 세션 저장소 읽기) |
@@ -524,10 +524,30 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 ## 20. 작업 폴더, 워크트리, 추가 폴더
 
-- **워크트리**: 새 대화를 시작하기 전에만 켤 수 있습니다.
-  - Claude: 새 세션에서 `--worktree`를 씁니다.
-  - Codex·Cursor: `<프로젝트>/worktrees/chat-<id>` 경로에 `ade/chat-<id>` 브랜치로 git 워크트리를 만듭니다.
-  - 서버는 워크트리 설정을 받고 저장합니다. **단, 워크트리를 켜는 체크박스는 PR #42(`6cf6567`, 이전 대화 모달)에서 채팅 화면에서 제거됐고, 지금은 화면에서 켤 방법이 없습니다.** 이미 켜진 채팅에만 서버 값이 남습니다.
+채팅 하나가 자기만의 git worktree(자기 브랜치와 폴더)에서 일하고, 원본 작업 트리는 건드리지 않다가, 끝나면 원본으로 합칩니다. 서버는 `chat-worktree.js`(git 작업)·`chat-worktree-routes.js`(`chat/worktree/*` 라우트)·`chat.js`(채팅을 옮기는 일), 화면은 `ChatWorktree.tsx`·`chat-worktree.ts`입니다.
+
+- **만드는 곳과 방식**: 세 에이전트 모두 ADE가 직접 `git worktree add -b ade/chat-<id 앞 8자> <프로젝트 데이터>/worktrees/chat-<…> <지금 커밋>`으로 만듭니다(브랜치가 이미 있으면 전체 id). 원본 저장소 경로·브랜치·기준 커밋은 worktree 옆 `<폴더>.ade.json`에, 채팅이 가진 worktree는 채팅 폴더의 `worktree.json`에 남습니다. 채팅이 저장소의 하위 폴더에서 열려 있었으면 worktree의 같은 하위 폴더에서 일합니다.
+  - Claude의 `--worktree`를 쓰지 않는 이유: CLI가 `<저장소>/.claude/worktrees/<이름>`에 만들고 ADE에는 위치·브랜치·기준 커밋을 알려 주지 않습니다(`claude --help`: `-w, --worktree [name]  Create a git worktree for this session`). 표시와 합치기에 필요한 것을 세 에이전트에 똑같이 알기 위해 ADE가 만듭니다. 예전에 `--worktree`로 시작한 채팅은 그대로 이어집니다(세션이 있으면 플래그를 다시 붙이지 않음).
+  - 저장소 옆이 아니라 데이터 폴더에 두는 이유: 원본 작업 트리에 폴더가 생기지 않아 `.gitignore`가 필요 없고, 프로젝트 파일 감시와 원본의 `git status`가 에이전트의 편집을 사용자 변경으로 보지 않습니다. 저장소별 worktree(`<데이터>/worktrees/<저장소 id>`)와 같은 자리이고, 프로젝트 밖 경로라도 그 저장소의 worktree면 채팅 cwd로 받아 줍니다(`projectWorktree`).
+- **시작**: 빈 채팅 시작 화면의 **격리된 worktree에서 시작**. 누르면 worktree를 만들고 채팅이 그 안으로 옮겨 가며, 대화에 "새 worktree를 만들었습니다 · 브랜치", "worktree 진입 · 브랜치" 줄이 남습니다. 서버 옵션 `chat/set { worktree: true }`(플러그인 등)도 첫 메시지 때 같은 방법으로 만듭니다.
+- **표시**: worktree가 있으면 채팅 헤더(제목 옆), 입력창 아래 줄, 사이드바의 탭·pane 행에 브랜치 표시가 붙습니다. `↑N`은 원본 브랜치에 없는 커밋 수, `●N`은 커밋하지 않은 파일 수입니다. 색은 상태(합치지 않은 커밋 강조색, 미커밋 경고색, 합쳐짐 완료색, 충돌·폴더 없음 오류색)이고, 채팅이 원본으로 나와 있으면 점선 회색입니다. 툴팁에 경로·원본·브랜치·상태가 나옵니다. 상태는 서버가 턴이 끝날 때·옮길 때·합칠 때 다시 읽어 채팅 상태의 `worktreeInfo`로 보냅니다.
+- **worktree 창**(표시를 누름): 위치(worktree 안/원본), 경로(복사), 원본과 그 브랜치, 상태. 버튼은 **worktree에서 나가기**/**다시 들어가기**, **해제…**, **원본으로 합치기…**. 응답 중에는 옮기거나 합칠 수 없습니다.
+- **진입·나가기(사용자)**: 쉬고 있는 채팅만 옮깁니다(응답·승인 대기·스티어링·백그라운드 작업 중이면 거절). CLI 자식은 끝내고, 세션은 이렇게 따라갑니다.
+  - Claude: 세션이 cwd별 폴더(`<config>/projects/<cwd를 -로 바꾼 이름>/<세션>.jsonl`)에 있고 `--resume`이 거기서 찾으므로, 대화 기록(과 서브에이전트 폴더)을 새 폴더 쪽에 **복사**합니다. 원본은 지우지 않고, 새 쪽에 예전 복사본이 있으면 `.ade-<시각>.bak`으로 남긴 뒤 바꿉니다. 시작 폴더에 없으면 `projects/*`에서 가장 최근 것을 찾습니다.
+  - Codex: thread는 cwd와 상관없이 저장되므로 같은 thread를 새 cwd로 `thread/resume`합니다.
+  - Cursor: ACP 세션 저장소를 새 cwd의 새 세션으로 복사합니다(Branch와 같은 `forkCursorSession`, 원본은 그대로).
+  - 옮긴 뒤 첫 메시지 앞에만 "작업 폴더가 바뀌었다(새 경로·브랜치, 이전 경로의 파일은 같은 상대 경로)"는 ADE 안내가 붙습니다(대화에는 보이지 않음). 대화에는 "worktree 진입 · 브랜치" / "worktree에서 나옴 · 원본 폴더" 줄이 `events.jsonl`에 남아 다시 열어도 보입니다.
+- **진입·나가기(에이전트)**: Claude의 EnterWorktree/ExitWorktree 결과(기존 `worktreeMove`)와, 다시 시작한 Claude의 init 이벤트 `cwd`가 ADE가 띄운 폴더와 다를 때(스스로 들어간 worktree로 이어짐)를 감지해 "AI가 워크트리로 이동했습니다, …" 줄을 남기고 표시를 바꿉니다. 에이전트가 만든 worktree는 ADE가 옮기지 않습니다. worktree 창의 **에이전트에게 나오라고 요청**은 ExitWorktree를 부탁하는 문장을 입력창에 채웁니다. 합치기는 똑같이 됩니다.
+- **원본으로 합치기**: 합칠 커밋, 바뀐 파일(+/−), 커밋하지 않은 변경과 커밋 메시지(채팅 제목과 파일 목록으로 채워짐, 고칠 수 있음), 예상 충돌을 먼저 보여 줍니다. **커밋하고 합치기**는 worktree에서 `git add -A` + 커밋한 뒤 원본 저장소의 **지금 체크아웃된 브랜치**로 `git merge --ff --no-squash --no-edit <브랜치>`를 합니다. fast-forward가 되면 fast-forward, 아니면 merge 커밋입니다. **squash·rebase는 하지 않습니다.**
+  - 멈추는 경우(원본은 건드리지 않음): 원본에 추적 파일의 미커밋 변경(파일 목록 표시, untracked는 상관없음), 원본에서 merge·rebase 진행 중, 원본이 detached HEAD, worktree에 진행 중인 merge, `git merge-tree --write-tree`로 예상한 충돌. 예상하지 못한 충돌이 나면 `git merge --abort`로 되돌립니다.
+  - 충돌이면 **에이전트에게 충돌 해결 맡기기**가 입력창에 "원본 브랜치를 이 worktree에 merge해(rebase·squash 금지) 충돌을 풀고 커밋해 줘 + 파일 목록"을 채웁니다. 에이전트가 worktree 안에서 풀고 나면 다음 합치기는 fast-forward입니다(원본에 반쯤 된 merge가 남지 않음).
+  - 합친 뒤 같은 창에서 **worktree 해제**(브랜치도 삭제 기본 선택) 또는 **계속 worktree에서 작업**.
+  - 이 흐름 안의 커밋만 별도 라우트(`chat/worktree/commit`·`merge`)로 합니다. 일반 스테이징·커밋 UI(`git/stage`·`git/commit`·`git/discard`)는 여전히 없습니다(404).
+  - ADE가 실행하는 git은 저장소의 hooks·fsmonitor를 끕니다(runtime.js 규칙). 그래서 이 커밋에는 저장소의 pre-commit 훅이 돌지 않습니다.
+- **해제**: 채팅이 안에 있으면 먼저 원본으로 옮긴 뒤 `git worktree remove`로 폴더를 지웁니다. **합치지 않고 해제**는 브랜치를 남기고(미커밋 변경이 있으면 메시지를 받아 그 브랜치에 커밋한 뒤), 브랜치 삭제를 골라도 원본에 합쳐지지 않은 브랜치는 `git branch -d`가 거절해 남깁니다. **버리기**는 브랜치 이름을 입력해야 하고 `worktree remove --force`와 `branch -D`로 미커밋 변경과 합치지 않은 커밋을 지웁니다. 대화에 "worktree를 해제했습니다 · 브랜치 · 브랜치 삭제/유지" 줄이 남고, 대화 기록은 지우지 않습니다.
+- **닫기·정리**: worktree가 남은 채팅을 닫으면 묻습니다(닫기만, 합치지 않은 작업이 있으면 **원본으로 합치기…**, 비어 있으면 **worktree 해제하고 닫기**). 탭을 닫을 때는 합치지 않은 작업이 남은 채팅이 있으면 한 번 묻습니다. 닫아도 worktree와 브랜치는 남습니다. 명령 팔레트의 **채팅 worktree 관리…**(설정에서 단축키 지정 가능, 기본 없음)가 이 프로젝트의 채팅 worktree를 모두 보여 줍니다: 열린 채팅·닫힌 채팅·**남은 worktree**(채팅을 잊어 주인이 없는 것). 닫힌 채팅과 남은 것은 **정리**(미커밋 변경이 없을 때)와 **버리기…**(브랜치 이름 확인)를 할 수 있습니다. 닫힌 채팅이 worktree 안에서 쉬고 있으면 그 채팅을 다시 열어 나온 뒤 정리합니다.
+- **병렬 에이전트**: 에이전트 버스가 각 채팅의 worktree를 보여 주고, 충돌 예측·통합·합치기 도구를 줍니다([에이전트 버스](docs/AGENT_BUS.md#병렬-worktree를-하나로-합치기)). 에이전트가 합치거나 통합하면 그 채팅에 "AI가 … 합쳤습니다" 줄이 남습니다.
+- **한계**: 플러그인 작업공간 계약(v1, 원격 화면)에는 `worktreeInfo`와 `chat/worktree/*`가 없어 폰 화면에는 표시가 나오지 않습니다. 커밋이 없는 저장소와 git 저장소가 아닌 폴더에서는 만들 수 없습니다. 멀티 저장소 프로젝트의 루트처럼 저장소가 아닌 폴더에서 연 채팅은 쓸 수 없습니다(저장소 폴더에서 연 채팅은 됨).
 - **추가 폴더**: 절대 경로 최대 8개. 존재하는 폴더만 받습니다. Claude와 Codex만 지원합니다. 시작 화면의 폴더 추가 칩도 PR #42에서 제거돼 화면에서 추가할 방법은 없고, 이미 적용된 폴더가 있는 채팅에만 입력창 아래 "폴더 +N"이 보입니다.
 
 ---
@@ -611,7 +631,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 1. **제목 규칙의 이중 구현**: 서버(`chat-title.js`)와 화면(`chat-model.ts`)에 같은 규칙이 있습니다(§19).
 
-이번 갱신에서 해결된 항목(참고): 상태 줄 기본 항목(코드와 문서 일치: 토큰·비용·사용량 기여도), Cursor 사용 한도 문구(상태바·팝오버 조회 있음), `CURSOR_STORE_CONTEXT` 환경 변수(`ENVIRONMENT_VARIABLES.md`에 추가), `AskUserQuestion` 승인 카드 설명(질문 카드로 변경), 워크트리·폴더 추가 칩(PR #42에서 제거된 것으로 확인, `TESTING_GUIDE.md` 7-2~7-4 정정).
+이번 갱신에서 해결된 항목(참고): 상태 줄 기본 항목(코드와 문서 일치: 토큰·비용·사용량 기여도), Cursor 사용 한도 문구(상태바·팝오버 조회 있음), `CURSOR_STORE_CONTEXT` 환경 변수(`ENVIRONMENT_VARIABLES.md`에 추가), `AskUserQuestion` 승인 카드 설명(질문 카드로 변경), 폴더 추가 칩(PR #42에서 제거된 것으로 확인, `TESTING_GUIDE.md` 7-2~7-4 정정; 워크트리는 §20의 새 화면으로 다시 생김).
 
 ---
 
@@ -645,6 +665,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 | 에이전트 실행 파일 해석(Windows) | `apps/local-server/src/agent-spawn.js` |
 | 서버 라우트(chat/*, chat/peers, chat/stats, terminal/to-chat) | `apps/local-server/src/index.js` |
 | 에이전트 버스(내장 플러그인) | `apps/desktop/builtin-plugins/agent-bus/` |
+| 채팅 worktree(git 작업, 라우트, 화면) | `apps/local-server/src/chat-worktree.js`, `chat-worktree-routes.js`, `chat.js`(`relocate`·`refreshWorktree`), `apps/web/src/ChatWorktree.tsx`, `chat-worktree.ts`, `chat-worktree.css` |
 | 채팅 탭 화면 | `apps/web/src/ChatPane.tsx` |
 | 질문 카드 | `apps/web/src/QuestionCard.tsx` |
 | 제한 카드(`/limit`) | `apps/web/src/LimitCard.tsx` |
