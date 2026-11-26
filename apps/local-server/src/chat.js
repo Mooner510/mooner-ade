@@ -26,7 +26,7 @@ import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
 import { createChatTextStore } from './chat-text.js';
-import { readLastLines } from './file-util.js';
+import { readLastLines, renameRetry } from './file-util.js';
 import { evaluateLimit, limitOptions, limitView, normalizeLimit, POLL_MS } from './chat-limit.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
 
@@ -330,7 +330,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const data = JSON.stringify(snapshotMeta());
     if (data === lastMeta) return writing;
     lastMeta = data;
-    const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
+    const saved = writing.then(async () => {
+      const temporary = `${metaFile}.tmp`;
+      await fs.writeFile(temporary, data, { mode: 0o600 });
+      // Windows can refuse the replace for a moment while something reads meta.json; retried, and the temp file does not stay behind on a final failure.
+      try { await renameRetry(temporary, metaFile); } catch (error) { await fs.rm(temporary, { force: true }).catch(() => {}); throw error; }
+    });
     writing = saved.catch(error => { if (lastMeta === data) lastMeta = null; reportStorage(error); }); return saved;
   };
   // Limits (chat-limit.js). limitNow: the last window readings for the chip. limitBypass: the automatic compact after a stop runs outside the limit.
