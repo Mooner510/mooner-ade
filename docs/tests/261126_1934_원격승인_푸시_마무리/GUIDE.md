@@ -29,7 +29,7 @@ QR이나 링크 없이 "다른 PC에 접속"에서 연결을 요청하면, 그 P
 ### 2. 릴리스
 - **플러그인:** 원격 접속 플러그인 새 버전. 에이전트 푸시 감시는 ADE가 `workspace.quiet`를 알릴 때만 켜진다(옛 ADE에서는 그것만 꺼진다).
 - **폰 앱:** `apps/ade/android/app/google-services.json`이 있어야 푸시가 켜진 APK가 나온다. 다른 기기라면 Firebase 콘솔(`roufin` → 프로젝트 설정 → Android 앱)에서 두 앱(`com.roufin.ade`, `com.roufin.ade.dev`)이 든 파일을 다시 받아 그 자리에 둔다. 커밋하지 않는다(gitignore, gitleaks가 API 키로 잡는다). `versionCode`/`versionName`을 올려 서명 빌드한다.
-- **ADE:** CLAUDE.md의 릴리스 규칙대로. 연결 요청·원격 창 파일 업로드·푸시는 Hub 계정 기능이라 `changelog.json`과 릴리스 노트에 넣지 않는다. 넣을 수 있는 것은 "올린 파일(`upload-*`)이 오래되면 지워진다" 정도다.
+- **ADE:** CLAUDE.md의 릴리스 규칙대로. 연결 요청·원격 창 파일 업로드(올린 파일 `upload-*`가 오래되면 지워지는 것 포함)·푸시는 Hub 계정 기능이라 `changelog.json`과 릴리스 노트에 어떤 형태로도 넣지 않는다.
 
 ## 참고
 - 이미 확인한 것: Hub `go test ./...`, 플러그인 `pnpm test` 143개, 폰 Kotlin 단위 테스트와 웹 typecheck·lint·test·build, ADE `tests/remote-link.test.mjs`와 `node scripts/verify/t-remote-pc.mjs`(격리 Electron, 대화상자 연결 요청과 터미널 파일 끌어 놓기 포함 16/16). 네 PR의 CI와 머지 뒤 master CI 모두 통과.
