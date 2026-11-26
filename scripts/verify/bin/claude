@@ -108,14 +108,16 @@ if (!stream) {
     if (text.includes('e2e-echo')) { say('echo: ' + text); result(); return; }
     // Turn change card and file Rewind (chat-snapshots.js): `fsedit write <path> <text>; delete <path>` changes files in the working folder the way
     // a Bash tool would, after the turn's start snapshot (ctl.json {"fsms":N}, default 1.5 s), and answers with a uuid so Rewind can pick that answer.
-    if (text.startsWith('fsedit ')) {
+    // A line ADE puts ahead of the message (a worktree move note) may come first: the command is the first line that starts with `fsedit `.
+    const fsedit = /(?:^|\n)fsedit ([^\n]*)/.exec(text)?.[1];
+    if (fsedit !== undefined) {
       await wait(ctl().fsms ?? 1500);
-      for (const command of text.slice(7).split(';').map(item => item.trim()).filter(Boolean)) {
+      for (const command of fsedit.split(';').map(item => item.trim()).filter(Boolean)) {
         const [verb, name = '', ...rest] = command.split(' '), file = path.join(process.cwd(), name);
         if (verb === 'write') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, rest.join(' ').replace(/\\n/g, '\n') + '\n'); }
         if (verb === 'delete') fs.rmSync(file, { force: true, recursive: true });
       }
-      send({ type: 'assistant', uuid: crypto.randomUUID(), message: { id: 'm' + Date.now(), content: [{ type: 'text', text: 'done: ' + text.slice(7) }], usage: { input_tokens: 10, output_tokens: 5 } } });
+      send({ type: 'assistant', uuid: crypto.randomUUID(), message: { id: 'm' + Date.now(), content: [{ type: 'text', text: 'done: ' + fsedit }], usage: { input_tokens: 10, output_tokens: 5 } } });
       result(); return;
     }
     // File chips: the [[file:…]] form the system prompt asks for (relative path, :line, folder with a trailing slash), a path link, and look-alikes that must stay plain text.
