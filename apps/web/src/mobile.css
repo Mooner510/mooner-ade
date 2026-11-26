@@ -46,7 +46,8 @@
   .shell.mobile .projects-head .icon-btn[aria-label^="사이드바"] { display: none; }
   .shell.mobile > .projects { position: fixed; z-index: 60; top: 0; bottom: 0; left: 0; width: var(--rail-w); box-shadow: var(--shadow); transform: translateX(-102%); transition: transform .22s var(--ease-out, ease-out); padding-top: env(safe-area-inset-top, 0px); }
   .shell.mobile.drawer-open > .projects { transform: none; }
-  .shell.mobile > .projects::before { height: 8px; }
+  /* A desktop window this narrow still has the window controls (macOS traffic lights over the drawer's corner): --win-top is 0 on a phone. */
+  .shell.mobile > .projects::before { height: max(8px, var(--win-top)); }
   .shell.mobile .projects-resizer { display: none; }
   .drawer-scrim { position: fixed; z-index: 59; inset: 0; border: 0; border-radius: 0; padding: 0; background: #0008; animation: drawer-scrim .2s ease-out; }
   @keyframes drawer-scrim { from { opacity: 0; } }
@@ -59,7 +60,8 @@
   .shell.mobile .folder-actions button, .shell.mobile .ptab-close { min-width: 28px; min-height: 28px; }
 
   /* ---- top bar: icons only, the palette button shrinks to the project name ---- */
-  .tabbar { height: 48px; gap: 4px; padding: env(safe-area-inset-top, 0px) 6px 0 !important; overflow-x: auto; scrollbar-width: none; }
+  /* The bar grows by the phone's top inset (border-box); in a desktop window --win-left / --win-edge keep the buttons out from under the window controls. */
+  .tabbar { height: calc(48px + env(safe-area-inset-top, 0px)); gap: 4px; padding: env(safe-area-inset-top, 0px) max(6px, var(--win-edge)) 0 max(6px, var(--win-left)) !important; overflow-x: auto; scrollbar-width: none; }
   .tabbar::-webkit-scrollbar { display: none; }
   .tabbar .new-tab > span:not(.icon), .palette-button > kbd, .bar-note, .tabbar .drag-space { display: none; }
   /* No search field on a phone: the project's name, branch and folder take its place (Workspace.tsx), and tapping them searches. */
@@ -128,7 +130,7 @@
      appearance preview stays pinned under it, so a change can be watched without scrolling down to it. .settings-main is dissolved so the bar, tabs and page order as siblings. ---- */
   .settings { flex-direction: column; min-height: 0; overflow: hidden; }
   .settings-main { display: contents; }
-  .settings-main > header { order: 0; flex: none; gap: 8px; padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px 14px; }
+  .settings-main > header { order: 0; flex: none; gap: 8px; padding: calc(6px + env(safe-area-inset-top, 0px)) max(8px, var(--win-edge)) 6px max(14px, var(--win-left)); }
   .settings-main > header h3 { font-size: 16px; }
   .settings-main > header .settings-search { max-width: none; min-width: 0; margin-left: 0; height: 38px; }
   .settings-main > header .icon-btn { flex: none; width: 40px; height: 40px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--raised, var(--surface)); color: var(--fg); touch-action: manipulation; }
@@ -158,9 +160,10 @@
   body:has(dialog.settings-modal.bar-live) .app > .statusbar { box-shadow: none; }
   .project-modal .welcome-card { padding: 18px 16px; }
   .project-modal .actions { padding: 8px 16px 16px; }
+  .project-modal { padding-top: max(env(safe-area-inset-top, 0px), var(--win-top)); }
   .project-modal form { flex-wrap: wrap; }
   input, select, textarea { font-size: max(16px, 1em); }
-  .folder-picker { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+  .folder-picker { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; padding-top: max(env(safe-area-inset-top, 0px), var(--win-top)); padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 @media (max-width: 760px) and (prefers-reduced-motion: reduce) {
   .shell.mobile > .projects, .drawer-scrim { transition: none; animation: none; }
