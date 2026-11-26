@@ -92,6 +92,8 @@ const sections: { id: Section; label: string; icon: IconName }[] = [
   { id: 'keys', label: '단축키', icon: 'code' },
   { id: 'about', label: '정보', icon: 'info' }
 ];
+// The command palette's `,` search opens these (palette entries in main.tsx).
+export const settingsSections: readonly { id: Section; label: string; icon: IconName }[] = sections;
 type AiTab = 'common' | 'claude' | 'codex' | 'cursor';
 const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
   { id: 'common', label: '공용', icon: 'settings' },
@@ -823,6 +825,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
             <Row title="에이전트 작업 완료" hint="터미널의 AI 에이전트가 5초 넘게 출력을 멈추면(완료 또는 입력 대기) 알립니다.">{toggle('notifyDone')}</Row>
             <Row title="승인/입력 요청" hint="CLI가 벨(BEL)로 승인/입력을 요청할 때도 알립니다.">{toggle('notifyApproval')}</Row>
             <Row title="보고 있는 터미널도 알림" hint="끄면 지금 보고 있는 터미널은 알리지 않습니다.">{toggle('notifyLooking')}</Row>
+            <Row title="창 제목과 작업 표시줄에 표시" hint="확인이 필요한 탭이 있으면 창 제목에 개수를 붙이고, 창이 뒤에 있을 때 Windows 작업 표시줄 아이콘을 깜빡이고 점을 붙입니다(macOS는 Dock 배지)."><input type="checkbox" role="switch" aria-label="창 제목과 작업 표시줄에 표시" checked={settings.attentionBadge} onChange={event => set('attentionBadge', event.target.checked)} /></Row>
             <Row title="알림 소리" hint="알림과 함께 짧은 효과음을 재생합니다. 알림 권한이 없어도 소리는 납니다.">{toggle('notifySound')}</Row>
             {settings.notifySound && <>
               <Row title="소리 확장" hint="소리 크기를 최대 200%까지 조절합니다."><input type="checkbox" role="switch" aria-label="소리 확장" checked={settings.soundVolumeExtended} onChange={event => onChange({ ...settings, soundVolumeExtended: event.target.checked, soundVolume: event.target.checked ? settings.soundVolume : Math.min(settings.soundVolume, 100) })} /></Row>
@@ -896,14 +899,16 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
   const definitions = [...appKeyDefs.map(def => ({ ...def, scope: 'appKeys' as const })), ...chatKeyDefs.map(def => ({ ...def, group: '채팅 모드 (입력창에서)', scope: 'chatKeys' as const }))];
   const current = (def: typeof definitions[number]) => def.scope === 'appKeys' ? appKey(settings.appKeys, def.id)! : chatKey(settings.chatKeys, def.id as typeof chatKeyDefs[number]['id']);
   const inTerminal = (def: typeof definitions[number]) => settings.termKeys?.[def.id] ?? appKeyInTerminalByDefault(settings, def.id);
-  const changed = definitions.some(def => !combosOverlap(current(def), def.keys)) || Object.keys(settings.termKeys ?? {}).length > 0;
+  const same = (combo: string, keys: string) => combo === keys || (Boolean(combo) && Boolean(keys) && combosOverlap(combo, keys));
+  const changed = definitions.some(def => !same(current(def), def.keys)) || Object.keys(settings.termKeys ?? {}).length > 0;
   const bind = (def: typeof definitions[number], combo: string) => {
-    if (settings.chatSendKey === 'mod-enter' && combosOverlap(combo, 'mod+enter')) { setNote('메시지 전송에서 이미 쓰는 단축키입니다.'); return; }
-    const clash = definitions.find(other => (other.scope !== def.scope || other.id !== def.id) && combosOverlap(current(other), combo));
+    if (combo && settings.chatSendKey === 'mod-enter' && combosOverlap(combo, 'mod+enter')) { setNote('메시지 전송에서 이미 쓰는 단축키입니다.'); return; }
+    const clash = combo ? definitions.find(other => (other.scope !== def.scope || other.id !== def.id) && current(other) && combosOverlap(current(other), combo)) : undefined;
     if (clash) { setNote(`"${clash.label}"에서 이미 쓰는 단축키입니다.`); return; }
     const { [def.id]: _drop, ...rest } = settings[def.scope] ?? {};
     const { [def.id]: _term, ...termRest } = settings.termKeys ?? {};
-    onChange({ ...settings, [def.scope]: combosOverlap(combo, def.keys) ? rest : { ...rest, [def.id]: combo }, ...(def.scope === 'appKeys' && combosOverlap(combo, def.keys) ? { termKeys: termRest } : {}) });
+    const back = combo === def.keys || (Boolean(combo) && Boolean(def.keys) && combosOverlap(combo, def.keys)); // '' with no default: the key is taken away
+    onChange({ ...settings, [def.scope]: back ? rest : { ...rest, [def.id]: combo }, ...(def.scope === 'appKeys' && back ? { termKeys: termRest } : {}) });
     setEditing(''); setNote('');
   };
   const setInTerminal = (def: typeof definitions[number], on: boolean) => {
@@ -928,13 +933,13 @@ function ShortcutKeys({ settings, onChange }: { settings: Settings; onChange(set
       return <div className="shortcut-list setting-block" key={group}>
       <h3>{group}</h3>
       {items.map(def => {
-        const id = `${def.scope}:${def.id}`, custom = !combosOverlap(current(def), def.keys) || (def.scope === 'appKeys' && settings.termKeys?.[def.id] !== undefined);
+        const id = `${def.scope}:${def.id}`, custom = !same(current(def), def.keys) || (def.scope === 'appKeys' && settings.termKeys?.[def.id] !== undefined);
         return <div key={id} className="setting-hit"><span>{def.label}</span><span className="key-edit">
           {def.scope === 'appKeys' && <label className="key-term"><input type="checkbox" checked={inTerminal(def)} onChange={event => setInTerminal(def, event.target.checked)} />터미널에서도</label>}
           <button type="button" className="kbd-edit" aria-label={`${def.label} 단축키 변경`} aria-pressed={editing === id} onClick={() => { setEditing(id); setNote(''); }} onKeyDown={event => editing === id && capture(event, def)} onBlur={() => setEditing('')}>
-            {editing === id ? '키를 누르세요…' : <kbd>{def.scope === 'appKeys' ? showAppKey(settings.appKeys, def.id) : showCombo(current(def))}</kbd>}
+            {editing === id ? '키를 누르세요…' : current(def) ? <kbd>{def.scope === 'appKeys' ? showAppKey(settings.appKeys, def.id) : showCombo(current(def))}</kbd> : <span className="key-none">없음</span>}
           </button>
-          <button type="button" disabled={!custom} title="기본값으로" aria-label={`${def.label} 단축키 되돌리기`} onClick={() => bind(def, def.keys)}><Icon name="refresh" size={13} /></button>
+          <button type="button" disabled={!custom} title={def.keys ? '기본값으로' : '단축키 지우기'} aria-label={`${def.label} 단축키 ${def.keys ? '되돌리기' : '지우기'}`} onClick={() => bind(def, def.keys)}><Icon name="refresh" size={13} /></button>
         </span></div>;
       })}
     </div>;

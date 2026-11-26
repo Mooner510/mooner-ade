@@ -15,7 +15,14 @@ import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VER
 import { installThemes, nextTheme, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
-import { SettingsModal } from './Settings';
+import { SettingsModal, settingsSections, type Section } from './Settings';
+import { KeyGuide } from './KeyGuide';
+import { bindKeyGuide, bindSettingsSection, openKeyGuide, openSettingsSection } from './app-events';
+import { attentionTargets, nextAttention } from './attention-nav';
+import { treeKey, type TreeRow } from './tree-nav';
+import { useWindowAttention } from './window-attention';
+import { toast } from './toast';
+import type { PaletteEntry, PaletteHost } from './palette';
 import { AppUpdate } from './AppUpdate';
 import { onPluginsOpen } from './PluginSettings';
 import { AppVersion, Modal } from './views';
@@ -528,6 +535,12 @@ function Shell() {
     { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
     { id: 'nextProject', label: '다음 프로젝트', icon: 'arrowRight', run: () => actions.current.cycle(1) },
     { id: 'prevProject', label: '이전 프로젝트', icon: 'arrowLeft', run: () => actions.current.cycle(-1) },
+    { id: 'focusSidebar', label: '사이드바의 현재 탭으로 이동', icon: 'panelLeft', run: () => keyActions.current.sidebar() },
+    { id: 'nextAttention', label: '다음 확인 필요 탭/pane으로 이동', icon: 'alert', run: () => keyActions.current.attention(1) },
+    { id: 'prevAttention', label: '이전 확인 필요 탭/pane으로 이동', icon: 'alert', run: () => keyActions.current.attention(-1) },
+    // Not inside the editor: Monaco's Ctrl+/ comments the line out.
+    { id: 'keyGuide', label: '단축키 한눈에 보기', icon: 'keyboard', run: openKeyGuide, when: event => keyPlace(event.target) !== 'editor' },
+    { id: 'changelog', label: '변경 내역 보기', icon: 'sparkles', run: () => keyActions.current.changelog() },
     ...Array.from({ length: 9 }, (_, index): Command => ({ id: `project${index + 1}`, label: index === 8 ? '마지막 프로젝트' : `${index + 1}번 프로젝트`, hidden: true, run: () => actions.current.select(index) }))
   ], []);
   const onAddProject = useCallback(() => setPicker(true), []);
@@ -535,6 +548,54 @@ function Shell() {
   // (Also used directly as a click handler, so anything that is not an agent name, such as the event, means the default page.)
   const onOpenSettings = useCallback((agent?: unknown) => setSettingsOpen(agent === 'claude' || agent === 'codex' || agent === 'cursor' ? agent : 'default'), []);
   const onOpenPlugins = useCallback(() => setSettingsOpen('plugins'), []);
+
+  // ---- keyboard: the shell's part (shortcuts.ts workspaceKeyDefs, docs/LOCAL_IDE.md 단축키) ----
+  // A settings section asked for by the palette (`,`) or the shortcut guide; the shortcut guide itself (mod+/).
+  const [settingsAt, setSettingsAt] = useState<Section>(), [keyGuideOpen, setKeyGuideOpen] = useState(false);
+  useEffect(() => bindSettingsSection(section => { setSettingsAt(section); setSettingsOpen('default'); }), []);
+  useEffect(() => bindKeyGuide(() => setKeyGuideOpen(true)), []);
+  // The sidebar is one Tab stop (roving tabindex): the row last focused, else the current tab's row; arrow keys walk it (tree-nav.ts).
+  const [roving, setRoving] = useState('');
+  const focusTreeRow = (key: string) => { setRoving(key); requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-tree-key="${CSS.escape(key)}"]`)?.focus()); };
+  const currentRowKey = () => {
+    const root = activeRootRef.current, item = statusRef.current[root], tab = item?.tabs.find(entry => entry.id === item.activeTab), pane = tab?.panes.find(entry => entry.focused);
+    return compact || folded.has(root) || !tab ? `p:${root}` : pane ? `q:${root}\t${tab.id}\t${pane.id}` : `t:${root}\t${tab.id}`;
+  };
+  // Selects a tab (and pane) of any project and moves the keyboard into it.
+  const revealTab = (root: string, tabId: string, paneId?: string) => { setActiveRoot(root); handles.current.get(root)?.reveal(tabId, paneId); };
+  const keyActions = useRef({ sidebar: () => {}, attention: (_step: 1 | -1) => {}, changelog: () => {} });
+  keyActions.current = {
+    sidebar: () => { if (mobile) setDrawer(true); focusTreeRow(currentRowKey()); },
+    // Questions and approvals first, then finished answers, across every open project (attention-nav.ts).
+    attention: step => {
+      const projects = entriesRef.current.map(entry => ({ root: entry.root, tabs: (statusRef.current[entry.root]?.tabs ?? []).map(tab => ({ id: tab.id, asking: tab.asking, attention: tab.attention, panes: tab.panes.map(pane => ({ id: pane.id, asking: pane.asking, attention: pane.attention })) })) }));
+      const root = activeRootRef.current, item = statusRef.current[root], tab = item?.tabs.find(entry => entry.id === item.activeTab);
+      const target = nextAttention(attentionTargets(projects), tab ? { root, tabId: tab.id, paneId: tab.panes.find(pane => pane.focused)?.id } : undefined, step);
+      if (target) revealTab(target.root, target.tabId, target.paneId); else toast('done_all', '확인이 필요한 탭이 없습니다');
+    },
+    changelog: () => setChangelogOpen(true)
+  };
+  // What the shell adds to each project's command palette (palette.ts): every project's tabs and chats, the projects, the settings sections.
+  const paletteEntries = useRef<() => PaletteEntry[]>(() => []);
+  paletteEntries.current = () => {
+    const state = (pane: { asking: boolean; attention: boolean; working: boolean }) => pane.asking ? '응답 필요' : pane.attention ? '확인 필요' : pane.working ? '작업 중' : '';
+    const kind = (pane: { kind?: string; agent?: keyof typeof agentNames }) => pane.kind === 'chat' ? `${agentNames[pane.agent ?? 'claude']} 채팅` : pane.kind === 'editor' ? '편집기' : pane.kind === 'launcher' ? '새 창' : pane.agent ? `${agentNames[pane.agent]} CLI` : '터미널';
+    const icon = (pane: { kind?: string; agent?: keyof typeof agentNames }): IconName => pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.kind === 'chat' ? 'chat' : pane.agent ?? 'terminal';
+    const list: PaletteEntry[] = [];
+    for (const entry of entriesRef.current) {
+      const item = statusRef.current[entry.root], project = item?.name || shortName(entry.root);
+      for (const tab of item?.tabs ?? []) {
+        if (!tab.panes.length) list.push({ id: `tab:${entry.root}\t${tab.id}`, kind: 'tab', label: tab.label, icon: icon(tab), detail: [project, kind(tab), state(tab)].filter(Boolean).join(' · '), search: project, run: () => revealTab(entry.root, tab.id) });
+        else for (const pane of tab.panes) list.push({ id: `pane:${entry.root}\t${tab.id}\t${pane.id}`, kind: 'tab', label: pane.label, icon: icon(pane), detail: [project, `${tab.label} 분할`, kind(pane), state(pane)].filter(Boolean).join(' · '), search: `${project} ${tab.label}`, run: () => revealTab(entry.root, tab.id, pane.id) });
+      }
+      list.push({ id: `proj:${entry.root}`, kind: 'project', label: project, icon: 'folder', detail: entry.root, run: () => setActiveRoot(entry.root) });
+    }
+    for (const section of settingsSections) list.push({ id: `set:${section.id}`, kind: 'setting', label: `설정: ${section.label}`, icon: section.icon, run: () => openSettingsSection(section.id) });
+    return list;
+  };
+  const paletteHost = useMemo<PaletteHost>(() => ({ entries: () => paletteEntries.current() }), []);
+  // "(2) 무너에이드" and the taskbar while tabs need you (window-attention.ts).
+  useWindowAttention(Object.values(status).reduce((sum, item) => sum + item.attention, 0), settings.attentionBadge);
   useEffect(() => onPluginsOpen(onOpenPlugins), [onOpenPlugins]);
 
   // Dragging only moves a CSS variable; the width is committed to the settings (and saved) once the pointer is released.
@@ -561,7 +622,8 @@ function Shell() {
   const animCardLife = useExit(Boolean(useTipNotice('bg-anim', [['bganim', animTip && settings.tips && !settings.animateInBackground]])));
   const animCard = <BgAnimTip closing={animCardLife.closing} onOpenSettings={() => { setAnimTip(false); setSettingsOpen('default'); }} onDone={() => setAnimTip(false)} />;
   const animTipCard = animCardLife.mounted && <>{<Spotlight target='button[aria-label="설정"]' closing={animCardLife.closing} />}{createPortal(animCard, document.body)}</>;
-  const settingsModal = settingsOpen && <SettingsModal key={settingsOpen} initialSection={settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />;
+  const settingsModal = settingsOpen && <SettingsModal key={`${settingsOpen}:${settingsAt ?? ''}`} initialSection={settingsAt ? settingsAt : settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => { setSettingsOpen(false); setSettingsAt(undefined); }} />;
+  const keyGuideModal = keyGuideOpen && <KeyGuide settings={settings} onClose={() => setKeyGuideOpen(false)} onSettings={() => { setKeyGuideOpen(false); openSettingsSection('keys'); }} />;
   // "다른 PC에 접속" is the desktop app's: a phone's window and a plain browser have no `adeDesktop.remote`.
   const canRemotePc = !isRemote && Boolean(remoteBridge());
   const remotePcModal = remotePcOpen && canRemotePc && <RemotePcDialog onClose={() => setRemotePcOpen(false)} />;
@@ -603,6 +665,8 @@ function Shell() {
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', icon: 'captureWindow', run: () => { if (!canCapture()) throw new Error('이 브라우저는 화면 캡쳐를 지원하지 않습니다. 이미지를 붙여넣거나 파일로 추가하세요.'); requestCapture('element'); } },
     { id: 'tutorial', label: '둘러보기 다시 보기', icon: 'book', run: () => actions.current.tutorial() },
     { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, icon: 'palette', run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
+    { id: 'keyGuide', label: '단축키 한눈에 보기', icon: 'keyboard', run: openKeyGuide },
+    { id: 'changelog', label: '변경 내역 보기', icon: 'sparkles', run: () => setChangelogOpen(true) },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openWelcomePalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openWelcomePalette }
   ];
@@ -613,7 +677,7 @@ function Shell() {
     // The same rules as the workspace's handler (Workspace.tsx): the tour and a capture keep the keys, a dialog too (except the capture key), and so does a field's own Ctrl+letter.
     const handler = (event: KeyboardEvent) => {
       if (event.isComposing || touringRef.current || document.querySelector('.tour, .feedback-capture')) return;
-      const command = welcomeCommands.current.find(item => item.keys && matches(item.keys, event));
+      const command = welcomeCommands.current.find(item => item.keys && matches(item.keys, event) && (!item.when || item.when(event)));
       if (!command) return;
       if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
       if (keyBelongsToField(event, keyPlace(event.target), isMac)) return;
@@ -623,7 +687,27 @@ function Shell() {
     return () => window.removeEventListener('keydown', handler, true);
   }, [welcome, report]);
   const welcomeQuickDialog = welcomeQuick && createPortal(<QuickInput key={welcomeQuick.key} request={welcomeQuick.request} onClose={() => setWelcomeQuick(current => current?.key === welcomeQuick.key ? null : current)} />, document.body);
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} open={welcomeFeedback} setOpen={setWelcomeFeedback} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}<AppUpdate compact={false} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}{welcomeQuickDialog}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} open={welcomeFeedback} setOpen={setWelcomeFeedback} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}<AppUpdate compact={false} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}{welcomeQuickDialog}{keyGuideModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+
+  // The sidebar rows in screen order, for the arrow keys (tree-nav.ts) and the one row that is the Tab stop.
+  const treeRows: (TreeRow & { key: string })[] = entries.flatMap(entry => {
+    const item = status[entry.root] || idle, open = !folded.has(entry.root), head = { key: `p:${entry.root}`, level: 1, ...(compact ? {} : { expanded: open }) };
+    if (compact || !open) return [head];
+    return [head, ...item.tabs.flatMap(tab => tab.panes.length
+      ? [{ key: `t:${entry.root}\t${tab.id}`, level: 2, expanded: true, fixed: true }, ...tab.panes.map(pane => ({ key: `q:${entry.root}\t${tab.id}\t${pane.id}`, level: 3 }))]
+      : [{ key: `t:${entry.root}\t${tab.id}`, level: 2 }])];
+  });
+  const rovingKey = treeRows.some(row => row.key === roving) ? roving : treeRows.some(row => row.key === currentRowKey()) ? currentRowKey() : treeRows[0]?.key;
+  const treeItem = (key: string, level: number) => ({ 'data-tree-key': key, 'aria-level': level, tabIndex: key === rovingKey ? 0 : -1, onFocus: (event: React.FocusEvent) => { if (event.target === event.currentTarget) setRoving(key); } });
+  const onTreeKey = (event: React.KeyboardEvent) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !(event.target instanceof HTMLElement) || !event.target.dataset.treeKey) return;
+    const move = treeKey(treeRows, treeRows.findIndex(row => row.key === (event.target as HTMLElement).dataset.treeKey), event.key);
+    if (!move) return;
+    event.preventDefault();
+    if ('focus' in move) { focusTreeRow(treeRows[move.focus].key); return; }
+    const root = treeRows[move.toggle].key.slice(2);
+    setFolded(previous => { const next = new Set(previous); if (move.expand) next.delete(root); else next.add(root); return next; });
+  };
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''} ${mobile ? 'mobile' : ''} ${mobile && drawer ? 'drawer-open' : ''}`} style={{ '--rail-w': mobile ? 'min(86vw, 340px)' : compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     {mobile && drawer && <button type="button" className="drawer-scrim" aria-label="프로젝트 목록 닫기" onClick={() => setDrawer(false)} />}
@@ -635,7 +719,7 @@ function Shell() {
         {!compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
         <IconButton icon={compact ? 'chevronsRight' : 'chevronsLeft'} label={`사이드바 ${compact ? '펼치기' : '접기'}`} keys={showAppKey(settings.appKeys, 'toggleProjects')} onClick={() => setCompact(value => !value)} />
       </div>
-      <div className="folders" role="tree"
+      <div className="folders" role="tree" aria-label="프로젝트와 탭" onKeyDown={onTreeKey}
         onDragOver={event => { if (!projectDrag) return; const last = entries[entries.length - 1]; if (!last || last.root === projectDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setProjectDrop(previous => previous?.root === last.root && previous.after ? previous : { root: last.root, after: true }); }}
         onDrop={event => { if (!projectDrag) return; event.preventDefault(); const last = entries[entries.length - 1]; if (last && last.root !== projectDrag) moveProject(projectDrag, last.root, true); setProjectDrag(''); setProjectDrop(null); }}
         onDragLeave={event => { if (projectDrag && !event.currentTarget.contains(event.relatedTarget as Node | null)) setProjectDrop(null); }}>
@@ -672,21 +756,21 @@ function Shell() {
             const box = (event.currentTarget as HTMLElement).getBoundingClientRect(), mouse = 'clientX' in event && event.clientX ? event : null;
             setProjectMenu({ x: mouse ? mouse.clientX : box.left + 24, y: mouse ? mouse.clientY : box.bottom, root: entry.root, id: entry.id });
           };
-          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} tabIndex={0} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectSource} {...projectTarget} onContextMenu={openProjectMenu}
+          if (compact) return <div key={entry.root} role="treeitem" aria-selected={selected} {...treeItem(`p:${entry.root}`, 1)} className={`rail-item ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} title={hint} {...projectSource} {...projectTarget} onContextMenu={openProjectMenu}
             onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openProjectMenu(event); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
             <span className="rail-initial">{initials(name)}</span>
             {asking ? <span className="question-alert rail-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : item.attention > 0 ? <i className="rail-dot attn" aria-label="확인 필요" /> : null}
           </div>;
           return <section key={entry.root} className={`folder ${selected ? 'active' : ''} ${projectDrag === entry.root ? 'project-dragging' : ''} ${projectDrop?.root === entry.root ? `project-drop-${projectDrop.after ? 'after' : 'before'}` : ''}`} {...projectTarget}>
-            <div role="treeitem" aria-expanded={open} aria-selected={selected} tabIndex={0} className="folder-head" {...projectSource} onContextMenu={openProjectMenu}
+            <div role="treeitem" aria-expanded={open} aria-selected={selected} {...treeItem(`p:${entry.root}`, 1)} className="folder-head" {...projectSource} onContextMenu={openProjectMenu}
               onClick={() => setActiveRoot(entry.root)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setActiveRoot(entry.root); else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openProjectMenu(event); }} onAuxClick={event => { if (event.button === 1) void closeProject(entry.root); }}>
-              <button className="folder-chevron" aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
+              <button className="folder-chevron" tabIndex={-1} aria-label={open ? `${name} 접기` : `${name} 펼치기`} onClick={event => { event.stopPropagation(); setFolded(previous => { const next = new Set(previous); if (!next.delete(entry.root)) next.add(entry.root); return next; }); }}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={13} /></button>
               <span className="folder-icon"><Icon name="folder" size={15} /></span>
               <span className="folder-name" data-tip-overflow="">{name}</span>
               {asking ? <span className="question-alert" role="img" aria-label="응답 필요" title="질문, 승인 대기"><Icon name="alert" size={15} /></span> : item.attention > 0 && <i className="attn-dot" aria-label="확인 필요" title={`확인이 필요한 터미널 ${item.attention}개`} />}
               <span className="folder-actions">
-                <button aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
-                <button aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root, true); }}><Icon name="x" size={14} /></button>
+                <button tabIndex={-1} aria-label={`${name}에 새 탭`} title={`새 터미널 탭 (${showAppKey(settings.appKeys, 'newTab')})`} onClick={event => { event.stopPropagation(); setActiveRoot(entry.root); owner()?.newTab(); }}><Icon name="plus" size={14} /></button>
+                <button tabIndex={-1} aria-label={`${name} 프로젝트 닫기`} onClick={event => { event.stopPropagation(); void closeProject(entry.root, true); }}><Icon name="x" size={14} /></button>
               </span>
             </div>
             {open && <ul className="folder-tabs" role="group" data-dragging={drag?.root === entry.root ? '' : undefined}>
@@ -709,7 +793,7 @@ function Shell() {
                   else return;
                   event.preventDefault();
                 };
-                const close = <button className="ptab-close" aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id, true); }}><Icon name="x" size={12} /></button>;
+                const close = <button className="ptab-close" tabIndex={-1} aria-label={`${tab.label} 탭 닫기`} onClick={event => { event.stopPropagation(); owner()?.closeTab(tab.id, true); }}><Icon name="x" size={12} /></button>;
                 // Edges of a row reorder (a line shows where); the middle merges, labelled so it is never a surprise.
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
@@ -747,7 +831,7 @@ function Shell() {
                 const trail = (pane: { id: string; asking: boolean; attention: boolean; working: boolean }) => { if (state(pane) !== 'working') return null; const h = [...pane.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0); /* per-row lap time and phase, stable across renders */ return <span className="agent-trail" aria-hidden="true" style={{ '--lap': `${3.8 + (h % 5) * .35}s`, '--phase': `${-(h % 7) * .7}s` } as React.CSSProperties}><i /><i /><i /><i /></span>; };
                 const alert = (pane: { asking: boolean; attention: boolean }) => pane.asking ? <span className="question-alert" role="img" aria-label="응답 필요"><Icon name="alert" size={15} /></span> : pane.attention && <i className="attn-dot" aria-label="확인 필요" />;
                 if (!tab.panes.length) return <li key={tab.id} role="none" className={`${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}>
-                  <div role="treeitem" aria-selected={on} tabIndex={0} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)}
+                  <div role="treeitem" aria-selected={on} {...treeItem(`t:${entry.root}\t${tab.id}`, 2)} className={`folder-tab ${on ? 'active' : ''}`} data-kind={tab.kind} data-agent={tab.agent} data-agent-state={state(tab)}
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id, true))} onContextMenu={event => openMenu(event)}
                     onDoubleClick={() => owner()?.renameTab(tab.id)} onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name={tab.kind === 'launcher' ? 'plus' : tab.agent || (tab.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{tab.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span>{trail(tab)}
@@ -757,18 +841,18 @@ function Shell() {
                 // A split tab: a header that drags the whole tab, and one row per terminal that drags just that terminal.
                 return <li key={tab.id} role="none" className={`folder-group ${on ? 'active' : ''} ${dragging ? 'dragging' : ''} ${mode ? `drop-${mode}` : ''}`} {...dnd}
                   onAuxClick={event => { if (event.button === 1) owner()?.closeTab(tab.id); }}>
-                  <div role="treeitem" aria-selected={on} aria-expanded tabIndex={0} className="group-head"
+                  <div role="treeitem" aria-selected={on} aria-expanded {...treeItem(`t:${entry.root}\t${tab.id}`, 2)} className="group-head"
                     onClick={select} onKeyDown={event => rowKeys(event, select, () => owner()?.closeTab(tab.id, true))} onContextMenu={event => openMenu(event)} onDoubleClick={() => owner()?.renameTab(tab.id)}>
                     <span className="folder-tab-mark" aria-hidden="true"><Icon name="layers" size={13} /></span><span className="folder-tab-label" data-tip-overflow="">{tab.label}</span><small className="group-count">{tab.panes.length}</small>{close}
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
-                    {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} tabIndex={0} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
+                    {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} {...treeItem(`q:${entry.root}\t${tab.id}\t${pane.id}`, 3)} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
                       draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id, true), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}
                       {alert(pane)}
-                      <button className="ptab-close" aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id, true); }}><Icon name="x" size={12} /></button>
+                      <button className="ptab-close" tabIndex={-1} aria-label={`${pane.label} 닫기`} onClick={event => { event.stopPropagation(); owner()?.closePane(pane.id, true); }}><Icon name="x" size={12} /></button>
                     </li>; })}
                   </ul>{dropHint}
                 </li>;
@@ -793,19 +877,24 @@ function Shell() {
         {tourHintShown && <Hint title="둘러보기는 언제든 다시 볼 수 있어요" text="이 버튼을 누르면 처음부터 다시 시작해요." onDone={() => setSkippedTour(false)} />}
       </div>
       {!compact && <div className="projects-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="사이드바 너비 조절 (더블클릭: 기본값)" aria-valuemin={160} aria-valuemax={480} aria-valuenow={settings.sidebarWidth}
+        data-tip={'끌기: 너비 조절\n더블클릭: 기본 너비 (Enter)'}
         onPointerDown={startResize} onDoubleClick={() => setWidth(252)}
-        onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setWidth(clampWidth(settings.sidebarWidth + (event.key === 'ArrowLeft' ? -16 : 16))); } }} />}
+        onKeyDown={event => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setWidth(clampWidth(settings.sidebarWidth + (event.key === 'ArrowLeft' ? -16 : 16))); }
+          else if (event.key === 'Enter' || event.key === 'Home') { event.preventDefault(); setWidth(252); }
+        }} />}
     </nav>
     <div className="ws-stack">
       {entries.map(entry => <Workspace key={entry.root} ref={handleRef(entry.root)}
         root={entry.root} projectId={entry.id} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         requestedFile={requestedFile?.root === entry.root ? requestedFile : undefined} onOpenExternalFile={openExternalFile}
         onFileOpened={clearFileRequest}
-        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenUsage={() => setUsageOpen(true)} onOpenRemotePc={canRemotePc ? () => setRemotePcOpen(true) : undefined} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenUsage={() => setUsageOpen(true)} onOpenRemotePc={canRemotePc ? () => setRemotePcOpen(true) : undefined} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} paletteHost={paletteHost} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
     {settingsModal}
+    {keyGuideModal}
     {animTipCard}
     {changelogModal}
     {usageModal}

@@ -29,6 +29,8 @@ export type Settings = {
   tips: boolean; hintsSeen: string[];
   // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
   tmuxGuide: 'auto' | 'always' | 'off'; tmuxPrefix: string;
+  // attentionBadge: the window title, the Windows taskbar (flash, dot) and the macOS Dock show how many tabs need you (window-attention.ts).
+  attentionBadge: boolean;
   // Customization. accentColor '' keeps the theme's own accent. The rest map onto xterm / Monaco options of the same meaning.
   accentColor: string; terminalFontWeight: number; rightClickPaste: boolean; optionAsMeta: boolean; confirmClose: boolean;
   letterSpacing: number; scrollSensitivity: number; minimumContrast: number; wordSeparator: string; boldBright: boolean; terminalGpu: boolean;
@@ -148,6 +150,7 @@ export const defaultSettings: Settings = {
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
   agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, idleCompact: false, idleCompactMinK: 200, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
+  attentionBadge: true,
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
   diffLayout: 'auto', diffIgnoreWhitespace: false, diffFoldUnchanged: true, diffContextLines: 3,

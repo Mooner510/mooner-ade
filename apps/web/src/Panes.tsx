@@ -6,6 +6,7 @@ import { terminalEditKey } from './terminal-keys';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { usePaneDrag } from './pane-drag';
+import { tabStep as editorTabStep } from './tree-nav';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -134,7 +135,8 @@ function LauncherPane({ id, focused, onFocus, onClose, onLaunch, hidden, mode, s
     <div className="pane-tools" role="toolbar" aria-label="새 창">
       <span className="pane-title"><span className="pane-mark"><Icon name="plus" size={12} /></span><span className="pane-label">새 창</span></span>
       <span className="pane-actions"><IconButton icon="x" label="pane 닫기" onClick={() => onClose(id)} /></span></div>
-    <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus hidden={hidden} nudge={nudge} onLaunch={command => onLaunch(id, command)} />
+    {/* Only the focused launcher takes the focus when it mounts: the others come back when a maximize ends and must not pull the focus away from the pane that was maximized. */}
+    <Launchers onModeChange={onModeChange} shell={shell} mode={mode} autoFocus={focused} hidden={hidden} nudge={nudge} onLaunch={command => onLaunch(id, command)} />
   </section>;
 }
 
@@ -711,9 +713,11 @@ function DiffTab({ spec, ctx }: { spec: string; ctx: EditorCtx }) {
 // A file tab shows a dot where the close button is while its buffer has edits that are not on disk (like VS Code); pointing at it brings the close button back.
 function EditorTab({ spec, file, name, active, buffer, onSelect, onClose }: { spec: string; file: string; name: string; active: boolean; buffer?: FileBuffer; onSelect(): void; onClose(): void }) {
   const dirty = useSyncExternalStore(buffer?.subscribe ?? noSubscribe, () => Boolean(buffer?.dirty));
-  return <div role="tab" aria-selected={active} className={`tab ${active ? 'active' : ''} ${dirty ? 'dirty' : ''}`} onClick={onSelect} onAuxClick={event => { if (event.button === 1) onClose(); }}>
+  // One Tab stop for the strip (the open file); ←/→ and Home/End move between the files (EditorGroup), Delete closes the one with focus.
+  return <div role="tab" aria-selected={active} tabIndex={active ? 0 : -1} data-spec={spec} className={`tab ${active ? 'active' : ''} ${dirty ? 'dirty' : ''}`} onClick={onSelect} onAuxClick={event => { if (event.button === 1) onClose(); }}
+    onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } else if (event.key === 'Delete') { event.preventDefault(); onClose(); } }}>
     {file ? <FileIcon name={name} size={14} /> : <Icon name="diff" size={13} />}<span title={file || spec}>{name}</span>
-    <button className={dirty ? 'unsaved' : undefined} aria-label={`${file || spec} 닫기${dirty ? ' (저장하지 않은 변경 사항 있음)' : ''}`} onClick={event => { event.stopPropagation(); onClose(); }}>{dirty && <i aria-hidden="true" />}<Icon name="x" size={13} /></button></div>;
+    <button tabIndex={-1} className={dirty ? 'unsaved' : undefined} aria-label={`${file || spec} 닫기${dirty ? ' (저장하지 않은 변경 사항 있음)' : ''}`} onClick={event => { event.stopPropagation(); onClose(); }}>{dirty && <i aria-hidden="true" />}<Icon name="x" size={13} /></button></div>;
 }
 const noSubscribe = () => () => {};
 
@@ -721,8 +725,16 @@ function EditorGroup({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom }: {
   const tabs = leaf.tabs || [], active = leaf.active && tabs.includes(leaf.active) ? leaf.active : tabs[0] || '';
   const label = (spec: string) => { const { kind, path } = diffParts(spec); return `${basename(path)} (${revisionLabel(kind)})`; };
   const path = active.startsWith('file:') ? active.slice(5) : '';
-  return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)}>
-    <header className="tab-strip"><div className="tabs" role="tablist">{tabs.map(spec => {
+  // Arrow keys on the strip select the neighbouring file and keep the keyboard on its tab (roving tabindex).
+  const stripKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const at = tabs.indexOf(active), next = editorTabStep(tabs.length, at, event.key);
+    if (next === null || !(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return;
+    event.preventDefault(); ctx.onSelectTab(leaf.id, tabs[next]);
+    const strip = event.currentTarget; requestAnimationFrame(() => strip.querySelector<HTMLElement>(`[data-spec="${CSS.escape(tabs[next])}"]`)?.focus());
+  };
+  // onFocus: reaching the editor by Tab (not only by a click) makes it the focused pane, so pane keys and the maximize act on it.
+  return <section className={`editor-group ${focused ? 'focused' : ''}`} data-feedback-region="편집기 pane" onMouseDownCapture={() => onFocus(leaf.id)} onFocus={() => { if (!focused) onFocus(leaf.id); }}>
+    <header className="tab-strip"><div className="tabs" role="tablist" aria-label="열린 파일" onKeyDown={stripKeys}>{tabs.map(spec => {
       const file = spec.startsWith('file:') ? spec.slice(5) : '';
       return <EditorTab key={spec} spec={spec} file={file} name={file ? basename(file) : label(spec)} active={spec === active} buffer={file ? ctx.fileBuffer(file) : undefined}
         onSelect={() => ctx.onSelectTab(leaf.id, spec)} onClose={() => ctx.onCloseTab(leaf.id, spec)} />;
@@ -746,7 +758,11 @@ export function Splitter({ direction, sizes, onSizes, children, keys, equalOnCli
   }
   return <div className={`split ${direction}`} ref={host}>{children.map((child, index) => <div className="split-slot" key={keys?.[index] ?? index} data-fresh={fresh?.[index] ? direction : undefined} data-leaf={ids?.[index]} data-dir={direction} data-last={index === children.length - 1 || undefined} style={{ flex: sizes[index] || 1 }}>
     {child}{index < children.length - 1 && <div className="divider" role="separator" tabIndex={0} aria-label="패널 크기" aria-orientation={direction === 'row' ? 'vertical' : 'horizontal'} aria-valuenow={Math.round(sizes[index] * 100 / sizes.reduce((a, b) => a + b, 0))}
-      onKeyDown={event => { if (['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key)) { event.preventDefault(); adjust(index, sizes.reduce((a, b) => a + b, 0) * (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -.03 : .03)); } }}
+      data-tip={equalOnClick ? `끌기: 크기 조절\n클릭: 같은 크기로 (Enter)` : undefined}
+      onKeyDown={event => {
+        if (['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key)) { event.preventDefault(); adjust(index, sizes.reduce((a, b) => a + b, 0) * (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -.03 : .03)); }
+        else if (equalOnClick && (event.key === 'Enter' || event.key === 'Home')) { event.preventDefault(); onSizes(sizes.map(() => 1)); }
+      }}
       onPointerDown={event => {
         event.preventDefault(); const divider = event.currentTarget; divider.setPointerCapture(event.pointerId);
         const start = direction === 'row' ? event.clientX : event.clientY;
@@ -843,6 +859,7 @@ export function Panes(props: Props) {
     if (hosts.has(leaf.id)) continue;
     const host = document.createElement('div');
     host.className = 'pane-content';
+    host.dataset.paneId = leaf.id; // pane-focus.ts finds a pane by it
     hosts.set(leaf.id, host);
   }
   useLayoutEffect(() => {
