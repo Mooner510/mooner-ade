@@ -18,3 +18,8 @@ export function parseBusMessages(text: string): BusMessage[] | null {
   return messages;
 }
 export const busAgentName = (agent: string) => agent === 'claude' ? 'Claude' : agent === 'codex' ? 'Codex' : agent === 'cursor' ? 'Cursor' : agent;
+// What the sticky "요청한 내용으로 이동" bar shows for a message from another agent: who sent it and the start of what it says, not the raw `[ADE agent bus]` header the CLI received.
+export const busPreview = (messages: BusMessage[]) => {
+  const first = messages[0], who = `${busAgentName(first.agent)}${first.title ? ` “${first.title}”` : ''}`;
+  return `${who}${messages.length > 1 ? ` 외 ${messages.length - 1}건` : ''}: ${first.text.replace(/\s+/g, ' ').trim()}`;
+};

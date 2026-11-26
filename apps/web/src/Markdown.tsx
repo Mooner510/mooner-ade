@@ -101,6 +101,8 @@ function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
   const [left, setLeft] = useState(false);
   const [right, setRight] = useState(false);
   const spans = useMemo(() => tableSpans(rows, head.length), [rows, head.length]);
+  // Columns that hold sentences (a few words, long enough to wrap) get a floor width so a long path or URL elsewhere in the row cannot squeeze them to one syllable per line.
+  const prose = useMemo(() => head.map((title, c) => [title, ...rows.map(row => row[c] ?? '')].some(cell => cell.length > 28 && /\S\s+\S/.test(cell))), [head, rows]);
 
   useEffect(() => {
     const scroll = scrollRef.current!;
@@ -121,12 +123,12 @@ function MarkdownTable({ head, rows }: Extract<Node, { t: 'table' }>) {
 
   return <div className={`md-table${head.length >= 5 ? ' wide' : ''}`} data-scroll-left={left || undefined} data-scroll-right={right || undefined}>
     <div className="md-table-scroll" ref={scrollRef}>
-      <table><thead><tr>{head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}</tr></thead>
+      <table><thead><tr>{head.map((cell, i) => <th key={i} data-prose={prose[i] || undefined}>{inline(cell)}</th>)}</tr></thead>
         <tbody>{rows.map((row, r) => <tr key={r}>{head.map((_, c) => {
           const span = spans[r][c];
           if (!span) return null;
           // A merged cell that reaches the last row would draw the table's bottom border inside the frame; `last:` rows drop theirs, so it must too.
-          return <td key={c} rowSpan={span > 1 ? span : undefined} data-merge-end={span > 1 && r + span >= rows.length ? '' : undefined}>{inline(row[c] ?? '')}</td>;
+          return <td key={c} rowSpan={span > 1 ? span : undefined} data-prose={prose[c] || undefined} data-merge-end={span > 1 && r + span >= rows.length ? '' : undefined}>{inline(row[c] ?? '')}</td>;
         })}</tr>)}</tbody></table>
     </div>
   </div>;

@@ -570,7 +570,7 @@ test('Cursor: an MCP tool trusted in the settings is allowed once without a card
 });
 
 // ---- how a chat shows a message from the bus -------------------------------------------------------------------------------------
-import { parseBusMessages } from '../apps/web/src/bus-message.ts';
+import { busPreview, parseBusMessages } from '../apps/web/src/bus-message.ts';
 test('the chat recognises what the bus delivered, one message or several that waited together', () => {
   const one = formatMessage({ from: { id: 'codex-1', sessionId: 'concrete-session', agent: 'codex', title: 'Re"viewer' }, text: 'line 1\n\n---\nline 2' });
   assert.deepEqual(parseBusMessages(one), [{ title: "Re'viewer", agent: 'codex', id: 'codex-1', text: 'line 1\n\n---\nline 2' }]);
@@ -579,4 +579,11 @@ test('the chat recognises what the bus delivered, one message or several that wa
   const many = parseBusMessages(`${one}\n\n=====\n\n${untitled}`);
   assert.deepEqual(many?.map(message => message.agent), ['codex', 'cursor']);
   for (const plain of ['hello', '[ADE agent bus] but not a message', '[ADE agent bus] Message from codex chat, chat id x.\nno separator', `${one}\n\n=====\n\nstray text`]) assert.equal(parseBusMessages(plain), null, plain);
+});
+test('the sticky preview of a message from the bus names the sender and starts with the body, never the raw header', () => {
+  const first = formatMessage({ from: { id: 'codex-1', agent: 'codex', title: 'Reviewer' }, text: 'line 1\n\nline   2' });
+  const second = formatMessage({ from: { id: 'c-2', agent: 'cursor', title: '' }, text: 'hi' });
+  assert.equal(busPreview(parseBusMessages(first)), 'Codex “Reviewer”: line 1 line 2');
+  assert.equal(busPreview(parseBusMessages(first + '\n\n=====\n\n' + second)), 'Codex “Reviewer” 외 1건: line 1 line 2');
+  assert.equal(busPreview(parseBusMessages(second)), 'Cursor: hi');
 });
