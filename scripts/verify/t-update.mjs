@@ -1,8 +1,8 @@
 // macOS: the whole self-update of a packaged build, isolated. Needs `pnpm package` first (apps/desktop/dist/MoonerADE.app).
-//   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update.mjs [--old-progress-window] [--windowed]
+//   VERIFY_OUT=<folder from `session.mjs new update --folder-only --reason …`> node scripts/verify/t-update.mjs [--apply-later | --manual-download] [--windowed]
 // A copy of the build, renamed 0.0.1, runs from a temp folder with its own profile (ADE_USER_DATA_DIR), data, HOME and a fake release
 // (ADE_UPDATE_URL) offering 9.9.9 as GitHub would (app-only zip + manifest + full zip, sha256 digests). ADE_UPDATE_ANSWER takes
-// "지금 업데이트" for it. The main window goes full screen (unless --windowed) before the update quits the app.
+// "지금 업데이트" for it, or "나중에" with --apply-later. The main window goes full screen unless --windowed.
 // Checks: the progress card is drawn in the main window (screenshots), the old app exits without a signal, the bundle in the temp folder
 // becomes 9.9.9 and starts again under the same isolated profile, no new crash report names the temp folder, no Keychain prompt
 // (SecurityAgent) appeared, the real profile's lock was not touched. --old-progress-window puts back the separate progress window
@@ -18,6 +18,8 @@ import { ROOT, S, WebSocket, sleep } from './lib.mjs';
 
 if (process.platform !== 'darwin') { console.error('macOS 전용입니다.'); process.exit(2); }
 const args = process.argv.slice(2), oldWindow = args.includes('--old-progress-window'), windowed = args.includes('--windowed');
+const applyLater = args.includes('--apply-later'), manualDownload = args.includes('--manual-download');
+if (applyLater && manualDownload) throw new Error('업데이트 방식은 하나만 지정하세요.');
 const dist = join(ROOT, 'apps/desktop/dist/MoonerADE.app');
 if (!existsSync(dist)) { console.error('먼저 pnpm package를 실행하세요.'); process.exit(2); }
 if (existsSync(join(S, 'env.json'))) { console.error(`${S}에 이미 다른 세션이 있습니다. 새 VERIFY_OUT을 쓰세요.`); process.exit(2); }
@@ -26,6 +28,7 @@ const temp = realpathSync(mkdtempSync(join(S, 'update-')));
 writeFileSync(join(S, 'env.json'), JSON.stringify({ temp, startedAt: Date.now() }));
 const dirs = Object.fromEntries(['install', 'next', 'release', 'user', 'data', 'home'].map(name => [name, join(temp, name)]));
 for (const dir of Object.values(dirs)) mkdirSync(dir);
+writeFileSync(join(dirs.data, 'app-state.json'), JSON.stringify({ version: 1, openProjects: [], activeProjectId: '', settings: { onboarded: true, tourVersion: 2, tips: false } }));
 const run = (file, list) => execFileSync(file, list, { stdio: ['ignore', 'pipe', 'pipe'] });
 const results = [], record = (name, pass, detail = '') => { results.push({ name, pass, detail }); console.log(`${pass ? 'PASS' : 'FAIL'} ${name}${detail ? ` - ${detail}` : ''}`); };
 
@@ -57,9 +60,11 @@ writeFileSync(join(dirs.release, `${asset}.json`), JSON.stringify({ version: '9.
 
 // ---- the fake GitHub ----------------------------------------------------------------------------------------------
 const served = [];
+let offering = !manualDownload;
 const server = http.createServer((req, res) => {
   served.push(req.url);
   if (req.url === '/repos/Mooner510/mooner-ade/releases/latest') {
+    if (!offering) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ tag_name: 'v0.0.1', assets: [] })); return; }
     const port = server.address().port;
     const assets = readdirSync(dirs.release).map(name => {
       const file = join(dirs.release, name);
@@ -97,7 +102,7 @@ const cdpPort = 20000 + Math.floor(Math.random() * 20000);
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('ADE_') && !name.startsWith('ELECTRON_')));
 const log = join(S, 'app.log');
 const child = spawn(join(installed, 'Contents/MacOS/Electron'), [`--remote-debugging-port=${cdpPort}`], {
-  env: { ...env, HOME: dirs.home, ADE_USER_DATA_DIR: dirs.user, ADE_DATA_DIR: dirs.data, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: '지금 업데이트|중단하고 업데이트|확인' },
+  env: { ...env, HOME: dirs.home, ADE_USER_DATA_DIR: dirs.user, ADE_DATA_DIR: dirs.data, ADE_UPDATE_URL: `http://127.0.0.1:${server.address().port}`, ADE_UPDATE_ANSWER: `${applyLater ? '나중에' : '지금 업데이트'}|중단하고 업데이트|확인` },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 const out = [];
@@ -126,7 +131,7 @@ function connect(url) {
 }
 
 const shots = [];
-let separate = false;
+let separate = false, foundReady = false, countdownStarted = 0, sawTen = false;
 try {
   const cdp = await connect((await page()).webSocketDebuggerUrl);
   const evaluate = async (expression, userGesture = false) => (await cdp.send('Runtime.evaluate', { expression, userGesture, awaitPromise: true, returnByValue: true })).result?.result?.value;
@@ -142,11 +147,34 @@ try {
     }
     record('메인 창 전체 화면', await full(), `requestFullscreen: ${html} · ${await evaluate('innerWidth + "x" + innerHeight + " / " + screen.width + "x" + screen.height')}`);
   }
+  if (manualDownload) {
+    let enabledByDefault;
+    for (let attempt = 0; attempt < 50 && typeof enabledByDefault !== 'boolean'; attempt++) {
+      enabledByDefault = await evaluate('window.adeDesktop?.updates?.getAutoDownload()');
+      if (typeof enabledByDefault !== 'boolean') await sleep(100);
+    }
+    const saved = await evaluate('window.adeDesktop.updates.setAutoDownload(false)');
+    const prefs = JSON.parse(readFileSync(join(dirs.user, 'update-channel.json'), 'utf8'));
+    record('자동 다운로드 기본 켜짐과 끄기 저장', enabledByDefault === true && saved === false && prefs.autoDownload === false,
+      `기본값 ${enabledByDefault}, 응답 ${saved}, 저장 ${prefs.autoDownload}`);
+    offering = true;
+    void evaluate('window.adeDesktop.checkUpdate()').catch(() => {});
+  }
   // Progress card screenshots until the app goes away (the update starts on its own 5 s after launch).
   const seen = new Set();
   while (!exit) {
     if (!separate) separate = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then(r => r.json()).then(list => list.some(item => item.url.startsWith('data:text/html')), () => false);
-    const text = await Promise.race([evaluate("document.getElementById('ade-update-progress')?.textContent ?? null").catch(() => null), sleep(2000).then(() => null)]);
+    const state = await Promise.race([evaluate(`({ text: document.getElementById('ade-update-progress')?.textContent,
+      ready: !!document.querySelector('#ade-update-ready button'), seconds: document.querySelector('#ade-update-countdown [role=timer]')?.textContent })`).catch(() => null), sleep(2000).then(() => null)]);
+    if (state?.seconds) { countdownStarted ||= Date.now(); sawTen ||= state.seconds === '10'; }
+    if (applyLater && state?.ready && !foundReady) {
+      foundReady = true;
+      await sleep(1200);
+      const beforeApply = JSON.parse(readFileSync(join(installed, 'Contents/Resources/app/package.json'), 'utf8')).version;
+      record('나중에 이후 실행 및 버전 유지', !exit && beforeApply === '0.0.1');
+      void evaluate("document.querySelector('#ade-update-ready button').click()", true).catch(() => {});
+    }
+    const text = state?.text || (state?.seconds && '업데이트 재시작 카운트다운');
     const label = text?.replace(/[\d.]+ \/ [\d.]+ MB|[\d.]+ MB/, 'N MB');
     if (label && !seen.has(label)) {
       seen.add(label);
@@ -156,6 +184,9 @@ try {
     if (Date.now() - started > 180_000) { if (inKeychain(child.pid)) securityAgent = true; throw new Error('3분 안에 업데이트로 종료되지 않았습니다.'); }
     await sleep(250);
   }
+  if (manualDownload) record('10초 카운트다운 후 재시작', sawTen && Date.now() - countdownStarted >= 9500);
+  else record('자동 다운로드 후 적용에 카운트다운 없음', countdownStarted === 0);
+  if (applyLater) record('준비 알림에서 한 번 받은 업데이트 적용', foundReady && served.filter(url => url === `/assets/${asset}.zip`).length === 1);
   cdp.close();
 } catch (error) { record('진행', false, error.message); }
 
@@ -196,4 +227,4 @@ server.close();
 writeFileSync(join(S, `results-update${oldWindow ? '-old' : ''}.json`), JSON.stringify({ oldWindow, windowed, temp, exit, results, shots, crashes }, null, 2));
 writeFileSync(log, Buffer.concat(out));
 console.log(`\n${results.filter(item => item.pass).length}/${results.length} 통과 · 로그 ${log}`);
-process.exit(0);
+process.exit(results.every(item => item.pass) ? 0 : 1);

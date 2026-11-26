@@ -15,6 +15,7 @@ import { installThemes, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
 import { SettingsModal } from './Settings';
+import { AppUpdate } from './AppUpdate';
 import { onPluginsOpen } from './PluginSettings';
 import { AppVersion, Modal } from './views';
 import { CacheTimer } from './Panes';
@@ -585,7 +586,7 @@ function Shell() {
   // Seeing the tour to its end means seeing its Git graph step, which is what the one-time Git card says; skipping it does not (the card stays for that person).
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION, ...(skipped ? {} : { gitTipPending: false }) })), 450); };
   const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
-  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}</main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
+  if (!entries.length) return booted ? <><main className="welcome" inert={touring}><PickerCard {...picking} /><WelcomeFeedback settings={settings} setSettings={setSettings} />{canRemotePc && <button type="button" className="welcome-remote" onClick={() => setRemotePcOpen(true)}><Icon name="laptop" /> 다른 PC에 접속</button>}<AppUpdate compact={false} /></main><ErrorCorner scope="shell" />{tutorial}{animTipCard}{settingsModal}{changelogModal}{remotePcModal}</> : <div className="shell">{bootError && <div role="alert" className="boot-error"><b>시작하지 못했습니다</b><p>{bootError}</p><button type="button" onClick={() => location.reload()}>다시 시도</button></div>}</div>;
 
   return <AppKeysContext.Provider value={settings.appKeys}><div ref={shell} inert={touring} className={`shell ${compact ? 'compact' : ''} ${mobile ? 'mobile' : ''} ${mobile && drawer ? 'drawer-open' : ''}`} style={{ '--rail-w': mobile ? 'min(86vw, 340px)' : compact ? '52px' : `${settings.sidebarWidth}px` } as React.CSSProperties}>
     {mobile && drawer && <button type="button" className="drawer-scrim" aria-label="프로젝트 목록 닫기" onClick={() => setDrawer(false)} />}
@@ -745,11 +746,10 @@ function Shell() {
           </section>;
         })}
       </div>
+      <AppUpdate compact={compact} />
       <div className="projects-foot">
         {compact && <IconButton icon="folderPlus" label="프로젝트 열기" keys={showAppKey(settings.appKeys, 'addProject')} onClick={onAddProject} />}
-        <IconButton icon="chart" label="사용 기록" onClick={() => setUsageOpen(true)} />
         <IconButton icon="sparkles" label={changelogUnread ? '변경 내역 (읽지 않은 버전 있음)' : '변경 내역'} dot={changelogUnread} onClick={() => setChangelogOpen(true)} />
-        {canRemotePc && <IconButton icon="laptop" label="다른 PC에 접속" onClick={() => setRemotePcOpen(true)} />}
         {closeRemote && <IconButton icon="arrowLeft" label={remoteClient === 'desktop' ? '창 닫기' : 'PC 목록으로'} onClick={closeRemote} />}
         <span className="spacer" /><AppVersion /><span className="spacer" />
         <IconButton icon="book" label="둘러보기 다시 보기" className={tourHintShown ? 'hint-anchor' : ''} onClick={() => { setSkippedTour(false); actions.current.tutorial(); }} />
@@ -764,7 +764,7 @@ function Shell() {
         root={entry.root} projectId={entry.id} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         requestedFile={requestedFile?.root === entry.root ? requestedFile : undefined} onOpenExternalFile={openExternalFile}
         onFileOpened={clearFileRequest}
-        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
+        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenUsage={() => setUsageOpen(true)} onOpenRemotePc={canRemotePc ? () => setRemotePcOpen(true) : undefined} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}

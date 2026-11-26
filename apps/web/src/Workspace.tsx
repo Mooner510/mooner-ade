@@ -57,7 +57,7 @@ type WorkspaceProps = {
   root: string; projectId?: string; active: boolean; hub: Hub; connection: string; settings: Settings; setSettings: Dispatch<SetStateAction<Settings>>; projectCommands: Command[];
   requestedFile?: { path: string; location: FileLocation }; onOpenExternalFile(folder: string, path: string, location: FileLocation): Promise<void>;
   onFileOpened(request: { path: string; location: FileLocation }): void;
-  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
+  onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenUsage(): void; onOpenRemotePc?(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
 };
 
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
@@ -200,7 +200,7 @@ function MobileStatus({ settings, projectId, active, connection, branch, onBranc
 }
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, requestedFile, onOpenExternalFile, onFileOpened, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, requestedFile, onOpenExternalFile, onFileOpened, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenUsage, onOpenRemotePc, onOpenPlugins, onAgentAlert }, handleRef) {
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
@@ -444,7 +444,7 @@ ${where}`, [
   // What the project tree needs from the editors: which open files have unsaved edits, tabs that follow a moved file, and a nudge for every tree listing to reload.
   const treeHost: TreeHost = {
     confirm: ask.confirm, input: ask.input,
-    dirty: paths => [...fileBuffers.current.values()].filter(buffer => buffer.dirty && paths.some(path => buffer.path === path || buffer.path.startsWith(`${path}/`))).map(buffer => buffer.path),
+    dirty: paths => [...fileBuffers.current.values()].filter(buffer => buffer.dirty && paths.some(path => path === '.' || buffer.path === path || buffer.path.startsWith(`${path}/`))).map(buffer => buffer.path),
     moved(moves) {
       const remap = (spec: string) => {
         const path = spec.startsWith('file:') ? spec.slice(5) : '', hit = moves.find(({ from }) => path === from || path.startsWith(`${from}/`));
@@ -1348,14 +1348,16 @@ ${where}`, [
       <button className={`bar-button ${!noGit && gitOpen ? 'on' : ''}`} data-tip={noGit ? 'Git 저장소가 없습니다.' : `Git 커밋 그래프 (${showAppKey(settings.appKeys, 'gitLog')})`} aria-label="Git 커밋 그래프" aria-disabled={noGit || undefined} aria-pressed={noGit ? undefined : gitOpen} style={noGit ? { opacity: 0.4, cursor: 'default', background: 'transparent', color: 'var(--muted)' } : undefined} onPointerEnter={noGit ? undefined : preloadMonaco} onFocus={noGit ? undefined : preloadMonaco} onClick={() => { if (noGit) setGitNote(true); else toggleGit(); }}>
         <Icon name="graph" />{(git.additions > 0 || git.deletions > 0) && <span className="diffstat"><ins>+{git.additions}</ins><del>−{git.deletions}</del></span>}</button>{gitNote && noGit && <span className="bar-note" role="status">Git 저장소가 없는 폴더예요. 터미널에서 git init 을 하면 커밋 그래프를 쓸 수 있어요.</span>}
       <button className={`bar-button ${feedbackOpen && !errorsOpen ? 'on' : ''}`} data-tip={`피드백 요청 (${showAppKey(settings.appKeys, 'feedback')})${newsCount ? ', 처리 상태가 바뀐 피드백이 있어요' : ''}`} aria-label="피드백 요청" aria-pressed={feedbackOpen && !errorsOpen} onClick={toggleFeedback}><Icon name="feedback" />{newsCount > 0 && <i className="feedback-dot bar-news" aria-hidden="true" />}</button>
+      {onOpenRemotePc && <button className="bar-button" data-tip="다른 PC에 접속" aria-label="다른 PC에 접속" onClick={onOpenRemotePc}><Icon name="laptop" /></button>}
       {headerPlugins.map(plugin => <button key={plugin.id} className={`bar-button ${pluginShown?.id === plugin.id ? 'on' : ''}`} data-tip={`플러그인: ${plugin.name}`} aria-label={plugin.name} aria-pressed={pluginShown?.id === plugin.id} onClick={() => togglePlugin(plugin.id!)}><PluginIcon plugin={plugin} /></button>)}
       <ErrorTabButton scope={root} pressed={errorsOpen} onClick={toggleErrors} />
+      <IconButton icon="chart" tip="header" label="사용 기록" className="bar-icon" onClick={onOpenUsage} />
       <IconButton icon="settings" tip="header" label={pluginUpdates ? `설정 (플러그인 업데이트 ${pluginUpdates}개)` : '설정'} dot={pluginUpdates > 0} keys={showAppKey(settings.appKeys, 'settings')} className="bar-icon" onClick={onOpenSettings} />
       </div>
     </header>
     <ErrorToast scope={root} active={active} />
     <div className="workbench">
-      <ProjectTree key={project.root} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
+      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
         onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} host={treeHost} />
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>
