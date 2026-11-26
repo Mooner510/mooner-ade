@@ -33,6 +33,8 @@ const e = env(), post = (action, body) => fetch(`${e.origin}/api/${action}`, { m
 const second = join(e.temp, 'repo-perf2');
 
 async function seed() {
+  const state0 = await post('app/state', {});
+  if (!state0.settings?.onboarded) await post('app/state', { state: { ...state0, settings: { ...state0.settings, onboarded: true, tourVersion: 2 } } });
   const write = (pid, root, id, turns, label) => {
     const dir = join(e.data, pid, 'chat', id); mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'events.jsonl'), events(turns, label).map(item => JSON.stringify(item) + '\n').join(''));
@@ -71,28 +73,40 @@ async function clean() {
   rmSync(second, { recursive: true, force: true }); console.log('cleaned');
 }
 
+async function waitTab(c, expr, ms = 30000) {
+  for (let t = 0; t < ms; t += 400) { if (await c.ev(`return !!(${expr})`)) return; await sleep(400); }
+  throw new Error(`chat-heavy: UI 대기 시간 초과 (${expr.slice(0, 80)})`);
+}
+
 async function run(reps) {
   const c = await connect(page => page.url().includes('127.0.0.1')); await c.send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await c.send('Performance.enable');
   await c.ev(`if (!window.__perf) { window.__perf = { t0: 0, res: null }; for (const type of ['keydown', 'pointerdown']) addEventListener(type, event => { window.__perf.t0 = event.timeStamp; }, true); } return 1`);
   const V = `document.querySelector('main.app:not([hidden]) .tab-page:not([hidden])')`;
   const where = (selector, text, index = -1) => c.ev(`const e=[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e=>e.textContent.includes(${JSON.stringify(text)})).at(${index}); const r=e.getBoundingClientRect(); return [r.x+Math.min(40,r.width/2),r.y+r.height/2]`);
-  const select = async text => { await c.click(...await where('section.folder.active .folder-tab', text)); await sleep(1200); };
+  const select = async text => {
+    await waitTab(c, `[...document.querySelectorAll('section.folder.active .folder-tab')].some(t=>t.textContent.includes(${JSON.stringify(text)}))`);
+    await c.click(...await where('section.folder.active .folder-tab', text));
+    await sleep(1200);
+  };
   const project = async index => { await c.click(...await c.ev(`const e=document.querySelectorAll('section.folder .folder-head')[${index}]; const r=e.getBoundingClientRect(); return [r.x+60,r.y+r.height/2]`)); await sleep(1300); };
   const metrics = async fn => { const read = async () => Object.fromEntries((await c.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value])); const a = await read(); await fn(); await sleep(900); const b = await read(); return { layoutMs: (b.LayoutDuration - a.LayoutDuration) * 1000, scriptMs: (b.ScriptDuration - a.ScriptDuration) * 1000, styleMs: (b.RecalcStyleDuration - a.RecalcStyleDuration) * 1000 }; };
   // Frame pacing for `span` ms after the trigger. jank = time beyond one 16.7ms frame, summed over the frames longer than 20ms.
   const frames = async (trigger, span) => {
     await c.ev(`window.__fr=[]; window.__frOn=true; let last=0; const tick=t=>{ if(!window.__frOn) return; if(last) window.__fr.push(t-last); last=t; requestAnimationFrame(tick); }; requestAnimationFrame(tick); return 1`);
     await sleep(100); await c.ev(`window.__fr.length=0; return 1`); await trigger(); await sleep(span);
-    const list = await c.ev(`window.__frOn=false; return window.__fr`);
-    return { jankMs: list.filter(x => x > 20).reduce((a, b) => a + b - 16.7, 0), worst: Math.max(...list), over50: list.filter(x => x > 50).length };
+    const list = (await c.ev(`window.__frOn=false; return window.__fr`)) || [];
+    return { jankMs: list.filter(x => x > 20).reduce((a, b) => a + b - 16.7, 0), worst: list.length ? Math.max(...list) : 0, over50: list.filter(x => x > 50).length };
   };
   // Input event → the second frame after `done` is true.
   const latency = async (trigger, done) => {
-    await c.ev(`const p=window.__perf; p.res=null; p.t0=0; const check=()=>{ if(!(${done})) return requestAnimationFrame(check); requestAnimationFrame(()=>requestAnimationFrame(()=>{ p.res=performance.now()-p.t0; })); }; requestAnimationFrame(check); return 1`);
+    await c.ev(`if (!window.__perf) { window.__perf = { t0: 0, res: null }; for (const type of ['keydown', 'pointerdown']) addEventListener(type, event => { window.__perf.t0 = event.timeStamp; }, true); } const p=window.__perf; p.res=null; p.t0=0; const check=()=>{ if(!(${done})) return requestAnimationFrame(check); requestAnimationFrame(()=>requestAnimationFrame(()=>{ p.res=performance.now()-p.t0; })); }; requestAnimationFrame(check); return 1`);
     await trigger(); for (let i = 0; i < 200; i++) { const res = await c.ev(`return window.__perf.res`); if (res != null) return res; await sleep(30); } return null;
   };
-  const out = { reps }; await project(0);
+  const out = { reps };
+  await waitTab(c, `document.querySelector('section.folder .folder-head')`);
+  await project(0);
+  await waitTab(c, V);
   for (const [name, label] of [['long', LABEL.long], ['short', LABEL.short]]) {
     await select(label);
     const base = await c.ev(`return { turnsInDom: ${V}.querySelectorAll('.chat-turn').length, elementsInTab: ${V}.getElementsByTagName('*').length }`);
@@ -101,9 +115,11 @@ async function run(reps) {
     for (const [key, modifiers, letter] of [['ctrlD', 2, 'd'], ['ctrlShiftD', 10, 'D']]) {
       const rows = [];
       for (let i = 0; i <= reps; i++) {
-        await c.click(...await c.ev(`const t=${V}.querySelector('textarea[aria-label="메시지 입력"]'); const r=t.getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]`)); await sleep(250);
-        const before = await c.ev(`return ${V}.querySelectorAll('.launcher-pane').length`);
-        const toFirstPaint = await latency(() => c.key(letter, 'KeyD', modifiers), `${V}.querySelectorAll('.launcher-pane').length > ${before}`); await sleep(900);
+        const at = await c.ev(`const t=${V}?.querySelector('textarea[aria-label="메시지 입력"]'); if(!t) return null; const r=t.getBoundingClientRect(); return [r.x+r.width/2,r.y+r.height/2]`);
+        if (!at) throw new Error('chat-heavy: no composer in active tab');
+        await c.click(...at); await sleep(250);
+        const before = await c.ev(`return (${V}&&${V}.querySelectorAll('.launcher-pane').length)||0`);
+        const toFirstPaint = await latency(() => c.key(letter, 'KeyD', modifiers), `(${V})&&${V}.querySelectorAll('.launcher-pane').length > ${before}`); await sleep(900);
         await c.key('Escape', 'Escape'); await sleep(900);
         const fr = await frames(() => c.key(letter, 'KeyD', modifiers), 900); await c.key('Escape', 'Escape'); await sleep(900);
         const m = await metrics(() => c.key(letter, 'KeyD', modifiers)); await c.key('Escape', 'Escape'); await sleep(900);
