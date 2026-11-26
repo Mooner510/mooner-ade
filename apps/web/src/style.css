@@ -503,6 +503,11 @@ dialog.settings-modal.bar-live::backdrop { mask-image: linear-gradient(#000 0, #
 @media (max-width: 850px) {
   .palette-button { min-width: 0; } .palette-button > span:not(.icon), .palette-button kbd { display: none; }
 }
+/* The top bar too narrow for its right-hand tools (use-bar-fit.ts measures against the Windows window-button reserve, whatever the window or sidebar width): shed the least useful part first. */
+.tabbar:is([data-fit='1'], [data-fit='2'], [data-fit='3']) .palette-button { min-width: 0; }
+.tabbar:is([data-fit='1'], [data-fit='2'], [data-fit='3']) .palette-button > :is(span:not(.icon), kbd) { display: none; }
+.tabbar:is([data-fit='2'], [data-fit='3']) .new-tab > span:not(.icon) { display: none; }
+.tabbar[data-fit='3'] .bar-tools .diffstat { display: none; }
 
 /* multi-project shell: a rail of open projects beside the stack of workspaces */
 .shell { display: flex; height: 100dvh; background: var(--bg); }
