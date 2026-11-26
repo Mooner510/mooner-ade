@@ -60,6 +60,11 @@ function prune(modules) {
   }
 }
 
+// Untracked leftovers in the source folders never belong in the app: Git Bash (msys) leaves bash.exe.stackdump in the folder it crashed in,
+// and editors or manual backups leave *.bak/*.orig. The copies below skip them so a local build ships the same files as a clean checkout.
+const isLeftover = file => /\.(stackdump|bak|orig)$/i.test(file) || path.basename(file) === '.DS_Store';
+const sourceCopy = { recursive: true, filter: file => !isLeftover(file) };
+
 const deployment = mkdtempSync(path.join(os.tmpdir(), 'mooner-ade-deploy-'));
 const stage = path.join(dist, 'app');
 // Hoisted: real folders instead of pnpm's links, which the copy below turned into a second full copy of each package.
@@ -72,12 +77,12 @@ try {
   mkdirSync(path.join(stage, 'apps', 'desktop'), { recursive: true });
   mkdirSync(path.join(stage, 'apps', 'local-server'), { recursive: true });
   mkdirSync(path.join(stage, 'apps', 'web'), { recursive: true });
-  cpSync(path.join(import.meta.dirname, 'src'), path.join(stage, 'apps/desktop/src'), { recursive: true });
-  cpSync(path.join(import.meta.dirname, 'assets'), path.join(stage, 'apps/desktop/assets'), { recursive: true });
+  cpSync(path.join(import.meta.dirname, 'src'), path.join(stage, 'apps/desktop/src'), sourceCopy);
+  cpSync(path.join(import.meta.dirname, 'assets'), path.join(stage, 'apps/desktop/assets'), sourceCopy);
   stagePluginApi(path.join(root, 'apps/plugin-api'), path.join(stage, 'apps/plugin-api'), path.join(import.meta.dirname, 'builtin-plugins'));
-  cpSync(path.join(import.meta.dirname, 'builtin-plugins'), path.join(stage, 'apps/desktop/builtin-plugins'), { recursive: true });
-  cpSync(path.join(root, 'apps/local-server/src'), path.join(stage, 'apps/local-server/src'), { recursive: true });
-  cpSync(path.join(root, 'apps/web/dist'), path.join(stage, 'apps/web/dist'), { recursive: true });
+  cpSync(path.join(import.meta.dirname, 'builtin-plugins'), path.join(stage, 'apps/desktop/builtin-plugins'), sourceCopy);
+  cpSync(path.join(root, 'apps/local-server/src'), path.join(stage, 'apps/local-server/src'), sourceCopy);
+  cpSync(path.join(root, 'apps/web/dist'), path.join(stage, 'apps/web/dist'), sourceCopy);
   cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
   cpSync(path.join(deployment, 'node_modules'), path.join(stage, 'apps/local-server/node_modules'), { recursive: true, verbatimSymlinks: true });
   prune(path.join(stage, 'apps/local-server/node_modules'));
