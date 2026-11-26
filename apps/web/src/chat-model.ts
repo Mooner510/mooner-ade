@@ -1,5 +1,6 @@
 // What the chat tab knows about one conversation, built from the events the local server streams (apps/local-server/src/chat-claude.js).
 // Pure functions only, so tests/chat-model.test.mjs can load this file through Node's type stripping.
+import { applyFileRewind, attachTurnChanges, type FileRewindData, type TurnChanges } from './turn-changes.ts';
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheCreate: number };
 export type ModelConfigOption = { id: string; name: string; description?: string; category?: string; type: 'select'; currentValue: string; options: { value: string; name: string; description?: string }[] };
@@ -54,7 +55,7 @@ export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
   | { kind: 'peer_message'; sender: string; text: string }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone; changes?: TurnChanges } // changes: files the turn this answer closed changed (turn-changes.ts)
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual' | 'idle'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -65,7 +66,8 @@ export type Item = ItemBase & (
   | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
-  | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+  | { kind: 'info'; text: string; local?: boolean } // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+  | ({ kind: 'file_rewind' } & FileRewindData)); // Rewind put the work folder's files back (or an undo of that), turn-changes.ts
 /** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
 export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
@@ -489,10 +491,13 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), steers: rest };
       return { ...view, steers: rest };
     }
+    // Files changed during a turn and a file restore (chat-snapshots.js on the server, turn-changes.ts here).
+    case 'turn_changes': return attachTurnChanges(view, event);
+    case 'file_rewind': return applyFileRewind(view, event, key, fresh);
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).
     case 'rewind': {
       const at = view.items.findIndex(item => item.kind === 'assistant' && item.uuid === event.uuid);
-      return at < 0 ? view : { ...view, items: [...settleItems(view.items.slice(0, at + 1)), { kind: 'note', key, text: '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.', fresh }], live: {}, liveId: null, approvals: [], thinkingTokens: 0 };
+      return at < 0 ? view : { ...view, items: [...settleItems(view.items.slice(0, at + 1)), { kind: 'note', key, text: event.files ? '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다.' : '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.', fresh }], live: {}, liveId: null, approvals: [], thinkingTokens: 0 };
     }
     default: return view;
   }
