@@ -603,6 +603,8 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   // bypassPermissions never asks: every tool request is allowed on the spot. Only a question to the user (AskUserQuestion) or a plan to approve
   // (ExitPlanMode) still reaches the user, since an answer is the point there. Codex does the same inside its protocol (chat-rpc.js).
   const bypassAllows = event => agent === 'claude' && state.permissionMode === 'bypassPermissions' && event.phase === 'request' && !event.questions && event.tool !== 'AskUserQuestion' && event.tool !== 'ExitPlanMode';
+  // Cursor Bypass (Run Everything): tool prompts are answered in chat-rpc; if one still reaches here, auto-allow instead of showing a card.
+  const cursorRunEverything = event => agent === 'cursor' && state.runEverything === true && event.phase === 'request' && !event.questions && event.tool !== '계획 승인';
   // "Always allow" on a tool whose suggestion is one rule for the whole tool (an MCP tool) is the same grant as the "this tool" button: either way the chat answers it.
   const toolAllowedForChat = tool => toolAllowable(tool) && (meta.allowTools?.includes(tool) || meta.sessionAllow?.includes(tool));
   const bypassAllow = event => write(approvalLine(event.requestId, { allow: true, input: event.input })).catch(() => {});
@@ -626,6 +628,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (event.kind === 'usage') noteCursorAcpUsage(event);
       if (agent === 'claude' && event.kind === 'tool_result' && event.isError) noteAutoDenied(event);
       if (event.kind === 'approval' && bypassAllows(event)) { void bypassAllow(event); return; }
+      if (event.kind === 'approval' && cursorRunEverything(event)) {
+        if (protocol) void protocol.approve(event.requestId, { allow: true, always: false }).catch(() => {});
+        return;
+      }
       if (event.kind === 'approval') {
         // A tool the user allowed for this chat is answered here, without a card. The CLI's own allow rule cannot do this alone: an `ask` rule in the user's settings
         // (or a hook) beats every allow rule, and the CLI then offers no suggestion at all, so the request would come back each time.
@@ -1355,7 +1361,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         // flag: it is stored now and the process is replaced when the turn ends (or now, when idle).
         if (agent === 'cursor' && (sandbox !== undefined || runEverything !== undefined)) {
           if ([model, effort, configOption, permissionMode, worktree, addDirs].some(value => value !== undefined)) throw fault('INVALID_INPUT', '모델 설정은 한 번에 하나씩 바꾸세요.');
-          if (runEverything !== undefined) { meta.runEverything = state.runEverything = runEverything; protocol?.setRunEverything?.(runEverything); }
+          if (runEverything !== undefined) { meta.runEverything = state.runEverything = runEverything; await protocol?.setRunEverything?.(runEverything); }
           if (sandbox !== undefined) {
             meta.sandbox = state.sandbox = sandbox ?? null;
             if (child) { restartWhenQuiet(); }

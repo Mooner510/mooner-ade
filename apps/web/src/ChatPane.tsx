@@ -30,13 +30,13 @@ import { caretEdges } from './caret-lines';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPendingText, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, briefDuration,toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
-import { prepareChatImage } from './image-fit';
+import { MAX_CHAT_IMAGES, prepareChatImage } from './image-fit';
 import { UserMessageBubble } from './user-message-bubble';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
 import type { QuickItem } from './QuickInput';
-import { busAgentName, parseBusMessages } from './bus-message';
+import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
@@ -221,6 +221,29 @@ const LOCAL: CommandInfo[] = [
 const SHELLS: Record<string, string> = { Bash: 'bash', PowerShell: 'powershell', Monitor: 'shell' };
 const TOOL_ICONS: Record<string, string> = { Monitor: 'monitor_heart', CronCreate: 'schedule', CronList: 'schedule', CronDelete: 'schedule', ListAgents: 'groups', NotebookEdit: 'edit_note', TaskStop: 'stop_circle', SendMessage: 'send', Skill: 'bolt', EnterPlanMode: 'assignment', ExitPlanMode: 'assignment', ToolSearch: 'manage_search', EnterWorktree: 'account_tree', ExitWorktree: 'account_tree', AskUserQuestion: 'help', Bash: 'terminal', PowerShell: 'terminal', Read: 'description', Write: 'edit_document', Edit: 'edit', MultiEdit: 'edit', Glob: 'search', Grep: 'search', WebFetch: 'language', WebSearch: 'travel_explore', webSearch: 'travel_explore', Task: 'account_tree', Agent: 'account_tree', TodoWrite: 'checklist', SubagentHandback: 'flag' };
 const DRAWER_DOCK = 760, TURN_PAGE = 30, TURN_REACH = 1200;
+
+type ChatScrollPosition = { top: number; anchor?: Element; offset: number };
+
+function chatScrollPosition(scroll: HTMLElement, thread: HTMLElement): ChatScrollPosition {
+  const top = scroll.scrollTop;
+  if (top === 0) return { top, offset: 0 };
+  const edge = scroll.getBoundingClientRect().top;
+  // Measure the turn wrappers first so content-visibility can still skip the older turns' contents.
+  const turn = Array.from(thread.children).find(node => node.getBoundingClientRect().bottom > edge);
+  const anchor = (turn?.classList.contains('chat-turn')
+    ? Array.from(turn.children).find(node => node.getBoundingClientRect().bottom > edge) : null) ?? turn;
+  return { top, anchor, offset: anchor ? anchor.getBoundingClientRect().top - edge : 0 };
+}
+
+function restoreChatScroll(scroll: HTMLElement, position: ChatScrollPosition) {
+  const { anchor, offset, top } = position;
+  let target = top;
+  if (anchor && scroll.contains(anchor)) {
+    const delta = anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top - offset;
+    target = scroll.scrollTop + delta;
+  }
+  if (Math.abs(scroll.scrollTop - target) > 1) scroll.scrollTop = target;
+}
 const chatWidths = { narrow: '680px', default: '780px', wide: '1000px', full: '100%' };
 // An MCP tool answers with JSON text on one line: shown indented. Anything else is left as it came.
 const prettyResult = (value: string) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : value; } catch { return value; } };
@@ -778,6 +801,14 @@ export function SystemLine({ text, error, enter, tones, rev }: { text: string; e
   </div>;
 }
 
+// Cards for what other agents sent through the agent bus. Used by the thread and by a steering message that still waits for the turn.
+function BusCards({ messages }: { messages: BusMessage[] }) {
+  return <>{messages.map((message, index) => <div className="chat-bus" key={index}>
+    <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지: {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span></div>
+    <Markdown text={message.text} />
+  </div>)}</>;
+}
+
 // Everything in the thread that is not an assistant reply. Assistant blocks are rows of their Turn.
 const Message = memo(function Message({ item, onRecover, recovering }: { item: Item; onRecover?(): void; recovering?: boolean }) {
   const enter = item.fresh || undefined;
@@ -789,10 +820,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
     const slash = parseChatSlashCommand(item.text);
     if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="command" markdown={false}><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</UserMessageBubble></div>;
     const bus = parseBusMessages(item.text);
-    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus">{bus.map((message, index) => <div className="chat-bus" key={index}>
-      <div className="chat-bus-head"><Icon name="bot" size={12} /><span>다른 에이전트의 메시지: {busAgentName(message.agent)}{message.title ? ` “${message.title}”` : ''}</span>{message.hop > 0 && <small>답장 {message.hop}/{message.maxHops}</small>}</div>
-      <Markdown text={message.text} />
-    </div>)}</UserMessageBubble></div>;
+    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div>;
     return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}>{item.shells ? <small className="chat-shell-included"><Icon name="terminal" size={12} />콘솔 실행 결과 {item.shells}건을 이 메시지와 함께 에이전트에게 보냈어요</small> : null}<UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
@@ -996,7 +1024,7 @@ function UserImages({ previews, count }: { previews?: string[]; count: number })
   const [big, setBig] = useState<string | null>(null), modalId = useId();
   if (!previews?.length) return count > 0 ? <small className="chat-images"><Icon name="copy" size={11} />이미지 {count}장</small> : null;
   return <>
-    <div className="chat-user-images">{previews.map((url, index) => <button type="button" key={index} title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBig(url)}><img src={url} alt={`첨부 이미지 ${index + 1}`} /></button>)}</div>
+    <div className="chat-user-images" style={{ '--cols': previews.length === 4 ? 2 : Math.min(previews.length, 3), '--tile': previews.length === 1 ? '220px' : undefined } as CSSProperties}>{previews.map((url, index) => <button type="button" key={index} title="크게 보기" aria-label={`첨부 이미지 ${index + 1} 크게 보기`} onClick={() => setBig(url)}><img src={url} alt={`첨부 이미지 ${index + 1}`} /></button>)}</div>
     {big && <Modal className="image-modal" labelledBy={`image-modal-${modalId}`} region="이미지 크게 보기" onClose={() => setBig(null)}><span className="image-modal-frame"><img id={`image-modal-${modalId}`} src={big} alt="첨부 이미지 크게 보기" onClick={() => setBig(null)} /><IconButton icon="x" label="닫기" onClick={() => setBig(null)} /></span></Modal>}
   </>;
 }
@@ -1086,7 +1114,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   }, []);
   const [pin, setPin] = useState<{ key: string; text: string } | null>(null);
   const syncPin = useCallback(() => {
-    const root = scroller.current; if (!root) return;
+    const root = scroller.current; if (!root?.clientHeight) return;
     const edge = root.getBoundingClientRect().top + 4;
     let hit: HTMLElement | null = null;
     // From the newest up: the first one above the edge is the pin. Walking down from the top measured every older request, which also forced turns that are
@@ -1099,11 +1127,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Following the bottom: content growth glides the view down a fraction of the gap per frame instead of snapping a line at a time. Only the user's own
   // scrolling (wheel, touch, keys, scrollbar) lets go, so a fold collapsing or a block growing never unpins it; reaching the bottom pins it again.
   const follow = useRef(0), pinFrame = useRef(0), readingTool = useRef(false);
+  const viewport = useRef({ width: 0, height: 0 });
+  const readingPosition = useRef<ChatScrollPosition | null>(null), restoredTop = useRef<number | null>(null);
+  const windowBlurred = useRef(false);
+  const following = useCallback(() => stick.current && (ctxRef.current.settings.chatAutoScroll || jump.current), []);
   const followBottom = useCallback(() => {
-    if (!stick.current || !(ctxRef.current.settings.chatAutoScroll || jump.current) || follow.current) return;
+    if (!following() || follow.current) return;
     const step = () => {
       follow.current = 0;
       const element = scroller.current; if (!element || !stick.current) return;
+      if (!element.clientHeight) return;
       const gap = element.scrollHeight - element.clientHeight - element.scrollTop;
       if (gap <= 1) { jump.current = false; return; }
       // A whole history at once (opening, switching back) is not animated.
@@ -1111,7 +1144,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       follow.current = requestAnimationFrame(step);
     };
     follow.current = requestAnimationFrame(step);
-  }, []);
+  }, [following]);
   const release = () => { stick.current = false; cancelAnimationFrame(follow.current); follow.current = 0; };
   // Server messages arrive per token. They are queued and applied together once per frame (a timer stands in when frames are paused in a hidden
   // window), so a burst costs one render instead of one per message.
@@ -1203,7 +1236,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
 
   // The pane handing focus to the input is not the user choosing it: the composer stays folded until they click, type or tab into it.
   const autoFocus = useRef(false);
-  useEffect(() => { if (focused && visible) { autoFocus.current = true; box.current?.focus(); autoFocus.current = false; } }, [focused, visible]);
+  useEffect(() => { if (focused && visible) { autoFocus.current = true; box.current?.focus({ preventScroll: true }); autoFocus.current = false; } }, [focused, visible]);
   // Cursor's process takes several seconds to start. Warm it as soon as the pane is on screen, not only once it has focus.
   useEffect(() => { if (agent === 'cursor' && view.ready && visible) void ctxRef.current.call('chat/warm', { id }).catch(() => {}); }, [agent, id, view.ready, visible]);
   const [recovering, setRecovering] = useState(false);
@@ -1342,13 +1375,55 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     observer.observe(el); edits.observe(el, { childList: true, subtree: true, characterData: true }); void document.fonts?.ready.then(() => { fitSig.current = ''; fit(); });
     return () => { observer.disconnect(); edits.disconnect(); };
   }, [fit]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = thread.current, scroll = scroller.current;
-    if (!element || !scroll) return;
-    const observer = new ResizeObserver(followBottom);
+    if (!visible || !element || !scroll) return;
+    const restore = () => {
+      const { clientWidth: width, clientHeight: height } = scroll;
+      if (!height) return;
+      viewport.current = { width, height };
+      if (following()) { followBottom(); return; }
+      if (readingPosition.current) {
+        restoreChatScroll(scroll, readingPosition.current);
+        restoredTop.current = scroll.scrollTop;
+      } else readingPosition.current = chatScrollPosition(scroll, element);
+    };
+    // Reparenting a split pane can reset scrollTop. Use the position from before the resize, even when the text wraps differently.
+    const observer = new ResizeObserver(() => {
+      if (viewport.current.width !== scroll.clientWidth || viewport.current.height !== scroll.clientHeight) restore();
+      else followBottom();
+    });
     observer.observe(element); observer.observe(scroll);
-    return () => observer.disconnect();
-  }, [followBottom]);
+    let focusFrame = 0, blurTimer = 0;
+    const blur = () => {
+      windowBlurred.current = true;
+      cancelAnimationFrame(focusFrame);
+      // A window blur also fires when focus moves to a UI card's iframe.
+      clearTimeout(blurTimer);
+      blurTimer = window.setTimeout(() => { windowBlurred.current = !document.hasFocus(); });
+    };
+    const focus = () => {
+      clearTimeout(blurTimer);
+      if (!windowBlurred.current) return;
+      cancelAnimationFrame(focusFrame);
+      focusFrame = requestAnimationFrame(() => {
+        if (!windowBlurred.current) return;
+        windowBlurred.current = false;
+        restore();
+      });
+    };
+    restore();
+    window.addEventListener('blur', blur);
+    window.addEventListener('focus', focus);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(focusFrame);
+      clearTimeout(blurTimer);
+      windowBlurred.current = false;
+      window.removeEventListener('blur', blur);
+      window.removeEventListener('focus', focus);
+    };
+  }, [visible, following, followBottom]);
   useEffect(() => {
     const el = box.current; if (!el) return;
     if (!text.trim() && !stash) { el.style.height = ''; return; }
@@ -1359,12 +1434,20 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     requestAnimationFrame(() => { el.style.transition = ''; });
   }, [text, stash, ctx.settings.chatComposerMax]);
   const onScroll = () => {
-    const element = scroller.current; if (!element) return;
-    const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const element = scroller.current;
+    if (!visible || !element?.clientHeight || !thread.current || windowBlurred.current) return;
+    // Scroll events can arrive before ResizeObserver. A temporary clamp or reset is not a new reading position.
+    if (viewport.current.width !== element.clientWidth || viewport.current.height !== element.clientHeight) return;
+    const top = element.scrollTop, gap = element.scrollHeight - top - element.clientHeight;
+    const restored = top === restoredTop.current;
+    restoredTop.current = null;
     // Opening a tool can emit a bottom scroll before its animation grows; that must not resume following while it is being read.
-    if (gap < 4 && !readingTool.current) stick.current = true;
+    if (!restored) {
+      if (gap < 4 && !readingTool.current) stick.current = true;
+      readingPosition.current = following() ? null : chatScrollPosition(element, thread.current);
+      if (hiddenRef.current > 0 && !stick.current && top < TURN_REACH) showEarlier();
+    }
     setAway(!stick.current && gap > 240);
-    if (hiddenRef.current > 0 && !stick.current && element.scrollTop < TURN_REACH) showEarlier();
     if (!pinFrame.current) pinFrame.current = requestAnimationFrame(() => { pinFrame.current = 0; syncPin(); });
   };
   // Touch: only a finger drawn down (the thread moves toward older messages) lets go. A finger drawn up, or one that only rests, does not: at the bottom there is
@@ -1747,7 +1830,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     // 5MB가 넘는 그림은 줄이는 데 몇 초 걸릴 수 있어, 그동안 "줄이는 중"을 보여 준다(조용히 멈춘 것처럼 보이지 않게).
     const large = accepted.filter(file => file.size > 4_500_000).length; if (large) setShrinking(count => count + large);
     try {
-      const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, 4);
+      const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, MAX_CHAT_IMAGES);
       setImages(next); toastAttached(next.length - images.length || accepted.length);
     } catch (cause) { ctx.fail(cause); } finally { if (large) setShrinking(count => Math.max(0, count - large)); }
   }
@@ -1913,16 +1996,16 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <IconButton icon="x" label="채팅 닫기" onClick={() => ctx.onClose(id)} /></span></div>
     {/* 둘러보기(projectId 'tour')는 연습 화면이라 실제 CLI 업데이트 안내·실행 버튼을 띄우지 않는다. */}
     {(agent === 'claude' || agent === 'codex') && ctx.projectId !== 'tour' && <CliUpdateNotice agent={agent} />}
-    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchStart={event => { touchFrom.current = event.touches[0]?.clientY ?? null; }} onTouchMove={onTouchMove} onTouchEnd={settleAtBottom} onTouchCancel={settleAtBottom}
+    <div className="chat-scroll" ref={scroller} onScroll={onScroll} onWheel={event => { windowBlurred.current = false; readingTool.current = false; if (event.deltaY < 0) release(); }} onTouchStart={event => { touchFrom.current = event.touches[0]?.clientY ?? null; }} onTouchMove={event => { windowBlurred.current = false; onTouchMove(event); }} onTouchEnd={settleAtBottom} onTouchCancel={settleAtBottom}
       onClick={event => { if ((event.target as HTMLElement).closest('.chat-tool-head[aria-expanded="false"], .chat-bundle-head[aria-expanded="false"]')) { readingTool.current = true; release(); } }}
-      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) readingTool.current = false; if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.pointerType === 'mouse' && event.target === event.currentTarget) { readingTool.current = false; release(); } }}>
+      onKeyDown={event => { if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) { windowBlurred.current = false; readingTool.current = false; } if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) release(); }} onPointerDown={event => { if (event.pointerType === 'mouse' && event.target === event.currentTarget) { windowBlurred.current = false; readingTool.current = false; release(); } }}>
       {pin && <div className="chat-pin-wrap"><button type="button" className="chat-pin" aria-label="요청한 내용으로 이동" onClick={() => jumpToUser(pin.key)}><Icon name="arrowUp" size={14} /><span>{pin.text}</span></button></div>}
       <div className="chat-thread" ref={thread}>
         {openError && <div className="chat-msg error" role="alert"><Icon name="alert" size={14} /><span>{openError}</span></div>}
         {hiddenTurns > 0 && <button type="button" className="chat-earlier" onClick={showEarlier}>이전 대화 {hiddenTurns}개 더 보기</button>}
         {renderedTurns.map((items, index) => { const current = index === renderedTurns.length - 1; return <Turn key={items[0].key} items={items} agentIds={agentIds} settled={!current || !busy} working={current && busy} results={view.results} settings={ctx.settings} plainThinking={agent === 'claude'} onBranch={caps?.branch === false ? undefined : branch} onRewind={caps?.rewind === false ? undefined : rewind} onRecover={state.recoverable ? recoverSession : undefined} recovering={recovering} />; })}
         {!empty && <ChatStatusRow active={busy} effort={state.effort} tokens={view.thinkingTokens} label={view.reconnecting ? 'Cursor 연결이 잠깐 끊겨 이어서 재시도하는 중…' : view.compacting ? '컨텍스트를 압축하는 중… 대화가 길수록 오래 걸립니다' : activityLabel || (state.configuring ? '설정을 적용하는 중' : '')} />}
-        {view.steers.map(item => <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링, 반영 대기 중' : '스티어링, ↑ 수정, Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>)}
+        {view.steers.map(item => { const bus = parseBusMessages(item.text); return bus ? <div className="chat-msg user" key={item.uuid}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div> : <div className="chat-msg user" key={item.uuid}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="steer" markdown={false}><small className="chat-steer">{caps?.cancelSteer === false ? '스티어링, 반영 대기 중' : '스티어링, ↑ 수정, Esc 바로 보내기'}</small><span className="chat-bubble-plain">{item.text}</span></UserMessageBubble></div>; })}
         {state.error && state.status === 'idle' && !turnError && <ChatErrorAlert message={state.error} recoverable={state.recoverable} recovering={recovering} onRecover={state.recoverable ? recoverSession : undefined} />}
       </div>
     </div>
