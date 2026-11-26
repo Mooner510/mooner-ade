@@ -33,6 +33,9 @@ async function main() {
   cleanup.push(() => rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const data = join(temp, 'data'), home = join(temp, 'home'), repo = join(temp, 'repo'), profile = join(temp, 'chrome');
   for (const folder of [data, home, repo]) await mkdir(folder);
+  // A fresh data folder is a first run: the onboarding tour would cover the app with its own sample projects (terminals included) and take the focus.
+  // Start as someone who already finished it (TOUR_VERSION in apps/web/src/Editor.tsx; an older number brings the tour back).
+  await writeFile(join(data, 'app-state.json'), JSON.stringify({ version: 1, openProjects: [], activeProjectId: '', settings: { onboarded: true, tourVersion: 2 } }));
   const git = (...args) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo, stdio: 'ignore' });
   git('init', '-q', '-b', 'main');
   await writeFile(join(repo, 'hello-e2e.txt'), 'hello\n'); git('add', '.'); git('commit', '-q', '-m', 'init');
@@ -89,7 +92,12 @@ async function main() {
     throw new Error(`timeout: ${what}`);
   };
   const visible = selector => `([...document.querySelectorAll(${JSON.stringify(selector)})].find(el => el.getClientRects().length))`;
-  await send('Runtime.enable'); await send('Page.enable'); await send('Page.navigate', { url });
+  await send('Runtime.enable'); await send('Page.enable');
+  // The saved settings above make this a returning user, so the app would open the update notes (a modal that takes the focus) the first time it sees a "newer" version.
+  // Record the newest version as already run; the page's origin is new on every run, so its localStorage starts empty.
+  const [{ version: latest }] = JSON.parse(await readFile(join(root, 'apps/web/src/changelog.json'), 'utf8'));
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('ade-changelog-last', ${JSON.stringify(latest)})` });
+  await send('Page.navigate', { url });
   // With no project open the app starts on the project picker; otherwise it is behind the "open project" button.
   await until(`${visible('[aria-label="프로젝트 열기"]')} || ${visible('input[aria-label="프로젝트 절대 경로"]')}`, 'authenticated shell');
   await evaluate(`void (${visible('input[aria-label="프로젝트 절대 경로"]')} || ${visible('[aria-label="프로젝트 열기"]')}.click())`);
