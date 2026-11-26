@@ -168,7 +168,7 @@ header, nav, .actions { display: flex; align-items: center; gap: 4px; flex-wrap:
 .menu button:hover { background: var(--selected); }
 .menu button span { display: flex; flex-direction: column; }
 /* sidebar right-click menu: fixed at the pointer */
-.tab-menu { position: fixed; top: 0; width: max-content; min-width: 196px; max-width: 280px; padding: 4px; }
+.tab-menu { position: fixed; top: 0; width: max-content; min-width: 196px; max-width: min(280px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 4px; }
 .tab-menu button { gap: 8px; padding: 4px 8px; font-size: 12px; }
 .tab-menu button .icon, .tab-menu button svg.icon { flex: none; width: 15px; height: 15px; }
 .tab-menu button:disabled { opacity: .4; cursor: default; background: transparent; }
@@ -1310,7 +1310,7 @@ body:has(dialog.settings-modal.bar-live) .app > .statusbar { color: var(--fg); b
 
 @keyframes spin { to { rotate: 360deg; } }
 /* Usage detail popover (click on a usage item). */
-.usage-detail { inset: auto; margin: 0; padding: 10px 12px; width: 280px; max-width: calc(100vw - 16px); z-index: 30; white-space: normal; color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px #0005; font-size: 12px; animation: pop-in .12s var(--ease-out); }
+.usage-detail { inset: auto; margin: 0; padding: 10px 12px; width: 280px; max-width: calc(100vw - 16px); z-index: 30; white-space: normal; color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px #0005; font-size: 12px; overflow-y: auto; overscroll-behavior: contain; animation: pop-in .12s var(--ease-out); }
 :root[data-scheme=light] .usage-detail { box-shadow: 0 4px 16px #0000001f; }
 @media (prefers-reduced-motion: reduce) { .usage-detail { animation: none; } }
 .usage-detail:popover-open { display: flex; flex-direction: column; gap: 8px; }
@@ -2000,7 +2000,7 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 dialog.image-modal { padding: 0; border: 0; background: transparent; box-shadow: none; max-width: calc(100vw - 48px); max-height: calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))); overflow: visible; }
 dialog.image-modal img { display: block; max-width: calc(100vw - 48px); max-height: calc(100dvh - 2 * max(24px, calc(var(--win-top) + 4px))); border-radius: 8px; cursor: zoom-out; }
 dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; background: var(--overlay); border: 1px solid var(--border-strong); }
-.chat-commands { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); z-index: 20; }
+.chat-commands { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; padding: 4px; list-style: none; max-height: min(240px, var(--list-room, 240px)); overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay); box-shadow: var(--shadow); z-index: 20; }
 .chat-commands button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 6px; text-align: left; color: var(--fg); }
 .chat-commands li[aria-selected="true"] button, .chat-commands button:hover { background: var(--selected); }
 .chat-commands .chat-command-head { display: flex; align-items: baseline; gap: 6px; flex: none; max-width: 55%; min-width: 0; font-family: var(--mono); font-size: 12.5px; }
@@ -2033,7 +2033,7 @@ dialog.image-modal .icon-btn { position: absolute; top: 8px; right: 8px; backgro
 .usage-basis .usage-caret { opacity: .6; transition: transform .15s var(--ease); }
 .usage-basis[aria-expanded=true] .usage-caret { transform: rotate(180deg); }
 /* Only while open: a closed popover must stay display:none (the UA rule), or it covers the button and takes its clicks. */
-.chat-stat-tip.usage-panel { box-sizing: border-box; width: 228px; max-width: calc(100vw - 16px); padding: 6px; }
+.chat-stat-tip.usage-panel { box-sizing: border-box; width: 228px; max-width: calc(100vw - 16px); padding: 6px; overflow-y: auto; overscroll-behavior: contain; }
 .chat-stat-tip.usage-panel:popover-open { display: grid; gap: 2px; pointer-events: auto; }
 .usage-panel strong.usage-head { margin: 0; padding: 4px 8px; color: var(--muted); }
 .usage-panel .usage-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -2486,7 +2486,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 
 
 /* The quick launcher uses the same mode control as the empty tab. */
-.menu.launcher-menu { width: 272px; min-width: 0; max-width: calc(100vw - 24px); padding: 8px; }
+.menu.launcher-menu { width: 272px; min-width: 0; max-width: calc(100vw - 24px); max-height: calc(100dvh - 64px); overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
 .launcher-menu > header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 8px 8px; color: var(--muted); font-size: 11px; }
 .launcher-menu > header .icon-btn { padding: 0; justify-content: center; }
 .launcher-menu .launcher-modes { display: grid; margin-bottom: 8px; }
@@ -2569,7 +2569,7 @@ button.chat-chip:hover { transform: translateY(-1px); }
 .chat-tune .icon, .chat-tune-panel .dd-label .icon { display: block; width: 18px; height: 18px; font-size: 18px !important; line-height: 18px; }
 .chat-tune .icon.effort-signal, .chat-tune-panel .dd-label .icon.effort-signal { width: 17.5px; height: 17.5px; margin: .25px; flex: none; }
 .chat-tune > .icon { transform: translateY(-.7px); width: 16px; height: 16px; font-size: 16px !important; color: var(--faint); }
-.chat-tune-panel { position: fixed; inset: auto; margin: 0; padding: 6px; width: 240px; max-width: calc(100vw - 16px); border: 1px solid var(--border-strong); border-radius: 14px; background: var(--raised); color: var(--fg); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.chat-tune-panel { position: fixed; inset: auto; margin: 0; padding: 6px; width: 240px; max-width: calc(100vw - 16px); border: 1px solid var(--border-strong); border-radius: 14px; background: var(--raised); color: var(--fg); box-shadow: 0 10px 30px rgba(0, 0, 0, .35); overflow-y: auto; overscroll-behavior: contain; }
 .chat-tune-panel:popover-open { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
 /* Every option is one row: caption on the left (the control's label), current value on the right. */
 .chat-tune-panel > *, .chat-tune-panel .effort-wrap, .chat-tune-panel .dropdown { display: block; width: 100%; box-sizing: border-box; }
@@ -3107,7 +3107,7 @@ dialog.feedback-annotate[open] { max-height: calc(100dvh - 2 * max(16px, calc(va
 :root .monaco-diff-editor.side-by-side .editor.original { border-right: 0; }
 
 /* Split menu (SplitButton in Icon.tsx): hangs under its button in the top layer. */
-.split-menu { position: fixed; inset: auto; margin: 6px 0 0; position-area: bottom span-left; position-try-fallbacks: flip-block; padding: 4px; min-width: 150px; background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); color: var(--fg); }
+.split-menu { position: fixed; inset: auto; margin: 6px 0 0; position-area: bottom span-left; position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline; padding: 4px; min-width: 150px; background: var(--overlay); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); color: var(--fg); }
 .split-menu:popover-open { display: flex; flex-direction: column; }
 .split-menu button { width: auto; height: auto; color: var(--fg); display: flex; align-items: center; gap: 8px; padding: 6px 10px; text-align: left; border-radius: 6px; white-space: nowrap; }
 .split-menu button:hover, .split-menu button:focus-visible { background: var(--selected); }
@@ -3547,9 +3547,10 @@ textarea.git-message { font: 12.5px var(--mono); resize: vertical; white-space: 
 .git-swatches { display: inline-flex; gap: 3px; margin-left: 8px; }
 .git-swatches i { width: 12px; height: 12px; border-radius: 3px; }
 /* the one-time card: the changes panel is now the Git graph */
-.chat-mode-tip.git-graph-tip { bottom: auto; top: 46px; right: 12px; z-index: 30; width: min(440px, calc(100% - 32px)); }
-.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(520px, calc(100vw - 32px)); }
-.bg-anim-tip .chat-mode-tip-body strong { white-space: nowrap; }
+.chat-mode-tip.git-graph-tip { bottom: auto; top: 46px; right: 12px; z-index: 30; width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 58px); overflow-y: auto; }
+.chat-mode-tip.bg-anim-tip { position: fixed; top: 56px; right: 16px; bottom: auto; z-index: 40; width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 68px); overflow-y: auto; }
+.bg-anim-tip .chat-mode-tip-body strong { white-space: normal; }
+@media (max-width: 480px) { .bg-anim-tip .bg-tip-art { display: none; } }
 .bg-tip-art { position: relative; flex: none; align-self: center; width: 146px; height: 100px; display: flex; align-items: center; justify-content: center; gap: 14px; padding-top: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 .bg-tip-art::before { content: ''; position: absolute; inset: 8px; border: 2px solid var(--border-strong); border-radius: 8px; border-top-width: 14px; }
 .bg-tip-art > i { position: absolute; top: 12px; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); left: 16px; }
@@ -3585,6 +3586,7 @@ body.pane-dragging { user-select: none; }
   mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0); mask-size: 100% 100%, var(--hw, 0) var(--hh, 0); mask-position: 0 0, var(--hx, 0) var(--hy, 0); mask-repeat: no-repeat; mask-composite: exclude; }
 .notice-ring { position: fixed; left: calc(var(--hx) + 2px); top: calc(var(--hy) + 2px); width: calc(var(--hw) - 4px); height: calc(var(--hh) - 4px); z-index: 900; pointer-events: none; box-sizing: border-box; border: 1px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .chat-mode-tip.notice-card { position: fixed; z-index: 901; }
+.chat-mode-tip.notice-card:not(.git-graph-tip, .bg-anim-tip) { max-height: calc(100dvh - 52px); overflow-y: auto; }
 @media (prefers-reduced-motion: no-preference) { .notice-scrim { animation: notice-scrim-in .25s ease-out; } @keyframes notice-scrim-in { from { opacity: 0; } } }
 /* Closing a tip: the card and the blur fade out together (EXIT_MS in use-notice.ts keeps them mounted that long). */
 .chat-mode-tip[data-closing], .hint-card[data-closing] { pointer-events: none; animation: tip-out .18s ease-in forwards; }

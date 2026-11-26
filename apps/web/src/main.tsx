@@ -40,6 +40,7 @@ import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { bytesToBase64 } from './feedback-model';
 import type { FileLocation } from './file-buffer';
+import { useFitMenu } from './use-fit-menu';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, requestCapture, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
@@ -246,9 +247,9 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
   const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: target.root }).catch(fail); };
   const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span></button>;
   const ides = byLastUsed(list?.ides ?? []);
+  useFitMenu(ref, target.x, target.y);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
-    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.max(8, Math.min(target.y, innerHeight - 120 - 28 * Math.max(1, ides.length))) }}>
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}>
       <button role="menuitem" onClick={() => open('files')}><Icon name="folderOpen" size={14} /><span className="menu-label">{list ? `${list.fileManager}에서 폴더 열기` : '폴더 열기'}</span></button>
       {item('fileOpen', '파일 열기…', onPickFile)}
       {(!list || ides.length > 0) && <>
@@ -266,14 +267,14 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, []);
   const index = tabs.findIndex(tab => tab.id === target.tabId), tab = tabs[index];
+  useFitMenu(ref, target.x, target.y);
   if (!tab || !handle) return null;
   const pane = tab.panes.find(item => item.id === target.paneId);
   const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
     <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span>{keys && <MenuKeys keys={keys} />}</button>;
   const onKey = menuKeys(ref, onClose);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
-    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 180 : 120)) }}>
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}>
       {pane && <>
         {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
         {item('x', pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
