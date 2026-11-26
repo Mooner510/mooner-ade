@@ -1127,6 +1127,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       proc.detach();
       closed = true; child = null; protocol = null;
       clearTimeout(idleTimer); clearTimeout(activityTimer); clearTimeout(publishTimer); clearTimeout(cacheLater); clearInterval(limitTimer); stopIdleCompact(); stopCursorStorePoll();
+      await worktreeChain.catch(() => {});
       await writing.catch(() => {});
       await saveMeta().catch(() => {});
       await fs.writeFile(liveFile, JSON.stringify(saved), { mode: 0o600 });
@@ -1657,6 +1658,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
         await new Promise(resolve => { if (proc.exitCode !== null || proc.signalCode) return resolve(); const timer = setTimeout(resolve, 2000); proc.once('close', () => { clearTimeout(timer); resolve(); }); });
       }
       await cursorSnapshot;
+      await worktreeChain.catch(() => {}); // a git read still running would keep the folder busy (Windows) for whoever removes it next
       await writing.catch(() => {});
       if (forget) await fs.rm(root, { recursive: true, force: true }).catch(() => {});
       else { await saveMeta(); if (archiveAs) await fs.rename(root, chatFolder(directory, archiveAs)); } // archiveAs: the transcript moves to another id so this id can start over as another agent
