@@ -451,7 +451,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     } else if (event.kind === 'result') {
       state.turns += 1; state.durationMs += event.durationMs ?? 0; if (event.contextWindow) state.contextWindow = event.contextWindow;
       if (event.usage) for (const key of Object.keys(state.tokens)) state.tokens[key] += event.usage[key]; resetLive();
-      // total_cost_usd is the session total: the CLI restores it on --resume (its cost-state), so a replaced child continues from the old figure; nothing is added on top.
+      // costUsd is the session total (sessionCost turns the CLI's per-process total into it, also for a child that started its count from 0).
       if (!replay && event.costUsd != null) { const spent = weigh(event.usage ?? zero()); if (spent > 0 && event.costUsd > state.costUsd) costPerUnit = (event.costUsd - state.costUsd) / spent; state.costUsd = event.costUsd; void saveMeta().catch(() => {}); } // saveMeta reports its own failure
       else if (event.turnCostUsd > 0) { const spent = weigh(event.usage ?? zero()); if (spent > 0) costPerUnit = event.turnCostUsd / spent; } // a reopened chat still prices subagent usage that landed after the last result
       if (event.status === 'failed') state.error = event.text || '실패했습니다.'; else state.error = null;
@@ -607,7 +607,17 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       const ids = raw.user_message_uuids ?? (raw.user_message_uuid ? [raw.user_message_uuid] : []);
       if (ids.length ? !ids.includes(inflight.uuid) : raw.local_command !== 'compact' && !inflight.acked && !inflight.compacted) return;
     }
-    for (const event of normalizeClaude(raw, meta.model ?? state.model)) handleEvent(event);
+    for (const event of normalizeClaude(raw, meta.model ?? state.model)) handleEvent(event.kind === 'result' && Number.isFinite(event.costUsd) ? { ...event, costUsd: sessionCost(event.costUsd) } : event);
+  }
+  // Claude's total_cost_usd is the running total of its process. A resumed CLI starts from the session's earlier total only when it restored its cost
+  // state, which it keeps per project folder for the last session there: never for a fork (Rewind, Branch) or a resume in another folder (the chat moved
+  // into or out of its worktree), and not when another session ran in that folder since. Such a process counts from 0, so its totals sit on the chat's
+  // total so far (`procCost.base`, fixed by the process's first result). Without a sure sign, a first total below the chat's means it started from 0.
+  let procCost = { base: null, fresh: true }, costMoved = false;
+  function sessionCost(total) {
+    const before = state.costUsd ?? 0;
+    if (procCost.base === null) procCost.base = procCost.fresh || total < before ? before : 0;
+    return procCost.base + total;
   }
   // The CLI says only in the result text that auto mode refused a call. The refusal is recorded next to the call it was for (its input, the reason and the exact allow rule
   // that would let it through), so the screen and a later "allow and retry" work from what the CLI really ran, never from what the page sends.
@@ -862,7 +872,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (proc.exitCode === null && !proc.signalCode) throw fault('CHAT_SWITCH_FAILED', '에이전트를 종료하지 못해 옮기지 않았습니다.', 500);
     }
     const sessionId = state.sessionId ?? meta.sessionId, previous = cwd;
-    if (sessionId && agent === 'claude') await moveClaudeSession({ configDir: configDirOf(), sessionId, from: previous, to: nextCwd });
+    if (sessionId && agent === 'claude') { await moveClaudeSession({ configDir: configDirOf(), sessionId, from: previous, to: nextCwd }); costMoved = true; }
     if (sessionId && agent === 'cursor') {
       await cursorSnapshot;
       const store = await cursorStorePath(sessionId, { env: { CURSOR_CONFIG_DIR: cursorDirOf() } });
@@ -982,6 +992,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     setStatus();
   }
   function attach(proc) {
+    if (agent === 'claude') { procCost = { base: null, fresh: !meta.sessionId || meta.fork === true || costMoved }; costMoved = false; }
     child = proc; state.liveTasks = []; taskIds.clear(); subTools.clear(); // a replaced child took its subagents with it
     let buffer = '', stderr = '';
     const decoder = new StringDecoder('utf8');
