@@ -866,7 +866,7 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
       onChange={event => setNote(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && feedback) { event.preventDefault(); onAnswer(false, { message: feedback }); } }} />
     <div className="plan-actions">
       <button type="button" className="plan-back" onClick={() => setRevising(false)}>취소</button>
-      <button type="button" onClick={() => onAnswer(false)}>의견 없이 반려</button>
+      <button type="button" onClick={() => onAnswer(false)} title="의견 없이 계획을 반려합니다">의견 없이 반려</button>
       <button type="button" className="primary" disabled={!feedback} onClick={() => onAnswer(false, { message: feedback })}>{choices ? '의견 보내고 다시 계획' : '의견 보내고 다음 메시지로'}</button>
     </div>
   </footer>;
@@ -876,9 +876,9 @@ function PlanActions({ modes, choices = true, onAnswer, onBack }: { modes: strin
   // Cursor's plan has no permission mode to pick. A revision is the next user message, not a mode choice.
   if (!choices) return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
-    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)}>수정 요청…</button>
-    <button type="button" className="secondary" onClick={() => onAnswer(false)}>거부</button>
-    <button type="button" className="primary" onClick={() => onAnswer(true)}>승인</button>
+    <button type="button" className="secondary plan-back" onClick={() => setRevising(true)} title="계획을 반려하고, 적은 내용을 다음 메시지로 보냅니다.">수정 요청…</button>
+    <button type="button" className="secondary" onClick={() => onAnswer(false)} title="계획을 반려합니다.">거부</button>
+    <button type="button" className="primary" onClick={() => onAnswer(true)} title="계획대로 실행합니다.">승인</button>
   </footer>;
   return <footer className="plan-actions">
     {onBack && <button type="button" className="plan-back" onClick={onBack}>돌아가기</button>}
