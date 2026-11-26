@@ -4,7 +4,8 @@ export { ApiError };
 export const api = <T = any>(action: string, input: object = {}): Promise<T> => call<T>(action, input);
 // A leaf is a terminal, an editor group, a chat (a headless Claude Code drawn as a conversation; its id names the server-side transcript) or a launcher (a fresh pane still choosing what to run); legacy saved layouts have `{ id }` only and mean terminal.
 // A terminal leaf also remembers where it was opened and which agent CLI ran in it, so it can be reopened after the server restarts.
-export type Leaf = { id: string; kind?: 'terminal' | 'editor' | 'launcher' | 'chat'; tabs?: string[]; active?: string; preview?: string; cwd?: string; agent?: 'claude' | 'codex' | 'cursor' };
+// A console leaf is a plugin's console tab (plugin API v2 `console`); `plugin` names the plugin.
+export type Leaf = { id: string; kind?: 'terminal' | 'editor' | 'launcher' | 'chat' | 'console'; tabs?: string[]; active?: string; preview?: string; cwd?: string; agent?: 'claude' | 'codex' | 'cursor'; plugin?: string };
 export type Pane = Leaf | { direction: 'row' | 'column'; children: Pane[]; sizes: number[] };
 export const isLeaf = (pane: Pane): pane is Leaf => 'id' in pane;
 export const leafList = (pane: Pane | null): Leaf[] => !pane ? [] : isLeaf(pane) ? [pane] : pane.children.flatMap(leafList);

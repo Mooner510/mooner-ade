@@ -19,6 +19,8 @@ import type { FileBuffer } from './file-buffer';
 import { Icon, IconButton, SplitButton, type IconName } from './Icon';
 import { CacheTimer, type ClaudeCache } from './CacheTimer';
 import { ChatPane, type ChatCtx } from './ChatPane';
+import { ConsolePane } from './ConsolePane';
+import { PluginIcon, usePluginsState } from './PluginSettings';
 import { copyText, toastPasted, toastAttached, setToastAnchor } from './toast';
 import { playSound } from './sound';
 import { hintCandidates } from './tips';
@@ -105,15 +107,22 @@ type Props = {
 
 export { launchers } from './launchers';
 export const CHAT_COMMAND = 'ade:chat:claude';
+// `ade:console:<plugin id>` opens that plugin's console tab.
+export const consolePlugin = (command: string) => /^ade:console:([a-z0-9][a-z0-9-]{1,39})$/.exec(command)?.[1];
 export const chatAgent = (command: string): Agent | undefined => ({ 'ade:chat:claude': 'claude', 'ade:chat:codex': 'codex', 'ade:chat:cursor': 'cursor' } as Record<string, Agent>)[command];
 // The centered picker shown by an empty tab and by a fresh split; the shell button takes focus so Enter opens a plain terminal.
 export function Launchers({ title, onLaunch, autoFocus, hidden = [], mode, shell, onModeChange, nudge }: { onModeChange(mode: AgentMode): void; shell: string; mode: AgentMode; title?: string; onLaunch(command: string): void; autoFocus?: boolean; hidden?: string[]; nudge?: boolean }) {
   const hide = useHiddenAgents(hidden), shells = useShells(), greeting = useMemo(() => pickGreeting(), []);
+  const consoles = usePluginsState()?.plugins.filter(plugin => plugin.console && plugin.id) ?? [];
   return <div className="empty-tab" data-mode={mode}>
     <div className="launcher-heading"><LauncherModes mode={mode} onChange={onModeChange} nudge={nudge} /><h2>{greeting}</h2></div>
     <div className="launchers">{launchersFor(mode, shellLabel(shells, shell)).filter(item => !hide.includes(item.id)).map((item, index) =>
       <button key={item.id} autoFocus={autoFocus && index === 0} onClick={() => onLaunch(item.command)}>
         <span className="launcher-icon"><Icon name={item.icon} size={24} /></span><span className="launcher-copy"><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</span>
+        <span className="launcher-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></span>
+      </button>)}
+      {consoles.map(plugin => <button key={plugin.id} onClick={() => onLaunch(`ade:console:${plugin.id}`)}>
+        <span className="launcher-icon"><PluginIcon plugin={plugin} size={22} /></span><span className="launcher-copy"><strong>{plugin.name}</strong></span>
         <span className="launcher-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></span>
       </button>)}</div>
   </div>;
@@ -864,6 +873,7 @@ const PaneContent = memo(function PaneContent(props: Props & { leaf: Leaf }) {
   const focused = focus === leaf.id, zoomed = zoom === leaf.id;
   if (leaf.kind === 'editor') return <EditorGroup leaf={leaf} focused={focused} zoomed={zoomed} visible={visible && (!zoom || zoomed)} ctx={editor} onFocus={onFocus} onZoom={onZoom} />;
   if (leaf.kind === 'chat') return <ChatPane leaf={leaf} focused={focused} zoomed={zoomed} visible={visible} ctx={chat} onFocus={onFocus} onZoom={onZoom} onSplit={props.onSplit} />;
+  if (leaf.kind === 'console') return <ConsolePane leaf={leaf} focused={focused} onFocus={onFocus} onClose={props.onClose} />;
   if (leaf.kind === 'launcher') return <LauncherPane onModeChange={props.onModeChange} shell={editor.settings.terminalShell} mode={editor.settings.defaultMode}
     hidden={editor.settings.agentsOff} nudge={editor.settings.chatTipPending} id={leaf.id} focused={focused} onFocus={onFocus} onClose={props.onClose} onLaunch={props.onLaunch} />;
   return <TerminalPane {...props} id={leaf.id} focused={focused} zoomed={zoomed} settings={editor.settings} />;

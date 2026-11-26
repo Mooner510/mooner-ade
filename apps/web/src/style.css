@@ -3691,3 +3691,23 @@ dialog.usage-review > header .spacer { flex: 1; }
 @media (max-width: 360px) {
   .usage-review-bar .chat-provider { gap: 4px; padding-inline: 4px; }
 }
+
+/* Plugin console tab (ConsolePane): commands and their output as plain text, a composer like the chat's. */
+.console-pane { display: flex; flex-direction: column; background: var(--surface); }
+.console-scroll { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.console-run + .console-run { margin-top: 12px; }
+.console-command { display: flex; align-items: baseline; gap: 8px; color: var(--fg); white-space: pre-wrap; word-break: break-all; }
+.console-command > span:first-child { color: var(--muted); }
+.console-command > span:nth-child(2) { flex: 1; min-width: 0; }
+.console-stop { flex: none; padding: 1px 8px; font-size: 11px; }
+.console-out { margin: 4px 0 0; white-space: pre-wrap; word-break: break-all; font: inherit; color: var(--fg); }
+.console-out [data-fd="2"] { color: var(--muted); }
+.console-end { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.console-run[data-failed] .console-end { color: var(--error); }
+.console-dock { flex: none; display: grid; gap: 6px; padding: 8px 10px 10px; }
+.console-note { font-size: 12px; color: var(--muted); }
+.console-password { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.console-password input[type="password"] { flex: 1; min-width: 0; }
+.console-password label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.console-composer { padding: 8px 12px; border-radius: 12px; }
+.console-composer textarea { font-family: var(--mono); font-size: 12px; }
