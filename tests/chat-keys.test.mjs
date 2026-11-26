@@ -79,7 +79,8 @@ test('conversation keys and when the message box keeps them for its own editing'
   assert.equal(action(key('End', { metaKey: true })), 'bottom');
   assert.equal(action(key('f', { ctrlKey: true })), 'find');
   assert.equal(action(key('c', { ctrlKey: true, shiftKey: true })), 'copyAnswer');
-  assert.equal(action(key('c', { ctrlKey: true, altKey: true })), 'copyCode');
+  assert.equal(action(key('c', { ctrlKey: true, altKey: true, shiftKey: true })), 'copyCode');
+  assert.equal(action(key('c', { ctrlKey: true, altKey: true })), null, 'Ctrl+Alt+C is the app key that returns to the chat box');
   assert.equal(action(key('c', { ctrlKey: true })), null, 'Ctrl+C stays copy');
   assert.equal(action(key('PageUp')), 'pageUp');
   assert.equal(action(key('PageDown', { shiftKey: true })), null);
