@@ -285,7 +285,8 @@ const resultFields = new Map(Object.entries({
 }));
 export function result(action, value) {
   if (snapshotActions.has(action)) return snapshot(value);
-  if (action === 'chat/peers') return map(value, item => pick(item, 'id projectId project agent sessionId title status cwd permissionMode'));
+  // `lastUser` ({ text, at }): what the user last typed in that chat. The agent bus quotes it to the chat it messages (bus.mjs formatMessage).
+  if (action === 'chat/peers') return map(value, item => { const out = pick(item, 'id projectId project agent sessionId title status cwd permissionMode lastUser'); if (out && 'lastUser' in out) out.lastUser = pick(out.lastUser, 'text at') ?? null; return out; });
   if (action === 'chat/open') {
     const out = pick(value, 'id agent user events state seq replace approvals');
     if (out?.state) out.state = chatState(out.state);
