@@ -1,43 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, type IconName } from './Icon';
+import { fuzzy } from './palette-model';
 
 export type QuickItem = { id: string; detail?: string; keys?: string } &
   ({ label: string; icon: IconName } | { label: '확인' | '취소'; icon?: never });
 export type QuickRequest =
-  | { kind: 'pick'; title: string; items: QuickItem[]; resolve(value: string | null): void }
+  | { kind: 'pick'; title: string; items: QuickItem[]; resolve(value: string | null): void; source?: QuickSource; placeholder?: string; initial?: string }
   | { kind: 'input'; title: string; initial?: string; resolve(value: string | null): void };
 
-// Subsequence match; consecutive and word-start hits score higher. Returns -1 when the query does not match.
-export function fuzzy(query: string, text: string) {
-  if (!query) return 0;
-  const lower = text.toLowerCase(), needle = query.toLowerCase();
-  let score = 0, at = -1, streak = 0;
-  for (const char of needle) {
-    const next = lower.indexOf(char, at + 1);
-    if (next < 0) return -1;
-    streak = next === at + 1 ? streak + 1 : 0;
-    score += 1 + streak * 2 + (next === 0 || '/._- '.includes(lower[next - 1]) ? 3 : 0);
-    at = next;
-  }
-  return score - lower.length * .01;
-}
+// A pick with a source (the command palette) asks it for the list on every keystroke instead of filtering `items`; `subscribe` asks again when
+// something it reads arrives later (the project's file list), and `empty` is the line shown when nothing matches.
+export type QuickSource = { filter(value: string): QuickItem[]; subscribe?(listener: () => void): () => void; empty?(value: string): string };
+
+// The fuzzy score lives with the palette's other pure parts (Node tests load it from there).
+export { fuzzy };
 
 // A choice list gets a search box only when it is long enough to need one (the palette, branches, models); a yes/no or a handful of options is just the list.
 const SEARCH_FROM = 8;
 export function QuickInput({ request, onClose }: { request: QuickRequest; onClose(): void }) {
-  const [value, setValue] = useState(request.kind === 'input' ? request.initial || '' : '');
+  const [value, setValue] = useState(request.initial || '');
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null), box = useRef<HTMLDivElement>(null);
-  const searchable = request.kind === 'pick' && request.items.length >= SEARCH_FROM, typed = request.kind === 'input' || searchable;
-  useEffect(() => { if (typed) { input.current?.focus(); input.current?.select(); } else box.current?.focus(); }, []);
+  const source = request.kind === 'pick' ? request.source : undefined, [version, setVersion] = useState(0);
+  useEffect(() => source?.subscribe?.(() => setVersion(current => current + 1)), [source]);
+  const searchable = request.kind === 'pick' && (Boolean(source) || request.items.length >= SEARCH_FROM), typed = request.kind === 'input' || searchable;
+  // A palette opened with a prefix already typed (`@`) keeps the caret after it instead of selecting it.
+  useEffect(() => { if (typed) { input.current?.focus(); if (source) input.current?.setSelectionRange(value.length, value.length); else input.current?.select(); } else box.current?.focus(); }, []);
   const items = useMemo<QuickItem[]>(() => {
     if (request.kind === 'input') return [];
+    if (source) return source.filter(value);
     const query = searchable ? value.trim() : '';
     // A project's whole file list is thousands long: show the first screenfuls until a search narrows it down.
     if (!query) return request.items.length > 300 ? request.items.slice(0, 300) : request.items;
     return request.items.map(item => ({ item, score: fuzzy(query, item.label) })).filter(entry => entry.score >= 0).sort((a, b) => b.score - a.score).slice(0, 80).map(entry => entry.item);
-  }, [request, value, searchable]);
+  }, [request, value, searchable, source, version]);
   useEffect(() => setIndex(0), [value]);
+  // Arrow keys past the visible rows of a long list keep the chosen row in view.
+  useEffect(() => { box.current?.querySelector('li.selected')?.scrollIntoView({ block: 'nearest' }); }, [index]);
   const finish = (result: string | null) => { onClose(); request.resolve(result); };
   const title = request.title;
   // The title is always a heading above the field/list (never a placeholder). A short one is bold; a sentence (a warning, a question) is plain text, and
@@ -59,9 +58,9 @@ export function QuickInput({ request, onClose }: { request: QuickRequest; onClos
         }
       }}>
       <div className="quick-head"><p className={sentence ? 'quick-message' : 'quick-title'}>{first}</p>{detail && <p className="quick-note">{detail}</p>}</div>
-      {typed && <input ref={input} value={value} aria-label={first} placeholder={request.kind === 'input' ? '' : '검색'} onChange={event => setValue(event.target.value)} />}
+      {typed && <input ref={input} value={value} aria-label={first} placeholder={request.kind === 'input' ? '' : request.placeholder ?? '검색'} onChange={event => setValue(event.target.value)} />}
       {request.kind !== 'input' && <ul role="listbox">{items.map((item, position) => <li key={item.id} role="option" aria-selected={position === index} className={position === index ? 'selected' : ''} onMouseMove={() => setIndex(position)} onMouseDown={event => { event.preventDefault(); finish(item.id); }}>
-        {item.icon && <Icon name={item.icon} size={14} />}<span>{item.label}</span>{item.detail && <small>{item.detail}</small>}{item.keys && <kbd>{item.keys}</kbd>}</li>)}{!items.length && <li className="none">일치하는 항목이 없습니다.</li>}</ul>}
+        {item.icon && <Icon name={item.icon} size={14} />}<span>{item.label}</span>{item.detail && <small>{item.detail}</small>}{item.keys && <kbd>{item.keys}</kbd>}</li>)}{!items.length && <li className="none">{source?.empty?.(value) ?? '일치하는 항목이 없습니다.'}</li>}</ul>}
     </div>
   </div>;
 }
