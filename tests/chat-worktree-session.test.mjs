@@ -108,3 +108,15 @@ test('a resumed Claude that reports another folder (a worktree it entered itself
   assert.deepEqual([line.phase, line.by, line.branch], ['enter', 'agent', 'worktree-feature']);
   await assert.rejects(w.session.leaveWorktree(), { code: 'AGENT_WORKTREE' });
 });
+
+test('a chat opened in a plain linked worktree (a project that is itself a worktree) does not count as being in a chat worktree', { timeout: 60_000 }, async t => {
+  const w = await world(t);
+  const plain = path.join(w.root, 'plain');
+  await git(w.repo, 'worktree', 'add', '-q', '-b', 'feature/plain', plain);
+  const session = await openChatSession({ ...w.options, id: 'plainchat-0001', cwd: plain });
+  t.after(() => session.close());
+  assert.equal(await session.refreshWorktree(), null);
+  // Going into its own worktree from there works, and its origin is that folder, not the main checkout.
+  const info = await session.enterWorktree();
+  assert.ok(samePath(info.origin, plain)); assert.equal(info.managed, true);
+});

@@ -814,7 +814,10 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
   function refreshWorktree({ announce = false } = {}) {
     worktreeChain = worktreeChain.catch(() => {}).then(async () => {
       if (closed) return state.worktreeInfo;
-      const own = await readOwnWorktree(root), here = await detectWorktree(state.cwd).catch(() => null);
+      const own = await readOwnWorktree(root);
+      let here = await detectWorktree(state.cwd).catch(() => null);
+      // A project opened from a linked worktree (or a plugin's work folder) is simply where the chat lives, not a worktree it went into.
+      if (here?.kind === 'other' && samePath(here.path, (await detectWorktree(cwd).catch(() => null))?.path ?? '')) here = null;
       const kept = here ?? (own ? await detectWorktree(own.path).catch(() => null) : null);
       const managed = Boolean(own && kept && samePath(own.path, kept.path)), before = state.worktreeInfo;
       const status = kept ? await worktreeStatus({ ...kept, base: kept.base || own?.base }).catch(() => null) : null;
