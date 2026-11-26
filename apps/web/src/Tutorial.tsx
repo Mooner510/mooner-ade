@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { findLeaf, isLeaf, leafList, type Leaf, type Pane } from './api';
+import { dragStartsOnButton, notePress } from './drag-guard';
 import { usageHue, type Settings } from './Editor';
 import { Icon, IconButton, SplitButton } from './Icon';
 import { ChatPane, type ChatCtx } from './ChatPane';
@@ -341,7 +342,8 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
           const mode = selected && dropAt?.id === tabItem.id ? dropAt.mode : null;
           const dnd = {
             draggable: selected,
-            onDragStart: (event: DragEvent) => { if (event.target instanceof Element && event.target.closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', tabItem.id); setDrag(tabItem.id); },
+            onPointerDownCapture: notePress,
+            onDragStart: (event: DragEvent) => { if (dragStartsOnButton(event)) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', tabItem.id); setDrag(tabItem.id); },
             onDragEnd: () => { setDrag(''); setDropAt(null); },
             onDragOver: (event: DragEvent<HTMLLIElement>) => {
               if (!drag || !selected) return;
