@@ -87,7 +87,13 @@ export async function boot({ env = {}, data, home, repoFiles = true, minimalPath
   const project = await api('project/open', { path: repo });
   const call = (action, body = {}, expected) => api(action, { projectId: project.id, ...body }, expected);
   const callStatus = (action, body = {}) => status(action, { projectId: project.id, ...body });
-  const stop = async () => { if (child.exitCode === null) { const ex = new Promise(r => child.once('exit', r)); child.kill('SIGTERM'); await ex; } };
+  // On Windows kill('SIGTERM') ends only the server itself: the agent-bus host and anything else it started keep running, hold the temp folder
+  // open (EPERM on removal) and keep the runner's pipes, so a `node --test` that booted one never exits. Take the whole tree down there.
+  const killTree = () => {
+    if (process.platform === 'win32') { try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); return; } catch { /* already gone */ } }
+    child.kill('SIGTERM');
+  };
+  const stop = async () => { if (child.exitCode === null) { const ex = new Promise(r => child.once('exit', r)); killTree(); await ex; } };
   const calls = async () => (await readFile(log, 'utf8')).split('\n').filter(Boolean).map(l => JSON.parse(l));
   const setCtl = obj => writeFile(ctlFile, JSON.stringify(obj));
   return { temp, data, home, repo, agents, origin, token, cookie, api, raw, status, call, callStatus, projectId: project.id, stop, calls, setCtl, child, get stderr() { return stderr; }, chatDir: id => join(data, project.id, 'chat', id), feedbackDir: join(data, 'feedback') };
