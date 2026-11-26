@@ -22,6 +22,7 @@ import { playSound } from './sound';
 import { AppVersion, type Ask } from './views';
 import { matches, showKeys as showDefaultKeys } from './Workspace';
 import { appKey, appKeyDefs, appKeyInTerminal, showAppKey } from './shortcuts';
+import { cardTopLimit, windowBarHeight } from './window-chrome';
 import { activeTab, agentPrompt, closable, initialTour, project, reduce, shellPrompt, stepDone, steps, type Action, type Agent, type Tour, type TourProject, type TourTab } from './onboarding-steps';
 
 // First-run tutorial: a full-screen practice copy of the app, drawn with the app's own markup and styles (sidebar, tab bar, panes,
@@ -263,13 +264,15 @@ export function Tutorial({ settings, onSettings, setup, onDone }: Props) {
     const card = coach.current; if (!card) return;
     if (!rect) { card.style.left = card.style.top = ''; return; }
     const w = card.offsetWidth, h = card.offsetHeight, m = 16, W = innerWidth, H = innerHeight;
-    const y = (value: number) => Math.max(m, Math.min(H - h - m, value)), x = (value: number) => Math.max(m, Math.min(W - w - m, value));
+    // Never under the window controls' bar at the top (Windows buttons on the right, macOS traffic lights on the left).
+    const top = cardTopLimit(m, windowBarHeight());
+    const y = (value: number) => Math.max(top, Math.min(H - h - m, value)), x = (value: number) => Math.max(m, Math.min(W - w - m, value));
     // Beside the target the card sits low, clear of the terminal output that fills panes from the top.
     const side = y(Math.max(rect.y, H - h - 48));
     // A pane header button: the bottom-right corner, clear of the pane's content (a chat's centred composer, a terminal's output).
     // A whole pane (the Chat showcase): over the sidebar at the left, next to the conversation rather than on it.
     // A terminal fills from the top, so its card sits low (a question and its choices stay readable); a chat keeps the card high.
-    const corner = [W - w - m - 8, H - h - 42], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, target?.includes('.terminal-pane') ? y(H - h - 48) : y(rect.y + 40)]
+    const corner = [x(W - w - m - 8), y(H - h - 42)], spot = target?.includes('.pane-actions') ? corner : rect.w > W * .4 ? [m, target?.includes('.terminal-pane') ? y(H - h - 48) : y(rect.y + 40)]
       : rect.x + rect.w + m + w <= W - m ? [rect.x + rect.w + m, side] : rect.x - m - w >= m ? [rect.x - m - w, side]
       : rect.y + rect.h + m + h <= H - m ? [x(rect.x), rect.y + rect.h + m] : rect.y - m - h >= m ? [x(rect.x), rect.y - m - h] : corner;
     card.style.left = `${spot[0]}px`; card.style.top = `${spot[1]}px`;

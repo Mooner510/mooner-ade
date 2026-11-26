@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { clearErrors, dismissError, errorLog, subscribeErrors, type AppError } from './errors';
 import { Icon, IconButton } from './Icon';
+import { errorToastMaxWidth } from './window-chrome';
 
 const useLog = (scope: string) => useSyncExternalStore(fn => subscribeErrors(scope, fn), () => errorLog(scope), () => errorLog(scope));
 
@@ -41,7 +42,11 @@ export function ErrorToast({ scope, active = true }: { scope: string; active?: b
     if (!btn || view.phase !== 'in') return;
     const box = btn.getBoundingClientRect();
     el.style.top = `${box.bottom + 8}px`;
-    el.style.right = `${Math.max(8, window.innerWidth - box.right)}px`;
+    // clientWidth, not innerWidth: a fixed box is positioned inside the page's scrollbar (the welcome screen scrolls in a short window).
+    const viewport = document.documentElement.clientWidth, right = Math.max(8, viewport - box.right);
+    el.style.right = `${right}px`;
+    // Leave room for the right inset, or a long message runs off the left edge when the button sits well inside the window (Windows controls, narrow windows).
+    el.style.maxWidth = `${errorToastMaxWidth(viewport, right)}px`;
     el.style.left = 'auto';
     el.style.bottom = 'auto';
   }, [view, scope]);

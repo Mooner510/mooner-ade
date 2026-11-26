@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type C
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, restoreDefaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { APP_THEMES, themeById, type ThemeId } from './themes';
+import { dialogYRange, windowBarHeight } from './window-chrome';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -468,7 +469,9 @@ function placeSettings(dialog: HTMLElement, x: number, y: number) {
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   // Leave the bottom status bar clear while that section is showing it live.
   const bottom = dialog.classList.contains('bar-live') ? 36 : 0;
-  settingsOffset = { x: clamp(x, -rect.left, innerWidth - rect.right), y: clamp(y, -rect.top, innerHeight - bottom - rect.bottom) };
+  // The top edge stays under the bar the window controls sit in, or the close button ends up beneath them.
+  const [minY, maxY] = dialogYRange(rect.top, rect.bottom, innerHeight, windowBarHeight(), bottom);
+  settingsOffset = { x: clamp(x, -rect.left, innerWidth - rect.right), y: clamp(y, minY, maxY) };
   dialog.style.translate = `${settingsOffset.x}px ${settingsOffset.y}px`;
 }
 function dragSettings(event: PointerEvent<HTMLElement>) {
