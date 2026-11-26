@@ -81,7 +81,7 @@ async function run() {
     leakSuspect: [drift('serverRssMb'), drift('chromeRssMb'), drift('heapMB')].some(d => d != null && d > 15),
   };
   writeFileSync(join(S, 'evidence', 'memory-soak.json'), JSON.stringify(out, null, 2));
-  console.log(JSON.stringify(out, null, 1));
+  console.error(JSON.stringify(out, null, 1));
 }
 
 await run();
