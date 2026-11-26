@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell } from 'electron';
+import { setupAttention } from './attention.js';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -316,6 +317,7 @@ function createWindow(url) {
     if (origin && !window.isDestroyed()) void load(window, `${origin}/`);
   });
   mainWindow = window; window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
+  attention.attach(window);
   // The window's X quits through before-quit, so its question (end, background, cancel) comes while the window is still there to go back to.
   window.on('close', event => { if (!quitting) { event.preventDefault(); app.quit(); } });
   void load(window, url);
@@ -396,6 +398,8 @@ const updateTarget = (manual = false) => {
     getCountdownPosition: () => readUpdatePreferences().countdownPosition, beforeRestart: () => { keepTerminalsOnQuit = true; } };
 };
 const fromMainWindow = event => event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame && sameOrigin(event.senderFrame?.url ?? '');
+// Tabs that need the user: window title count from the page, taskbar flash and dot (Windows) or Dock badge (macOS) from here.
+const attention = setupAttention({ ipcMain, app, nativeImage, getWindow: () => mainWindow, trusted: fromMainWindow });
 ipcMain.handle('ade:move-dropped-files', (event, input) => {
   if (!fromMainWindow(event)) throw new Error('허용되지 않은 요청입니다.');
   const child = server;
