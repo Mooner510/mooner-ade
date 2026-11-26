@@ -39,6 +39,7 @@ import type { QuickItem } from './QuickInput';
 import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
 import { can, isRemote } from './transport';
+import { useChatWorktree } from './ChatWorktree';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 
 // What the workspace gives a chat pane. `subscribe` delivers this chat's websocket messages (`chat/event`, `chat/state`) and
@@ -1961,6 +1962,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const providers = (['claude', 'codex', 'cursor'] as const).filter(item => item === agent || !hiddenAgents.includes(item));
   const empty = view.ready && !shown.length && !busy;
   const startScreen = empty || providerSwap;
+  // The chat's git worktree: badges in the header and under the composer, the start-screen choice and its dialogs (ChatWorktree.tsx).
+  const worktree = useChatWorktree({ id, state: view.state, call: ctx.call, busy, fresh: empty, title, fail: ctx.fail, prefill: setText });
   const turnError = lastTurn?.some(item => item.kind === 'error');
   const otherCursorOptions = agent === 'cursor' ? cursorOptions.filter(option => !isCursorEffort(option)) : [];
   // Cursor models can come with many options: from two on (besides model and Effort) they all live behind one settings button.
@@ -1991,7 +1994,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     <div className="chat-drop" data-on={dropping || undefined} aria-hidden="true"><div className="chat-drop-card"><span className="chat-drop-icon"><Icon name="plus" size={26} /></span><b>여기에 놓아 첨부</b><span>이미지는 그림으로, 그 밖의 파일은 경로(@)로 입력창에 붙여넣습니다</span></div></div>
     <div className="pane-tools" role="toolbar" aria-label="채팅 pane">
       {agent === 'claude' && ctx.settings.cacheTimer && view.state.cache && <CacheTimer cache={view.state.cache} working={view.state.status === 'working'} warn={ctx.settings.cacheWarn} />}
-      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? '세션 ID 복사' : undefined} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel}, ${basename(cwd.replace(/\\/g, '/'))}`}</span>
+      <span className="pane-title" data-copy={view.state.sessionId ? '' : undefined} title={view.state.sessionId ? '세션 ID 복사' : undefined} onClick={() => view.state.sessionId && copyText(view.state.sessionId)}><span className="pane-mark"><Icon name={agent} size={12} /></span><span className="pane-label">{title || `${agentLabel}, ${basename(cwd.replace(/\\/g, '/'))}`}</span>{worktree.head}
         {view.approvals.length > 0 && <span className="question-alert" role="img" aria-label="승인 필요" title="도구 실행 승인 대기"><Icon name="alert" size={12} /></span>}</span>
       <span className="pane-actions">
         {/* Buttons that cannot work right now are hidden, not dimmed. */}
@@ -2150,7 +2153,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <button type="button" className="chat-attach" title="이미지/파일 첨부" aria-label="첨부" onClick={() => void ctx.pick('무엇을 첨부할까요?', [{ id: 'image', label: '이미지', icon: 'image', detail: 'PNG, JPEG, GIF, WebP. 5MB를 넘으면 조금 줄여 보냅니다' }, { id: 'file', label: '파일', icon: 'file', detail: '경로(@)를 넣어 에이전트가 직접 읽게 합니다' }]).then(choice => { if (choice === 'image') imageInput.current?.click(); else if (choice === 'file') fileInput.current?.click(); })}><Icon name="plus" size={16} /></button>
         <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
         <input ref={fileInput} type="file" multiple hidden onChange={event => { void attach([...(event.target.files ?? [])]); event.target.value = ''; }} />
-        <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>
+        <span className="fit-mode">{modeDd}{sandboxDd}</span>{bypassBtn && !forcePanel && <span className="fit-inline">{bypassBtn}</span>}<span className="fit-note">{noteItems}</span>{worktree.foot}
         <span className="drag-space" />
         {agent === 'cursor' ? <button type="button" className="chat-model cursor-model" disabled={Boolean(locked)} title={locked || '모델'} aria-haspopup="dialog" aria-label="모델 선택" onClick={() => setModelsOpen(true)}><span className="dd-label" style={{ color: modelAppearance(selectedModel, agent).color }}>{displayModel(selectedModel, agent)}</span><Icon name="chevronDown" size={14} /></button> : <Dropdown labelOnlyTip label="모델" className={`chat-model${hint === 'keymodel' ? ' hint-anchor' : ''}`} value={resolvedModelValue} options={modelChoices} onChange={model => { if (model === MORE_MODELS) setModelsOpen(true); else void chooseModel(model).then(pickedBy('keymodel'), ctx.fail); }} />}
         {effortCtl}{!forcePanel && <span className="fit-inline">{optionItems}</span>}{tuneButton}
@@ -2160,12 +2163,13 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       </div>
       </div>
       <div className="chat-start-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
-        <button type="button" className="chat-resume" disabled={!view.ready || resuming || busy} onClick={() => void resume()}><Icon name="refresh" size={16} />{resuming ? '불러오는 중…' : '이전 대화 불러오기'}</button></div></div>
+        <button type="button" className="chat-resume" disabled={!view.ready || resuming || busy} onClick={() => void resume()}><Icon name="refresh" size={16} />{resuming ? '불러오는 중…' : '이전 대화 불러오기'}</button>{worktree.start}</div></div>
     </div>
     <div className="chat-bottom-space" aria-hidden="true" />
     {providers.length > 1 && <div className="chat-start-slot chat-provider-slot" inert={!startScreen} aria-hidden={!startScreen}><div>
       <div className="chat-providers" role="group" aria-label="Provider 전환">{providers.map(item => <button type="button" key={item} className="chat-provider" aria-pressed={item === agent} disabled={!view.ready || busy || providerSwap} onClick={() => { if (item === agent || providerSwap) return; setProviderSwap(true); void ctx.switchAgent(id, item, !view.items.length).then(done => { if (!done) setProviderSwap(false); }); }}><Icon name={item} size={14} />{PROVIDER_LABELS[item]}</button>)}</div>
     </div></div>}
+    {worktree.dialogs}
     {drawerAgent && <AgentDrawer agent={drawerAgent} closing={!openedAgent} list={agentList} colors={agentColors} results={view.results} settings={ctx.settings} docked={drawerDocked} onPick={setAgentOpen} onStop={stopTask} onClose={() => setAgentOpen(null)} />}
   </section></LocalCardsContext.Provider></AgentsContext.Provider></DeniedContext.Provider></AwaitingContext.Provider></CwdContext.Provider></SetDiffLayoutContext.Provider></ChatUiContext.Provider>;
 }

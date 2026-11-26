@@ -25,6 +25,8 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   // Ids are camelCase like the rest: the server's appKeys validation only accepts [a-zA-Z][a-zA-Z0-9]*.
   { id: 'feedback', group: '화면/도구', label: '피드백 요청', keys: 'mod+alt+f' },
   { id: 'feedbackCapture', group: '화면/도구', label: '피드백 화면 캡쳐', keys: 'mod+alt+shift+f' },
+  // No default key: the palette's "채팅 worktree 관리…"; a key can be set in Settings.
+  { id: 'chatWorktrees', group: '화면/도구', label: '채팅 worktree 관리', keys: '' },
   { id: 'addProject', group: '프로젝트', label: '프로젝트 열기…', keys: 'mod+alt+o' },
   { id: 'toggleProjects', group: '화면/도구', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b' },
   { id: 'settings', group: '화면/도구', label: '설정 열기', keys: 'mod+,' },

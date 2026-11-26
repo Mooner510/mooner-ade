@@ -34,6 +34,10 @@ export function worktreeBadge(info: WorktreeInfo) {
   return { label: info.branch || folder(info.path), ahead, dirty, tone, title: lines.join('\n') };
 }
 
+// What a sidebar row needs (main.tsx): small enough to travel in the workspace status on every render.
+export type WorktreeMark = { label: string; ahead: number; dirty: number; tone: ReturnType<typeof worktreeBadge>['tone']; title: string; inside: boolean };
+export function worktreeMark(info: WorktreeInfo): WorktreeMark { const badge = worktreeBadge(info); return { label: badge.label, ahead: badge.ahead, dirty: badge.dirty, tone: badge.tone, title: badge.title, inside: info.inside }; }
+
 // The default commit message in the merge flow: the chat's title, then the files that change.
 export function defaultCommitMessage(title: string, files: { path: string }[] = []) {
   const head = (title.trim() || '채팅 작업').replace(/\s+/g, ' ').slice(0, 72);
