@@ -13,7 +13,8 @@ import { localServerEnv } from './server-env.js';
 
 // `terminalNode` runs what plugins add to terminals (their CLIs, agents' MCP servers). Terminals outlive the app across an update, so
 // it is the pty-host's copy of Node in the data folder: one in the install folder would be locked while the update replaces it.
-export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted, systemCa = () => false }) {
+// `appActions(action, input, from)` answers the workspace requests MoonerADE itself handles (app/update*, for a remote device; plugin-core.js).
+export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, version, getServer, getWindow, trusted, systemCa = () => false, appActions }) {
   // The plugins that ship with the app (apps/desktop/builtin-plugins): no approval, only their own on/off.
   const builtinDir = process.env.ADE_BUILTIN_PLUGINS_DIR || path.join(import.meta.dirname, '..', 'builtin-plugins');
   const dir = process.env.ADE_PLUGINS_DIR || path.join(userData, 'plugins'), stagingRoot = path.join(userData, 'plugin-staging');
@@ -92,7 +93,7 @@ export function setupPlugins({ userData, nodeBinary, terminalNode = nodeBinary, 
     // A console tab's output goes to the window only: never to the local server, so no remote screen or phone sees it.
     onConsole: event => { const window = getWindow(); if (window && !window.isDestroyed()) window.webContents.send('ade:plugins-console', event); },
     onChange: publish, onTerminal: config => { terminal = config; push(); }, onFeedback: status => { feedback = status; pushFeedback(); }, toServer, notify, probeMcp,
-    github, hub, clientId: githubClientId(), openExternal,
+    github, hub, clientId: githubClientId(), openExternal, ...appActions && { appActions },
     probeCredential: async () => {
       if (testApi) return null;
       const accounts = await machineAccounts();

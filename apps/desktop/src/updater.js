@@ -1,6 +1,6 @@
 import { readBody } from './plugin-updates.js';
 import { observeSignature } from './release-signature.js';
-import { app, dialog } from 'electron';
+import { app, dialog, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, staleUpdateDirs, unknownReport, VERSION_PATTERN } from './update-policy.js';
+import { compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, pluginApiSupported, staleUpdateDirs, unknownReport, VERSION_PATTERN } from './update-policy.js';
 import { APPLY, HELPER_STARTED, helperCommandLine, startHelperArguments, startHelperScript } from './update-windows.js';
 
 export { UPDATE_CHECK_INTERVAL_MS } from './update-policy.js';
@@ -176,6 +176,51 @@ export async function applyDownloadedUpdate({ window, getBusy, beforeRestart }) 
   finally { running = false; }
 }
 
+// ---- requests from a remote device (the remote-access plugin, apps/desktop/src/plugins.js) ----
+// No dialog on the PC: the person is at the phone. The PC only sees the progress and a notification.
+const coded = (message, code) => Object.assign(new Error(message), { code });
+
+export async function remoteUpdateStatus({ repo, asset, beta }) {
+  const current = app.getVersion(), staged = pendingUpdate?.version ?? null;
+  if (!portable()) return { current, supported: false, latest: null, staged };
+  const seen = await probeLatest(repo, beta);
+  const latest = seen && !isNewer(seen, current) ? null : (await newerRelease(repo, asset, beta))?.version ?? null;
+  return { current, supported: true, latest, staged };
+}
+
+// Downloads (or takes the one already downloaded) and installs the newest release, after two checks the PC's own update does not make:
+// the new bundle must still run the asking plugin's API version (`apiVersion`), or the remote link could not come back, and work a restart
+// would cut off is reported back ({ busy, reasons }) unless the remote user already chose to go ahead (`force`).
+export async function remoteUpdate({ repo, asset, beta, window, getBusy, beforeRestart }, { apiVersion, force = false }) {
+  if (!portable()) throw coded('이 PC의 ADE는 자동 업데이트를 지원하지 않습니다.', 'UNSUPPORTED');
+  if (running || applying) throw coded('이미 업데이트를 확인하거나 설치하는 중입니다.', 'UPDATING');
+  running = true;
+  try {
+    const wanted = await newerRelease(repo, asset, beta);
+    if (pendingUpdate && wanted && pendingUpdate.version !== wanted.version) discardPendingUpdate();
+    let current = pendingUpdate;
+    if (!current) {
+      if (!wanted) throw coded('이미 최신 버전입니다.', 'LATEST');
+      const { file, kind } = await pickPackage(wanted.release, asset, wanted.version);
+      const signature = wanted.release.assets.find(item => item.name === file.name + '.sig');
+      current = await prepareUpdate({ version: wanted.version, file, signature, kind, window, autoDownload: true, manual: false });
+    }
+    try {
+      let versions = null;
+      try { versions = JSON.parse(fs.readFileSync(path.join(current.appDir, 'apps', 'plugin-api', 'versions.json'), 'utf8')); } catch { /* an older build: unknown */ }
+      if (!pluginApiSupported(versions, apiVersion)) throw coded(`v${current.version}에서는 원격 접속을 쓸 수 없어 PC에서만 업데이트할 수 있습니다.`, 'INCOMPATIBLE');
+      const report = await readBusy(getBusy);
+      if (report.busy && !force) return { busy: true, version: current.version, reasons: describeReasons(report.reasons) };
+      if (pendingUpdate !== current || applying) throw coded('이미 업데이트를 설치하는 중입니다.', 'UPDATING');
+      if (Notification.isSupported()) new Notification({ title: '업데이트', body: `원격 기기에서 v${current.version} 업데이트를 시작했습니다.` }).show();
+      await restartNow({ current, window, beforeRestart, quitAfterMs: 1500, onFailure: error => { throw coded(`업데이트하지 못했습니다: ${describeFailure(error)}`, 'FAILED'); } });
+      return { busy: false, version: current.version, restarting: true };
+    } finally {
+      if (pendingUpdate === current && !applying) showPrepared(window);
+    }
+  } finally { running = false; }
+}
+
 async function applyPrepared({ current, window, getBusy, beforeRestart }) {
   const report = await readBusy(getBusy);
   if (report.busy && !(await confirmInterrupt(window, report))) return 'staged';
@@ -280,6 +325,21 @@ async function probeLatest(repo, beta) {
   } catch { return null; }
 }
 
+// The release to offer from api.github.com, or null when it is not newer than this app.
+async function newerRelease(repo, asset, beta) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
+  // /releases/latest never returns a prerelease; the beta channel reads the list instead (one request either way).
+  const response = await fetch(`${UPDATE_API}/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) {
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    const wait = response.headers.get('x-ratelimit-remaining') === '0' && reset ? ` — 요청 한도 초과, ${new Date(reset * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 이후 다시 시도하세요` : '';
+    throw new Error(`GitHub 응답 오류 (HTTP ${response.status})${wait}`);
+  }
+  const body = await response.json();
+  const picked = pickRelease(beta ? body : [body], { beta, asset });
+  return picked && isNewer(picked.version, app.getVersion()) ? picked : null;
+}
+
 async function check({ repo, asset, window, manual, beta, autoDownload, getBusy, getCountdownPosition, beforeRestart }) {
   const upToDate = async () => {
     if (manual) await say(window, { type: 'info', title: '업데이트', message: '최신 버전을 사용 중입니다.', detail: `현재 버전은 ${app.getVersion()}입니다.${beta ? ' (베타 포함)' : ''}` });
@@ -292,17 +352,8 @@ async function check({ repo, asset, window, manual, beta, autoDownload, getBusy,
     if (!manual && declined.has(seen)) return 'declined';
     if (!manual && failures.blocked(seen)) return 'error';
   }
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': app.getName() };
-  // /releases/latest never returns a prerelease; the beta channel reads the list instead (one request either way).
-  const response = await fetch(`${UPDATE_API}/repos/${repo}/releases${beta ? '?per_page=10' : '/latest'}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  if (!response.ok) {
-    const reset = Number(response.headers.get('x-ratelimit-reset'));
-    const wait = response.headers.get('x-ratelimit-remaining') === '0' && reset ? ` — 요청 한도 초과, ${new Date(reset * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 이후 다시 시도하세요` : '';
-    throw new Error(`GitHub 응답 오류 (HTTP ${response.status})${wait}`);
-  }
-  const body = await response.json();
-  const picked = pickRelease(beta ? body : [body], { beta, asset });
-  if (!picked || !isNewer(picked.version, app.getVersion())) return upToDate();
+  const picked = await newerRelease(repo, asset, beta);
+  if (!picked) return upToDate();
   const { release, version } = picked, label = isPrerelease(version) ? '베타 버전' : '버전';
   // The timer does not ask again about a version the user answered "later" to (and so does not even fetch its manifest).
   if (!manual && declined.has(version)) return 'declined';
@@ -396,7 +447,7 @@ async function prepareUpdate({ version, file, signature, kind, window, autoDownl
     const staged = process.platform === 'darwin' ? await stageMac({ zip, progress }) : await stageWindows({ zip, work, kind });
     progress.close();
     pendingUpdate = {
-      version, autoDownload, onQuit: false, getCountdownPosition,
+      version, autoDownload, onQuit: false, getCountdownPosition, appDir: staged.appDir,
       discard() { try { staged.discard(); } finally { fs.rmSync(work, { recursive: true, force: true }); } },
       launch: () => staged.launch({ work }),
     };
@@ -423,7 +474,9 @@ async function launchPrepared(current, window) {
   }
 }
 
-async function restartNow({ current, window, beforeRestart }) {
+// `quitAfterMs` leaves a moment before the quit, for a remote request to get its answer back before the link goes down with the app.
+// `onFailure` is the PC's error box; a remote request takes the error back instead (nobody may be at the PC to close a box).
+async function restartNow({ current, window, beforeRestart, quitAfterMs = 0, onFailure = reportUpdateFailure }) {
   startingRestart = true;
   try {
     await launchPrepared(current, window);
@@ -434,13 +487,13 @@ async function restartNow({ current, window, beforeRestart }) {
     if (!current.autoDownload) discardPendingUpdate();
     showPrepared(window);
     failures.record(current.version);
-    reportUpdateFailure(error);
+    onFailure(error);
     return 'error';
   } finally {
     startingRestart = false;
   }
-  beforeRestart?.();
-  app.quit();
+  const quit = () => { beforeRestart?.(); app.quit(); };
+  if (quitAfterMs) setTimeout(quit, quitAfterMs); else quit();
   return 'updating';
 }
 
@@ -468,6 +521,7 @@ async function stageWindows({ zip, work, kind }) {
   if (!valid) throw new Error('업데이트 파일 구성이 올바르지 않습니다.');
   const target = kind === 'app' ? app.getAppPath() : path.dirname(process.execPath);
   return {
+    appDir: kind === 'app' ? source : path.join(source, 'resources', 'app'),
     discard() {},
     async launch() {
       const script = path.join(work, 'apply.ps1'), starter = path.join(work, 'start.ps1');
@@ -510,6 +564,7 @@ async function stageMac({ zip, progress }) {
     const installed = await requirement(target).catch(() => '');
     if (installed.includes('certificate leaf') && installed !== await requirement(next)) throw new Error('새 버전의 서명이 설치된 앱과 다릅니다.');
     return {
+      appDir: path.join(next, 'Contents', 'Resources', 'app'),
       discard() { fs.rmSync(stage, { recursive: true, force: true }); },
       async launch({ work }) {
         const script = path.join(work, 'apply.sh');

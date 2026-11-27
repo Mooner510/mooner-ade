@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { UPDATE_CHECK_INTERVAL_MS, RETRY_AFTER_FAILURE_MS, compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, quitPrompt, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
+import { UPDATE_CHECK_INTERVAL_MS, RETRY_AFTER_FAILURE_MS, compareVersions, createDeclined, createFailures, describeFailure, describeReasons, isNewer, isPrerelease, normalizeReport, pickRelease, pluginApiSupported, quitPrompt, staleUpdateDirs, unknownReport, VERSION_PATTERN } from '../apps/desktop/src/update-policy.js';
 
 test('background checks run every 30 minutes', () => {
   assert.equal(UPDATE_CHECK_INTERVAL_MS, 10 * 60 * 1000);
@@ -166,4 +166,15 @@ test('main.js asks the quit question through quitPrompt with the update that is 
   assert.match(main, /buttons\[response\] === QUIT_CANCEL/);
   assert.match(main, /buttons\[response\] === QUIT_KEEP/);
   assert.ok(!main.includes("'종료: 터미널과 채팅을 모두 끝냅니다."), 'the wording lives in update-policy.js only');
+});
+
+test('a remote update needs the new release to still run the remote plugin’s API version', () => {
+  const versions = JSON.parse(readFileSync(new URL('../apps/plugin-api/versions.json', import.meta.url), 'utf8'));
+  assert.equal(pluginApiSupported(versions, 1), true, 'the shipped list runs v1');
+  assert.equal(pluginApiSupported({ supported: [{ version: 1, status: 'deprecated' }], removed: [] }, 1), true);
+  assert.equal(pluginApiSupported({ supported: [{ version: 2, status: 'supported' }], removed: [1] }, 1), false, 'removed');
+  assert.equal(pluginApiSupported({ supported: [{ version: 2, status: 'supported' }], removed: [] }, 1), false, 'not listed');
+  assert.equal(pluginApiSupported({ supported: [{ version: 1, status: 'gone' }] }, 1), false, 'unknown status');
+  for (const bad of [null, undefined, {}, { supported: 'v1' }, 'x']) assert.equal(pluginApiSupported(bad, 1), false, JSON.stringify(bad));
+  assert.equal(pluginApiSupported(versions, undefined), false, 'a plugin without a version is not assumed to fit');
 });

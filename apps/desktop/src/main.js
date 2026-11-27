@@ -16,7 +16,7 @@ import { setupSystemCa } from './system-ca.js';
 import { clearRendezvous, markHostCopy, newEndpoint, prepareHostCopy, processAlive, readRendezvous, sweepHostCopies, writeRendezvous } from './pty-host-files.js';
 import { QUIT_CANCEL, QUIT_KEEP, quitPrompt } from './update-policy.js';
 import { lastSignature, loadSignatureStatus } from './release-signature.js';
-import { applyDownloadedUpdate, applyStagedUpdate, checkForUpdate, discardPendingUpdate, stagedUpdateVersion, sweepStaleUpdates, updateRestartPending, updateStatus, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
+import { applyDownloadedUpdate, applyStagedUpdate, checkForUpdate, discardPendingUpdate, remoteUpdate, remoteUpdateStatus, stagedUpdateVersion, sweepStaleUpdates, updateRestartPending, updateStatus, UPDATE_CHECK_INTERVAL_MS } from './updater.js';
 
 // Keep the existing profile when changing the displayed product name. ADE_USER_DATA_DIR gives a copy of the app started from a shell
 // (an isolated test of a packaged build) a profile of its own: its own single-instance lock, pty-host, plugins and Chromium data.
@@ -429,6 +429,15 @@ ipcMain.handle('ade:get-update-countdown-position', () => readUpdatePreferences(
 ipcMain.handle('ade:set-update-countdown-position', (event, position) => fromMainWindow(event) && isCountdownPosition(position) ? updatePreference('countdownPosition', position) : readUpdatePreferences().countdownPosition);
 ipcMain.handle('ade:check-update', event => fromMainWindow(event) && checkForUpdate(updateTarget(true)));
 ipcMain.handle('ade:update-status', event => fromMainWindow(event) ? updateStatus() : null);
+// A remote device (through the remote-access plugin) checks and installs this app's update without a dialog here (updater.js remoteUpdate).
+const remoteAppAction = async (action, input, { apiVersion }) => {
+  if (action === 'app/update-status') return remoteUpdateStatus(updateTarget());
+  if (action === 'app/update') {
+    if (quitting) throw Object.assign(new Error('앱이 종료되는 중입니다.'), { code: 'UPDATING' });
+    return remoteUpdate(updateTarget(), { apiVersion, force: input.force === true });
+  }
+  throw Object.assign(new Error('이 MoonerADE에서는 쓸 수 없는 요청입니다.'), { code: 'UNSUPPORTED' });
+};
 ipcMain.handle('ade:apply-downloaded-update', event => fromMainWindow(event) && !quitting && applyDownloadedUpdate(updateTarget()));
 
 function installMenu() {
@@ -458,7 +467,7 @@ if (leavingConsole) {
       // Needs the app to be ready (safeStorage). Off unless turned on and each plugin approved; a plugin setup that fails leaves plugins off, never the app.
       const systemCa = setupSystemCa({ trusted: event => sameOrigin(event.senderFrame?.url ?? ''), userData: app.getPath('userData'), nodeBinary, getWindow: () => mainWindow });
       systemCaEnabled = systemCa.enabled;
-      try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? '') }); }
+      try { plugins = setupPlugins({ systemCa: systemCa.enabled, userData: app.getPath('userData'), nodeBinary, terminalNode: ptyHostInfo?.node ?? nodeBinary, version: appVersion, getServer: () => server, getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? ''), appActions: remoteAppAction }); }
       catch (error) { console.warn(`플러그인을 불러오지 못했습니다: ${error.message}`); }
       // "다른 PC에 접속": nothing starts until the user opens it (the sealed store is read then, not at startup).
       try { remote = setupRemote({ userData: app.getPath('userData'), getWindow: () => mainWindow, trusted: event => sameOrigin(event.senderFrame?.url ?? ''), iconPath, background }); }
