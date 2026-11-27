@@ -38,7 +38,8 @@ function Chart({ spec }: { spec: Extract<Spec, { t: 'chart' }> }) {
     body = <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label={title || 'chart'}>
       {ticks.map(t => <g key={t}><line x1={L} x2={W - R} y1={at(t)} y2={at(t)} stroke={t === 0 ? 'var(--border-strong)' : 'var(--border)'} strokeDasharray={t === 0 ? undefined : '2 3'} />
         <text x={L - 6} y={at(t) + 3.5} textAnchor="end" className="ui-axis">{short(t)}</text></g>)}
-      {Array.from({ length: n }, (_, i) => <text key={i} x={L + step * (i + .5)} y={H - 5} textAnchor="middle" className="ui-axis">{n > 12 && i % 2 ? '' : x[i] ?? ''}</text>)}
+      {Array.from({ length: n }, (_, i) => { const full = n > 12 && i % 2 ? '' : x[i] ?? '', room = Math.max(2, Math.floor(step * (n > 12 ? 2 : 1) / 9)); // a long label is cut to the room under its bar, so neighbours do not print over each other
+        return <text key={i} x={L + step * (i + .5)} y={H - 5} textAnchor="middle" className="ui-axis">{full.length > room ? <><title>{full}</title>{full.slice(0, room - 1)}…</> : full}</text>; })}
       {y.map(([name, values], s) => kind === 'line'
         ? <g key={name} fill={COLORS[s]} stroke={COLORS[s]}><polyline fill="none" strokeWidth="2" points={values.map((v, i) => `${L + step * (i + .5)},${at(v)}`).join(' ')} />{values.map((v, i) => <circle key={i} cx={L + step * (i + .5)} cy={at(v)} r="2.5" stroke="none"><title>{`${name} ${x[i] ?? ''}: ${v}`}</title></circle>)}</g>
         : values.map((v, i) => { const w = Math.min(step * .7 / y.length, 72), left = L + step * i + (step - w * y.length) / 2 + w * s, top = Math.min(at(v), at(0));

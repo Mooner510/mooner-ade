@@ -4,7 +4,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, stat, utimes } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readLastLines, writeIfChanged, writeShared } from '../apps/local-server/src/file-util.js';
+import { readLastLines, renameRetry, writeIfChanged, writeShared } from '../apps/local-server/src/file-util.js';
 import { openChatSession } from '../apps/local-server/src/chat.js';
 
 const temp = async t => { const directory = await mkdtemp(join(tmpdir(), 'ade-file-util-')); t.after(() => rm(directory, { recursive: true, force: true })); return directory; };
@@ -61,4 +61,31 @@ test('opening a chat with a long log reads its tail and keeps every event on dis
   assert.equal(events[0].seq, total - 4000 + 1);
   assert.equal(events.at(-1).seq, total);
   assert.equal(await readFile(join(root, 'events.jsonl'), 'utf8'), log, 'the log on disk is not trimmed');
+});
+
+test('renameRetry tries again while Windows refuses the replace, then succeeds', async () => {
+  const calls = [], pauses = [];
+  const rename = async () => { calls.push(1); if (calls.length < 4) throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }); };
+  await renameRetry('a', 'b', { rename, wait: async ms => { pauses.push(ms); } });
+  assert.equal(calls.length, 4);
+  assert.deepEqual(pauses, [10, 20, 30], 'the pause grows with each attempt');
+});
+
+test('renameRetry gives up after its attempts and does not retry other errors', async () => {
+  let calls = 0;
+  const busy = async () => { calls++; throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); };
+  await assert.rejects(renameRetry('a', 'b', { rename: busy, wait: async () => {}, attempts: 5 }), { code: 'EBUSY' });
+  assert.equal(calls, 6, 'the first try plus five more');
+  calls = 0;
+  const missing = async () => { calls++; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+  await assert.rejects(renameRetry('a', 'b', { rename: missing, wait: async () => {} }), { code: 'ENOENT' });
+  assert.equal(calls, 1);
+});
+
+test('renameRetry replaces a real file', async t => {
+  const directory = await temp(t), from = join(directory, 'm.json.tmp'), to = join(directory, 'm.json');
+  await writeFile(to, 'old'); await writeFile(from, 'new');
+  await renameRetry(from, to);
+  assert.equal(await readFile(to, 'utf8'), 'new');
+  assert.deepEqual(await readdir(directory), ['m.json']);
 });

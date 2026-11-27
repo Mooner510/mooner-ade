@@ -3,6 +3,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useId, useLayo
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type DiffLayoutChoice, type McpTrust, type Settings } from './Editor';
 import { addTrust } from './mcp-trust';
+import { listRoom, placeDonePop } from './popover-place';
 import { chatDarkVars, themeById } from './themes';
 import { placeAbove, UsageRows, usageHueStyle, useUsage } from './Usage';
 import { Icon, type IconName, IconButton, SettingGlyph, SplitButton } from './Icon';
@@ -36,7 +37,7 @@ import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
 import type { QuickItem } from './QuickInput';
-import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
+import { busAgentName, busPreview, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
 import { useChatPasteRefs, useChatSendTarget } from './chat-send-ui';
 import { joinPath } from './chat-send';
@@ -682,15 +683,7 @@ function TurnTokens({ done }: { done: TurnDone }) {
   const rows = turnTokenRows(done), pop = useRef<HTMLSpanElement>(null);
   // The note opens above the icon, starting at its left edge. Shown, it is pushed back inside the thread's box (a phone is narrower than the note is long) and
   // drops below the icon when there is no room above it (the first rows of the thread). It wraps in the CSS when even the whole width is too narrow.
-  const place = () => {
-    const el = pop.current; if (!el) return;
-    el.style.setProperty('--pop-x', '0px'); el.dataset.side = 'above';
-    const box = el.getBoundingClientRect(), host = el.closest('.chat-scroll')?.getBoundingClientRect(), margin = 8;
-    const left = Math.max(host?.left ?? 0, 0) + margin, right = Math.min(host?.right ?? innerWidth, innerWidth) - margin;
-    let shift = 0; if (box.right > right) shift = right - box.right; if (box.left + shift < left) shift = left - box.left;
-    el.style.setProperty('--pop-x', `${Math.round(shift)}px`);
-    if (box.top < (host?.top ?? 0) + 44) el.dataset.side = 'below';
-  };
+  const place = () => placeDonePop(pop.current);
   return <span className="chat-done-tip" onMouseEnter={place} onFocus={place}>
     <IconButton icon="info" tip="none" label={[...rows.map(row => `${row.label} ${row.up.label} ${row.up.value} ${row.down.label} ${row.down.value}`), ...(done.costUsd ? [`비용 ${dollars(done.costUsd)}달러`] : [])].join(', ')} size={13} />
     <span className="chat-done-pop" role="tooltip" ref={pop}>{rows.map(row => <span key={row.icon} className="chat-done-row">
@@ -839,7 +832,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
     const slash = parseChatSlashCommand(item.text);
     if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="command" markdown={false}><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</UserMessageBubble></div>;
     const bus = parseBusMessages(item.text);
-    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div>;
+    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={busPreview(bus).slice(0, 280)}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div>;
     return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}>{item.shells ? <small className="chat-shell-included"><Icon name="terminal" size={12} />콘솔 실행 결과 {item.shells}건을 이 메시지와 함께 에이전트에게 보냈어요</small> : null}<UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
@@ -1637,6 +1630,17 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // In another PC's window (or the phone) an @path names a file on that PC. A file of this device is sent there first: the `@word`
   // gives way to the file picker, and the copy's path comes back as the mention (attach → mentionFiles).
   const localPick = mentionOpen && isRemote && can('files/upload');
+  // The command / mention list opens above the composer inside the pane (which clips): it may not grow past the pane's top, so a short pane scrolls it.
+  const listOpen = matches.length > 0 || mentions.length > 0 || localPick;
+  useLayoutEffect(() => {
+    const box = composer.current, pane = box?.closest<HTMLElement>('.chat-pane');
+    if (!listOpen || !box || !pane) return;
+    const fit = () => box.style.setProperty('--list-room', `${listRoom({ paneTop: pane.getBoundingClientRect().top, composerTop: box.getBoundingClientRect().top })}px`);
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(pane); observer.observe(box);
+    return () => { observer.disconnect(); box.style.removeProperty('--list-room'); };
+  }, [listOpen]);
   const pickLocal = () => {
     const next = text.slice(0, mentionAt) + text.slice(caret);
     setText(next); setCaret(mentionAt);
@@ -1916,6 +1920,10 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const waitingAgents = useMemo(() => new Set(askingAgents.values()), [askingAgents]);
   const shown = useMemo(() => { const from = lastIndexWhere(view.items, item => item.kind === 'divider'); return from < 0 ? view.items : view.items.slice(from + 1); }, [view.items]);
   const turns = useMemo(() => turnsOf(shown, busy), [shown, busy]), lastTurn = turns.at(-1);
+  // The pin is measured on scroll, but a new conversation (/clear) replaces the thread without one: the previous conversation's last request (often a
+  // message from the agent bus) stayed pinned above the new, empty chat. It is measured again whenever the thread starts somewhere else.
+  const threadStart = shown[0]?.key ?? '';
+  useLayoutEffect(() => { if (!threadStart) setPin(null); else syncPin(); }, [threadStart, syncPin]);
   // Only the newest turns are in the DOM; the rest load as the reader scrolls up (a long chat was thousands of elements per pane, laid out and kept in memory for every open tab).
   const [turnLimit, setTurnLimit] = useState(TURN_PAGE);
   const hiddenTurns = Math.max(0, turns.length - turnLimit), renderedTurns = hiddenTurns ? turns.slice(hiddenTurns) : turns;

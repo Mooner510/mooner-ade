@@ -11,6 +11,9 @@ import { useActionKeys } from './shortcuts';
 
 type Entry = { name: string; folder: boolean };
 type Move = { from: string; to: string };
+// What git says about a path: ignored (gray), untracked (vermilion), newly added (green), modified or holding modified files (blue).
+export type GitState = 'ignored' | 'untracked' | 'added' | 'modified';
+type GitStates = Record<string, GitState>;
 type DroppedMove = { from: string | null; to: string };
 type DesktopDrop = (files: File[], projectId: string, dir: string, dirty: string[]) => Promise<{ moved: DroppedMove[]; error?: string }>;
 // What the tree asks of the workspace: its dialogs, which open files have unsaved edits, tabs that follow a moved file, and a nudge for the open listings to reload.
@@ -20,7 +23,7 @@ export type TreeHost = {
 };
 type TreeContext = {
   visible: boolean; selected: string; picked: Set<string>; cut: Set<string>; dropOn: string; expanded: Set<string>;
-  prefetched: Map<string, Entry[]>;
+  prefetched: Map<string, Entry[]>; gitStates: GitStates;
   select(path: string, folder: boolean): void; toggle(path: string): void; open(path: string): void;
   press(event: MouseEvent, path: string): void; click(event: MouseEvent, path: string): void; menu(event: MouseEvent, path: string, folder: boolean): void;
   dragStart(event: DragEvent, path: string): void; dragOver(event: DragEvent, path: string, folder: boolean): void; drop(event: DragEvent, path: string, folder: boolean): void; dragEnd(): void;
@@ -39,16 +42,27 @@ const topLevel = (paths: string[]) => paths.filter(path => !paths.some(other => 
 const remapPath = (path: string, moves: Move[]) => { const hit = moves.find(({ from }) => inside(path, from)); return hit ? hit.to + path.slice(hit.from.length) : path; };
 // Dropping onto the folder the items already sit in changes nothing (for a move), and nothing goes into itself.
 const droppable = (paths: string[], dest: string, copy: boolean) => paths.every(path => !inside(dest, path)) && (copy || paths.some(path => parentOf(path) !== dest));
+// A path's own entry wins (a folder git reports whole is keyed with a trailing slash); otherwise the nearest folder above it that git reports whole ("node_modules/" ignored, a new folder untracked) decides.
+const gitStateOf = (states: GitStates, path: string): GitState | undefined => {
+  const own = states[path] ?? states[`${path}/`];
+  if (own) return own;
+  for (let slash = path.lastIndexOf('/'); slash > 0; slash = path.lastIndexOf('/', slash - 1)) {
+    const whole = states[`${path.slice(0, slash)}/`];
+    if (whole) return whole;
+  }
+  return undefined;
+};
 const where = (dir: string) => dir === '.' ? '프로젝트 루트' : dir;
 const listOf = (paths: string[]) => [...paths.slice(0, 8).map(path => `• ${path}`), paths.length > 8 && `외 ${paths.length - 8}개`].filter(Boolean).join('\n');
 
 function TreeRow({ path, name, folder, depth, ctx }: { path: string; name: string; folder: boolean; depth: number; ctx: TreeContext }) {
   const expanded = folder && ctx.expanded.has(path);
+  const git = gitStateOf(ctx.gitStates, path);
   return <div role="treeitem" aria-label={name} aria-expanded={folder ? expanded : undefined} aria-selected={ctx.picked.has(path)}
     tabIndex={ctx.selected === path ? 0 : -1} data-path={path} data-parent={parentOf(path)} style={{ '--depth': depth } as CSSProperties} onFocus={event => {
       if (event.target === event.currentTarget) ctx.select(path, folder);
     }}>
-    <div className={`project-tree-row${ctx.cut.has(path) ? ' cut' : ''}${ctx.dropOn === path ? ' drop' : ''}`} title={path === '.' ? name : path} draggable={path !== '.'}
+    <div className={`project-tree-row${ctx.cut.has(path) ? ' cut' : ''}${ctx.dropOn === path ? ' drop' : ''}`} data-git={git} title={path === '.' ? name : path} draggable={path !== '.'}
       onMouseDown={event => ctx.press(event, path)} onClick={event => ctx.click(event, path)} onContextMenu={event => ctx.menu(event, path, folder)}
       onDragStart={event => ctx.dragStart(event, path)} onDragOver={event => ctx.dragOver(event, path, folder)} onDrop={event => ctx.drop(event, path, folder)} onDragEnd={ctx.dragEnd}
       onDoubleClick={() => folder ? ctx.toggle(path) : ctx.open(path)}>
@@ -105,8 +119,8 @@ function Directory({ path, depth, ctx }: { path: string; depth: number; ctx: Tre
   </div>;
 }
 
-export function ProjectTree({ projectId, root, visible, open, expanded, setExpanded, onClose, call, watch, onOpen, host }: {
-  projectId: string; root: string; visible: boolean; open: boolean; expanded: Set<string>; setExpanded: Dispatch<SetStateAction<Set<string>>>;
+export function ProjectTree({ projectId, root, visible, open, expanded, setExpanded, onClose, call, watch, onOpen, host, gitColors }: {
+  projectId: string; root: string; visible: boolean; open: boolean; gitColors: boolean; expanded: Set<string>; setExpanded: Dispatch<SetStateAction<Set<string>>>;
   onClose(): void; call: TreeContext['call']; watch: TreeContext['watch']; onOpen(path: string): void; host: TreeHost;
 }) {
   // `selection` is the row with the keyboard focus (the "lead"); `picked` is everything selected, as the rows draw it. The same facts live in `live` too so a handler that
@@ -119,6 +133,7 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
   const [expanding, setExpanding] = useState(false);
   const [notice, setNotice] = useState('');
   const [width, setWidth] = useState(272);
+  const [gitStates, setGitStates] = useState<GitStates>({});
   const prefetched = useRef(new Map<string, Entry[]>());
   const expansion = useRef<AbortController | null>(null);
   const search = useRef({ value: '', at: 0 });
@@ -136,6 +151,27 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
     const cache = prefetched.current;
     return () => { expansion.current?.abort(); cache.clear(); setNotice(''); };
   }, [visible, open]);
+  // The git colours: read again when the project's files change and every few seconds (a `git add` or commit touches nothing the watcher sees).
+  useEffect(() => {
+    if (!visible || !open || !gitColors) { setGitStates(previous => Object.keys(previous).length ? {} : previous); return; }
+    let live = true, running = false, again = false;
+    const load = async () => {
+      if (running) { again = true; return; }
+      running = true;
+      try {
+        const { states } = await call<{ states: GitStates }>('files/git-status', {});
+        if (live) setGitStates(previous => JSON.stringify(previous) === JSON.stringify(states) ? previous : states);
+      } catch { /* colours are decoration: an unreadable status just leaves the names plain */ }
+      finally {
+        running = false;
+        if (live && again) { again = false; void load(); }
+      }
+    };
+    void load();
+    const unsubscribe = watch(() => void load());
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 5000);
+    return () => { live = false; unsubscribe(); clearInterval(timer); };
+  }, [visible, open, gitColors, call, watch]);
   const toggle = (path: string) => {
     expansion.current?.abort();
     const next = new Set(expanded);
@@ -400,7 +436,7 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
     else if (droppable(paths, dest, copy)) void transfer(paths, dest, copy, true);
   }
 
-  const ctx: TreeContext = { expanded, selected, picked, cut: new Set(clip?.cut ? clip.paths : []), dropOn, select, toggle, press, click, menu: (event, path, folder) => openMenu(event, path, folder), dragStart, dragOver, drop, dragEnd: clearDrag,
+  const ctx: TreeContext = { expanded, selected, picked, cut: new Set(clip?.cut ? clip.paths : []), dropOn, gitStates, select, toggle, press, click, menu: (event, path, folder) => openMenu(event, path, folder), dragStart, dragOver, drop, dragEnd: clearDrag,
     prefetched: prefetched.current, visible: visible && open, call, watch, open: onOpen };
   function navigate(event: KeyboardEvent<HTMLDivElement>) {
     const item = event.target as HTMLElement;

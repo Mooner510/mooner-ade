@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type C
 import { api } from './api';
 import { agentNames, chatStatusLayout, defaultSettings, restoreDefaultSettings, statusLayout, terminalFontStack, usageHue, type Settings } from './Editor';
 import { APP_THEMES, themeById, type ThemeId } from './themes';
+import { dialogYRange, windowBarHeight } from './window-chrome';
 import { chatItemView, chatStatusDefs, chatStatusLabels, type CacheTtl } from './ChatStatus';
 import { chatKey, chatKeyDefs, comboOf, emptyState, showCombo, validCombo } from './chat-model';
 import { chatKeyGroup } from './chat-key-guide';
@@ -471,7 +472,9 @@ function placeSettings(dialog: HTMLElement, x: number, y: number) {
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
   // Leave the bottom status bar clear while that section is showing it live.
   const bottom = dialog.classList.contains('bar-live') ? 36 : 0;
-  settingsOffset = { x: clamp(x, -rect.left, innerWidth - rect.right), y: clamp(y, -rect.top, innerHeight - bottom - rect.bottom) };
+  // The top edge stays under the bar the window controls sit in, or the close button ends up beneath them.
+  const [minY, maxY] = dialogYRange(rect.top, rect.bottom, innerHeight, windowBarHeight(), bottom);
+  settingsOffset = { x: clamp(x, -rect.left, innerWidth - rect.right), y: clamp(y, minY, maxY) };
   dialog.style.translate = `${settingsOffset.x}px ${settingsOffset.y}px`;
 }
 function dragSettings(event: PointerEvent<HTMLElement>) {
@@ -593,7 +596,7 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   const number = (key: 'fontSize' | 'terminalFontSize' | 'scrollback' | 'sidebarWidth' | 'diffRefresh' | 'lineHeight' | 'cacheWarn' | 'cacheSendWarnMinutes' | 'idleCompactMinK' | 'usageRefresh' | 'letterSpacing' | 'scrollSensitivity' | 'minimumContrast' | 'diffContextLines' | 'systemRefresh' | 'reviewWidth' | 'chatFontSize' | 'chatComposerMax' | 'uiZoom' | 'diffComputeMs', min: number, max: number, step = 1) =>
     <input type="number" min={min} max={max} step={step} value={settings[key]} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= min && value <= max && (step < 1 || Number.isInteger(value))) set(key, value as never); }} />;
-  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'idleCompact' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
+  const toggle = (key: 'dimInactivePanes' | 'cursorBlink' | 'copyOnSelect' | 'notifyDone' | 'notifyApproval' | 'notifySound' | 'notifyLooking' | 'cacheTimer' | 'cacheSendWarn' | 'idleCompact' | 'tips' | 'followUpQueue' | 'interactiveUi' | 'artifactAlways' | 'usageColors' | 'claudeSession' | 'rightClickPaste' | 'optionAsMeta' | 'confirmClose' | 'boldBright' | 'terminalGpu' | 'diffIgnoreWhitespace' | 'diffFoldUnchanged' | 'clock12h' | 'clockSeconds' | 'chatToolsOpen' | 'chatAutoScroll' | 'chatSmoothStream' | 'sidebarCompact' | 'animateInBackground' | 'confirmCloseChat' | 'confirmCloseProject' | 'treeGitColors' | 'feedbackAgentTool' | 'feedbackAiContext' | 'chatDarker') =>
     <input type="checkbox" role="switch" checked={settings[key]} onChange={event => set(key, event.target.checked as never)} />;
   // Switch on = the agent is not in the list (shown / alerting).
   const inList = (key: 'agentsOff' | 'agentsMuted', agent: string, label: string) =>
@@ -862,6 +865,9 @@ export function SettingsModal({ settings, onChange, onClose, initialSection = 'a
         </SectionFrame>}
         {(searching || section === 'git') && <SectionFrame label="Git" searching={searching}>
           <GitSettings settings={settings} set={set} />
+          <Group title="파일 트리">
+            <Row title="Git 상태 색상" hint="프로젝트 파일 트리에서 .gitignore에 걸리는 파일은 회색, 아직 git에 추가하지 않은 파일은 다홍색, 새로 추가(staged)한 파일은 초록색, 수정한 파일(과 그 폴더)은 파란색으로 표시합니다.">{toggle('treeGitColors')}</Row>
+          </Group>
           <Group title="Diff">
             <p className="setting-note">글꼴, 줄바꿈, 표시 방식, 구간 접기는 외관에서 바꿉니다.</p>
             <Row title="공백 변경 무시" hint="줄 앞뒤 공백만 바뀐 줄은 변경으로 표시하지 않습니다.">{toggle('diffIgnoreWhitespace')}</Row>

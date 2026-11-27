@@ -67,7 +67,7 @@
 ### 에이전트 버스 (내장 플러그인)
 
 설명과 설정은 [AGENT_BUS.md](../../AGENT_BUS.md). 자동 검증: `node --test tests/agent-bus.test.mjs tests/agent-bus-host.test.mjs tests/plugins.test.mjs`와 `pnpm typecheck`.
-규칙(범위, 전송·연쇄·길이 한도, 대기열 합치기·만료), MCP 서버 프로토콜, 내장 플러그인 켜기·끄기·봉인, 채팅 전용 MCP 서버의 터미널 제외와 `ADE_CHAT_*` 주입,
+규칙(범위, 전송·길이 한도, 대기열 합치기·만료), MCP 서버 프로토콜, 내장 플러그인 켜기·끄기·봉인, 채팅 전용 MCP 서버의 터미널 제외와 `ADE_CHAT_*` 주입,
 Codex·Cursor 프로토콜의 env와 자동 허용, 호스트 프로세스(루프백·토큰·재시작 시 같은 포트·워크스페이스 세션 재연결)를 가짜 서버로 확인합니다.
 
 실제 CLI 확인(2026-11-12, claude 2.1.322, Windows): 실제 `claude -p`가 `--mcp-config`로 받은 `agent_bus`의 `list_peers`와 `send_message`를 호출했고, 채팅 id(`ADE_CHAT_ID`)가
@@ -82,7 +82,7 @@ Cursor는 `cursor-agent`가 없어 확인하지 못했습니다.
 | 상세 → 사용 스위치 끄기 | 상태가 꺼짐, 설정 칸이 사라짐. 켜면 되돌아옴. 앱을 다시 켜도 유지 |
 | 같은 프로젝트에 Claude·Codex·Cursor 채팅 세 개, Claude에게 "Codex 채팅에 ○○라고 전해" | Codex 채팅에 "다른 에이전트의 메시지" 카드가 뜨고 Codex가 새 턴을 시작 |
 | Codex가 응답 중일 때 보내기 | 턴에 끼워 들어감(스티어). Cursor가 응답 중이면 끝난 뒤 전달 |
-| 서로 답장을 계속 시키기 | 연쇄 한도(기본 4)에서 멈추고 에이전트가 사용자에게 알림 |
+| 서로 답장을 계속 시키기 | 같은 채팅으로 15초에 4번·1분에 8번을 넘기면 전송 한도(`RATE_LIMIT`)로 거부되고 에이전트가 사용자에게 알림. 답장 깊이(연쇄) 한도는 없다(docs/AGENT_BUS.md "루프와 폭주를 막는 장치") |
 | 설정에서 Cursor 참여 끄기 | `list_peers`에 Cursor가 나오지 않음 |
 | Cursor가 `send_message`를 허용 요청 없이 실행하는지 | 요청이 뜨면 AGENT_BUS.md의 한계 항목대로 **항상 허용** |
 | 채팅 A에서 "B에게 ○○ 고쳐달라고 시켜"(A, B 모두 새로 연 채팅). B가 `auto`/`bypassPermissions` | B 화면의 카드 머리글에 `ADE verified` 두 줄(B의 모드, A에서 마지막으로 입력한 말)이 보이고, B가 거부 없이 스스로 판단해 진행 |

@@ -23,8 +23,16 @@ process.on('message', m => {
   const options = { dataRoot, verifyOut, appVersion: '0.0.0', env: { PATH: process.env.PATH, HOME: path.join(root, 'home'), VERIFY_PLUGIN_DIR: source } };
   const hosts = [];
   const create = () => { const host = createVerifyPlugins(options); hosts.push(host); return host; };
-  t.after(async () => { for (const host of hosts) host.close(); await new Promise(resolve => setTimeout(resolve, 100)); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, dataRoot, options, create };
+  // Servers a test boots go in `stops`: they must be down before the folder is removed (the runner's own hook order would remove it first, and
+  // Windows refuses to delete a folder a running process has open). Removal retries while the last handles are released.
+  const stops = [];
+  t.after(async () => {
+    for (const stop of stops) await stop();
+    for (const host of hosts) host.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  });
+  return { root, dataRoot, options, create, stops };
 }
 async function answer(host, pending, accept) {
   const request = await wait(async () => (await host.route('poll', {})).confirmations[0]);
@@ -88,9 +96,9 @@ test('verification API is absent normally and enforces the existing session and 
   process.env.VERIFY_OUT = s.options.verifyOut;
   const { boot } = await import('../scripts/verify/lib.mjs');
   if (previous === undefined) delete process.env.VERIFY_OUT; else process.env.VERIFY_OUT = previous;
-  const normal = await boot(); t.after(() => normal.stop());
+  const normal = await boot(); s.stops.push(() => normal.stop());
   assert.equal((await normal.status('verify/plugins/state')).status, 404);
-  const active = await boot({ dir: s.root, env: { ADE_DEV: '1', ADE_VERIFY_PLUGINS: '1', VERIFY_OUT: s.options.verifyOut } }); t.after(() => active.stop());
+  const active = await boot({ dir: s.root, env: { ADE_DEV: '1', ADE_VERIFY_PLUGINS: '1', VERIFY_OUT: s.options.verifyOut } }); s.stops.push(() => active.stop());
   const state = await active.api('verify/plugins/state');
   assert.equal(state.testSession, true); assert.equal(state.enabled, false);
   for (const [headers, status] of [

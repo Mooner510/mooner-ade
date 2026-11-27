@@ -1,6 +1,7 @@
 import { AppKeysContext, appKey, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
 import { QuickInput, type QuickRequest } from './QuickInput';
 import { installTooltips } from './tooltip';
+import { dragStartsOnButton, notePress } from './drag-guard';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
@@ -46,6 +47,7 @@ import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { bytesToBase64 } from './feedback-model';
 import type { FileLocation } from './file-buffer';
+import { useFitMenu } from './use-fit-menu';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, refreshFeedback, requestCapture, useFeedback } from './feedback-store';
 import '@material-symbols/font-400/outlined.css';
 import '@fontsource-variable/inter/wght.css';
@@ -253,9 +255,9 @@ function ProjectMenu({ target, handle, onPickFile, onClose }: { target: ProjectM
   const open = (ide: string) => { onClose(); if (ide !== 'files') rememberIde(ide); void api('ide/open', { projectId: target.id, ide, path: target.root }).catch(fail); };
   const item = (icon: IconName, label: string, run: () => void) => <button role="menuitem" onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span></button>;
   const ides = byLastUsed(list?.ides ?? []);
+  useFitMenu(ref, target.x, target.y);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
-    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.max(8, Math.min(target.y, innerHeight - 120 - 28 * Math.max(1, ides.length))) }}>
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${shortName(target.root)} 메뉴`} onKeyDown={menuKeys(ref, onClose)}>
       <button role="menuitem" onClick={() => open('files')}><Icon name="folderOpen" size={14} /><span className="menu-label">{list ? `${list.fileManager}에서 폴더 열기` : '폴더 열기'}</span></button>
       {item('fileOpen', '파일 열기…', onPickFile)}
       {(!list || ides.length > 0) && <>
@@ -273,14 +275,14 @@ function TabMenu({ target, tabs, handle, onClose }: { target: TabMenuTarget; tab
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus(); }, []);
   const index = tabs.findIndex(tab => tab.id === target.tabId), tab = tabs[index];
+  useFitMenu(ref, target.x, target.y);
   if (!tab || !handle) return null;
   const pane = tab.panes.find(item => item.id === target.paneId);
   const item = (icon: IconName, label: string, run: () => void, keys?: string, disabled?: boolean) =>
     <button role="menuitem" disabled={disabled} onClick={() => { onClose(); run(); }}><Icon name={icon} size={14} /><span className="menu-label">{label}</span>{keys && <MenuKeys keys={keys} />}</button>;
   const onKey = menuKeys(ref, onClose);
   return <><button className="context-dismiss" aria-label="메뉴 닫기" onClick={onClose} onContextMenu={event => { event.preventDefault(); onClose(); }} />
-    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}
-      style={{ left: Math.min(target.x, innerWidth - 250), top: Math.min(target.y, innerHeight - (pane ? 180 : 120)) }}>
+    <div ref={ref} className="menu tab-menu" role="menu" aria-label={`${pane?.label ?? tab.label} 메뉴`} onKeyDown={onKey}>
       {pane && <>
         {item('externalLink', '새 탭으로 분리', () => handle.movePane(tab.id, pane.id, undefined, 'after'))}
         {item('x', pane.kind === 'chat' ? '이 채팅 닫기' : pane.kind === 'editor' ? '이 편집기 닫기' : '이 터미널 닫기', () => handle.closePane(pane.id), 'Del')}
@@ -733,7 +735,8 @@ function Shell() {
           // below the folder name still moves the project instead of being refused and flying back.
           const projectSource = {
             draggable: true,
-            onDragStart: (event: React.DragEvent<HTMLElement>) => { if ((event.target as HTMLElement).closest('button')) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
+            onPointerDownCapture: notePress,
+            onDragStart: (event: React.DragEvent<HTMLElement>) => { if (dragStartsOnButton(event)) { event.preventDefault(); return; } event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', `project:${entry.root}`); setProjectDrag(entry.root); },
             onDragEnd: () => { setProjectDrag(''); setProjectDrop(null); }
           };
           const projectTarget = {
@@ -799,7 +802,7 @@ function Shell() {
                 const dragging = drag?.root === entry.root && drag.id === tab.id && !drag.pane, mode = dropAt?.id === tab.id && drag?.root === entry.root ? dropAt.mode : null;
                 const dropHint = mode === 'merge' && <span className="drop-hint" aria-hidden="true">{drag?.pane ? '이 탭으로 옮기기' : '분할로 합치기'}</span>;
                 const startDrag = (event: React.DragEvent, pane?: string) => {
-                  if (event.target instanceof Element && event.target.closest('button')) { event.preventDefault(); return; }
+                  if (dragStartsOnButton(event)) { event.preventDefault(); return; }
                   event.stopPropagation(); setMenu(null);
                   event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', pane || tab.id);
                   setDrag({ root: entry.root, id: tab.id, ...(pane ? { pane } : {}) });
@@ -807,6 +810,7 @@ function Shell() {
                 const endDrag = () => { setDrag(null); setDropAt(null); };
                 const dnd = {
                   draggable: true,
+                  onPointerDownCapture: notePress,
                   onDragStart: (event: React.DragEvent) => startDrag(event),
                   onDragEnd: endDrag,
                   onDragOver: (event: React.DragEvent<HTMLLIElement>) => {
@@ -848,7 +852,7 @@ function Shell() {
                   </div>
                   <ul className="group-panes" role="group" aria-label={`분할 ${tab.panes.length}개`}>
                     {tab.panes.map(pane => { const focus = () => { setActiveRoot(entry.root); owner()?.selectPane(tab.id, pane.id); }; return <li key={pane.id} role="treeitem" aria-selected={on && pane.focused} {...treeItem(`q:${entry.root}\t${tab.id}\t${pane.id}`, 3)} className={`group-pane ${on && pane.focused ? 'focused' : ''} ${drag?.pane === pane.id ? 'dragging' : ''}`} data-kind={pane.kind === 'chat' ? 'chat' : undefined} data-agent={pane.agent} data-agent-state={state(pane)} data-pane-id={pane.id}
-                      draggable onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
+                      draggable onPointerDownCapture={notePress} onDragStart={event => startDrag(event, pane.id)} onDragEnd={endDrag}
                       onClick={focus} onKeyDown={event => rowKeys(event, focus, () => owner()?.closePane(pane.id, true), pane.id)} onContextMenu={event => openMenu(event, pane.id)}>
                       <span className="folder-tab-mark" aria-hidden="true"><Icon name={pane.kind === 'launcher' ? 'plus' : pane.kind === 'editor' ? 'code' : pane.agent || (pane.kind === 'chat' ? 'claude' : 'terminal')} size={13} />{pane.kind === 'chat' && <span className="mark-chat"><Icon name="chat" size={9} /></span>}</span><span className="folder-tab-label" data-tip-overflow="">{pane.label}</span>{trail(pane)}{pane.worktree && <WorktreeRowMark mark={pane.worktree} />}
                       {!(on && pane.focused) && pane.cache && <CacheTimer cache={pane.cache} working={pane.working} />}

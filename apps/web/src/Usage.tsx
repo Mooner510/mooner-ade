@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { api } from './api';
 import { usageHue } from './Editor';
+import { placePopover } from './popover-place';
 
 // The plan-limit readings of the login a project's agent CLI uses. Shared by the bottom status bar and the chat tab's usage ring.
 export type UsageWindow = { key: string; label: string; percent: number; resetsAt: number | null };
@@ -90,12 +91,11 @@ export function CreditRow({ credit, colors }: { credit: UsageCredit; colors: boo
 }
 
 // Light-dismiss popover in the top layer, so no overflow clipping cuts it off; opened by the element before it, placed above it.
+// When there is not enough room above, it opens below instead, and it never grows past the room it has (it scrolls inside).
 export function placeAbove(event: { newState: string; currentTarget: HTMLElement }, align: 'left' | 'right' = 'left', gap = 14) {
   if (event.newState !== 'open') return;
-  const menu = event.currentTarget, anchor = (menu.previousElementSibling as HTMLElement).getBoundingClientRect(), width = menu.offsetWidth;
-  const left = align === 'right' ? anchor.right - width : anchor.left;
-  menu.style.left = `${Math.max(8, Math.min(left, innerWidth - width - 8))}px`;
-  menu.style.bottom = `${innerHeight - anchor.top + gap}px`;
+  const menu = event.currentTarget;
+  placePopover(menu, menu.previousElementSibling as HTMLElement, { align, gap });
 }
 
 // Codex credits like Claude's extra usage: a bar with used / limit when a spend limit exists, else the balance.

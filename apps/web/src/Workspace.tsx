@@ -35,6 +35,7 @@ import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
+import { useBarFit } from './use-bar-fit';
 import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { can, isRemote, readOnly } from './transport';
@@ -1387,6 +1388,9 @@ ${where}`, [
   // Git 저장소가 없는 프로젝트에서 흐린 Git 버튼을 누르면 이유를 잠깐 보여 준다(툴팁은 올려 둬야만 보인다).
   const [gitNote, setGitNote] = useState(false);
   useEffect(() => { if (!gitNote) return; const timer = setTimeout(() => setGitNote(false), 4000); return () => clearTimeout(timer); }, [gitNote]);
+  // 상단 바 줄이기(use-bar-fit.ts): 창 버튼 밑으로 오른쪽 버튼 묶음이 넘치지 않게 한다.
+  const topBar = useRef<HTMLElement>(null);
+  useBarFit(topBar, !mobile, Boolean(project));
   // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
   const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   // The one-time cards wait their turn (notices.ts) and are drawn in the dock strip below the workspaces (main.tsx): none covers a button or another card.
@@ -1501,7 +1505,7 @@ ${where}`, [
       : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} nudge={settings.chatTipPending} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
-    <header className="tabbar" data-feedback-region="상단 바">
+    <header className="tabbar" data-feedback-region="상단 바" ref={topBar}>
       {mobile && <IconButton icon="panelLeft" className="bar-icon mobile-menu" label="프로젝트와 탭" tip="header" dot={false} onClick={() => setDrawer(open => !open)} />}
       <div className="split-button">
         <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
@@ -1534,7 +1538,7 @@ ${where}`, [
     </header>
     <ErrorToast scope={root} active={active} />
     <div className="workbench">
-      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
+      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} gitColors={settings.treeGitColors} expanded={treeExpanded} setExpanded={setTreeExpanded}
         onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} host={treeHost} />
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>

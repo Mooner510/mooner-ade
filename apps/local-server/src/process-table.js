@@ -86,7 +86,8 @@ function windowsTable({ timeoutMs }) {
     child.stdin.write(`${roots.join(',')}\r\n`);
   });
   const table = (roots = []) => { const next = queue.then(() => ask(roots)); queue = next; return next; };
-  return Object.assign(table, { close: stop });
+  // An explicit close is not a failure: it must not start the RESTART_MS wait, or the next call would get null until it ends.
+  return Object.assign(table, { close() { child?.kill(); child = null; } });
 }
 
 function psTable({ timeoutMs }) {

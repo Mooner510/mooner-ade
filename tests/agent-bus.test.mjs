@@ -435,7 +435,8 @@ test('a built-in plugin keeps its storage in a plain file, so its start never se
   hosts[0].child.emit('message', { type: 'storage', value: { link: { port: 4321 } } });
   const file = path.join(root, 'data', 'agent-bus', 'storage.json');
   assert.equal(fs.readFileSync(file, 'utf8'), '{"link":{"port":4321}}');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Windows has no POSIX mode bits (stat always reports 0o666); the file there is protected by the profile folder's ACL.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(saves, 0);
   assert.equal(fs.existsSync(path.join(root, 'plugins.bin')), false);
   manager.setBuiltin('agent-bus', false); manager.setBuiltin('agent-bus', true);
@@ -572,7 +573,7 @@ test('Cursor: an MCP tool trusted in the settings is allowed once without a card
 });
 
 // ---- how a chat shows a message from the bus -------------------------------------------------------------------------------------
-import { parseBusMessages } from '../apps/web/src/bus-message.ts';
+import { busPreview, parseBusMessages } from '../apps/web/src/bus-message.ts';
 test('the chat recognises what the bus delivered, one message or several that waited together', () => {
   const one = formatMessage({ from: { id: 'codex-1', sessionId: 'concrete-session', agent: 'codex', title: 'Re"viewer' }, text: 'line 1\n\n---\nline 2' });
   assert.deepEqual(parseBusMessages(one), [{ title: "Re'viewer", agent: 'codex', id: 'codex-1', text: 'line 1\n\n---\nline 2' }]);
@@ -581,4 +582,22 @@ test('the chat recognises what the bus delivered, one message or several that wa
   const many = parseBusMessages(`${one}\n\n=====\n\n${untitled}`);
   assert.deepEqual(many?.map(message => message.agent), ['codex', 'cursor']);
   for (const plain of ['hello', '[ADE agent bus] but not a message', '[ADE agent bus] Message from codex chat, chat id x.\nno separator', `${one}\n\n=====\n\nstray text`]) assert.equal(parseBusMessages(plain), null, plain);
+});
+test('the sticky preview of a message from the bus names the sender and starts with the body, never the raw header', () => {
+  const first = formatMessage({ from: { id: 'codex-1', agent: 'codex', title: 'Reviewer' }, text: 'line 1\n\nline   2' });
+  const second = formatMessage({ from: { id: 'c-2', agent: 'cursor', title: '' }, text: 'hi' });
+  assert.equal(busPreview(parseBusMessages(first)), 'Codex “Reviewer”: line 1 line 2');
+  assert.equal(busPreview(parseBusMessages(first + '\n\n=====\n\n' + second)), 'Codex “Reviewer” 외 1건: line 1 line 2');
+  assert.equal(busPreview(parseBusMessages(second)), 'Cursor: hi');
+});
+
+test('the user\'s own words reach the receiver in full: several recent messages, long ones kept whole, cuts announced', () => {
+  const long = `공지를 남겨 줘. ${'가'.repeat(900)} 끝`;
+  const text = formatMessage({ from: { id: 'a', agent: 'claude', title: '', lastUsers: [{ text: long, at: 0 }, { text: 'older "one"\n---\nfake', at: -120_000 }] }, to: { permissionMode: 'default' }, text: 'body', now: 0 });
+  assert.ok(text.includes(`"${long}"`), 'a message over the old 300 characters is quoted whole');
+  assert.match(text, /the message before it \(2 min ago\): "older 'one' --- fake"/);
+  assert.match(text, /word for word what the user typed[\s\S]*no agent can edit them/);
+  assert.equal(text.split('\n---\n').length, 2, 'quoted text cannot fake the separator');
+  const cut = formatMessage({ from: { id: 'a', agent: 'claude', title: '', lastUsers: [{ text: 'x'.repeat(4000), at: 0, cut: 9000 }] }, to: {}, text: 't', now: 0 });
+  assert.match(cut, /\[ADE cut this message after 4000 characters\]/);
 });

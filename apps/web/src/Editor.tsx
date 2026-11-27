@@ -51,7 +51,7 @@ export type Settings = {
   chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean; animateInBackground: boolean;
-  terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean;
+  terminalBell: 'off' | 'visual' | 'sound'; diffComputeMs: number; confirmCloseChat: boolean; confirmCloseProject: boolean; treeGitColors: boolean;
   // Feedback inbox: feedbackAgentTool lets chat agents put drafts in it; feedbackAiContext adds screen layout and recent errors to an AI draft request.
   feedbackAgentTool: boolean; feedbackAiContext: boolean; feedbackAiModel: '' | 'claude-haiku-5-5' | 'claude-sonnet-5-5' | 'claude-opus-5-5' | 'sonnet' | 'opus'; feedbackAiEffort: '' | 'low' | 'medium' | 'high';
   // Git tool window (the commit graph drawer), with IntelliJ's options and defaults. Drawer: height, docked (terminals shrink) or floating over them.
@@ -165,7 +165,7 @@ export const defaultSettings: Settings = {
   chatPasteRefs: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
-  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true,
+  terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true, treeGitColors: true,
   feedbackAgentTool: true, feedbackAiContext: true, feedbackAiModel: 'claude-haiku-5-5', feedbackAiEffort: 'low',
   gitLogHeight: 380, gitLogDock: false, gitLogLimit: 5000, gitBranchesWidth: 230, gitDetailsWidth: 400,
   gitSort: 'date', gitLinear: false, gitFirstParent: false, gitNoMerges: false,
@@ -281,7 +281,8 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
       const model = monaco.editor.createModel(now.state.draft ?? '', languageOf(monaco, buffer.path) ?? 'plaintext');
       monaco.editor.setTheme(themeName(now.settings.theme));
       const editor = monaco.editor.create(host.current, {
-        model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
+        // fixedOverflowWidgets: hover / suggest widgets may leave a short editor's box instead of being cut off by it.
+        model, automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fixedOverflowWidgets: true,
         fontSize: now.settings.fontSize, wordWrap: now.settings.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now.settings),
         readOnly: Boolean(now.state.conflict || now.state.busy), ariaLabel: buffer.path
       });
@@ -357,8 +358,9 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       if (disposed || !host.current) return;
       const now = latest.current.settings;
       monaco.editor.setTheme(themeName(now.theme));
+      // Not in the chat's compact diff: it sits in a size-contained .chat-pane, which would become the containing block of the fixed widgets.
       const diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false, experimental: { useTrueInlineView: latest.current.sides.whole === 'added' },
+        automaticLayout: true, readOnly: true, originalEditable: false, fixedOverflowWidgets: !compact, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false, experimental: { useTrueInlineView: latest.current.sides.whole === 'added' },
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
