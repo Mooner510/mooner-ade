@@ -42,7 +42,7 @@ import { DEFAULT_K, validMinK } from './chat-idle-compact.js';
 import { spawnAgent } from './agent-spawn.js';
 import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
-import { createRemoteUi, listFolders } from './remote-ui.js';
+import { createRemoteUi, listFolders, gzipReply } from './remote-ui.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
 import { builtinWorkspaceRequest, chatWorktreeRoute, peerWorktree } from './chat-worktree-routes.js';
 import { createChatTextStore } from './chat-text.js';
@@ -1149,7 +1149,7 @@ async function route(action, input, project) {
         } finally { project.openingChats--; }
       }
       if (input.agent !== undefined && chat.agent !== input.agent) throw fault('INVALID_INPUT', '저장된 대화의 에이전트가 다릅니다.');
-      return { id, agent: chat.agent, user: os.userInfo().username, ...chat.replay(input.since) };
+      return { id, agent: chat.agent, user: os.userInfo().username, ...chat.replay(input.since, { slim: input.slim === true }) };
     });
     case 'chat/sessions': return listChatSessions({ directory: project.directory, agent: input.agent ?? 'claude', exclude: input.exclude });
     // Conversations from the plain `claude` CLI in this project (Claude only: its transcript is the one format ADE reads).
@@ -1441,7 +1441,11 @@ async function route(action, input, project) {
       if (stamp) (project.treeStates ??= new Map()).set(workspace.root, { stamp, fsVersion, at: Date.now(), result });
       return result;
     }
-    case 'files/read': return { file: await readProjectFile(workspace, input.path) };
+    case 'files/read': {
+      const file = await readProjectFile(workspace, input.path);
+      // The editor polls with the revision it holds: nothing to send back when the text is the same (a phone's slow link, a file of up to 2 MiB).
+      return { file: file && typeof input.revision === 'string' && file.revision === input.revision ? { revision: file.revision, unchanged: true } : file };
+    }
     case 'files/write': return writeProjectFile(workspace, input);
     case 'files/create': await createProjectEntry(workspace, input); return {};
     case 'files/move': await moveProjectEntries(workspace, input); return {};
@@ -1782,8 +1786,11 @@ async function pluginApi(client, action, input) {
     if (terminal) terminal.openedBy = plugin;
   }
   if (internal) return action === 'chat/peers' && Array.isArray(value) ? value.map(peer => ({ ...peer, worktree: peerWorktree(projects.get(peer.projectId)?.chats.get(peer.id)) })) : value;
-  return workspaceContract.result(action, value);
+  // After the contract's filter (what a plugin may see), and only for the replies worth it on a phone's slow link (web/src/transport.ts asks).
+  const result = workspaceContract.result(action, value);
+  return GZIP_ACTIONS.has(action) ? gzipReply(result, request) : result;
 }
+const GZIP_ACTIONS = new Set(['chat/open', 'chat/sessions', 'files/list', 'files/read', 'git/log']);
 function pluginWorkspace(message) {
   const { plugin, op, session, apiVersion, generation } = message;
   const contract = pluginRegistry.get(apiVersion)?.workspace;
