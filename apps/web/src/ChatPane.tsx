@@ -37,7 +37,7 @@ import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
 import { clearChatDevDraft, loadChatDevDraft, saveChatDevDraft } from './chat-dev-draft';
 import type { QuickItem } from './QuickInput';
-import { busAgentName, parseBusMessages, type BusMessage } from './bus-message';
+import { busAgentName, busPreview, parseBusMessages, type BusMessage } from './bus-message';
 import { filePaths } from './upload';
 import { can, isRemote } from './transport';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
@@ -815,7 +815,7 @@ const Message = memo(function Message({ item, onRecover, recovering }: { item: I
     const slash = parseChatSlashCommand(item.text);
     if (slash) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserImages previews={item.previews} count={item.images} /><UserMessageBubble text={item.text} className="command" markdown={false}><span className="chat-command-name">/{slash.name || '…'}</span>{slash.args ? ` ${slash.args}` : ''}</UserMessageBubble></div>;
     const bus = parseBusMessages(item.text);
-    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div>;
+    if (bus) return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={busPreview(bus).slice(0, 280)}><UserMessageBubble text={item.text} className="bus"><BusCards messages={bus} /></UserMessageBubble></div>;
     return <div className="chat-msg user" data-enter={enter} data-user-key={item.key} data-user-preview={preview.slice(0, 280)}>{item.shells ? <small className="chat-shell-included"><Icon name="terminal" size={12} />콘솔 실행 결과 {item.shells}건을 이 메시지와 함께 에이전트에게 보냈어요</small> : null}<UserImages previews={item.previews} count={item.images} />{!(item.images > 0 && item.text === '(이미지)') && <UserMessageBubble text={item.text} />}</div>;
   }
   if (item.kind === 'divider') return <div className="chat-divider" role="separator" data-enter={enter}><span>새 대화</span></div>;
