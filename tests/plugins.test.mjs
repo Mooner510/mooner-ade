@@ -36,7 +36,7 @@ function fakeHost() {
   Object.assign(child, { sent: [], held: null, connected: true, exitCode: null, send(message, done) { child.sent.push(message); if (child.held) child.held.push(done); else done?.(); }, kill() { child.exit(null); }, exit(code) { child.exitCode = code ?? 1; child.connected = false; child.emit('exit', code); } });
   return child;
 }
-function setup(t, { answers = [], toServer, onFeedback, probeMcp = async () => [] } = {}) {
+function setup(t, { answers = [], toServer, onFeedback, appActions, probeMcp = async () => [] } = {}) {
   const root = temp(t), dir = path.join(root, 'plugins'), hosts = [], asked = [], terminals = [], notices = [], probes = [];
   fs.mkdirSync(dir);
   const store = createPluginStore({ file: path.join(root, 'plugins.bin'), crypto: sealer() });
@@ -45,7 +45,7 @@ function setup(t, { answers = [], toServer, onFeedback, probeMcp = async () => [
     dir, dataRoot: path.join(root, 'plugin-data'), store, nodeBinary: '/node', appVersion: '9.9.9', log: { log() {}, warn() {}, error() {} },
     spawnHost: options => { const child = fakeHost(); hosts.push({ options, child }); return child; },
     ask: async options => { asked.push(options); return answers.length ? answers.shift() : 1; },
-    onTerminal: config => terminals.push(config), onFeedback, toServer, notify: notice => notices.push(notice),
+    onTerminal: config => terminals.push(config), onFeedback, toServer, notify: notice => notices.push(notice), ...appActions && { appActions },
     probeMcp: options => { probes.push(options); return probeMcp(options); }
   });
   t.after(() => manager.close());
@@ -288,9 +288,9 @@ test('workspace is an explicit permission, shown in the approval dialog', async 
   assert.match(asked.at(-1).detail, /프로젝트와 터미널을 열고 조작/);
 });
 
-async function workspaceHost(t, value, { connected = true } = {}) {
+async function workspaceHost(t, value, { connected = true, appActions } = {}) {
   const server = [];
-  const env = setup(t, { answers: [0, 0], toServer: message => { if (!connected) return false; server.push(message); return true; } });
+  const env = setup(t, { answers: [0, 0], appActions, toServer: message => { if (!connected) return false; server.push(message); return true; } });
   plugin(env.dir, 'example', value);
   await env.manager.setEnabled(true);
   await env.manager.approve('example');
@@ -308,6 +308,24 @@ test('a plugin without the workspace permission reaches no session', async t => 
   manager.close();
   assert.deepEqual(server, []);
   assert.ok(!child.sent.some(message => message.type === 'workspace'));
+});
+
+test('update requests are answered by MoonerADE itself, never by the local server, and a plugin cannot update itself', async t => {
+  const asked = [];
+  const appActions = async (action, input, from) => { asked.push({ action, input, from }); if (input.force) throw Object.assign(new Error('nope'), { code: 'INCOMPATIBLE' }); return { busy: false }; };
+  const { child, server } = await workspaceHost(t, manifest({ workspace: true }), { appActions });
+  const answer = async id => { for (let i = 0; i < 50 && !child.sent.some(message => message.id === id); i++) await new Promise(resolve => setTimeout(resolve, 5)); return child.sent.find(message => message.id === id); };
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 1, action: 'app/update', input: { force: false, extra: 1 } });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 2, action: 'app/update', input: { force: true } });
+  child.emit('message', { type: 'workspace', op: 'api', session: 's1', id: 3, action: 'plugins/update', input: { id: 'example' } });
+  assert.deepEqual(await answer(1), { type: 'workspace', session: 's1', op: 'api-result', id: 1, ok: true, value: { busy: false } });
+  assert.deepEqual(await answer(2), { type: 'workspace', session: 's1', op: 'api-result', id: 2, ok: false, error: { code: 'INCOMPATIBLE', message: 'nope' } });
+  assert.equal((await answer(3)).error.code, 'SELF_UPDATE');
+  assert.deepEqual(asked.map(item => [item.action, item.input, item.from]), [
+    ['app/update', { force: false }, { pluginId: 'example', apiVersion: 1 }],
+    ['app/update', { force: true }, { pluginId: 'example', apiVersion: 1 }]
+  ], 'fields outside the contract are dropped; the asking plugin and its API version are named');
+  assert.deepEqual(server, []);
 });
 
 test('workspace requests and answers are relayed under the plugin id, and end with the host', async t => {

@@ -142,3 +142,12 @@ export function createFailures(now = Date.now) {
 export const STALE_UPDATE_MS = 24 * 60 * 60 * 1000;
 export const staleUpdateDirs = (entries, now, maxAge = STALE_UPDATE_MS) =>
   entries.filter(entry => /^(?:mooner-update-|\.MoonerADE-update-)/.test(entry.name) && now - entry.mtimeMs > maxAge).map(entry => entry.name);
+
+// Whether a release's plugin API list (its apps/plugin-api/versions.json, read from the downloaded and verified bundle) still runs a plugin of
+// `apiVersion`. A list that is missing or cannot be read (a build from before the list existed) counts as no: a remote update that would leave
+// the remote-access plugin unable to start cannot be undone from afar.
+export function pluginApiSupported(versions, apiVersion) {
+  if (!Number.isInteger(apiVersion) || !versions || !Array.isArray(versions.supported)) return false;
+  if (Array.isArray(versions.removed) && versions.removed.includes(apiVersion)) return false;
+  return versions.supported.some(entry => entry?.version === apiVersion && ['supported', 'deprecated'].includes(entry.status));
+}

@@ -22,6 +22,7 @@ import { usageMeterCatalog, type UsageProvider } from './usage-meters';
 import { accentChoices } from './Setup';
 import { trustLabel } from './mcp-trust';
 import { countdownPositionOptions, updatesBridge, type CountdownPosition } from './AppUpdate';
+import { call, can, isRemote } from './transport';
 
 type Desktop = { setZoom(percent: number): void; appInfo(): Promise<{ version: string; dev?: boolean; lastSignature?: string }>; checkUpdate(): Promise<string>; getBetaUpdates(): Promise<boolean>; setBetaUpdates(beta: boolean): Promise<boolean>; getSystemCa(): Promise<boolean>; setSystemCa(on: boolean): Promise<boolean> };
 const desktop = () => (window as unknown as { adeDesktop?: Partial<Desktop> }).adeDesktop;
@@ -38,6 +39,43 @@ function FeedbackAvailabilityRow() {
   </Row>;
 }
 
+type RemoteAppUpdate = { current: string; supported: boolean; latest: string | null; staged: string | null };
+type RemotePluginUpdate = { id: string; name: string; version: string | null; latest: string | null; available: boolean; status: string; error: string | null; expected: object; self: boolean };
+
+// On a remote device: the PC's MoonerADE and plugin updates, installed without anyone at the PC (updater.js remoteUpdate, plugin-core.js appAction).
+function RemoteUpdates() {
+  const [pc, setPc] = useState<RemoteAppUpdate | null>(null), [plugins, setPlugins] = useState<RemotePluginUpdate[]>([]);
+  const [working, setWorking] = useState(''), [note, setNote] = useState(''), [reasons, setReasons] = useState('');
+  const load = () => {
+    void call<RemoteAppUpdate>('app/update-status').then(setPc, (error: Error) => setNote(error.message));
+    if (can('plugins/update-status')) void call<{ plugins: RemotePluginUpdate[] }>('plugins/update-status').then(value => setPlugins(value.plugins), () => {});
+  };
+  useEffect(load, []);
+  const run = (key: string, task: () => Promise<void>) => { setWorking(key); setNote(''); void task().catch((error: Error) => setNote(error.message)).finally(() => setWorking('')); };
+  const updateApp = (force: boolean) => run('app', async () => {
+    const result = await call<{ busy: boolean; version: string; reasons?: string }>('app/update', { force });
+    setReasons(result.busy ? result.reasons ?? '' : '');
+    if (!result.busy) setNote(`v${result.version}을 설치하고 PC의 앱을 다시 시작합니다. 잠시 뒤 다시 연결됩니다.`);
+  });
+  const next = pc?.staged ?? pc?.latest;
+  return <>
+    <Row title="PC 버전" hint={note || undefined}><span>{pc?.current ?? '—'}</span></Row>
+    {pc?.supported && <Row title="PC 업데이트" hint={reasons ? `지금 업데이트하면 중단됩니다. ${reasons.replace(/\n/g, ' ')}` : next ? `v${next}` : '최신 버전입니다.'}>
+      {reasons
+        ? <><button type="button" disabled={Boolean(working)} onClick={() => setReasons('')}>취소</button><button type="button" className="primary" disabled={Boolean(working)} onClick={() => updateApp(true)}>중단하고 업데이트</button></>
+        : next ? <button type="button" className="primary" disabled={Boolean(working)} onClick={() => updateApp(false)}>{working === 'app' ? '업데이트 중…' : '업데이트'}</button>
+        : <button type="button" disabled={Boolean(working)} onClick={load}><Icon name="refresh" />다시 확인</button>}
+    </Row>}
+    {plugins.filter(plugin => plugin.available).map(plugin => <Row key={plugin.id} title={plugin.name} hint={plugin.self ? 'PC에서 업데이트합니다.' : `${plugin.version ?? ''} → ${plugin.latest ?? ''}`}>
+      {!plugin.self && <button type="button" disabled={Boolean(working)} onClick={() => run(plugin.id, async () => {
+        const result = await call<{ message: string | null }>('plugins/update', { id: plugin.id, expected: plugin.expected });
+        setNote(result.message ?? `${plugin.name} 업데이트를 마쳤습니다.`);
+        load();
+      })}>{working === plugin.id ? '업데이트 중…' : '업데이트'}</button>}
+    </Row>)}
+  </>;
+}
+
 function AboutSettings() {
   const [version, setVersion] = useState(''), [checking, setChecking] = useState(false), [beta, setBeta] = useState<boolean | null>(null), [systemCa, setSystemCa] = useState<boolean | null>(null);
   const [autoDownload, setAutoDownload] = useState<boolean | null>(null), [savingDownload, setSavingDownload] = useState(false);
@@ -52,7 +90,7 @@ function AboutSettings() {
   }, [updates]);
   const canCheck = typeof desktop()?.checkUpdate === 'function';
   return <>
-    <Row title="현재 버전" hint="새 버전은 자동으로 확인하며, 찾으면 종료할 때 또는 바로 설치할 수 있습니다."><span>{version || '—'}</span></Row>
+    {!isRemote && <Row title="현재 버전" hint="새 버전은 자동으로 확인하며, 찾으면 종료할 때 또는 바로 설치할 수 있습니다."><span>{version || '—'}</span></Row>}
     {signature && <Row title="최근 다운로드 서명"><span>{signature}</span></Row>}
     {updates && autoDownload !== null && <Row title="업데이트 자동 다운로드" hint="새 버전을 먼저 내려받고 적용할 시점을 묻습니다. 끄면 내려받기 전에 묻습니다.">
       <input type="checkbox" role="switch" aria-label="업데이트 자동 다운로드" checked={autoDownload} disabled={savingDownload} onChange={event => {
@@ -76,6 +114,7 @@ function AboutSettings() {
     {canCheck && <Row title="업데이트 확인" hint="GitHub 최신 릴리스와 비교하고, 새 버전이 있으면 설치 여부를 묻습니다.">
       <button type="button" disabled={checking} onClick={() => { setChecking(true); void desktop()!.checkUpdate!().finally(() => { setChecking(false); void desktop()?.appInfo?.().then(info => setSignature(info.lastSignature ?? ''), () => {}); }); }}><Icon name="refresh" />{checking ? '확인 중…' : '지금 확인'}</button>
     </Row>}
+    {isRemote && can('app/update-status') && <RemoteUpdates />}
     <HubSignIn hub={hubState?.hub} bridge={pluginsBridge()} />
   </>;
 }

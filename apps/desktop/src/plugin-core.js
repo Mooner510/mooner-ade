@@ -25,6 +25,8 @@ const SVG_START = /^﻿?\s*(<\?xml[^>]*\?>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i;
 const RESTARTS = 3, RESTART_WINDOW_MS = 60_000, ACTION_TIMEOUT_MS = 5 * 60_000;
 // Workspace relay: what a host may ask for, and how much output may wait for a host that stops reading before its session is closed.
 const SESSION_ID = /^[\w-]{1,64}$/, WORKSPACE_BACKLOG = 8 * 1024 * 1024;
+// Workspace requests MoonerADE answers itself instead of passing them to the local server (relayWorkspace).
+const APP_ACTIONS = new Set(['app/update-status', 'app/update', 'plugins/update-status', 'plugins/update']);
 // Feedback submission (plugins that declared `feedback`): how long an upload may take before MoonerADE gives up on the answer.
 export const FEEDBACK_TIMEOUT_MS = 120_000;
 export const FEEDBACK_STATUS_TIMEOUT_MS = 40_000;
@@ -491,7 +493,7 @@ export function probeMcpTools({ command, args, cwd, env = process.env, timeoutMs
 // probeCredential() resolves which login this PC has for GitHub ({ via } or null), for the settings page only.
 // clientId: the GitHub App / OAuth App MoonerADE signs in with (device flow); null offers token connection only.
 // openExternal(url) opens GitHub's sign-in page in the browser.
-export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, onConsole = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console, registry = pluginApi }) {
+export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingRoot = path.join(dataRoot, '..', 'plugin-staging'), store, spawnHost, ask, extractZip = createZipExtractor(), nodeBinary, terminalNode = nodeBinary, appVersion = '0.0.0', onChange = () => {}, onTerminal = () => {}, onFeedback = () => {}, onConsole = () => {}, toServer = () => false, notify = () => {}, probeMcp = options => probeMcpTools({ ...options, clientVersion: appVersion }), github = null, hub = null, probeCredential = async () => null, appActions = async () => { throw fail('이 MoonerADE에서는 쓸 수 없는 요청입니다.', 'UNSUPPORTED'); }, clientId = null, openExternal = () => {}, firstCheckMs = FIRST_CHECK_MS, checkEveryMs = CHECK_EVERY_MS, hubEveryMs = HUB_CHECK_EVERY_MS, log = console, registry = pluginApi }) {
   let list = [], closing = false;
   const hosts = new Map(); // id -> running host
   const crashes = new Map(); // id -> recent crash times, kept across restarts
@@ -721,8 +723,39 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     else if (op === 'api') {
       if (!Number.isSafeInteger(message.id)) return;
       if (typeof message.action !== 'string' || message.action.length > 100) return reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'INVALID_INPUT', message: '잘못된 요청입니다.' } });
+      if (APP_ACTIONS.has(message.action)) {
+        const input = host.contract.workspace?.request?.(message.action, message.input ?? {});
+        if (!input) return reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'INVALID_INPUT', message: '잘못된 요청입니다.' } });
+        appAction(host, message.action, input).then(
+          value => reply({ op: 'api-result', id: message.id, ok: true, value: value ?? null }),
+          error => reply({ op: 'api-result', id: message.id, ok: false, error: { code: typeof error?.code === 'string' ? error.code : 'FAILED', message: String(error?.message ?? error).slice(0, 300) } }));
+        return;
+      }
       if (!toServer({ ...base, id: message.id, action: message.action, input: message.input ?? {} })) reply({ op: 'api-result', id: message.id, ok: false, error: { code: 'SERVER_UNAVAILABLE', message: '로컬 서버가 실행 중이 아닙니다.' } });
     }
+  }
+  // Asked of MoonerADE itself rather than of the local server: updates, for a remote device (so no dialog on the PC). The plugin that asks
+  // (the remote-access plugin) cannot update itself from afar: a broken new version would leave nobody a way back in.
+  async function appAction(host, action, input) {
+    if (action === 'plugins/update-status') {
+      const state = (github || hub) ? await checkUpdates().catch(() => snapshot()) : snapshot();
+      return {
+        plugins: state.plugins.filter(item => !item.builtin && item.id && item.update?.source).map(item => ({
+          id: item.id, name: item.name, version: item.version, latest: item.update.latest, available: item.update.available, status: item.update.status,
+          error: item.update.error, expected: { version: item.update.latest, apiVersion: item.update.apiVersion, sha256: item.update.sha256 }, self: item.id === host.id
+        }))
+      };
+    }
+    if (action === 'plugins/update') {
+      if (input.id === host.id) throw fail('원격 접속 플러그인은 PC에서만 업데이트할 수 있습니다.', 'SELF_UPDATE');
+      const expected = input.expected && typeof input.expected === 'object' ? input.expected : undefined;
+      try { return { message: (await installUpdate(String(input.id ?? ''), { auto: true, remote: true, expected })).message ?? null }; }
+      catch (error) {
+        if (error?.code === 'NEEDS_REVIEW') throw Object.assign(fail('새 권한을 요청하는 업데이트라 PC에서 확인해야 합니다.', 'NEEDS_REVIEW'), { review: error.review });
+        throw error;
+      }
+    }
+    return appActions(action, input, { pluginId: host.id, apiVersion: host.contract.version });
   }
   function workspaceAddress(host) {
     return { type: 'plugin/workspace', plugin: host.id, apiVersion: host.contract.version, generation: host.generation };
@@ -944,7 +977,8 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       const installedIdentity = installed && identityOf(installed);
       const review = installedIdentity ? updateReview(installedIdentity, manifest, { managed: update?.managed === true }) : [];
       // Automatic: only an approved, running-eligible plugin whose update asks for nothing new goes in without a dialog.
-      if (update?.auto && store.state.updateMode !== 'auto') throw fail('플러그인 업데이트 방식이 바뀌었습니다.', 'UPDATE_MODE_CHANGED');
+      // `remote`: a person on a remote device asked for this one update, whatever the background mode; it still installs only without the dialog.
+      if (update?.auto && !update.remote && store.state.updateMode !== 'auto') throw fail('플러그인 업데이트 방식이 바뀌었습니다.', 'UPDATE_MODE_CHANGED');
       const silent = update?.auto === true && installed && eligible(installed) && review.length === 0;
       if (update?.auto && !silent) throw Object.assign(fail(review.length ? '새 권한을 요청하는 업데이트라 자동으로 설치하지 않았습니다.' : '승인된 플러그인만 자동으로 업데이트합니다.', 'NEEDS_REVIEW'), { review });
       if (!silent) {
@@ -1106,7 +1140,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
     }
   }
 
-  async function installUpdate(id, { auto = false, expected } = {}) {
+  async function installUpdate(id, { auto = false, remote = false, expected } = {}) {
     const item = sourceItem(id), source = await settledSource(item), entry = updates.get(id), kind = sourceKind(source);
     if (!source) throw fail('이 플러그인은 업데이트 출처(source)를 알려 주지 않아 새 zip으로만 업데이트할 수 있습니다.', 'NO_SOURCE');
     const found = entry?.found && entry.kind === kind && entry.checkedAt > Date.now() - 60_000 && entry.status !== 'error' ? entry.found : await checkUpdate(id);
@@ -1126,7 +1160,7 @@ export function createPluginManager({ dir, builtinDir = null, dataRoot, stagingR
       observeSignature(signature, { kind: 'plugin', id, version: found.version, platform: 'any', variant: 'zip', sha256, size: data.length });
       zip = writeStagingZip(data);
       now.status = 'installing'; changed();
-      const result = await installZip(zip, { picked: true, update: { id, version: found.version, apiVersion: found.apiVersion, auto, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
+      const result = await installZip(zip, { picked: true, update: { id, version: found.version, apiVersion: found.apiVersion, auto, remote, ...(kind === 'hub' && { managed: true }) }, ...(kind === 'hub' && { origin: 'hub' }) });
       now.status = 'latest';
       return { ...snapshot(), message: result.message };
     } catch (error) {
