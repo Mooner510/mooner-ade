@@ -76,13 +76,16 @@ const encodeCanvas = async (image: CanvasImageSource, spec: FitSpec): Promise<Fi
   return { mime: encoded.type || spec.mime, bytes: new Uint8Array(await encoded.arrayBuffer()) };
 };
 
-export async function prepareChatImage(file: File): Promise<{ mime: string; data: string; url: string; reduced: boolean }> {
+// `limit` below the API's cap shrinks more (a phone sends over a slow link: ChatPane passes REMOTE_IMAGE_BYTES there).
+export const REMOTE_IMAGE_BYTES = 1_200_000;
+export async function prepareChatImage(file: File, limit = MAX_IMAGE_BYTES): Promise<{ mime: string; data: string; url: string; reduced: boolean }> {
+  limit = Math.min(limit, MAX_IMAGE_BYTES);
   const url = await readAsDataUrl(file), data = url.slice(url.indexOf(',') + 1);
   const byteLength = Math.max(file.size, base64Bytes(data));
-  if (imageWithinLimit(byteLength, data.length)) return { mime: file.type, data, url, reduced: false };
+  if (byteLength <= limit && data.length <= 4 * Math.ceil(limit / 3)) return { mime: file.type, data, url, reduced: false };
   const image = await loadImage(url);
   if (!image.naturalWidth || !image.naturalHeight) throw new Error('이미지를 열지 못했습니다. 손상되었거나 지원하지 않는 형식일 수 있어요. PNG, JPEG, WebP, GIF 파일로 다시 시도하세요.');
-  const fitted = await fitImageBytes({ mime: file.type, byteLength, width: image.naturalWidth, height: image.naturalHeight }, spec => encodeCanvas(image, spec));
+  const fitted = await fitImageBytes({ mime: file.type, byteLength, width: image.naturalWidth, height: image.naturalHeight }, spec => encodeCanvas(image, spec), limit);
   const out = bytesToBase64(fitted.bytes);
   return { mime: fitted.mime, data: out, url: `data:${fitted.mime};base64,${out}`, reduced: true };
 }

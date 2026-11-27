@@ -178,7 +178,11 @@ const settleItems = (items: Item[]) => {
   return out;
 };
 const findAssistant = (items: Item[], id: string) => { for (let at = items.length - 1; at >= 0; at--) { const item = items[at]; if (item.kind === 'assistant' && item.id === id) return at; } return -1; };
-const append = (view: ChatView, item: Item): ChatView => ({ ...view, items: [...view.items, item].slice(-MAX_ITEMS) });
+// While a replay runs its items array belongs to the replay alone (replayOwned) and is added to in place: copying up to MAX_ITEMS items for every event was quadratic.
+const append = (view: ChatView, item: Item): ChatView => {
+  if (replayOwned.has(view.items)) { view.items.push(item); if (view.items.length > MAX_ITEMS) view.items.splice(0, view.items.length - MAX_ITEMS); return { ...view }; }
+  return { ...view, items: [...view.items, item].slice(-MAX_ITEMS) };
+};
 
 // What a tool's input says so far, while its JSON is still arriving (`input_json_delta`): the whole object once it parses, else the string fields the card summary uses.
 const PARTIAL_KEYS = /"(command|description|file_path|notebook_path|pattern|url|query|path|prompt|subagent_type)"\s*:\s*"((?:[^"\\]|\\.)*)/g;
@@ -505,9 +509,9 @@ export function reduce(view: ChatView, event: any): ChatView {
 const replayOwned = new WeakSet<object>();
 export function fromReplay(replay: { events?: any[]; seq?: number; state?: ChatState; approvals?: any[] }): ChatView {
   let view = emptyView();
-  replayOwned.add(view.results);
+  replayOwned.add(view.results); replayOwned.add(view.items);
   for (const event of replay.events ?? []) view = reduce(view, event);
-  view = { ...view, results: { ...view.results } };
+  view = { ...view, items: [...view.items], results: { ...view.results } };
   // A request the log still holds as waiting that the server no longer has: the app (or its server) ended while the agent waited, and the agent's process with it.
   // Without a line the thread just stops after the request, with no card to answer.
   for (const lost of view.approvals.filter(item => !(replay.approvals ?? []).some(live => live.requestId === item.requestId)))

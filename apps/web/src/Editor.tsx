@@ -7,6 +7,7 @@ import type { FileBuffer } from './file-buffer';
 import { TIPS_VERSION } from './tips';
 import { wireDiffEditor, wireFileEditor, type DiffSend } from './send-to-chat-monaco';
 import { diffSides } from './diff-sides';
+import { isRemote } from './transport';
 
 // An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
 export type McpTrust = { server: string; tool?: string };
@@ -267,7 +268,8 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
       if (!paths.length || paths.some(path => path === buffer.path || buffer.path.startsWith(`${path}/`))) void buffer.refresh();
     });
     void buffer.refresh();
-    const timer = setInterval(refresh, 1000);
+    // The watch above and the visibility change already catch edits; the poll is the safety net (slower over a phone's link).
+    const timer = setInterval(refresh, isRemote ? 5000 : 1000);
     document.addEventListener('visibilitychange', refresh);
     return () => { unsubscribe(); clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
   }, [visible, buffer, watch]);

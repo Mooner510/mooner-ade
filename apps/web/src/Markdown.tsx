@@ -14,6 +14,7 @@ import { UiSpecView } from './UiBlocks';
 import { MermaidBlock } from './mermaid-block';
 import { ChatMedia } from './ChatMedia';
 import { MEDIA_LANG, parseChatMedia } from './chat-media';
+import { remoteClient } from './transport';
 
 // A small Markdown renderer for chat replies. It builds React elements (no HTML strings except Monaco's escaped syntax colouring), so model output cannot inject markup,
 // and links go through the app's own "open external link?" dialog (ade:link).
@@ -68,7 +69,8 @@ export function inline(source: string): ReactNode[] {
 function useColored(code: string, hint?: string) {
   const [done, setDone] = useState<{ code: string; html: string } | null>(null);
   useEffect(() => {
-    if (!hint) return;
+    // A phone draws code monochrome: colouring would load the whole Monaco editor (3 MB) over its link for every chat that shows code.
+    if (!hint || remoteClient === 'phone') return;
     let live = true;
     const timer = setTimeout(() => { void colorize(code, hint).then(html => { if (live && html) setDone({ code, html: html.replace(/(<br\/>)+$/, '') }); }, () => {}); }, 120);
     return () => { live = false; clearTimeout(timer); };

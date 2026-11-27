@@ -114,3 +114,56 @@ test('the manifest names what the first screen needs: page files biggest first, 
   for (const name of ['icons.woff2', 'inter-latin.woff2', 'inter-greek.woff2', 'noto-latin.woff2', 'noto-1.woff2']) await writeFile(asset(name), name);
   assert.deepEqual((await ui.manifest()).preload, ['/index.html', '/assets/app.css', '/assets/app.js', '/assets/inter-latin.woff2', '/assets/icons.woff2']);
 });
+
+test('gzipReply: the replay of a chat packs only when the phone asks, and unpacks to the same value', async () => {
+  const { gzipReply } = await import('../apps/local-server/src/remote-ui.js');
+  const { gunzipReply } = await import('../apps/web/src/transport.ts');
+  const value = { events: Array.from({ length: 200 }, (_, seq) => ({ seq, text: '가나다 '.repeat(50) })), seq: 200 };
+  assert.equal(await gzipReply(value, {}), value);
+  const packed = await gzipReply(value, { encoding: 'gzip' });
+  assert.equal(packed.encoding, 'gzip');
+  assert.ok(packed.data.length < JSON.stringify(value).length / 4);
+  assert.deepEqual(await gunzipReply(packed), value);
+  assert.equal(await gunzipReply(value), value);
+});
+
+test('slimEvents: a phone keeps the previews of the last three images and a tool output up to its limit, and nothing else changes', async () => {
+  const { slimEvents, MAX_RESULT } = await import('../apps/local-server/src/chat-replay.js');
+  const events = [
+    ...[1, 2, 3, 4, 5].map(seq => ({ seq, kind: 'user', text: `m${seq}`, images: 1, previews: [`data:image/jpeg;base64,${seq}`] })),
+    { seq: 6, kind: 'tool_result', toolUseId: 't', content: 'x'.repeat(MAX_RESULT + 50), isError: false },
+    { seq: 7, kind: 'tool_result', toolUseId: 'u', content: 'short' },
+  ];
+  const out = slimEvents(events);
+  assert.deepEqual(out.map(event => Boolean(event.previews)), [false, false, true, true, true, false, false]);
+  assert.equal(out[0].images, 1);
+  assert.ok(out[5].content.length < MAX_RESULT + 40 && out[5].content.startsWith('x'.repeat(100)));
+  assert.equal(out[6], events[6]);
+  assert.equal(events[0].previews.length, 1);
+});
+
+test('the plugin contract lets a phone ask for gzip and slim, which the contract would otherwise drop', async () => {
+  const { request } = await import('../apps/plugin-api/v1/workspace.js');
+  assert.deepEqual(request('chat/open', { projectId: 'p', id: 'c', slim: true, encoding: 'gzip', other: 1 }), { projectId: 'p', id: 'c', slim: true, encoding: 'gzip' });
+  for (const action of ['git/log', 'files/list', 'files/read', 'chat/sessions']) assert.equal(request(action, { projectId: 'p', encoding: 'gzip' }).encoding, 'gzip', action);
+});
+
+test('swipeClose: a long or quick swipe to the left closes the drawer, a short one springs back, a vertical one is a scroll', async () => {
+  const { swipeClose } = await import('../apps/web/src/mobile.ts');
+  const make = () => {
+    const handlers = {}, nav = { style: {}, offsetWidth: 300 }, closed = [];
+    const root = { addEventListener: (type, fn) => { handlers[type] = fn; }, removeEventListener: () => {}, setPointerCapture: () => {} };
+    swipeClose(root, nav, () => closed.push(1));
+    const event = (x, y, t) => ({ pointerId: 1, pointerType: 'touch', clientX: x, clientY: y, timeStamp: t });
+    const gesture = (points) => { handlers.pointerdown(event(...points[0])); for (const point of points.slice(1, -1)) handlers.pointermove(event(...point)); const last = points.at(-1); handlers.pointermove(event(...last)); handlers.pointerup(event(...last)); };
+    return { nav, closed, gesture };
+  };
+  const slow = make(); slow.gesture([[250, 400, 0], [230, 402, 200], [210, 402, 400], [150, 402, 600]]);  // 100 of 300 px, slowly: not a third
+  assert.equal(slow.closed.length, 0); assert.equal(slow.nav.style.transform, '');
+  const far = make(); far.gesture([[300, 400, 0], [200, 401, 300], [150, 401, 600], [100, 401, 900]]);   // 200 px
+  assert.equal(far.closed.length, 1);
+  const flick = make(); flick.gesture([[250, 400, 0], [220, 400, 20], [190, 400, 40]]);                    // 60 px in 40 ms
+  assert.equal(flick.closed.length, 1);
+  const scroll = make(); scroll.gesture([[250, 400, 0], [248, 440, 50], [240, 520, 100], [100, 600, 150]]);
+  assert.equal(scroll.closed.length, 0); assert.equal(scroll.nav.style.transform ?? '', '');
+});
