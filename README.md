@@ -84,14 +84,19 @@ RTX HDR 프로필을 되돌리려면 관리자 PowerShell에서 실행합니다.
 
 ### 자주 쓰는 단축키
 
-`mod`는 macOS의 ⌘, Windows의 Ctrl입니다. 설정에서 단축키를 바꿀 수 있습니다.
+`mod`는 macOS의 ⌘, Windows의 Ctrl입니다. 설정에서 단축키를 바꿀 수 있고, 명령 팔레트의 모든 명령에 키를 정할 수 있습니다.
 
 | 단축키 | 동작 |
 |---|---|
 | `mod+Alt+O` | 프로젝트 열기 |
 | `mod+Shift+T` | 새 탭 |
 | `mod+Shift+N` | 새 탭에서 실행할 도구 고르기 |
-| `mod+Shift+P` / `F1` | 명령 팔레트 |
+| `mod+Shift+P` / `F1` | 명령 팔레트 (`>` 명령, `#` 탭·채팅, `@` 파일, `,` 설정) |
+| `mod+/` | 단축키 한눈에 보기 |
+| `mod+Alt+C` | 어디서든 채팅 입력창으로 돌아가기 |
+| `Alt+0` | 사이드바의 현재 탭으로 (화살표로 이동) |
+| `mod+Alt+.` / `mod+Alt+,` | 다음 / 이전 확인 필요 탭 (질문·승인 먼저, 모든 프로젝트) |
+| `Alt+Shift+1…9` | 이 탭의 N번째 pane으로 |
 | `Ctrl+D` / `Ctrl+Shift+D` | 좌우 / 상하 분할 (macOS도 Ctrl, 편집기 안의 `Ctrl+D`는 편집기 몫) |
 | `mod+Shift+Enter` | 현재 칸 최대화 / 복원 |
 | `mod+Shift+G` | Git 커밋 그래프 |

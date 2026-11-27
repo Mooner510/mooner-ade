@@ -1,5 +1,7 @@
 // What the chat tab knows about one conversation, built from the events the local server streams (apps/local-server/src/chat-claude.js).
 // Pure functions only, so tests/chat-model.test.mjs can load this file through Node's type stripping.
+import { applyFileRewind, attachTurnChanges, type FileRewindData, type TurnChanges } from './turn-changes.ts';
+import { worktreeLine } from './chat-worktree.ts';
 
 export type Tokens = { input: number; output: number; cacheRead: number; cacheCreate: number };
 export type ModelConfigOption = { id: string; name: string; description?: string; category?: string; type: 'select'; currentValue: string; options: { value: string; name: string; description?: string }[] };
@@ -54,7 +56,7 @@ export type TurnDone = { at: number; ms: number | null; tokens?: Tokens; costUsd
 export type Item = ItemBase & (
   | { kind: 'user'; text: string; images: number; previews?: string[]; shells?: number }
   | { kind: 'peer_message'; sender: string; text: string }
-  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone }
+  | { kind: 'assistant'; id: string; uuid?: string; blocks: Block[]; sub: boolean; parent?: string; model?: string; done?: TurnDone; changes?: TurnChanges } // changes: files the turn this answer closed changed (turn-changes.ts)
   | { kind: 'divider' }
   | { kind: 'compact'; trigger: 'auto' | 'manual' | 'idle'; preTokens: number | null; postTokens: number | null }
   | { kind: 'error'; message: string; recoverable?: boolean }
@@ -65,7 +67,8 @@ export type Item = ItemBase & (
   | { kind: 'mcp'; local?: boolean } // /mcp: the MCP server list with its controls, client-only
   | { kind: 'usage'; snap: UsageSnap; local?: boolean } // /usage: the report card (context, cost, plan limits), client-only
   | { kind: 'shell'; id: string; command: string; cwd: string; shell?: string; status: ShellStatus; startedAt: number; lastOutputAt?: number; ms?: number; exitCode?: number | null; signal?: string | null; stdout: string; stderr: string; needsTerminal?: boolean; error?: string; sent?: boolean; skipped?: boolean } // `!command`: a shell command the user ran from the composer (not an agent tool call); stored with its whole output
-  | { kind: 'info'; text: string; local?: boolean }); // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+  | { kind: 'info'; text: string; local?: boolean } // a reply shown as a chat message (markdown): /cost /status /usage /context, whether ADE or the CLI answers
+  | ({ kind: 'file_rewind' } & FileRewindData)); // Rewind put the work folder's files back (or an undo of that), turn-changes.ts
 /** How a `!command` run stands: still running, or how it ended (stopped: by the user, interrupted: the app closed under it, limit: it printed too much and was stopped). */
 export type ShellStatus = 'running' | 'done' | 'failed' | 'stopped' | 'timeout' | 'limit' | 'interrupted' | 'error';
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
@@ -464,12 +467,8 @@ export function reduce(view: ChatView, event: any): ChatView {
       return append(view, { kind: 'note', key, text: `AI가 ${label}로 변경했습니다.`, tones: [{ value: label, color: permissionModeColor(mode), icon: modeIcons[mode] ?? 'tune' }], fresh });
     }
     // The agent moved the session into a worktree or back out: file paths and the branch it works on differ from here on.
-    case 'worktree': {
-      const folder = (path: unknown) => typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '' : '';
-      const enter = event.phase === 'enter', name = folder(enter ? event.path : event.from);
-      const tail = enter ? (event.branch && event.branch !== name ? ` (${event.branch})` : '') : name ? ` ${event.removed ? '삭제됨' : '유지됨'}` : '';
-      return append(view, { kind: 'note', key, text: `AI가 워크트리${enter ? '로 이동했습니다' : '에서 나왔습니다'}${name ? `, ${name}` : ''}${tail}`, tones: name ? [{ value: name, color: 'var(--accent)', icon: 'account_tree' }] : [], fresh });
-    }
+    // Also the user's own moves, commits, merges and the worktree let go (chat-worktree.ts).
+    case 'worktree': { const line = worktreeLine(event); return line ? append(view, { kind: 'note', key, ...line, fresh }) : view; }
     case 'limit': {
       // The CLI reports again whenever the rounded share moves, so one window keeps one line that follows the latest reading (not a new line per percent, and not the first reading for good).
       const line = limitLine(event), id = `limit:${event.limit}:${event.status}:${event.resetsAt}:${event.overage}`, at = view.items.findIndex(item => item.key === id);
@@ -489,10 +488,13 @@ export function reduce(view: ChatView, event: any): ChatView {
       if (event.phase === 'applied') return { ...append(view, { kind: 'user', key, text: String(event.text ?? ''), images: Number(event.images) || 0, previews: previewsOf(event), shells: Number(event.shells) || undefined, fresh }), steers: rest };
       return { ...view, steers: rest };
     }
+    // Files changed during a turn and a file restore (chat-snapshots.js on the server, turn-changes.ts here).
+    case 'turn_changes': return attachTurnChanges(view, event);
+    case 'file_rewind': return applyFileRewind(view, event, key, fresh);
     // Rewind: everything after that assistant message is gone (a replayed transcript lands on the same view).
     case 'rewind': {
       const at = view.items.findIndex(item => item.kind === 'assistant' && item.uuid === event.uuid);
-      return at < 0 ? view : { ...view, items: [...settleItems(view.items.slice(0, at + 1)), { kind: 'note', key, text: '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.', fresh }], live: {}, liveId: null, approvals: [], thinkingTokens: 0 };
+      return at < 0 ? view : { ...view, items: [...settleItems(view.items.slice(0, at + 1)), { kind: 'note', key, text: event.files ? '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다.' : '여기까지 되돌렸습니다. 이후 대화는 이어지지 않습니다. 에이전트가 이미 바꾼 파일은 그대로입니다.', fresh }], live: {}, liveId: null, approvals: [], thinkingTokens: 0 };
     }
     default: return view;
   }
@@ -1279,7 +1281,11 @@ export function pendingAsyncQuestions(items: Item[], dismissed: ReadonlySet<stri
 // Chat-composer shortcuts. A combo is "ctrl+alt+shift+key" (key from event.code, so Option+P on a Mac is "p", not "π"); the user's overrides live in settings.chatKeys.
 export const chatKeyDefs = [
   { id: 'effortUp', label: 'Effort 올리기', keys: 'ctrl+alt+arrowup' }, { id: 'effortDown', label: 'Effort 내리기', keys: 'ctrl+alt+arrowdown' },
-  { id: 'modelNext', label: '다음 모델로 전환', keys: 'ctrl+alt+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'ctrl+alt+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' }
+  { id: 'modelNext', label: '다음 모델로 전환', keys: 'ctrl+alt+arrowright' }, { id: 'modelPrev', label: '이전 모델로 전환', keys: 'ctrl+alt+arrowleft' }, { id: 'stash', label: '입력 임시 보관 / 복원', keys: 'ctrl+s' },
+  // Chat-wide keys (chat-keys.ts): the approval/plan/question card while one waits, and moving through the conversation. Matched with shortcuts.ts `matches`, so `mod` is ⌘ on a Mac.
+  { id: 'cardAllow', label: '카드: 허용 / 승인 / 답변 보내기', keys: 'mod+enter' }, { id: 'cardAllowMore', label: '카드: 이 세션에서 허용 / 편집 허용으로 승인', keys: 'mod+alt+enter' }, { id: 'cardMore', label: '카드: 허용 방식 메뉴 / 계획 수정 요청', keys: 'alt+enter' },
+  { id: 'turnPrev', label: '이전 요청으로 이동', keys: 'alt+arrowup' }, { id: 'turnNext', label: '다음 요청으로 이동', keys: 'alt+arrowdown' }, { id: 'threadTop', label: '대화 맨 위로', keys: 'mod+home' }, { id: 'threadBottom', label: '대화 맨 아래로', keys: 'mod+end' },
+  { id: 'find', label: '대화 안 찾기', keys: 'mod+f' }, { id: 'copyAnswer', label: '마지막 답변 복사', keys: 'mod+shift+c' }, { id: 'copyCode', label: '마지막 코드 블록 복사', keys: 'mod+alt+shift+c' }
 ] as const;
 export type ChatKeyId = typeof chatKeyDefs[number]['id'];
 export const chatKey = (overrides: Record<string, string> | undefined, id: ChatKeyId) => overrides?.[id] || chatKeyDefs.find(def => def.id === id)!.keys;
@@ -1294,6 +1300,7 @@ export function showCombo(combo: string): string {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const names: Record<string, string> = mac ? { meta: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' } : { meta: 'Win', ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' };
   const keyNames: Record<string, string> = { backquote: '`', backslash: '\\', comma: ',', period: '.', slash: '/', semicolon: ';', quote: "'", equal: '=', minus: '-', bracketleft: '[', bracketright: ']' };
+  combo = combo.replace(/(^|\+)mod(?=\+)/, mac ? '$1meta' : '$1ctrl'); // a default bound with `mod` shows as this platform's key
   return combo.split('+').map(part => names[part] ?? keyNames[part] ?? (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1))).join(mac ? '' : '+');
 }
 

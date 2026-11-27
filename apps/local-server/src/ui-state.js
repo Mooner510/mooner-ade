@@ -10,6 +10,9 @@ function validateSettings(settings, invalid) {
   if (settings.theme !== undefined && (typeof settings.theme !== 'string' || !/^[a-z][a-z0-9-]{0,23}$/.test(settings.theme))) invalid();
   for (const name of ['fontSize', 'terminalFontSize']) if (settings[name] !== undefined && !(Number.isInteger(settings[name]) && settings[name] >= 1 && settings[name] <= 72)) invalid();
   for (const name of ['wordWrap', 'dimInactivePanes', 'cursorBlink', 'copyOnSelect', 'notifyDone', 'notifyApproval', 'notifySound', 'soundVolumeExtended', 'wakatime', 'wakatimeBackground', 'usageColors', 'claudeSession', 'notifyLooking', 'cacheTimer', 'cacheSendWarn', 'tips', 'followUpQueue', 'interactiveUi', 'artifactAlways', 'rightClickPaste', 'optionAsMeta', 'confirmClose', 'boldBright', 'terminalGpu', 'diffIgnoreWhitespace', 'diffFoldUnchanged', 'clock12h', 'clockSeconds', 'onboarded', 'chatTipPending', 'chatToolsOpen', 'chatAutoScroll', 'chatSmoothStream', 'sidebarCompact', 'animateInBackground', 'confirmCloseChat', 'confirmCloseProject', 'chatPermissionAutoSet', 'feedbackAgentTool', 'feedbackAiContext', 'chatDarker', 'idleCompact', 'treeGitColors']) if (settings[name] !== undefined && typeof settings[name] !== 'boolean') invalid();
+  if (settings.attentionBadge !== undefined && typeof settings.attentionBadge !== 'boolean') invalid();
+  // 채팅 › 입력: an ADE copy pasted into a chat becomes a file reference.
+  if (settings.chatPasteRefs !== undefined && typeof settings.chatPasteRefs !== 'boolean') invalid();
   if (settings.feedbackAiModel !== undefined && !['', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'sonnet', 'opus'].includes(settings.feedbackAiModel)) invalid();
   if (settings.feedbackAiEffort !== undefined && !['', 'low', 'medium', 'high'].includes(settings.feedbackAiEffort)) invalid();
   if (settings.usageStyle !== undefined && !['bar', 'text'].includes(settings.usageStyle)) invalid();

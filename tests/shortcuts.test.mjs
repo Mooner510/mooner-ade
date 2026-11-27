@@ -75,7 +75,8 @@ test('shortcut overrides, defaults, punctuation and modifier conflicts', async t
   const definitions = [...appKeyDefs, ...chatKeyDefs];
   for (const [index, def] of definitions.entries()) {
     assert.match(def.id, /^[a-zA-Z][a-zA-Z0-9]{0,23}$/);
-    for (const other of definitions.slice(index + 1)) assert.ok(!combosOverlap(def.keys, other.keys), `${def.id} / ${other.id}`);
+    // keys '' = no default (palette commands the user may bind): nothing to collide with.
+    for (const other of definitions.slice(index + 1)) if (def.keys && other.keys) assert.ok(!combosOverlap(def.keys, other.keys), `${def.id} / ${other.id}`);
   }
 });
 

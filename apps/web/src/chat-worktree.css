@@ -1,0 +1,74 @@
+/* A chat's git worktree (ChatWorktree.tsx): the branch badge, the start-screen choice, the worktree panel and merge flow, and the list of chat worktrees. */
+.wt-badge { --wt: var(--accent); display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 220px; padding: 1px 7px; border: 1px solid color-mix(in srgb, var(--wt) 45%, transparent); border-radius: 999px;
+  background: color-mix(in srgb, var(--wt) 12%, transparent); color: color-mix(in srgb, var(--wt) 80%, var(--fg)); font: 500 11px/1.5 var(--mono); white-space: nowrap; cursor: default; }
+button.wt-badge { cursor: pointer; }
+button.wt-badge:hover { background: color-mix(in srgb, var(--wt) 22%, transparent); }
+.wt-badge .wt-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wt-badge .wt-ahead { color: var(--fg); }
+.wt-badge .wt-dirty { color: var(--warn); }
+.wt-badge[data-tone="dirty"] { --wt: var(--warn); }
+.wt-badge[data-tone="merged"] { --wt: var(--done); }
+.wt-badge[data-tone="conflict"], .wt-badge[data-tone="missing"] { --wt: var(--error); }
+/* Kept but not in use: the chat works in its origin right now. */
+.wt-badge[data-out] { --wt: var(--muted); border-style: dashed; }
+.wt-badge[data-compact] { max-width: 160px; padding: 0 6px; font-size: 10.5px; }
+.pane-title .wt-badge { flex: 0 1 auto; }
+.wt-foot { display: inline-flex; align-items: center; min-width: 0; }
+.chat-foot:is([data-fit="3"], [data-fit="4"]) .wt-foot .wt-label, .chat-composer[data-compact] .wt-foot .wt-label { display: none; }
+
+.wt-start { display: inline-flex; align-items: center; align-self: center; gap: 7px; margin: 0 0 0 6px; padding: 6px 12px; border: 1px dashed var(--border-strong); border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
+.wt-start:hover:not(:disabled) { color: var(--fg); border-color: var(--accent); background: var(--accent-soft); }
+.wt-start[aria-pressed="true"] { color: var(--accent); border-style: solid; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.wt-start b { font-family: var(--mono); font-weight: 500; }
+
+.wt-modal { width: min(620px, 94vw); }
+.wt-modal h2 { display: flex; align-items: center; gap: 6px; }
+.wt-modal .wt-branch { font: 500 13px var(--mono); color: var(--accent); }
+.wt-body { display: flex; flex-direction: column; gap: 12px; padding: 12px 18px 16px; overflow: auto; font-size: 12.5px; }
+.wt-body h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.wt-lead { margin: 0; line-height: 1.6; }
+.wt-hint { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.wt-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+.wt-facts dt { color: var(--muted); }
+.wt-facts dd { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; margin: 0; }
+.wt-here { color: var(--accent); font-weight: 600; }
+.wt-path code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.wt-tag { padding: 0 6px; border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.wt-icon { display: inline-flex; padding: 3px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+.wt-icon:hover { color: var(--fg); background: var(--hover); }
+.wt-files, .wt-commits, .wt-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.wt-files code, .wt-commits code { font-size: 11.5px; }
+.wt-files .wt-more { color: var(--muted); }
+.wt-add { color: var(--add); font: 11px var(--mono); }
+.wt-del { color: var(--del); font: 11px var(--mono); }
+.wt-message { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--input); color: var(--fg); font: 12px/1.5 var(--mono); resize: vertical; }
+.wt-callout { --tone: var(--info); margin: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--tone) 8%, transparent); display: flex; flex-direction: column; gap: 8px; }
+.wt-callout p { margin: 0; display: flex; gap: 6px; align-items: flex-start; line-height: 1.5; }
+.wt-callout[data-tone="warn"] { --tone: var(--warn); }
+.wt-callout[data-tone="conflict"] { --tone: var(--error); }
+.wt-callout[data-tone="ok"] { --tone: var(--done); }
+.wt-callout > button { align-self: flex-start; }
+.wt-actions { display: flex !important; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 18px; border-top: 1px solid var(--border); font-size: 12px; }
+.wt-actions .drag-space { flex: 1; }
+.wt-actions button, .wt-row-actions button, .wt-callout button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--raised); color: var(--fg); font-size: 12px; }
+.wt-actions button:hover:not(:disabled), .wt-row-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.wt-modal button:disabled { opacity: .5; cursor: not-allowed; }
+.wt-modal .wt-primary { border-color: var(--accent-strong); background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.wt-modal .wt-danger { border-color: color-mix(in srgb, var(--error) 60%, transparent); background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+/* A row like the app's other check rows (label.check): the box beside its text, not above it (a bare label is a column in style.css). */
+.wt-check, .wt-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; line-height: 1.5; cursor: pointer; }
+.wt-check > input, .wt-choice > input { flex: none; margin: 3px 0 0; cursor: pointer; }
+.wt-actions .wt-check { align-items: center; }
+.wt-actions .wt-check > input { margin: 0; }
+.wt-choice[data-tone="danger"] b { color: var(--error); }
+.wt-confirm { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.wt-confirm input { padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--input); color: var(--fg); font: 12px var(--mono); }
+.wt-confirm-row { display: flex; gap: 8px; }
+.wt-confirm-row input { flex: 1; }
+.wt-list > li { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.wt-list > li[data-orphan] { border-style: dashed; }
+.wt-row-head { display: flex; align-items: center; gap: 6px; font-family: var(--mono); }
+.wt-row-sub { color: var(--muted); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+/* Sidebar rows (main.tsx): just the mark; the tooltip says the rest. */
+.folder-tab .wt-badge, .group-pane .wt-badge { max-width: 92px; margin-left: auto; padding: 0 5px; font-size: 10px; }

@@ -54,6 +54,12 @@ function onWorkspace(message) {
 async function handle(request) {
   if (request.op === 'peers') return bus.peers(request.self);
   if (request.op === 'send') return bus.send(request.self, { to: request.to, message: request.message });
+  if (request.op === 'worktree-status') return bus.worktreeStatus(request.self, { chat: request.chat });
+  if (request.op === 'worktree-diff') return bus.worktreeDiff(request.self, { chat: request.chat, file: request.file });
+  if (request.op === 'merge-check') return bus.mergeCheck(request.self, { chats: request.chats });
+  if (request.op === 'merge-mine') return bus.mergeMine(request.self, { commitMessage: request.commitMessage });
+  if (request.op === 'integrate') return bus.integrate(request.self, { from: request.from });
+  if (request.op === 'request-peer') return bus.requestPeer(request.self, { to: request.to, request: request.request, note: request.note });
   throw new BusError('Unknown request.', 'INVALID_INPUT');
 }
 const sameToken = (given, wanted) => typeof given === 'string' && given.length === wanted.length && timingSafeEqual(Buffer.from(given), Buffer.from(wanted));
@@ -84,8 +90,8 @@ function listen(port) {
 }
 
 // ---- the settings page ---------------------------------------------------------------------------------------------------
-const STATUS = { delivered: '전달함', queued: '대기 중', failed: '실패', rejected: '거부함' };
-const REASON = { rate: '전송 한도', timeout: '시간 초과', closed: '채팅이 닫힘' };
+const STATUS = { delivered: '전달함', queued: '대기 중', failed: '실패', rejected: '거부함', merged: '원본에 합침', integrated: 'worktree 통합', blocked: '합치기 멈춤' };
+const REASON = { rate: '전송 한도', timeout: '시간 초과', closed: '채팅이 닫힘', conflict: '충돌', MERGE_CONFLICT: '충돌', ORIGIN_DIRTY: '원본에 미커밋 변경', WORKTREE_DIRTY: '미커밋 변경' };
 const clock = at => new Date(at).toTimeString().slice(0, 8);
 function view() {
   const { stats, history } = bus.snapshot();

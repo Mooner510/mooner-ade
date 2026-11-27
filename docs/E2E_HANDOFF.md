@@ -107,6 +107,7 @@ ONLY=F4 node scripts/verify/t-feedback.mjs                            # id가 F4
 | `mermaid`(단어 단위) | ` ```mermaid ` 흐름도·시퀀스 2개(미리보기와 확대 대화상자 확인용) |
 | `uiblock` | ` ```ui ` 블록 3개(통계, 폼, 깨진 JSON) |
 | `tools` | MCP 도구(Claude Docs update + Artifact URL), 자동 모드 차단 Bash, Read |
+| `fsedit write <경로> <글>; delete <경로>`(메시지 맨 앞) | 1.5초 뒤 작업 폴더의 파일을 쓰고 지운 다음 uuid가 있는 답변(턴 변경 카드·파일까지 되돌리는 Rewind 확인용, `ctl.json`의 `fsms`로 지연 조절) |
 
 `apply_flag_settings`·`set_permission_mode`·`set_model` 제어 요청에도 응답하며 모든 시작·사용자 메시지·제어 요청을 `<temp>/fake-claude.jsonl`에 남깁니다(`env.json`의 `temp`). 피드백 AI 정리(one-shot)는 `<temp>/ctl.json`의 `{"fb":"ok|fail|badjson|empty|iserror|slow"}`로 결과를 바꾸고, `{"flag":"error"}`는 `apply_flag_settings`를 거부합니다. **`codex`, `cursor-agent`는 가짜가 없습니다.**
 

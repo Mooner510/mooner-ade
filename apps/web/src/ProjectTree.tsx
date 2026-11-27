@@ -5,6 +5,9 @@ import { FileIcon } from './FileIcon';
 import { closeAll, PopupMenu, type MenuEntry } from './GitMenu';
 import { Icon, IconButton } from './Icon';
 import { copyText } from './toast';
+import { recordCopy, registerSendSource, requestSendToChat } from './send-to-chat';
+import type { SendPayload } from './chat-send';
+import { useActionKeys } from './shortcuts';
 
 type Entry = { name: string; folder: boolean };
 type Move = { from: string; to: string };
@@ -324,7 +327,13 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
       if (clip?.paths.some(path => list.some(gone => inside(path, gone)))) setClip(null);
     });
   }
-  const copyPaths = (paths: string[], cut: boolean) => setClip({ paths: topLevel(paths.filter(path => path !== '.')), cut });
+  const copyPaths = (paths: string[], cut: boolean) => { setClip({ paths: topLevel(paths.filter(path => path !== '.')), cut }); clipPaths(paths); };
+  // 채팅으로 보내기 / 참조로 붙여넣기: the picked rows as `@path` mentions. A copy also puts their absolute paths on the clipboard (like a file
+  // manager does), and pasting that into a chat inserts the mentions instead (send-to-chat.ts).
+  const pathsPayload = (all: string[]): SendPayload | null => { const paths = all.filter(path => path !== '.'); return paths.length ? { kind: 'paths', paths: paths.map(path => ({ path, base: 'project', ...(isFolder(path) && { folder: true }) })) } : null; };
+  const clipPaths = (paths: string[]) => { const payload = pathsPayload(topLevel(paths)); if (payload?.kind !== 'paths') return; const text = payload.paths.map(item => absolute(item.path)).join('\n'); copyText(text); recordCopy(text, payload); };
+  const sendKeys = useActionKeys('sendToChat');
+  useEffect(() => { const list = rootRow.current; if (list) return registerSendSource(list, () => pathsPayload([...live.current.picked]), '보낼 파일이나 폴더를 먼저 선택하세요.'); }, []);
   const paste = (dir: string) => { if (clip) void transfer(clip.paths, dir, !clip.cut, false); };
   // Where a new item or a paste goes: the selected folder, or the folder of the selected file.
   const targetDir = () => selection.folder ? selection.path : parentOf(selection.path);
@@ -370,6 +379,7 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
       { label: '잘라내기', icon: 'cut', keys: `${modKey}X`, disabled: !real.length, run: () => copyPaths(real, true) },
       { label: '복사', icon: 'copy', keys: `${modKey}C`, disabled: !real.length, run: () => copyPaths(real, false) },
       { label: '붙여넣기', icon: 'paste', keys: `${modKey}V`, disabled: !clip, run: () => paste(dir) },
+      { label: '채팅으로 보내기', icon: 'send', keys: sendKeys, disabled: !paths.filter(path => path !== '.').length, run: () => requestSendToChat(() => pathsPayload(paths)) },
       { label: '경로 복사', icon: 'link', disabled: !paths.length, items: [
         { label: '절대 경로', run: () => copyText(paths.map(absolute).join('\n')) },
         { label: '프로젝트 기준 경로', run: () => copyText(paths.join('\n')) },

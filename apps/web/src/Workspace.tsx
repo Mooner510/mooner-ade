@@ -2,7 +2,7 @@ import { appKey, appKeyInTerminal, keyBelongsToField, keyPlace, matches, showApp
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isLeaf, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
-import { agentArgs, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
+import { agentArgs, defaultSettings, preloadMonaco, statusLayout, usageHue, type Settings } from './Editor';
 import { nextTheme } from './themes';
 import { createPortal } from 'react-dom';
 import { useExit, useTipNotice } from './use-notice';
@@ -26,6 +26,7 @@ import { GitLog } from './GitLog';
 import { ProjectTree, type TreeHost } from './ProjectTree';
 import { FileBuffer, type FileLocation } from './file-buffer';
 import { loadSpec } from './git-graph';
+import { OPEN_DIFF_EVENT } from './TurnChanges';
 import { Dropdown, Modal, type Ask, type GitState } from './views';
 import { copyText } from './toast';
 import { COLOR_COPY_EVENT, colorCopyFormats, type ColorCopyTarget } from './color-chip';
@@ -41,17 +42,27 @@ import { can, isRemote, readOnly } from './transport';
 import { openUsageReview } from './usage-review-open';
 import { setDrawer, useMobile } from './mobile';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
+import { runPalette, type PaletteEntry, type PaletteHost } from './palette';
+import { focusInPanes, focusPane } from './pane-focus';
+import { pickChat } from './attention-nav';
+import { swapLeaves } from './tree-nav';
+import { sendToChat, setActiveRoots, type SendGet, type SendHost } from './send-to-chat';
+import { openChatWorktree, WorktreeManager } from './ChatWorktree';
+import { worktreeBadge, worktreeMark, worktreeOf, type WorktreeInfo, type WorktreeMark } from './chat-worktree.ts';
 
 // The app shell owns the single websocket; each open project subscribes to it and receives only its own messages.
 export type Hub = { subscribe(projectId: string, handler: (message: any) => void): () => void; send(message: object): boolean };
 export type AgentAlert = { kind: AgentEventKind; agent: Agent; tabId: string; paneId: string; name: string; looking?: boolean };
-export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' | 'chat' | 'launcher'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache };
-export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
+export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' | 'chat' | 'launcher'; agent?: Agent; attention: boolean; asking: boolean; working: boolean; focused: boolean; cache?: ClaudeCache; worktree?: WorktreeMark };
+export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache; worktree?: WorktreeMark };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
 // `forceAsk`: the sidebar X and Delete on a sidebar row always confirm. Shortcuts, middle-click and the pane's own close button still follow the confirm settings.
-export type WorkspaceHandle = { requestClose(forceAsk?: boolean): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string, forceAsk?: boolean): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string, forceAsk?: boolean): void; newTab(): void; renameTab(id: string): void; launcher(): void };
-export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown> } &
+export type WorkspaceHandle = { requestClose(forceAsk?: boolean): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string, forceAsk?: boolean): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string, forceAsk?: boolean): void; newTab(): void; renameTab(id: string): void; launcher(): void;
+  // Selects a tab (and one of its panes) and moves the keyboard into it: the next-attention key and the palette's tab search.
+  reveal(tabId: string, paneId?: string): void };
+// when: the key only counts in that situation (Ctrl+Tab while an editor has the focus); otherwise it goes on to the field or the shell.
+export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown>; when?(event: KeyboardEvent): boolean } &
   ({ hidden?: false; icon: IconName } | { hidden: true; icon?: never });
 export type SystemInfo = { cpu: number; cores: number; memory: { total: number; used: number }; uptime: number; platform: string; hostname: string };
 type WorkspaceProps = {
@@ -59,6 +70,7 @@ type WorkspaceProps = {
   requestedFile?: { path: string; location: FileLocation }; onOpenExternalFile(folder: string, path: string, location: FileLocation): Promise<void>;
   onFileOpened(request: { path: string; location: FileLocation }): void;
   onLegacySettings(settings: Partial<Settings>): void; onStatus(root: string, status: WorkspaceStatus): void; onFailed(root: string, cause: unknown): void; onOpenSettings(): void; onOpenUsage(): void; onOpenRemotePc?(): void; onOpenPlugins(): void; onAgentAlert(root: string, alert: AgentAlert): void;
+  paletteHost?: PaletteHost;
 };
 
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
@@ -201,7 +213,7 @@ function MobileStatus({ settings, projectId, active, connection, branch, onBranc
 }
 export const showKeys = (keys: string) => showCombo(keys.replace('mod+', mac ? 'meta+' : 'ctrl+'));
 
-export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, requestedFile, onOpenExternalFile, onFileOpened, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenUsage, onOpenRemotePc, onOpenPlugins, onAgentAlert }, handleRef) {
+export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(function Workspace({ root, projectId, active, hub, connection, settings, setSettings, projectCommands, requestedFile, onOpenExternalFile, onFileOpened, onLegacySettings, onStatus, onFailed, onOpenSettings, onOpenUsage, onOpenRemotePc, onOpenPlugins, onAgentAlert, paletteHost }, handleRef) {
   const [project, setProject] = useState<Snapshot | null>(null), [openError, setOpenError] = useState('');
   const [health, setHealth] = useState<Record<string, any>>({});
   const [gitVersion, setGitVersion] = useState(0);
@@ -250,6 +262,13 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   const [sshSet, setSshSet] = useState<Set<string>>(new Set());
   const [caches, setCaches] = useState<Record<string, ClaudeCache>>({});
   const dropCache = (id: string) => setCaches(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
+  // Each chat's git worktree (chat-worktree.ts): the sidebar mark, and the question when a chat that still holds one is closed. `worktreeList`: the palette's list of all of them.
+  const [worktrees, setWorktrees] = useState<Record<string, WorktreeInfo>>({}), [worktreeList, setWorktreeList] = useState(false);
+  const noteWorktree = (id: string, info: WorktreeInfo | null) => setWorktrees(previous => {
+    if (!info) { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; }
+    return JSON.stringify(previous[id]) === JSON.stringify(info) ? previous : { ...previous, [id]: info };
+  });
+  const worktreeMarks = useMemo(() => Object.fromEntries(Object.entries(worktrees).map(([id, info]) => [id, worktreeMark(info)])), [worktrees]);
   const clearAttention = (id: string) => setAttention(previous => { if (!(id in previous)) return previous; const { [id]: _gone, ...rest } = previous; return rest; });
   const agentOf = (id: string): Agent | undefined => resolveAgent(processAgents[id], launched[id], titles[id], sshSet.has(id));
   const [quick, setQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
@@ -274,6 +293,7 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
     fromRemote: useRef(false), gone: useRef(new Set<string>()), snapshotSeen: useRef(false)
   };
   refs.active.current = active;
+  const chatUsed = useRef(new Map<string, number>());
   refs.repository.current = gitRepositoryId; refs.paneTabs.current = paneTabs; refs.activeTab.current = activeTab;
   refs.focus.current = focus; refs.project.current = project;
   // Chat panes listen here for their own `chat/event` / `chat/state` messages; `chatPrev` remembers each chat's last status to tell "finished" from "started".
@@ -377,6 +397,7 @@ ${where}`, [
   const setFocusLeaf = (id: string) => {
     setFocus(id); refs.focus.current = id;
     const owner = tabOf(id); if (owner) refs.tabFocus.current[owner.id] = id;
+    if (findLeaf(owner?.pane ?? null, id)?.kind === 'chat') chatUsed.current.set(id, Date.now()); // for the "back to the chat" key
     if (findLeaf(activePane(), id)?.kind === 'editor') refs.lastEditor.current = id;
   };
   function selectTab(id: string) {
@@ -405,6 +426,11 @@ ${where}`, [
     }
     setFocusLeaf(id);
   }
+  // A chat turn's change card asks for a diff tab (TurnChanges.tsx): only this project's workspace opens it.
+  useEffect(() => {
+    const open = (event: Event) => { const detail = (event as CustomEvent<{ projectId: string; spec: string }>).detail; if (detail?.projectId === projectId && typeof detail.spec === 'string' && detail.spec.startsWith('diff:')) { preloadMonaco(); setZoom(''); openEditorTab(detail.spec); } };
+    window.addEventListener(OPEN_DIFF_EVENT, open); return () => window.removeEventListener(OPEN_DIFF_EVENT, open);
+  });
   function openProjectFile(path: string, location?: FileLocation) {
     const spec = `file:${path}`;
     if (location) fileBuffer(path).requestLocation(location);
@@ -534,6 +560,15 @@ ${where}`, [
     commitTabs(next); delete refs.tabFocus.current[tabId];
     selectTab(landed); setFocusLeaf(paneId);
   }
+  // Dropping a tab onto another folds its panes into it, side by side.
+  function mergeTabs(id: string, targetId: string) {
+    const list = refs.paneTabs.current, source = list.find(tab => tab.id === id), target = list.find(tab => tab.id === targetId);
+    if (!source?.pane || !target?.pane || id === targetId) return;
+    const merged = beside(target.pane, source.pane), first = leafList(source.pane)[0]?.id || '';
+    commitTabs(list.filter(tab => tab.id !== id).map(tab => tab.id === targetId ? { ...tab, pane: merged } : tab));
+    delete refs.tabFocus.current[id];
+    selectTab(targetId); if (first) setFocusLeaf(first);
+  }
   // Swaps the active tab with its neighbour (sidebar order).
   function moveTabBy(step: number) {
     const list = refs.paneTabs.current, at = list.findIndex(tab => tab.id === refs.activeTab.current), to = at + step;
@@ -550,16 +585,8 @@ ${where}`, [
     }),
     selectTab: id => selectTab(id), closePane: (id, forceAsk) => run(() => closeTerminal(id, forceAsk)),
     // Reordering only changes the list order; the saved layout follows it.
-    // Dropping a tab onto another folds its panes into it, side by side.
-    mergeTabs: (id, targetId) => {
-      const list = refs.paneTabs.current, source = list.find(tab => tab.id === id), target = list.find(tab => tab.id === targetId);
-      if (!source?.pane || !target?.pane || id === targetId) return;
-      const merged = beside(target.pane, source.pane), first = leafList(source.pane)[0]?.id || '';
-      commitTabs(list.filter(tab => tab.id !== id).map(tab => tab.id === targetId ? { ...tab, pane: merged } : tab));
-      delete refs.tabFocus.current[id];
-      selectTab(targetId); if (first) setFocusLeaf(first);
-    },
-    movePane,
+    mergeTabs,
+    movePane, reveal: revealPane,
     moveTab: (id, targetId, after) => {
       const list = refs.paneTabs.current, moving = list.find(tab => tab.id === id); if (!moving || id === targetId) return;
       const rest = list.filter(tab => tab.id !== id), at = rest.findIndex(tab => tab.id === targetId); if (at < 0) return;
@@ -628,8 +655,8 @@ ${where}`, [
   const tabInfo = JSON.stringify(paneTabs.map(tab => {
     const list = leafList(tab.pane);
     const focusedId = refs.tabFocus.current[tab.id], current = list.find(leaf => leaf.id === focusedId) || list[0];
-    return { id: tab.id, label: tabLabel(tab), kind: current?.kind === 'chat' ? 'chat' : !current || current.kind === 'launcher' ? 'launcher' : undefined, count: list.length, agent: current?.kind === 'chat' ? current.agent ?? 'claude' : current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined,
-      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : leaf.kind === 'chat' ? 'chat' : leaf.kind === 'launcher' ? 'launcher' : 'terminal', agent: leaf.kind === 'editor' ? undefined : leaf.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id) })) : [] };
+    return { id: tab.id, label: tabLabel(tab), kind: current?.kind === 'chat' ? 'chat' : !current || current.kind === 'launcher' ? 'launcher' : undefined, count: list.length, agent: current?.kind === 'chat' ? current.agent ?? 'claude' : current && current.kind !== 'editor' ? agentOf(current.id) : undefined, attention: list.some(leaf => attention[leaf.id]), asking: list.some(leaf => attention[leaf.id] === 'attention'), working: list.some(leaf => working.has(leaf.id)), cache: list.length === 1 ? cacheOf(list[0].id) : undefined, worktree: list.length === 1 ? worktreeMarks[list[0].id] : undefined,
+      panes: list.length > 1 ? list.map(leaf => ({ id: leaf.id, label: leafLabel(leaf), kind: leaf.kind === 'editor' ? 'editor' : leaf.kind === 'chat' ? 'chat' : leaf.kind === 'launcher' ? 'launcher' : 'terminal', agent: leaf.kind === 'editor' ? undefined : leaf.kind === 'chat' ? leaf.agent ?? 'claude' : agentOf(leaf.id), attention: Boolean(attention[leaf.id]), asking: attention[leaf.id] === 'attention', working: working.has(leaf.id), focused: leaf.id === current?.id, cache: cacheOf(leaf.id), worktree: worktreeMarks[leaf.id] })) : [] };
   }));
   useEffect(() => {
     onStatus(root, { id: project?.id ?? '', name: basename((project?.root ?? root).replace(/\\/g, '/')), loaded: Boolean(project), attention: attentionCount, tabs: JSON.parse(tabInfo), activeTab });
@@ -808,6 +835,17 @@ ${where}`, [
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   }, [project?.id, gitRepositoryId, active, settings.diffRefresh]);
   useEffect(() => { if (zoom && !findLeaf(activePane(), zoom)) setZoom(''); }, [paneTabs, activeTab, zoom]);
+  // A maximize that starts or ends re-parents the panes (Panes.tsx): the maximized pane's node moves, which drops the DOM focus, and the other
+  // panes mount again, where one taking the focus (a launcher used to) made itself the focused pane. The pane that was or is maximized keeps
+  // the focus, and the keyboard goes back into it, unless it was somewhere else (the sidebar, a dialog).
+  const zoomSeen = useRef(zoom);
+  useEffect(() => {
+    const keep = zoom || zoomSeen.current; zoomSeen.current = zoom;
+    if (!keep || !refs.active.current || !findLeaf(activePane(), keep)) return;
+    if (!focusInPanes(document.querySelector('main.app:not([hidden]) .tab-stack'))) return;
+    if (refs.focus.current !== keep) setFocusLeaf(keep);
+    focusPane(keep);
+  }, [zoom]);
 
   // ---- layout from the other devices ----
   // Another device changed the tabs: show the same ones. A tab that already matches stays as it is (a launcher not yet chosen,
@@ -1011,9 +1049,25 @@ ${where}`, [
     // A background subagent is always asked about: closing ends it silently otherwise. Sidebar X also asks before an idle chat disappears.
     const question = bgChats.current.has(id) ? '백그라운드 작업이 실행 중인 채팅을 닫을까요? 작업이 종료됩니다.' : working.has(id) && (forceAsk || settingsRef.current.confirmCloseChat) ? '응답 중인 채팅을 닫을까요? 진행 중인 작업이 중단됩니다.' : forceAsk ? '이 채팅을 닫을까요?' : '';
     if (question && !(await askClose(question))) return;
+    if (!(await keepWorktreeOnClose(id))) return;
     await call('chat/close', { id }).catch(report);
     chatBus.current.delete(id); chatPrev.current.delete(id);
     removeTerminalPane(id);
+  }
+  // A chat that still holds its worktree is asked about before it closes: the worktree and branch stay (and show in the palette's worktree list),
+  // or it is merged first, or (when there is nothing in it) let go with the chat.
+  async function keepWorktreeOnClose(id: string) {
+    const kept = worktrees[id];
+    if (!kept?.managed || kept.status?.exists === false) return true;
+    const ahead = kept.status?.ahead ?? 0, dirty = kept.status?.dirty ?? 0, idle = !working.has(id);
+    const work = [ahead && `합치지 않은 커밋 ${ahead}개`, dirty && `커밋하지 않은 변경 ${dirty}개`].filter(Boolean).join(', ');
+    const choice = await pick(`이 채팅의 worktree ${worktreeBadge(kept).label}${work ? `에 ${work}가 있습니다` : '가 남아 있습니다'}. 닫아도 worktree와 브랜치는 남고, 다시 열거나 ‘채팅 worktree 관리’에서 정리할 수 있습니다.`, [
+      { id: 'keep', label: '닫기 (worktree는 남김)', icon: 'x' },
+      ...(work ? [{ id: 'merge', label: '원본으로 합치기…', icon: 'merge' as const }] : idle ? [{ id: 'release', label: 'worktree 해제하고 닫기', icon: 'trash' as const }] : []),
+      { id: 'cancel', label: '취소' }]);
+    if (choice === 'merge') { openChatWorktree(id, 'merge'); return false; }
+    if (choice === 'release') return call('chat/worktree/remove', { id, deleteBranch: true }).then(() => true, cause => { report(cause); return false; });
+    return choice === 'keep';
   }
   function onAgentEvent(id: string, event: AgentEventKind | 'asyncQuestion') {
     const owner = tabOf(id), leaf = findLeaf(owner?.pane ?? null, id);
@@ -1028,6 +1082,7 @@ ${where}`, [
   // Status of a chat for the sidebar: working while it answers, attention while it waits for an approval, done (once) when it finishes.
   function onChatState(id: string, state: ChatState) {
     const before = chatPrev.current.get(id); chatPrev.current.set(id, state.status);
+    noteWorktree(id, worktreeOf(state));
     if (state.liveTasks?.length) bgChats.current.add(id); else bgChats.current.delete(id);
     paneProps.onAgentWorking(id, state.status === 'working' || state.status === 'attention');
     // The chat's prompt cache feeds the sidebar timer like a terminal Claude's does; only changed values re-render.
@@ -1059,6 +1114,9 @@ ${where}`, [
     if (!(await saveBeforeClose(leafList(tab.pane).flatMap(leaf => leaf.tabs ?? [])))) return;
     const running = leafList(tab.pane).filter(leaf => leaf.kind !== 'editor' && refs.project.current?.terminals.some(terminal => terminal.id === leaf.id && !terminal.exited));
     const chats = leafList(tab.pane).filter(leaf => leaf.kind === 'chat');
+    // Chats with work left in their worktree: one question for the tab (the worktrees stay; the palette lists them).
+    const unmerged = chats.filter(leaf => worktrees[leaf.id]?.managed && ((worktrees[leaf.id].status?.ahead ?? 0) > 0 || (worktrees[leaf.id].status?.dirty ?? 0) > 0));
+    if (unmerged.length && !(await askClose(`이 탭의 채팅 ${unmerged.length}개가 worktree에 합치지 않은 작업을 남겨 두고 있습니다(${unmerged.map(leaf => worktrees[leaf.id].branch).join(', ')}). 닫아도 worktree와 브랜치는 남고 ‘채팅 worktree 관리’에서 정리할 수 있습니다. 닫을까요?`))) return;
     // Busy: answering, waiting for an approval, or running a background subagent. Background work is asked about whatever the setting says.
     const busy = chats.filter(leaf => working.has(leaf.id) || bgChats.current.has(leaf.id)).length, background = chats.some(leaf => bgChats.current.has(leaf.id));
     if (forceAsk || (running.length && settingsRef.current.confirmClose) || (chats.length && settingsRef.current.confirmCloseChat) || background) {
@@ -1106,11 +1164,69 @@ ${where}`, [
     setFocusLeaf(next);
     // While a pane is maximized the maximize moves with the focus (like tmux), so the focus never lands on a pane that is off screen.
     setZoom(value => value ? next : value);
+    focusPane(next, { force: true }); // an editor, diff, launcher or console does not take the keyboard by itself
   }
   async function closeFocused() {
     const leaf = findLeaf(activePane(), refs.focus.current); if (!leaf) return;
     if (leaf.kind === 'editor') { if (leaf.active) await closeTab(leaf.id, leaf.active); }
     else await closeTerminal(leaf.id);
+  }
+
+  // ---- keyboard: moving between tabs and panes without the mouse (shortcuts.ts workspaceKeyDefs) ----
+  // Selects a tab and one of its panes (the remembered one when none is named) and moves the keyboard into it. A maximized pane hands the maximize over, like moveFocus.
+  function revealPane(tabId: string, paneId?: string) {
+    const tab = refs.paneTabs.current.find(item => item.id === tabId); if (!tab) return;
+    if (tabId !== refs.activeTab.current) selectTab(tabId);
+    const target = paneId && findLeaf(tab.pane, paneId) ? paneId : findLeaf(tab.pane, refs.focus.current) ? refs.focus.current : leaves(tab.pane)[0];
+    if (!target) { requestAnimationFrame(() => document.querySelector<HTMLElement>('main.app:not([hidden]) .tab-page:not([hidden]) .launchers button')?.focus()); return; }
+    setFocusLeaf(target); setZoom(value => value && value !== target ? target : value);
+    focusPane(target, { force: true });
+  }
+  // Alt+Shift+1…9: the panes of this tab in layout order (left to right, top to bottom); the ninth is the last.
+  function focusPaneAt(index: number) {
+    const ids = leaves(activePane()), id = ids[index === 8 ? ids.length - 1 : index];
+    if (id) revealPane(refs.activeTab.current, id);
+  }
+  // Back to the chat from anywhere: the chat used last in this tab, else in the project. With no chat open, offer to start one.
+  async function focusChat() {
+    const tabs = refs.paneTabs.current.map(tab => ({ id: tab.id, chats: leafList(tab.pane).filter(leaf => leaf.kind === 'chat').map(leaf => leaf.id) }));
+    const found = pickChat(tabs, refs.activeTab.current, chatUsed.current);
+    if (found) { revealPane(found.tabId, found.chatId); return; }
+    const chats = launchersFor('chat').filter(item => item.id !== 'shell' && !hiddenAgents.includes(item.id));
+    const choice = await pick('이 프로젝트에 열린 채팅이 없습니다. 새 채팅을 열까요?', [...chats.map(item => ({ id: item.command, label: `새 탭에서 ${item.label} 채팅`, icon: item.icon })), { id: 'cancel', label: '취소' }]);
+    if (choice && choice !== 'cancel') await launch(choice, 'tab');
+  }
+  // Ctrl+Tab / Ctrl+Shift+Tab: the next or previous file of the focused editor group.
+  const editorFocused = () => findLeaf(activePane(), refs.focus.current)?.kind === 'editor';
+  function cycleEditorTab(step: number) {
+    const tree = activePane(), leaf = findLeaf(tree, refs.focus.current); if (!tree || leaf?.kind !== 'editor' || !leaf.tabs?.length) return;
+    const list = leaf.tabs, at = Math.max(0, list.indexOf(leaf.active || '')), next = list[(at + step + list.length) % list.length];
+    commitPane(mapLeaf(tree, leaf.id, item => ({ ...item, active: next })));
+    focusPane(leaf.id, { force: true });
+  }
+  // The other tabs of this project, to move a pane into or merge with.
+  const otherTabs = () => refs.paneTabs.current.filter(tab => tab.id !== refs.activeTab.current && tab.pane).map(tab => ({ id: tab.id, label: tabLabel(tab), icon: 'layers' as const, detail: `pane ${leafList(tab.pane).length}개` }));
+  async function movePaneTo() {
+    const tabId = refs.activeTab.current, paneId = refs.focus.current, tab = refs.paneTabs.current.find(item => item.id === tabId);
+    if (!tab?.pane || !findLeaf(tab.pane, paneId)) return;
+    const alone = leafList(tab.pane).length < 2, others = otherTabs();
+    const choice = await pick('포커스된 pane을 어느 탭으로 옮길까요?', [...others, ...(alone ? [] : [{ id: 'new', label: '새 탭으로 분리', icon: 'externalLink' as const }]), { id: 'cancel', label: '취소' }]);
+    if (!choice || choice === 'cancel') return;
+    if (choice === 'new') movePane(tabId, paneId, undefined, 'after');
+    else if (alone) mergeTabs(tabId, choice); // the only pane: the whole tab joins the other one
+    else movePane(tabId, paneId, choice, 'merge');
+    focusPane(paneId, { force: true });
+  }
+  async function mergeTabInto() {
+    const choice = await pick('현재 탭을 어느 탭에 합칠까요?', [...otherTabs(), { id: 'cancel', label: '취소' }]);
+    if (choice && choice !== 'cancel') { mergeTabs(refs.activeTab.current, choice); focusPane(refs.focus.current, { force: true }); }
+  }
+  // The focused pane trades places with the next one in layout order (the last with the first).
+  function swapPane() {
+    const tree = activePane(), ids = leaves(tree), at = ids.indexOf(refs.focus.current);
+    if (!tree || ids.length < 2 || at < 0) return;
+    commitPane(swapLeaves(tree, ids[at], ids[(at + 1) % ids.length]));
+    focusPane(ids[at], { force: true });
   }
 
   // ---- workspace / git ----
@@ -1131,10 +1247,17 @@ ${where}`, [
   }
 
   // ---- quick input / commands ----
-  async function openPalette() {
-    const items = refs.commands.current.filter(command => !command.hidden).map(command => ({ id: command.id, label: command.label, icon: command.icon, keys: command.keys && showKeys(command.keys) }));
-    const choice = await pick('명령 팔레트', items);
-    if (choice) await refs.commands.current.find(command => command.id === choice)?.run();
+  // palette.ts: this project's commands and files, and from the shell every project's tabs and chats, the projects and the settings sections.
+  async function openPalette(initial = '') {
+    const commands = refs.commands.current.filter(command => !command.hidden).map((command): PaletteEntry => ({ id: `cmd:${command.id}`, kind: 'command', label: command.label, icon: command.icon!, ...(command.keys ? { keys: showKeys(command.keys) } : {}), run: command.run }));
+    const editable = !readOnly && can('files/read');
+    await runPalette({
+      initial, entries: [...commands, ...(paletteHost?.entries() ?? [])],
+      pick: ({ source, placeholder, initial: typed }) => new Promise<string | null>(resolve => openQuick({ kind: 'pick', title: '명령 팔레트', items: [], source, placeholder, initial: typed, resolve })),
+      files: async () => ((await call<{ files: string[] }>('files/list')).files ?? []).filter(file => !file.endsWith('/')),
+      // Straight into the ADE editor like VS Code's quick open; a window that cannot edit files asks how to open it instead.
+      openFile: path => editable ? openProjectFile(path) : askOpen({ path })
+    });
   }
   // The Git drawer rises from the bottom and lives beside the right panel (errors, feedback, plugins), so both can be open.
   const toggleGit = () => {
@@ -1169,6 +1292,36 @@ ${where}`, [
     const item = launchers.find(entry => entry.id === choice);
     if (item) await launch(item.command, where);
   }
+  const navCommands: Command[] = [
+    { id: 'focusChat', label: '채팅 입력창으로 돌아가기', icon: 'chat', run: focusChat },
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `pane${index + 1}`, label: index === 8 ? '마지막 pane' : `${index + 1}번 pane`, hidden: true, run: () => focusPaneAt(index) })),
+    { id: 'nextEditorTab', label: '편집기의 다음 파일 탭', icon: 'arrowRight', run: () => cycleEditorTab(1), when: editorFocused },
+    { id: 'prevEditorTab', label: '편집기의 이전 파일 탭', icon: 'arrowLeft', run: () => cycleEditorTab(-1), when: editorFocused },
+    { id: 'movePaneTo', label: '포커스된 pane을 다른 탭으로 옮기기…', icon: 'layers', run: movePaneTo },
+    { id: 'mergeTab', label: '현재 탭을 다른 탭에 합치기…', icon: 'merge', run: mergeTabInto },
+    { id: 'swapPane', label: '포커스된 pane을 다음 pane과 맞바꾸기', icon: 'sync', run: swapPane },
+    { id: 'openFile', label: '파일 열기…', icon: 'fileOpen', run: () => openPalette('@') },
+    { id: 'toggleTree', label: '파일 트리 열기/닫기', icon: 'folderOpen', run: () => setTreeOpen(value => !value) },
+    { id: 'errors', label: '오류 패널 열기/닫기', icon: 'error', run: toggleErrors },
+    { id: 'usage', label: '사용 기록 보기', icon: 'chart', run: openUsageReview },
+    { id: 'plugins', label: '플러그인 설정 열기', icon: 'plugin', run: onOpenPlugins },
+    ...headerPlugins.map((plugin): Command => ({ id: `plugin:${plugin.id}`, label: `플러그인 패널: ${plugin.name}`, icon: 'plugin', run: () => togglePlugin(plugin.id!) })),
+  ];
+  // ---- 채팅으로 보내기 (send-to-chat.ts): the key, the palette and the context menus all end here ----
+  const sendRoots = () => { const current = refs.project.current; return { project: current?.root ?? root, repo: (current?.repositories.find(repo => repo.id === refs.repository.current) ?? current?.repositories[0])?.path }; };
+  const sendHost: SendHost = {
+    tabs: () => refs.paneTabs.current, activeTab: () => refs.activeTab.current, focus: () => refs.focus.current, roots: sendRoots,
+    reveal: (tabId, chatId) => { if (refs.activeTab.current !== tabId) selectTab(tabId); setZoom(value => value && value !== chatId ? '' : value); setFocusLeaf(chatId); },
+    // No chat yet: a new one with the first agent that is not hidden, beside the pane the selection came from (the selection stays in view).
+    openChat: () => { setZoom(''); addChatLeaf(refs.focus.current, 'row', undefined, (['claude', 'codex', 'cursor'] as const).find(agent => !hiddenAgents.includes(agent)) ?? 'claude'); return refs.focus.current; }
+  };
+  const sendHostRef = useRef(sendHost); sendHostRef.current = sendHost;
+  useEffect(() => { if (active) setActiveRoots(sendRoots()); }, [active, project, gitRepositoryId]);
+  useEffect(() => {
+    const onSend = (event: Event) => { if (refs.active.current) run(() => sendToChat(sendHostRef.current, (event as CustomEvent<{ get: SendGet }>).detail.get)); };
+    window.addEventListener('ade:send-to-chat', onSend);
+    return () => window.removeEventListener('ade:send-to-chat', onSend);
+  }, []);
   const allCommands: Command[] = [
     { id: 'newTab', label: '새 탭', icon: 'plus', run: () => newTab() },
     ...launchers.filter(item => item.id !== 'shell').flatMap(item => [
@@ -1198,10 +1351,13 @@ ${where}`, [
     { id: 'gitLog', label: 'Git 로그(커밋 그래프) 전환', icon: 'graph', run: toggleGit },
     { id: 'feedback', label: '피드백 요청', icon: 'feedback', run: toggleFeedback },
     { id: 'feedbackCapture', label: '피드백: 화면 캡쳐', icon: 'captureWindow', run: startCapture },
+    { id: 'sendToChat', label: '선택 영역을 채팅으로 보내기', icon: 'send', run: () => sendToChat(sendHostRef.current) },
     { id: 'palette', label: '명령 팔레트', hidden: true, run: openPalette },
     { id: 'palette2', label: '명령 팔레트(F1)', hidden: true, run: openPalette },
     { id: 'branch', label: '브랜치 전환…', icon: 'branch', run: switchBranch },
+    { id: 'chatWorktrees', label: '채팅 worktree 관리…', icon: 'merge', run: () => setWorktreeList(true) },
     { id: 'theme', label: `색 테마 전환 (${nextTheme(settings.theme).label})`, icon: 'palette', run: () => setSettings(previous => ({ ...previous, theme: nextTheme(previous.theme).id })) },
+    ...navCommands,
     ...projectCommands
   ];
   // A hidden agent drops out of the palette too (ids: newClaude, splitCodex, …).
@@ -1212,7 +1368,7 @@ ${where}`, [
       if (!refs.project.current || !refs.active.current || event.isComposing) return;
       if (document.querySelector('.tour, .feedback-capture')) return; // the tutorial's practice keys must not touch real projects; a capture in progress owns the keys
       const inTerminal = event.target instanceof Element && event.target.closest('.xterm');
-      const command = refs.commands.current.find(item => item.keys && matches(item.keys, event));
+      const command = refs.commands.current.find(item => item.keys && matches(item.keys, event) && (!item.when || item.when(event)));
       if (!command) return;
       // A dialog keeps the keys to itself, except the feedback capture, which is how a dialog gets into a screenshot.
       if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
@@ -1292,7 +1448,12 @@ ${where}`, [
   const rightOpen = errorsOpen || feedbackOpen || Boolean(pluginShown);
   const rightPanel = <aside className={`right-panel ${reviewWide ? 'wide' : ''} ${feedbackOpen && !errorsOpen ? 'feedback-side' : ''}`} data-feedback-region={errorsOpen ? '오류 패널' : pluginShown ? `플러그인 ${pluginShown.name}` : '피드백 요청'} aria-label={errorsOpen ? '오류' : pluginShown ? pluginShown.name : '피드백 요청'} style={{ '--review-w': `${settings.reviewWidth}px` } as CSSProperties}>
     <div className="review-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label="오른쪽 패널 너비 조절 (더블클릭: 넓게/기본)" onPointerDown={startReviewResize} onDoubleClick={() => setReviewWide(value => !value)}
-      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); } }} />
+      data-tip={'끌기: 너비 조절\n더블클릭: 넓게/기본 (Enter)\n기본 너비 (Home)'}
+      onKeyDown={event => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setSettings(previous => ({ ...previous, reviewWidth: clampReview(previous.reviewWidth + (event.key === 'ArrowLeft' ? 32 : -32)) })); setReviewWide(false); }
+        else if (event.key === 'Enter') { event.preventDefault(); setReviewWide(value => !value); }
+        else if (event.key === 'Home') { event.preventDefault(); setReviewWide(false); setSettings(previous => ({ ...previous, reviewWidth: defaultSettings.reviewWidth })); }
+      }} />
     {errorsOpen ? <ErrorPanel scope={root} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} />
       : pluginShown ? <PluginPanel key={pluginShown.id} plugin={pluginShown} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onSettings={onOpenPlugins} onClose={() => setPluginOpen('')} />
       : <FeedbackPanel ask={ask} fail={report} wide={reviewWide} toggleWide={() => setReviewWide(value => !value)} onClose={() => setFeedbackOpen(false)} aiContext={feedbackContext} aiModel={settings.feedbackAiModel} aiEffort={settings.feedbackAiEffort} onAiChange={patch => setSettings(previous => ({ ...previous, ...patch }))} />}
@@ -1300,9 +1461,14 @@ ${where}`, [
   const gitDrawer = gitSheet.mounted && <div className={`git-drawer ${settings.gitLogDock ? 'docked' : 'floating'}`} data-closing={gitSheet.closing || undefined} inert={gitSheet.closing || undefined} style={{ '--git-h': `${settings.gitLogHeight}px` } as CSSProperties}>
     <div className="git-resizer" role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Git 패널 높이 조절 (더블클릭: 절반/기본)" onPointerDown={startGitResize}
       onDoubleClick={() => setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 }))}
-      onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); } }} />
+      data-tip={'끌기: 높이 조절\n더블클릭: 절반/기본 (Enter)\n기본 높이 (Home)'}
+      onKeyDown={event => {
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: clampGit(previous.gitLogHeight + (event.key === 'ArrowUp' ? 32 : -32)) })); }
+        else if (event.key === 'Enter') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: previous.gitLogHeight === 380 ? clampGit(window.innerHeight / 2) : 380 })); }
+        else if (event.key === 'Home') { event.preventDefault(); setSettings(previous => ({ ...previous, gitLogHeight: 380 })); }
+      }} />
     <GitLog call={call} settings={settings} setSettings={setSettings} visible={active && gitOpen} ask={ask} fail={report} onClose={() => setGitOpen(false)} onChanged={() => run(refreshGit)}
-      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined}
+      openDiff={openEditorTab} repoKey={`${project.id}:${gitRepositoryId}`} controls={gitControls || undefined} changes={git.changes}
       unavailable={!project.repositories.length ? 'Git 저장소가 없습니다.' : project.multiRepo && !gitRepositoryId ? '위에서 Git 저장소를 선택하세요.' : undefined} />
   </div>;
   const shown = (id: string) => settings.statusItems.includes(id);
@@ -1428,6 +1594,7 @@ ${where}`, [
         openFeedback(item.id); showFeedback();
       }} />}
     {quickDialog}
+    {worktreeList && <WorktreeManager call={call} fail={report} onClose={() => setWorktreeList(false)} onOpenChat={chatId => { const owner = tabOf(chatId); if (owner) { selectTab(owner.id); setFocusLeaf(chatId); } }} />}
   </main>;
 }));
 

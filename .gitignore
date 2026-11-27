@@ -9,7 +9,10 @@ coverage/
 *.log
 .claude-account/
 wakatime.txt
+# Git Bash (msys) crash dumps, left in whatever folder bash.exe crashed in, and manual or editor backups (e.g. apps/web/dist.bak)
 *.stackdump
+*.bak
+*.orig
 scripts/verify/bin/claude.exe
 # verify sessions (scripts/verify/session.mjs): tmp/main and tmp/ade-*
 /tmp/

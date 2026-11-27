@@ -1881,6 +1881,9 @@ dialog.closing[open]::backdrop { animation: fade-out .14s cubic-bezier(.4, 0, 1,
 .chat-diff-count .add { color: var(--add); } .chat-diff-count .del { color: var(--del); }
 .diff-view-choices { display: inline-flex; gap: 2px; flex: none; margin-left: auto; }
 .diff-view-choices button { padding: 2px 8px; border-radius: 5px; color: var(--muted); font-size: 11.5px; }
+/* A new (deleted) file (diff-sides.ts): the empty side shows no removed (added) blank line. */
+:is(.diff-view, .chat-diff-wrap)[data-whole="added"] .monaco-diff-editor .editor.original :is(.line-delete, .gutter-delete, .char-delete, .delete-sign),
+:is(.diff-view, .chat-diff-wrap)[data-whole="removed"] .monaco-diff-editor .editor.modified :is(.line-insert, .gutter-insert, .char-insert, .insert-sign) { visibility: hidden; }
 .diff-view-choices button[aria-pressed=true] { color: var(--fg); background: var(--selected); }
 .diff-view-choices button:disabled { opacity: .5; }
 .chat-approval-diff { margin-top: 6px; }

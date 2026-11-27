@@ -33,7 +33,8 @@ v2는 v1의 모듈을 다시 씁니다(`apps/plugin-api/v2/host.js`). v1을 종�
 - **각자 켜고 끕니다.** 기본은 켜짐입니다. 상세 화면의 **사용** 스위치로 끄면 플러그인 프로세스를 멈추고 에이전트에 주던 도구도 거둡니다.
   확인 창은 없습니다(끄는 것은 더하는 것이 아니고, 켜는 것도 앱에 들어 있는 기능일 뿐입니다). 선택은 `plugins.json`에 저장됩니다.
 - **id는 내장 플러그인이 먼저 갖습니다.** 플러그인 폴더에 같은 id의 플러그인을 넣거나 같은 id의 zip을 설치할 수 없습니다.
-- 에이전트 도구를 **확인 없이 실행**하도록 요청할 수 있습니다(`terminal` 메시지의 `autoApprove`). 설치한 플러그인이 보내면 무시됩니다.
+- 에이전트 도구를 **확인 없이 실행**하도록 요청할 수 있습니다(`terminal` 메시지의 `autoApprove`). 설치한 플러그인이 보내면 무시됩니다. 저장소를 바꾸는 도구(`ASK_MCP_TOOLS`, 지금은 에이전트 버스의 `merge_my_worktree`·`integrate_worktrees`)는 이때도 확인을 묻습니다.
+- 에이전트 버스는 작업공간 계약(v1) 밖의 앱 내부 요청 몇 개(`chat/worktree/*`의 일부, 줄이지 않은 `chat/peers`)를 쓸 수 있습니다. 앱의 일부라서이며, 플러그인 API 계약이 아니고 설치한 플러그인에는 열리지 않습니다(`chat-worktree-routes.js`의 `builtinWorkspaceRequest`).
 
 지금 들어 있는 것: **에이전트 버스**(`agent-bus`) — 채팅의 Claude·Codex·Cursor 에이전트가 서로 메시지를 주고받습니다. [AGENT_BUS.md](AGENT_BUS.md) 참고.
 

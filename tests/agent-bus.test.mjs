@@ -271,7 +271,7 @@ test('the MCP server speaks MCP and forwards tool calls with its chat identity',
   assert.equal(init.result.protocolVersion, '2025-03-26'); assert.equal(init.result.serverInfo.name, 'agent_bus'); assert.ok(init.result.capabilities.tools);
   client.notify('notifications/initialized');
   const list = await client.call('tools/list');
-  assert.deepEqual(list.result.tools.map(tool => tool.name), ['list_peers', 'send_message']);
+  assert.deepEqual(list.result.tools.map(tool => tool.name), ['list_peers', 'send_message', 'worktree_status', 'worktree_diff', 'merge_check', 'merge_my_worktree', 'integrate_worktrees', 'request_peer']);
   assert.equal(list.result.tools[0].annotations.readOnlyHint, true);
   assert.deepEqual(list.result.tools[1].inputSchema.required, ['to', 'message']);
   const peers = await client.call('tools/call', { name: 'list_peers', arguments: {} });
@@ -507,7 +507,8 @@ test('Codex gets the bus with its chat identity and without approval prompts', a
   const { protocol, written } = driven('codex', { 'model/list': { data: [] }, 'skills/list': { data: [] }, 'thread/start': { thread: { id: 't1' }, model: 'm' } });
   await protocol.initialize({ permissionMode: 'default', addDirs: [], sandbox: null, network: false }, 'C:\w', [BUS, PLAIN]);
   const { config } = written.find(message => message.method === 'thread/start').params;
-  assert.deepEqual(config['mcp_servers.agent_bus'], { command: BUS.command, args: BUS.args, env: BUS.env, default_tools_approval_mode: 'approve' });
+  // The tools that change a repository keep asking (Codex: a per-tool approval mode over the server's default).
+  assert.deepEqual(config['mcp_servers.agent_bus'], { command: BUS.command, args: BUS.args, env: BUS.env, default_tools_approval_mode: 'approve', tools: { merge_my_worktree: { approval_mode: 'prompt' }, integrate_worktrees: { approval_mode: 'prompt' } } });
   assert.deepEqual(config['mcp_servers.plain_tools'], { command: PLAIN.command, args: PLAIN.args }, 'another plugin gets neither env nor auto-approval');
 });
 
@@ -522,8 +523,9 @@ test('Cursor gets the bus with its chat identity, and approves only the bus tool
   assert.deepEqual(written.find(message => message.id === 101)?.result, { outcome: { outcome: 'selected', optionId: 'yes' } });
   ask(102, { title: 'rm -rf agent_bus', kind: 'execute', rawInput: {} });
   ask(103, { title: 'plain_tools: run', kind: 'other', rawInput: {} });
-  assert.equal(written.some(message => message.id === 102 || message.id === 103), false, 'shell commands and other servers still ask the user');
-  assert.deepEqual(emitted.filter(event => event.kind === 'approval').map(event => event.requestId), ['102', '103']);
+  ask(104, { title: 'agent_bus: merge_my_worktree', kind: 'other', rawInput: {} });
+  assert.equal(written.some(message => message.id === 102 || message.id === 103 || message.id === 104), false, 'shell commands, other servers and the bus tools that change a repository still ask the user');
+  assert.deepEqual(emitted.filter(event => event.kind === 'approval').map(event => event.requestId), ['102', '103', '104']);
 });
 
 test('Cursor starts a server with a disabled tool through the stdio filter', async () => {

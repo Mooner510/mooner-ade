@@ -5,6 +5,8 @@ import { APP_THEMES, isThemeId, themeById, type ThemeId } from './themes';
 import { defaultUsageMeters, usageMetersOf, type UsageStyle } from './usage-meters';
 import type { FileBuffer } from './file-buffer';
 import { TIPS_VERSION } from './tips';
+import { wireDiffEditor, wireFileEditor, type DiffSend } from './send-to-chat-monaco';
+import { diffSides } from './diff-sides';
 
 // An MCP tool (`tool` set) or a whole MCP server the user trusts for good, per provider: the approval card adds them, the provider's settings remove them.
 export type McpTrust = { server: string; tool?: string };
@@ -29,6 +31,8 @@ export type Settings = {
   tips: boolean; hintsSeen: string[];
   // tmux key guide: shown as soon as the prefix key (Ctrl+<tmuxPrefix>) is pressed. "auto" needs a tmux status line on screen.
   tmuxGuide: 'auto' | 'always' | 'off'; tmuxPrefix: string;
+  // attentionBadge: the window title, the Windows taskbar (flash, dot) and the macOS Dock show how many tabs need you (window-attention.ts).
+  attentionBadge: boolean;
   // Customization. accentColor '' keeps the theme's own accent. The rest map onto xterm / Monaco options of the same meaning.
   accentColor: string; terminalFontWeight: number; rightClickPaste: boolean; optionAsMeta: boolean; confirmClose: boolean;
   letterSpacing: number; scrollSensitivity: number; minimumContrast: number; wordSeparator: string; boldBright: boolean; terminalGpu: boolean;
@@ -42,6 +46,8 @@ export type Settings = {
   // Chat tab behaviour and looks. chatDefaultPermission/chatDefaultEffort apply to a chat when it is first created ('cli' permission and 'auto' effort = the CLI's own settings, like a plain `claude`).
   chatSendKey: 'enter' | 'mod-enter'; chatToolsOpen: boolean; chatToolDisplay: 'summary' | 'detail'; chatThinkingOpen: 'live' | 'always' | 'never'; chatAutoScroll: boolean; chatSmoothStream: boolean;
   chatFileChipLabel: 'path' | 'name';
+  // Pasting text last copied in ADE's editor or file tree into a chat inserts a file reference instead (설정 › 채팅 › 입력).
+  chatPasteRefs: boolean;
   chatFontSize: number; chatWidth: 'narrow' | 'default' | 'wide' | 'full'; chatComposerMax: number; chatModelPins: Partial<Record<'claude' | 'codex' | 'cursor', string[]>>; chatDefaultPermission: 'cli' | 'default' | 'acceptEdits' | 'plan' | 'auto'; chatPermissionAutoSet: boolean; chatDefaultEffort: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   // App-wide look: uiZoom in percent, diffFont '' = same as the terminal font, sidebarCompact = the icon-only rail.
   uiZoom: number; diffFont: string; sidebarCompact: boolean; animateInBackground: boolean;
@@ -148,6 +154,7 @@ export const defaultSettings: Settings = {
   sidebarWidth: 252, statusItems: [...statusItemIds], statusLeft: defaultLeft, statusRight: defaultRight, usageColors: true, usageStyle: 'bar', usageShown: { claude: [...defaultUsageMeters.claude], codex: [...defaultUsageMeters.codex], cursor: [...defaultUsageMeters.cursor] }, notifyDone: true, notifyApproval: true, notifySound: true, soundDone: 'marimba', soundAttention: 'alert', soundVolume: 60, soundVolumeExtended: false, diffRefresh: 3, wakatime: false, wakatimeBackground: true, terminalShell: '', claudeSession: true,
   agentsOff: [], agentsMuted: [], claudeArgs: '', codexArgs: '', cursorArgs: '', notifyLooking: false, cacheTimer: true, cacheWarn: 20, cacheSendWarn: true, cacheSendWarnMinutes: 10, followUpQueue: true, interactiveUi: true, artifactAlways: false, usageRefresh: 120, idleCompact: false, idleCompactMinK: 200, chatKeys: {}, appKeys: {}, termKeys: {}, defaultMode: 'chat', chatTipPending: true, tips: true, hintsSeen: [],
   tmuxGuide: 'auto', tmuxPrefix: 'b',
+  attentionBadge: true,
   accentColor: '', terminalFontWeight: 400, rightClickPaste: false, optionAsMeta: false, confirmClose: true,
   letterSpacing: 0, scrollSensitivity: 1, minimumContrast: 1, wordSeparator: defaultWordSeparator, boldBright: true, terminalGpu: true,
   diffLayout: 'auto', diffIgnoreWhitespace: false, diffFoldUnchanged: true, diffContextLines: 3,
@@ -155,6 +162,7 @@ export const defaultSettings: Settings = {
   chatStatusItems: ['tokens', 'cost', 'share'], chatStatusLeft: chatDefaultLeft, chatStatusRight: chatDefaultRight, chatStatusSeparator: '',
   chatSendKey: 'enter', chatToolsOpen: false, chatToolDisplay: 'summary', chatThinkingOpen: 'live', chatAutoScroll: true, chatSmoothStream: true,
   chatFileChipLabel: 'path',
+  chatPasteRefs: true,
   chatFontSize: 13, chatWidth: 'default', chatComposerMax: 220, chatModelPins: {}, chatDefaultPermission: 'auto', chatPermissionAutoSet: true, chatDefaultEffort: 'auto',
   uiZoom: 100, diffFont: '', sidebarCompact: false, animateInBackground: false,
   terminalBell: 'off', diffComputeMs: 2000, confirmCloseChat: true, confirmCloseProject: true, treeGitColors: true,
@@ -284,6 +292,7 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
       if (now.visible && !now.state.conflict && document.activeElement?.closest('.project-tree')) editor.focus();
       if (now.visible && now.focused) revealFileLocation(editor, buffer);
       cleanup = () => { live.current = null; change.dispose(); editor.dispose(); model.dispose(); };
+      const unwire = wireFileEditor(editor, host.current, buffer.path), close = cleanup; cleanup = () => { unwire(); close(); }; // 채팅으로 보내기
     });
     return () => { disposed = true; cleanup(); };
   }, [buffer, loaded]);
@@ -321,15 +330,20 @@ export function FileEditor({ buffer, settings, visible, focused, watch }: {
   </>;
 }
 
-export function DiffView({ original, modified, path, settings, onLayoutChange, header, compact = false, minHeight = 60, onHeight }: {
+export function DiffView({ original, modified, path, settings, onLayoutChange, header, compact = false, minHeight = 60, onHeight, send }: {
   original: string; modified: string; path: string; settings: Settings; onLayoutChange(layout: DiffLayoutChoice): void;
+  /** Where the diff came from, for 채팅으로 보내기 (no `send`: the view offers nothing). */
+  send?: DiffSend;
   header?: ReactNode; compact?: boolean; minHeight?: number; onHeight?(height: number): void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(true);
   const sideBySide = !narrow && (settings.diffLayout === 'split' || (settings.diffLayout === 'auto' && !compact));
   const live = useRef<{ monaco: typeof Monaco; diff: Monaco.editor.IStandaloneDiffEditor; a: Monaco.editor.ITextModel; b: Monaco.editor.ITextModel } | null>(null);
-  const latest = useRef({ original, modified, settings, sideBySide, onHeight }); latest.current = { original, modified, settings, sideBySide, onHeight };
+  // A new (or deleted) file: only its lines, without Monaco's removed (added) blank line for the empty side (diff-sides.ts).
+  const sides = diffSides(original, modified);
+  const latest = useRef({ sides, settings, sideBySide, onHeight }); latest.current = { sides, settings, sideBySide, onHeight };
+  const sendRef = useRef(send); sendRef.current = send;
   useEffect(() => {
     const box = host.current!;
     const measure = () => setNarrow(box.clientWidth <= 760);
@@ -346,12 +360,12 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       monaco.editor.setTheme(themeName(now.theme));
       // Not in the chat's compact diff: it sits in a size-contained .chat-pane, which would become the containing block of the fixed widgets.
       const diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true, readOnly: true, originalEditable: false, fixedOverflowWidgets: !compact, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false,
+        automaticLayout: true, readOnly: true, originalEditable: false, fixedOverflowWidgets: !compact, renderSideBySide: latest.current.sideBySide, useInlineViewWhenSpaceIsLimited: false, experimental: { useTrueInlineView: latest.current.sides.whole === 'added' },
         ignoreTrimWhitespace: now.diffIgnoreWhitespace, maxComputationTime: now.diffComputeMs, scrollBeyondLastLine: false, fontSize: now.fontSize, wordWrap: now.wordWrap ? 'on' : 'off', fontFamily: diffFontFamily(now),
         ...(compact ? { hideUnchangedRegions: { enabled: now.diffFoldUnchanged, contextLineCount: now.diffContextLines, minimumLineCount: 4 }, minimap: { enabled: false }, renderOverviewRuler: false, overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true, folding: false, glyphMargin: false, lineDecorationsWidth: 8, scrollbar: { alwaysConsumeMouseWheel: false, vertical: 'hidden' as const } } : {})
       });
       const uri = (side: string) => monaco.Uri.from({ scheme: 'diff', path: `/${side}/${path}`, query: String(Math.random()) });
-      const a = monaco.editor.createModel(latest.current.original, undefined, uri('a')), b = monaco.editor.createModel(latest.current.modified, undefined, uri('b'));
+      const a = monaco.editor.createModel(latest.current.sides.original, undefined, uri('a')), b = monaco.editor.createModel(latest.current.sides.modified, undefined, uri('b'));
       diff.setModel({ original: a, modified: b });
       live.current = { monaco, diff, a, b };
       const sized = compact ? diff.getModifiedEditor().onDidContentSizeChange(event => {
@@ -371,20 +385,22 @@ export function DiffView({ original, modified, path, settings, onLayoutChange, h
       };
       box.addEventListener('pointerdown', onDown, true); box.addEventListener('pointerup', onUp, true);
       cleanup = () => { live.current = null; box.removeEventListener('pointerdown', onDown, true); box.removeEventListener('pointerup', onUp, true); sized?.dispose(); diff.dispose(); a.dispose(); b.dispose(); };
+      const unwire = wireDiffEditor(diff, box, () => sendRef.current), close = cleanup; cleanup = () => { unwire(); close(); }; // 채팅으로 보내기
     });
     return () => { disposed = true; cleanup(); };
   }, [path, compact, minHeight, settings.diffFoldUnchanged, settings.diffContextLines]);
   useEffect(() => {
     const editor = live.current; if (!editor) return;
-    if (editor.a.getValue() !== original) editor.a.setValue(original);
-    if (editor.b.getValue() !== modified) editor.b.setValue(modified);
-  }, [original, modified]);
+    editor.diff.updateOptions({ experimental: { useTrueInlineView: sides.whole === 'added' } });
+    if (editor.a.getValue() !== sides.original) editor.a.setValue(sides.original);
+    if (editor.b.getValue() !== sides.modified) editor.b.setValue(sides.modified);
+  }, [sides.original, sides.modified, sides.whole]);
   useEffect(() => {
     const editor = live.current; if (!editor) return;
     editor.monaco.editor.setTheme(themeName(settings.theme));
     editor.diff.updateOptions({ fontSize: settings.fontSize, wordWrap: settings.wordWrap ? 'on' : 'off', renderSideBySide: sideBySide, ignoreTrimWhitespace: settings.diffIgnoreWhitespace, maxComputationTime: settings.diffComputeMs, fontFamily: diffFontFamily(settings) });
   }, [settings.theme, settings.fontSize, settings.wordWrap, sideBySide, settings.diffIgnoreWhitespace, settings.diffComputeMs, settings.diffFont, settings.terminalFont]);
-  return <div className={compact ? 'chat-diff-wrap' : 'diff-view'}>
+  return <div className={compact ? 'chat-diff-wrap' : 'diff-view'} data-whole={sides.whole ?? undefined}>
     <div className="diff-view-bar">
       {header}
       <span className="diff-view-choices" role="group" aria-label="diff 보기 방식">

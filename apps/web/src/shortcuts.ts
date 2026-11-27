@@ -25,6 +25,11 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   // Ids are camelCase like the rest: the server's appKeys validation only accepts [a-zA-Z][a-zA-Z0-9]*.
   { id: 'feedback', group: '화면/도구', label: '피드백 요청', keys: 'mod+alt+f' },
   { id: 'feedbackCapture', group: '화면/도구', label: '피드백 화면 캡쳐', keys: 'mod+alt+shift+f' },
+  // Cursor's "add selection to chat" key. Takes Monaco's Ctrl+Shift+L (select all occurrences; Ctrl+F2 still does it) and, in a terminal, the
+  // same ^L as Ctrl+L (left to the shell); nothing else in the app, Windows or macOS uses it.
+  { id: 'sendToChat', group: '화면/도구', label: '선택 영역을 채팅으로 보내기', keys: 'mod+shift+l' },
+  // No default key: the palette's "채팅 worktree 관리…"; a key can be set in Settings.
+  { id: 'chatWorktrees', group: '화면/도구', label: '채팅 worktree 관리', keys: '' },
   { id: 'addProject', group: '프로젝트', label: '프로젝트 열기…', keys: 'mod+alt+o' },
   { id: 'toggleProjects', group: '화면/도구', label: '프로젝트 사이드바 접기/펼치기', keys: 'mod+alt+b' },
   { id: 'settings', group: '화면/도구', label: '설정 열기', keys: 'mod+,' },
@@ -36,7 +41,43 @@ export const appKeyDefs: { id: string; group: string; label: string; keys: strin
   // The ninth key goes to the last tab/project (like browsers), whatever the count; the id stays `tab9`/`project9` so saved overrides keep working.
   ...Array.from({ length: 9 }, (_, i) => ({ id: `tab${i + 1}`, group: '탭', label: i === 8 ? '마지막 탭으로 이동' : `${i + 1}번 탭으로 이동`, keys: `alt+${i + 1}` })),
   ...Array.from({ length: 9 }, (_, i) => ({ id: `project${i + 1}`, group: '프로젝트', label: i === 8 ? '마지막 프로젝트로 이동' : `${i + 1}번 프로젝트로 이동`, keys: `mod+alt+${i + 1}` })),
+  ...workspaceKeyDefs(),
 ];
+// Moving around without the mouse (docs/LOCAL_IDE.md, 단축키). Alt+0 sits next to the Alt+1…9 tab keys, Alt+Shift+1…9 next to the Alt+Shift+]/[ pane keys,
+// mod+Alt+./, next to the mod+Alt+]/[ project keys (they cross projects). Ctrl+Tab only acts while an editor group has the focus (Workspace `when`).
+// keys: '' = no default: the command is in the palette and the user can give it a key in Settings › 단축키.
+function workspaceKeyDefs(): { id: string; group: string; label: string; keys: string; term?: boolean }[] {
+  const none = (id: string, group: string, label: string) => ({ id, group, label, keys: '' });
+  return [
+    { id: 'focusChat', group: '이동', label: '채팅 입력창으로 돌아가기', keys: 'mod+alt+c' },
+    { id: 'focusSidebar', group: '이동', label: '사이드바의 현재 탭으로 이동', keys: 'alt+0' },
+    { id: 'nextAttention', group: '이동', label: '다음 확인 필요 탭/pane', keys: 'mod+alt+.' },
+    { id: 'prevAttention', group: '이동', label: '이전 확인 필요 탭/pane', keys: 'mod+alt+,' },
+    ...Array.from({ length: 9 }, (_, i) => ({ id: `pane${i + 1}`, group: '이동', label: i === 8 ? '이 탭의 마지막 pane으로 이동' : `이 탭의 ${i + 1}번 pane으로 이동`, keys: `alt+shift+${i + 1}` })),
+    { id: 'nextEditorTab', group: '이동', label: '편집기의 다음 파일 탭', keys: 'ctrl+tab' },
+    { id: 'prevEditorTab', group: '이동', label: '편집기의 이전 파일 탭', keys: 'ctrl+shift+tab' },
+    { id: 'keyGuide', group: '화면/도구', label: '단축키 한눈에 보기', keys: 'mod+/' },
+    none('openFile', '화면/도구', '파일 열기…'),
+    none('toggleTree', '화면/도구', '파일 트리 열기/닫기'),
+    none('errors', '화면/도구', '오류 패널 열기/닫기'),
+    none('usage', '화면/도구', '사용 기록 보기'),
+    none('changelog', '화면/도구', '변경 내역 보기'),
+    none('plugins', '화면/도구', '플러그인 설정 열기'),
+    none('theme', '화면/도구', '색 테마 전환'),
+    none('tutorial', '화면/도구', '둘러보기 다시 보기'),
+    none('branch', '화면/도구', '브랜치 전환…'),
+    none('renameTab', '탭', '탭 이름 바꾸기…'),
+    none('moveTabUp', '탭', '탭을 위로 이동'),
+    none('moveTabDown', '탭', '탭을 아래로 이동'),
+    none('mergeTab', '탭', '현재 탭을 다른 탭에 합치기…'),
+    ...['claude', 'codex', 'cursor'].flatMap(agent => [none(`new${agent}`, '탭', `새 탭에서 ${agent[0].toUpperCase()}${agent.slice(1)} 실행`), none(`split${agent}`, '분할/Pane', `오른쪽 pane에서 ${agent[0].toUpperCase()}${agent.slice(1)} 실행`)]),
+    none('detachPane', '분할/Pane', '포커스된 pane을 새 탭으로 분리'),
+    none('movePaneTo', '분할/Pane', '포커스된 pane을 다른 탭으로 옮기기…'),
+    none('swapPane', '분할/Pane', '포커스된 pane을 다음 pane과 맞바꾸기'),
+    none('preset', '분할/Pane', '현재 탭을 터미널 2 × 3 그리드로'),
+    none('equalize', '분할/Pane', 'Pane 크기 균등화'),
+  ];
+}
 // Does this key belong to ADE (true) or the shell (false) while a terminal has focus? An explicit termKeys choice wins; otherwise only
 // plain Ctrl+key is left to the shell, unless the key is a default that must work there or the user rebound it themselves.
 export function appKeyInTerminal(settings: { appKeys?: Record<string, string>; termKeys?: Record<string, boolean> } | undefined, id: string, event: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
@@ -81,5 +122,6 @@ export function combosOverlap(a: string, b: string): boolean {
 }
 export function showAppKey(overrides: Record<string, string> | undefined, id: string): string {
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  if (!appKey(overrides, id)) return ''; // a command with no key (no default, none chosen)
   return showCombo(normalizeCombo(appKey(overrides, id) ?? '').replace('mod+', mac ? 'meta+' : 'ctrl+'));
 }

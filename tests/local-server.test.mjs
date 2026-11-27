@@ -394,7 +394,8 @@ test('git: status, log, commit diffs, operations, branches, checkout', async t =
   assert.deepEqual((await call('git/log', { signature: log.signature })).unchanged, true);
   const working = await call('git/commit-file', { working: true, parent: log.head.sha, path: 'a.txt' });
   assert.equal(working.original, 'hello world\nHello again\n'); assert.equal(working.modified, 'changed\n');
-  assert.deepEqual((await call('git/compare', { from: log.head.sha })).files, [{ status: 'M', path: 'a.txt' }]);
+  // Against the working tree, a file git does not track yet is an added file too.
+  assert.deepEqual((await call('git/compare', { from: log.head.sha })).files, [{ status: 'M', path: 'a.txt' }, { status: 'A', path: 'new.txt', untracked: true }]);
   assert.deepEqual((await call('git/commit-details', { sha: log.head.sha })).files.map(file => file.path).sort(), ['a.txt', 'src/b.ts']);
   assert.match((await call('git/patch', { shas: [log.head.sha] })).patch, /Subject: \[PATCH\] files/);
   await call('git/op', { op: 'branch-create', name: 'topic', from: log.head.sha, checkout: false });

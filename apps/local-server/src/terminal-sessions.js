@@ -70,6 +70,11 @@ const terminalMcpServers = () => agentMcpServers.filter(server => !server.chatOn
 export const chatMcpServers = (context = {}) => agentMcpServers.map(server => server.chatOnly
   ? { ...server, env: { ADE_CHAT_ID: String(context.chatId ?? ''), ADE_PROJECT_ID: String(context.projectId ?? ''), ADE_CHAT_AGENT: String(context.agent ?? '') } } : server);
 // Servers whose tools may run without a permission prompt. Only built-in plugins can ask for it (see pluginTerminal).
+// Tools of a built-in server that change a repository (the agent bus' worktree merges): never approved automatically, even when the server's
+// other tools are. Claude gets them as `ask` rules (they beat its `allow`), Codex as a per-tool approval mode, Cursor by the request title.
+export const ASK_MCP_TOOLS = Object.freeze({ agent_bus: Object.freeze(['merge_my_worktree', 'integrate_worktrees']) });
+export const askMcpTools = server => server?.autoApprove ? ASK_MCP_TOOLS[server.name] ?? [] : [];
+export const askMcpTitle = title => typeof title === 'string' && Object.values(ASK_MCP_TOOLS).flat().some(tool => title.includes(tool));
 export const autoApprovedMcpServers = () => agentMcpServers.filter(server => server.autoApprove).map(server => server.name);
 // `disabledTools` are the server's tools the user turned off in the plugin settings: Claude gets them as deny rules, Codex as disabled_tools.
 export function setAgentMcpServers(servers) {

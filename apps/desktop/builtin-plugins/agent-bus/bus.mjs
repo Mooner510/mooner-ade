@@ -46,7 +46,7 @@ export function createBus({ api, settings = DEFAULTS, now = Date.now, onChange =
   const counts = { delivered: 0, failed: 0, rejected: 0 };
   let timer = null, pumping = false;
 
-  const describe = peer => ({ id: peer.id, ...(peer.sessionId && { sessionId: peer.sessionId }), title: peer.title || '', agent: peer.agent, status: peer.status, ...(config.scope === 'all' && { project: peer.project }), cwd: peer.cwd });
+  const describe = peer => ({ id: peer.id, ...(peer.sessionId && { sessionId: peer.sessionId }), title: peer.title || '', agent: peer.agent, status: peer.status, ...(config.scope === 'all' && { project: peer.project }), cwd: peer.cwd, ...(peer.worktree && { worktree: peer.worktree }) });
   const record = (from, to, status, extra = {}) => {
     const entry = { at: now(), from: { id: from.id, agent: from.agent, title: from.title ?? '' }, to: to ? { id: to.id, agent: to.agent, title: to.title ?? '' } : null, status, ...extra };
     history.push(entry); if (history.length > HISTORY) history.shift();
@@ -144,6 +144,71 @@ export function createBus({ api, settings = DEFAULTS, now = Date.now, onChange =
     return { results };
   }
 
+  // ---- parallel work in git worktrees (docs/AGENT_BUS.md "worktree"): read anyone's, change only your own ----
+  // A chat named by the same tokens send_message takes; none (or "me") is the calling chat itself.
+  async function chatFor(self, token) {
+    const { me, others } = await roster(self);
+    const wanted = oneLine(token, 200);
+    return { me, target: !wanted || wanted === 'me' || wanted === 'self' ? me : find(wanted, others) };
+  }
+  const who = chat => ({ id: chat.id, agent: chat.agent, title: chat.title || '' });
+  async function worktreeStatus(self, { chat } = {}) {
+    checkSelf(self);
+    const { target } = await chatFor(self, chat);
+    const { info, preview } = await api('chat/worktree/status', { projectId: target.projectId, id: target.id, detail: true });
+    if (!info) return { chat: who(target), worktree: null, note: 'This chat works in its folder directly, not in a git worktree.' };
+    const status = preview?.status ?? info.status ?? {};
+    return { chat: who(target), worktree: { branch: info.branch, path: info.path, origin: info.origin, originBranch: status.originBranch ?? '', inside: info.inside, madeBy: info.managed ? 'ADE' : 'the agent' },
+      ahead: status.ahead ?? 0, behind: status.behind ?? 0, merged: status.merged === true, uncommitted: (status.files ?? []).slice(0, 50).map(file => `${file.status} ${file.path}`), conflictsInWorktree: status.conflicted ?? [],
+      commits: (preview?.commits ?? []).map(commit => `${commit.short} ${commit.subject}`), changedFiles: (preview?.changes ?? []).slice(0, 80).map(change => `${change.path} +${change.added} -${change.deleted}`),
+      conflictsWithOrigin: preview?.conflicts ?? [], originUncommitted: status.originDirty ?? 0 };
+  }
+  async function worktreeDiff(self, { chat, file } = {}) {
+    checkSelf(self);
+    const { target } = await chatFor(self, chat);
+    const diff = await api('chat/worktree/diff', { projectId: target.projectId, id: target.id, ...(typeof file === 'string' && file && { file }) });
+    return { chat: who(target), base: diff.base, untracked: diff.untracked, diff: diff.text };
+  }
+  async function mergeCheck(self, { chats } = {}) {
+    checkSelf(self);
+    const { me, others } = await roster(self);
+    const ids = Array.isArray(chats) && chats.length ? chats.slice(0, 16).map(token => (oneLine(token, 200) === 'me' ? me : find(oneLine(token, 200), others)).id) : undefined;
+    return api('chat/worktree/check', { projectId: self.projectId, ...(ids && { ids }) });
+  }
+  async function mergeMine(self, { commitMessage } = {}) {
+    checkSelf(self);
+    const { me } = await roster(self);
+    const result = await api('chat/worktree/merge', { projectId: self.projectId, id: self.chatId, by: 'agent', ...(typeof commitMessage === 'string' && commitMessage.trim() && { message: commitMessage.trim().slice(0, 4000) }) });
+    record(me, null, result.merged ? 'merged' : 'blocked', { ...(result.merged && { preview: `${result.into} <- ${result.info?.branch ?? ''}`.slice(0, 120) }), ...(result.blocked && { reason: oneLine(result.blocked.code, 40) }) });
+    return { merged: result.merged, ...(result.merged && { into: result.into, fastForward: result.fastForward, commits: result.commits, commit: result.commit }), ...(result.reason && { reason: result.reason }), ...(result.blocked && { blocked: result.blocked }),
+      ...(result.blocked?.code === 'MERGE_CONFLICT' && { next: 'Merge the origin branch into your own worktree (git merge <origin branch>; no rebase, no squash), resolve the conflicts, commit, then call merge_my_worktree again.' }) };
+  }
+  async function integrate(self, { from } = {}) {
+    checkSelf(self);
+    const { me, others } = await roster(self);
+    const list = (Array.isArray(from) ? from : [from]).map(item => oneLine(item, 200)).filter(Boolean);
+    if (!list.length || list.length > 8) throw new BusError('"from" needs 1 to 8 chats (ids or titles from list_peers).', 'INVALID_INPUT');
+    const targets = list.map(token => find(token, others));
+    if (targets.some(target => target.projectId !== self.projectId)) throw new BusError('Only chats of your own project can be integrated.', 'INVALID_INPUT');
+    const result = await api('chat/worktree/integrate', { projectId: self.projectId, id: self.chatId, from: targets.map(target => target.id), by: 'agent' });
+    record(me, targets[0], 'integrated', { preview: result.done.map(item => item.branch).join(', ').slice(0, 120), ...(result.stopped && { reason: 'conflict' }) });
+    return { ...result, info: undefined, ...(result.stopped && { next: `Resolve the conflicts in your worktree (${result.stopped.conflicts.join(', ') || 'see git status'}), commit the merge, then call integrate_worktrees again for the branches left, or merge_my_worktree.` }) };
+  }
+  // A standard request to another chat about its worktree. It is an ordinary bus message (same limits, same "ADE verified" lines); the other agent decides.
+  const REQUESTS = {
+    commit: 'Please commit the work in your git worktree now (one clear commit message), then reply with the commit.',
+    merge: 'When your work is ready, please merge your git worktree into its origin with the agent_bus tool merge_my_worktree (never squash or rebase), then reply with the result.',
+    pause: 'Please stop changing files after your current step and reply when you are idle: another chat is integrating the worktrees.',
+    sync: 'The origin branch moved. Please merge it into your git worktree (git merge <origin branch>; no rebase, no squash), resolve any conflicts, commit, and reply.'
+  };
+  async function requestPeer(self, { to, request, note } = {}) {
+    if (!Object.hasOwn(REQUESTS, request)) throw new BusError(`"request" must be one of: ${Object.keys(REQUESTS).join(', ')}.`, 'INVALID_INPUT');
+    const extra = typeof note === 'string' && note.trim() ? `
+
+${note.trim()}` : '';
+    return send(self, { to, message: `[worktree request: ${request}] ${REQUESTS[request]}${extra}` });
+  }
+
   // Messages for busy chats go out, merged into one turn per chat, as soon as the chat is idle.
   async function pump() {
     if (pumping || !queue.size) return;
@@ -173,7 +238,7 @@ export function createBus({ api, settings = DEFAULTS, now = Date.now, onChange =
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
   return {
-    peers, send, pump, stop,
+    peers, send, pump, stop, worktreeStatus, worktreeDiff, mergeCheck, mergeMine, integrate, requestPeer,
     setSettings(next) { config = cleanSettings(next); },
     get settings() { return config; },
     clearLog() { history.length = 0; onChange(); },

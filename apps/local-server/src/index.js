@@ -44,6 +44,7 @@ import { readClaudeCache, transcriptOf } from './claude-cache.js';
 import { UI_FRAME_CSP, UI_FRAME_HTML } from './ui-frame.js';
 import { createRemoteUi, listFolders } from './remote-ui.js';
 import { chatLaunchFiles } from './chat-launch-files.js';
+import { builtinWorkspaceRequest, chatWorktreeRoute, peerWorktree } from './chat-worktree-routes.js';
 import { createChatTextStore } from './chat-text.js';
 import { MAX_CHAT_IMAGES, MAX_CHAT_SEND_BODY, MAX_IMAGE_BASE64, MAX_PREVIEW_CHARS } from './image-limit.js';
 import { signatureGuard } from './agent-signature.js';
@@ -974,6 +975,7 @@ async function route(action, input, project) {
   if (action === 'agent/update') return cliUpdater(input.agent).update();
   if (action === 'readiness') return cachedReadiness(project?.root || os.homedir(), input.force === true);
   if (!project) throw fault('NOT_FOUND', '프로젝트를 먼저 여세요.', 404);
+  if (action.startsWith('chat/worktree/')) return chatWorktreeRoute(action, input, project);
   const repo = action.startsWith('git/') ? selectedRepository(project, input) : null;
   const runtime = repo ? (action === 'git/worktree-setting' || action === 'git/worktree/integrate' ? repo.sourceRuntime : repositoryRuntime(project, repo)) : project.runtime;
   const workspace = runtime.workspace;
@@ -1236,8 +1238,18 @@ async function route(action, input, project) {
     case 'chat/rewind': {
       const chat = project.chats.get(input.id);
       if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다.', 404);
-      await chat.rewind(input.uuid);
-      return {};
+      const files = await chat.rewind(input.uuid, { files: input.files === true });
+      return files ? { files } : {};
+    }
+    // Turn snapshots (chat-snapshots.js): Rewind's file preview, undoing a file restore, and one file of a turn's change card for the diff tab.
+    case 'chat/rewind-preview': case 'chat/rewind-undo': case 'chat/turn-file': {
+      const chat = project.chats.get(input.id);
+      if (!chat) throw fault('NOT_FOUND', '채팅을 찾을 수 없습니다. 채팅 탭을 연 뒤 다시 시도하세요.', 404);
+      if (action === 'chat/rewind-preview') return chat.rewindPreview(input.uuid);
+      if (action === 'chat/rewind-undo') return chat.undoFileRewind(input.seq, { preview: input.preview === true });
+      const hash = value => typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value) ? value : null;
+      if (!hash(input.to) || (input.from != null && !hash(input.from))) throw fault('INVALID_INPUT', '스냅샷이 올바르지 않습니다.');
+      return chat.turnFile({ from: input.from ?? null, to: input.to, path: input.path, original: input.original });
     }
     // /btw works whatever the chat is doing: no idle check, the question runs in its own process.
     case 'chat/btw': {
@@ -1758,7 +1770,9 @@ async function projectWorktree(project, requested) {
 async function pluginApi(client, action, input) {
   const { plugin, workspaceContract } = client;
   if (typeof action !== 'string' || !input || typeof input !== 'object' || Array.isArray(input)) throw fault('INVALID_INPUT', '잘못된 요청입니다.');
-  const request = workspaceContract.request(action, input);
+  // The built-in agent bus also reaches the chat worktree routes (app-internal, see chat-worktree-routes.js); answered in full, not in the contract's shape.
+  const internal = builtinWorkspaceRequest(plugin, action, input);
+  const request = internal ?? workspaceContract.request(action, input);
   if (!request) throw fault('NOT_FOUND', '이 플러그인 API 버전에서는 지원하지 않는 작업입니다.', 404);
   const max = workspaceContract.limits.terminals;
   if (action === 'terminal/open' && pluginTerminals(plugin) >= max) throw fault('TERMINAL_LIMIT', `플러그인은 터미널을 최대 ${max}개까지 열 수 있습니다.`);
@@ -1767,6 +1781,7 @@ async function pluginApi(client, action, input) {
     const terminal = projects.get(input.projectId)?.terminals.get(value.id);
     if (terminal) terminal.openedBy = plugin;
   }
+  if (internal) return action === 'chat/peers' && Array.isArray(value) ? value.map(peer => ({ ...peer, worktree: peerWorktree(projects.get(peer.projectId)?.chats.get(peer.id)) })) : value;
   return workspaceContract.result(action, value);
 }
 function pluginWorkspace(message) {

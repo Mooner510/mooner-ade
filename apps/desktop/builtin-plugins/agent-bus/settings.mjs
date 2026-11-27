@@ -53,7 +53,7 @@ export function fieldsFor(settings) {
     field('cursor', 'switch', settings),
     field('delivery', 'select', settings, { options: [{ value: 'steer', label: '작업 중이면 바로 끼워 넣기' }, { value: 'idle', label: '응답이 끝난 뒤에만' }], hint: 'Cursor는 작업 중 끼워 넣기를 지원하지 않아 응답이 끝난 뒤 전달합니다. 못 받은 메시지는 아래 보관 시간 동안 대기합니다.' }),
     field('broadcast', 'switch', settings, { hint: 'to에 "all"을 쓰면 보내는 채팅을 뺀 모든 참여 채팅에 한 번에 전달합니다.' }),
-    field('autoApprove', 'switch', settings, { hint: '켜면 send_message와 list_peers가 권한 확인 없이 실행됩니다. 바꾼 값은 새로 시작하는 채팅부터 적용됩니다.' }),
+    field('autoApprove', 'switch', settings, { hint: '켜면 메시지·조회 도구(list_peers, send_message, request_peer, worktree_status 등)가 권한 확인 없이 실행됩니다. 저장소를 바꾸는 merge_my_worktree와 integrate_worktrees는 켜도 항상 확인합니다. 바꾼 값은 새로 시작하는 채팅부터 적용됩니다.' }),
     field('maxLength', 'number', settings, { hint: '이보다 긴 메시지는 거부합니다. 긴 내용은 파일에 쓰고 경로를 보내게 하세요.' }),
     field('queueSeconds', 'number', settings, { hint: '받는 채팅이 바빠서 대기 중인 메시지를 이 시간까지 기다렸다가, 못 보내면 버립니다.' }),
     field('logContent', 'switch', settings, { hint: '꺼져 있으면 최근 기록에 누가 누구에게 보냈는지만 남기고 내용은 남기지 않습니다.' })
