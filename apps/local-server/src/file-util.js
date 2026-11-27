@@ -18,6 +18,15 @@ export async function writeIfChanged(file, content, mode = 0o600) {
   return true;
 }
 
+// On Windows a rename onto a file another process has open at that moment (antivirus scanning it, the indexer, our own list reading it)
+// fails with EPERM/EBUSY/EACCES for a few milliseconds. It is tried again with a growing pause (about 2 s in all) before the error is given up.
+export async function renameRetry(from, to, { rename = fs.rename, wait = ms => new Promise(resolve => setTimeout(resolve, ms)), attempts = 20 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await rename(from, to); }
+    catch (error) { if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= attempts) throw error; await wait(10 + attempt * 10); }
+  }
+}
+
 // A file whose name carries a hash of its content: every chat that needs the same content points at the one file, and a changed content
 // becomes a new file instead of racing a running reader. `name` keeps a readable prefix, `ext` includes the dot.
 export async function writeShared(directory, name, ext, content) {

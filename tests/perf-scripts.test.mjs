@@ -11,7 +11,8 @@ test('perf session status exits 0', () => {
   assert.match(out, /perf|없습니다/);
 });
 
-test('ps-tree rssKb on self', () => {
+// ps-tree.mjs reads `ps -o rss=` and is documented for macOS/Linux only; Windows has no such ps (Git Bash's ps rejects -o).
+test('ps-tree rssKb on self', { skip: process.platform === 'win32' && 'ps-tree reads RSS from POSIX ps' }, () => {
   const out = node(['-e', "import { rssKb } from './scripts/perf/ps-tree.mjs'; console.log(rssKb(process.pid)>0?'ok':'bad');"]);
   assert.equal(out.trim(), 'ok');
 });

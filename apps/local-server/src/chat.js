@@ -26,7 +26,7 @@ import { createLocalRuntime } from './runtime.js';
 import { chatMcpServers } from './terminal-sessions.js';
 import { chatPrompt } from './chat-prompt.js';
 import { createChatTextStore } from './chat-text.js';
-import { readLastLines } from './file-util.js';
+import { readLastLines, renameRetry } from './file-util.js';
 import { evaluateLimit, limitOptions, limitView, normalizeLimit, POLL_MS } from './chat-limit.js';
 import { interactiveHint, pendingShellRuns, runShell, SHELL_MAX_COMMAND, SHELL_TIMEOUT_MS, shellContext, wantsTerminal } from './chat-shell.js';
 
@@ -330,7 +330,12 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     const data = JSON.stringify(snapshotMeta());
     if (data === lastMeta) return writing;
     lastMeta = data;
-    const saved = writing.then(async () => { await fs.writeFile(`${metaFile}.tmp`, data, { mode: 0o600 }); await fs.rename(`${metaFile}.tmp`, metaFile); });
+    const saved = writing.then(async () => {
+      const temporary = `${metaFile}.tmp`;
+      await fs.writeFile(temporary, data, { mode: 0o600 });
+      // Windows can refuse the replace for a moment while something reads meta.json; retried, and the temp file does not stay behind on a final failure.
+      try { await renameRetry(temporary, metaFile); } catch (error) { await fs.rm(temporary, { force: true }).catch(() => {}); throw error; }
+    });
     writing = saved.catch(error => { if (lastMeta === data) lastMeta = null; reportStorage(error); }); return saved;
   };
   // Limits (chat-limit.js). limitNow: the last window readings for the chip. limitBypass: the automatic compact after a stop runs outside the limit.
@@ -1162,15 +1167,20 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
       if (retry) await this.send(retryText(picked), [], { steer: turnOpen });
     },
     state: shown,
-    // The latest thing the user typed in this chat (not a message from another agent). The agent bus quotes it to the chat it messages, so the receiver
-    // sees what the user actually asked for instead of taking the sender's word for it.
-    lastUserInstruction() {
-      for (let i = events.length - 1; i >= 0; i--) {
-        const event = events[i], said = event.kind === 'user' || (event.kind === 'steer' && event.phase === 'applied') ? event.text : null;
-        if (typeof said === 'string' && said.trim() && !said.startsWith('[ADE agent bus]')) return { text: said.trim().slice(0, 300), at: event.at };
+    // What the user typed in this chat (not messages from other agents), newest first. The agent bus quotes it, in full, to the chat it messages: ADE reads it from the
+    // chat's own record, so the receiver sees what the user actually asked for and no agent can reword, shorten or invent it. A queued steer counts (the user typed it
+    // already); its later 'applied' event repeats the same text and is skipped.
+    recentUserInstructions(limit = 3, max = 4000) {
+      const out = [];
+      for (let i = events.length - 1; i >= 0 && out.length < limit; i--) {
+        const event = events[i], said = event.kind === 'user' || (event.kind === 'steer' && event.phase === 'queued') ? event.text : null;
+        if (typeof said !== 'string' || !said.trim() || said.startsWith('[ADE agent bus]')) continue;
+        const text = said.trim();
+        out.push({ text: text.slice(0, max), at: event.at, ...(text.length > max && { cut: text.length }) });
       }
-      return null;
+      return out;
     },
+    lastUserInstruction() { return this.recentUserInstructions(1)[0] ?? null; },
     // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
     // right away when idle, or once the running turn ends. The next message starts a child with the new key.
     relaunch() { if (child) { restartWhenQuiet(); } },

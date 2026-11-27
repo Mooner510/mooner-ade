@@ -65,7 +65,7 @@ class Jar {
   header() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '); }
 }
 // The value of the <input name=...> in the Hub's own page. Only hard-coded patterns run on the HTML (the name is compared, never put in a RegExp).
-const field = (html, name) => { for (const [tag] of html.matchAll(/<input[^>]*>/g)) if (/name="([^"]*)"/.exec(tag)?.[1] === name) return /value="([^"]*)"/.exec(tag)?.[1]; };
+export const field = (html, name) => { for (const [tag] of html.matchAll(/<input\b[^>]*>/g)) if (/\bname="([^"]*)"/.exec(tag)?.[1] === name) return /\bvalue="([^"]*)"/.exec(tag)?.[1]; };
 // Approves a pending device enrollment as the Hub account `name` (the dev login makes it on first use): what the user does in the browser. `verifyUrl` is the
 // Hub's own /enroll?request=<id> page the device showed or opened; `userCode` is the 8-character code the device displays.
 export async function hubApprove(hubUrl, { verifyUrl, userCode, name = 'e2e' }) {

@@ -9,7 +9,7 @@
 
 | 심각도 | 항목 | 위치 | 검증 |
 |---|---|---|---|
-| Medium (API 제거됨) | `git/discard`에 `files: ["."]`를 보내면 `ls-files`가 실패하는 경우 프로젝트 루트 전체를 `fs.rm`한다. 추적 파일이 있으면 루트 전체를 `git restore`로 되돌린다. `files/delete`에는 루트 가드가 있었지만 discard에는 없었다. | `apps/local-server/src/index.js` (`git/discard`) | 이후 UI가 쓰지 않는 `git/discard`·`files/*` API 자체를 제거했다(이후 채팅 `@` 언급용 `files/list`가 새로 추가됐다, 4-2). 회귀 테스트 `endpoints of removed features stay gone`이 404를 확인한다. |
+| Medium (API 제거됨) | `git/discard`에 `files: ["."]`를 보내면 `ls-files`가 실패하는 경우 프로젝트 루트 전체를 `fs.rm`한다. 추적 파일이 있으면 루트 전체를 `git restore`로 되돌린다. `files/delete`에는 루트 가드가 있었지만 discard에는 없었다. | `apps/local-server/src/index.js` (`git/discard`) | 이후 UI가 쓰지 않는 `git/discard`·`files/*` API 자체를 제거했다. 회귀 테스트 `endpoints of removed features stay gone`이 `git/discard` 등의 404를 확인한다. 그 뒤 채팅 `@` 언급용 `files/list`(4-2)와 파일 트리·ADE 편집기용 `files/*`(4-5)가 새로 생겼다. |
 | Medium | 저장소의 `.git/config`에 있는 `core.fsmonitor`는 `git status`가 실행할 때 임의 명령으로 실행된다. ADE는 프로젝트를 열 때 `git/status`를 자동 호출하므로, 신뢰하지 않은 저장소를 여는 것만으로 명령이 실행될 수 있다. **재현됨**(임시 저장소, git 2.50.1). | `apps/local-server/src/runtime.js` (`GIT_TRUSTED_REPO_CONFIG`) | 회귀 테스트 `git: a repository-configured core.fsmonitor command never runs during status`. 수정을 끄면 실패하고 켜면 통과함을 확인했다. |
 | Medium (사용자 동작 필요) | 저장소의 `.git/hooks`(예: `post-checkout`)가 ADE의 브랜치 전환(`git switch`)에서 실행되었다. **재현됨**: 훅 환경변수 없이 `git switch`하면 훅이 실행되고, 적용하면 실행되지 않음을 확인했다(git 2.50.1). | `apps/local-server/src/runtime.js` (`GIT_TRUSTED_REPO_CONFIG`에 `core.hooksPath=/dev/null`) | 회귀 테스트 `git: a repository hook never runs during ADE checkout`. **현재 동작:** 로컬 런타임의 Git에서는 훅을 비활성화한다. 앱에는 커밋 API가 없다. 터미널·에이전트 CLI에서 실행한 Git은 사용자의 훅 설정을 따른다. |
 | Medium | 저장소의 `.git/config`에 있는 `filter.<이름>.clean/smudge/process`가 `.gitattributes`와 함께 지정되면, ADE가 자동으로 호출하는 `git diff --numstat HEAD`(`git/status`)와 브랜치 전환·워크트리 추가에서 임의 명령으로 실행되었다. `diff.<이름>.textconv/command`도 diff에서 실행될 수 있다. **재현됨**(git 2.45.1). | `apps/local-server/src/runtime.js` (`repositoryFilters`가 system·global이 아닌 범위의 필터 명령을 명령 범위에서 빈 값으로 덮어씀), `apps/local-server/src/index.js` (diff 호출에 `--no-ext-diff --no-textconv`) | 회귀 테스트 `git: repository-configured filter and diff commands never run during status, show or checkout`. 수정을 끄면 실패하고 켜면 통과함을 확인했다. 사용자 전역 설정의 필터(git-lfs 등)는 그대로 동작한다. |
@@ -74,7 +74,7 @@
 | 대화 분기·되돌리기·스티어링 | `chat/branch`·`chat/rewind`·`chat/cancel-steer`는 기존 인증된 `/api`를 거칩니다. 분기는 `seedChat`이 프로젝트 chat 폴더 아래에만 새 기록을 쓰고, 메시지 uuid는 형식을 검증한 뒤에만 `--resume-session-at`에 넘깁니다. 스티어링 취소는 CLI의 `cancel_async_message` 제어 요청만 보냅니다. 토큰·로그인 정보는 다루지 않습니다. | `chat-claude.test.mjs`(인자·uuid), 실제 동작은 수동 |
 | 모델 목록 조회 | `chat/models`는 별칭마다 `claude -p /cost`(로컬 명령, 모델 호출 없음)를 인자 배열로 실행하고 cwd는 임시 폴더입니다. `chat/model-catalog`는 CLI 캐시 파일 `~/.claude/cache/model-catalog/*-cc.json`에서 모델 ID(정규식 검증)·이름·계열·컨텍스트 창만 읽어 최대 64개를 돌려주며 그 밖의 필드와 로그인 정보는 읽지 않습니다. | `chat-claude.test.mjs`(probe), 캐시 파싱은 수동 |
 | 번들 글꼴 | Inter·Noto Sans KR·JetBrains Mono(SIL OFL 1.1)를 npm 패키지에서 빌드에 포함하며 외부 CDN을 쓰지 않습니다. 라이선스 전문은 빌드 결과 `licenses/`에 함께 배포합니다(pnpm `minimumReleaseAge` 7일 준수 버전). | 수동 |
-| `@` 파일 목록(`files/list`)이 프로젝트 밖 경로를 드러냄 | 열린 프로젝트 루트 검사(`workspace.resolve`)를 거친 cwd에서 서버가 `git ls-files -co --exclude-standard`를 argv 배열로 실행하고 이름만 돌려줍니다(최대 5만 개, 시간 제한 10초, 출력 32 MiB, 파일 내용은 읽지 않음). git 저장소가 아니면 빈 목록입니다. 이 API는 앞서 제거한 `files/read`·`files/save`·`files/search`와 다른 새 경로입니다. | 코드 검토 (`index.js` `files/list`) |
+| `@` 파일 목록(`files/list`)이 프로젝트 밖 경로를 드러냄 | 열린 프로젝트 루트 검사(`workspace.resolve`)를 거친 cwd에서 서버가 `git ls-files -co --exclude-standard`를 argv 배열로 실행하고 이름만 돌려줍니다(최대 5만 개, 시간 제한 10초, 출력 32 MiB, 파일 내용은 읽지 않음). git 저장소가 아니면 빈 목록입니다. 제거된 채로 404인 `files/save`·`files/search`와 다른 경로입니다(파일 트리·편집기용 `files/*`는 4-5). | 코드 검토 (`index.js` `files/list`) |
 | 첨부 이미지 축소본(`previews`)이 기록에 임의 데이터를 넣음 | 서버는 `data:image/jpeg;base64,` 형식에 150,000자 이하이고 이미지 수 안에 드는 것만 받아 `user`·`steer` 이벤트에 저장합니다. 화면은 이것을 `<img src>`로만 쓰며 앱 CSP는 `img-src 'self' data:`입니다. | 코드 검토 (`index.js` `chat/send`) |
 | 설정 값 주입 | 채팅 상태줄의 색·아이콘·형식은 `ui-state.js`에서 형식 검증하고 외부 명령은 실행하지 않습니다. | `ui-state-chat.test.mjs` |
 
@@ -104,6 +104,18 @@
 | 네이티브 `ui` 블록(JSON)이 코드 실행·마크업 삽입으로 번짐 | 위치 기반 JSON을 `ui-spec.ts`가 검증해 React 요소로만 그리고 모델 코드는 실행하지 않습니다. | `ui-spec.test.mjs` |
 | 에이전트 지침이 사용자 설정과 어긋남 | 지침(`chat-ui-prompt.js`)은 채팅의 첫 메시지 때 설정값으로 한 번 정해 `meta`에 저장하며, 시스템 프롬프트 파일(`ade-ui-prompt.md`, 0600)이나 `developerInstructions`로만 전달합니다. | 코드 검토 (`chat.js`, `index.js`) |
 
+## 4-5. 파일 트리와 ADE 편집기 (2026-11)
+
+파일 트리(`ProjectTree.tsx`)와 Monaco 편집기(`file-buffer.ts`, Ctrl+S 저장)가 쓰는 `files/directory`·`files/read`·`files/write`·`files/create`·`files/move`·`files/copy`·`files/delete`입니다. 처리는 모두 `apps/local-server/src/project-files.js`에 있습니다. 위협 모델(머리말)대로 인증된 사용자는 터미널로 이미 셸을 가지므로, 아래 검사는 인증 경계가 아니라 실수·경로 혼동을 막는 장치입니다.
+
+| 위협 | 대응 | 검증 |
+|---|---|---|
+| 인증 없이 또는 다른 사이트에서 호출 | 다른 `/api`와 같이 동일 출처 POST와 세션 쿠키 인증을 거칩니다(`index.js`). `files/write` 본문 상한은 13 MiB입니다. | 코드 검토 (`index.js`) |
+| 프로젝트 밖·`.git` 경로를 읽거나 씀 | 모든 경로가 `targetOf`를 거칩니다: 상대 경로만 받고 NUL, 8,192자 초과, `..` 구성요소, `.git`과 저장용 임시 파일(`.ade-save-*.tmp`) 구성요소를 거절합니다. 이어 `workspace.resolve`(`runtime.js`)가 루트 밖이나 루트 밖으로 풀리는 심볼릭 링크를 거절하고, 부모 경로가 링크로 다른 곳에 풀리면 "심볼릭 링크 경로는 지원하지 않습니다"로 거절합니다. 폴더 목록에서도 `.git`과 임시 파일은 빠집니다. | `project-files.test.mjs` (`../note.txt`·링크 안 경로·`.git` 거절) |
+| 큰 파일·이진 파일·링크를 열어 문제가 생김 | 읽기는 정규 파일만, `O_NOFOLLOW`로 열고 2 MiB 이하의 NUL 없는 UTF-8 텍스트만 돌려줍니다(아니면 `UNSUPPORTED_FILE`). 읽는 동안 크기·inode·시각이 바뀌면 `FILE_CHANGING`(409)입니다. | 코드 검토 (`snapshot`) |
+| 저장이 바깥(에이전트·다른 편집기)의 변경을 덮어씀 | 쓰기는 읽을 때 받은 내용 해시(SHA-256, `revision`)가 디스크와 같을 때만 합니다. 다르면 쓰지 않고 `conflict`와 디스크 내용을 돌려주며, 덮어쓰기는 화면에서 사용자가 고릅니다. 같은 폴더에 임시 파일(0600)을 쓰고 권한을 원래대로 맞춘 뒤 다시 확인하고 rename 한 번으로 바꿉니다. 지워진 파일을 다시 만들 때는 `link`로 만들어 동시에 생긴 파일을 덮지 않습니다. 저장·이동·복사·삭제는 한 줄로 차례대로 처리합니다(`serial`). | `project-files.test.mjs`, `local-server.test.mjs` (`project file editor endpoints compare the revision before writing`) |
+| 트리 조작이 프로젝트 폴더 자체를 지우거나 옮김 | 이동·복사·삭제 대상은 프로젝트 루트 자체가 될 수 없고(`inner`), 한 번에 500개까지입니다. 삭제는 대상 경로를 검사한 뒤 `fs.rm`(재귀)으로 지우며 휴지통을 거치지 않습니다. | `project-files.test.mjs`, 코드 검토 |
+
 ## 5. 실행하지 않은 검증
 
 - 원격 노출 시나리오(설계상 127.0.0.1 전용이라 대상이 아님)
@@ -114,7 +126,7 @@
 실행 환경·결과는 [VERIFICATION](VERIFICATION.md)에 모은다. 과거 테스트 수나 ADE/IDE 화면의 통과 기록을 현재 상태로 사용하지 않는다.
 
 - 파일 감시 생성 실패와 실행 중 오류를 처리한다. 오류 후 감시기·타이머·수집 경로를 정리하며 서버는 계속 동작한다. 현재 프로젝트의 Git 폴링은 유지한다. 개발 모드 감시 오류도 프로세스를 종료하지 않고 수동 재시작을 안내한다.
-- 앱의 `git/commit`·`git/stage`·`git/discard`·`files/read`·`files/save`·`files/search` API는 404를 반환한다(회귀 테스트가 확인하는 목록). 채팅 `@` 언급용 `files/list`(파일 이름만)는 새로 생겼으며 4-2에 있다. 터미널에서 직접 커밋하는 기능은 사용자 셸에 속한다.
+- 앱의 `git/commit`·`git/stage`·`git/discard`·`files/save`·`files/search`·`run/start`·`conversation/create`·`approval`·`agents/catalog` API는 404를 반환한다(`tests/local-server.test.mjs`의 `endpoints of removed features stay gone`이 확인하는 목록). 예전 목록에 있던 `files/read`는 파일 트리·ADE 편집기용 파일 API(`files/directory`·`files/read`·`files/write`·`files/create`·`files/move`·`files/copy`·`files/delete`)와 함께 다시 생겼고 경계는 4-5에 있다. 채팅 `@` 언급용 `files/list`(파일 이름만)는 4-2에 있다. 작업 트리의 변경을 스테이징하거나 커밋하는 API는 없고(커밋 그래프의 체리픽·되돌리기 같은 작업은 `git/op`), 그런 커밋은 터미널(사용자 셸)이나 에이전트가 한다.
 - `atom-material-icons@3.0.0`은 공개된 JSON/SVG만 사용한다. 사용하지 않는 YAML 빌드 도구 `js-yaml`은 pnpm override로 설치에서 제외해 `argparse`·`sprintf-js` 의존 경로를 제거했다. 경고를 숨기거나 취약 버전을 허용한 것은 아니다. 아이콘 패키지의 CLI/생성 도구를 사용하게 되면 이 override를 다시 검토해야 한다.
 
 터미널에 붙여넣은 이미지가 임시 폴더(`mooner-ade-paste`)에, 에이전트 세션 정보가 앱 데이터 폴더에 남는다. 로컬 데이터와 로그를 공개 저장소나 이슈에 첨부하기 전에 확인한다. 이 앱은 단일 사용자 로컬 전용이며 멀티 사용자 호스팅을 지원하지 않는다.

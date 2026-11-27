@@ -1,4 +1,4 @@
-import { appKey, appKeyInTerminal, matches, showAppKey } from './shortcuts';
+import { appKey, appKeyInTerminal, keyBelongsToField, keyPlace, matches, showAppKey } from './shortcuts';
 export { matches } from './shortcuts';
 import { forwardRef, Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api, ApiError, basename, beside, chatLeaf, editorLeaf, equalize, findLeaf, isDiffTab, isLeaf, isTerminal, leafList, leaves, mapLeaf, newId, pruneDead, remove, split, type Leaf, type Pane } from './api';
@@ -34,6 +34,7 @@ import { errorLog } from './errors';
 import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
+import { useBarFit } from './use-bar-fit';
 import { statusLabels } from './Settings';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
 import { can, isRemote, readOnly } from './transport';
@@ -48,7 +49,7 @@ export type PaneInfo = { id: string; label: string; kind: 'terminal' | 'editor' 
 export type TabInfo = { id: string; label: string; kind?: 'chat' | 'launcher'; count: number; panes: PaneInfo[]; agent?: Agent; attention: boolean; asking: boolean; working: boolean; cache?: ClaudeCache };
 export type WorkspaceStatus = { id: string; name: string; loaded: boolean; attention: number; tabs: TabInfo[]; activeTab: string };
 // The shell lists every project's tabs in its sidebar, so a project exposes them here instead of drawing its own tab strip.
-// `forceAsk`: the sidebar X always confirms. Shortcuts and the pane's own close button still follow the confirm settings.
+// `forceAsk`: the sidebar X and Delete on a sidebar row always confirm. Shortcuts, middle-click and the pane's own close button still follow the confirm settings.
 export type WorkspaceHandle = { requestClose(forceAsk?: boolean): Promise<boolean>; pickFile(): void; selectTab(id: string): void; selectPane(tabId: string, paneId: string): void; closePane(paneId: string, forceAsk?: boolean): void; moveTab(id: string, targetId: string, after: boolean): void; mergeTabs(id: string, targetId: string): void; movePane(tabId: string, paneId: string, targetId: string | undefined, mode: 'before' | 'after' | 'merge'): void; closeTab(id: string, forceAsk?: boolean): void; newTab(): void; renameTab(id: string): void; launcher(): void };
 export type Command = { id: string; label: string; keys?: string; run(): void | Promise<unknown> } &
   ({ hidden?: false; icon: IconName } | { hidden: true; icon?: never });
@@ -1100,8 +1101,11 @@ ${where}`, [
     }
   }
   function moveFocus(step: number) {
-    const ids = leaves(activePane());
-    if (ids.length) setFocusLeaf(ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length]);
+    const ids = leaves(activePane()); if (!ids.length) return;
+    const next = ids[(Math.max(0, ids.indexOf(refs.focus.current)) + step + ids.length) % ids.length];
+    setFocusLeaf(next);
+    // While a pane is maximized the maximize moves with the focus (like tmux), so the focus never lands on a pane that is off screen.
+    setZoom(value => value ? next : value);
   }
   async function closeFocused() {
     const leaf = findLeaf(activePane(), refs.focus.current); if (!leaf) return;
@@ -1181,7 +1185,7 @@ ${where}`, [
     { id: 'detachPane', label: '포커스된 pane을 새 탭으로 분리', icon: 'externalLink', run: () => movePane(refs.activeTab.current, refs.focus.current, undefined, 'after') },
     { id: 'nextTab2', label: '다음 탭', hidden: true, run: () => cyclePaneTab(1) },
     { id: 'prevTab2', label: '이전 탭', hidden: true, run: () => cyclePaneTab(-1) },
-    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
+    ...Array.from({ length: 9 }, (_, index): Command => ({ id: `tab${index + 1}`, label: index === 8 ? '마지막 탭' : `${index + 1}번 탭`, hidden: true, run: () => { const tab = refs.paneTabs.current[index === 8 ? refs.paneTabs.current.length - 1 : index]; if (tab) selectTab(tab.id); } })),
     { id: 'splitRight', label: '오른쪽으로 분할', icon: 'splitH', run: () => splitTerminal(refs.focus.current, 'row') },
     { id: 'splitDown', label: '아래로 분할', icon: 'splitV', run: () => splitTerminal(refs.focus.current, 'column') },
     { id: 'sendEof', label: '터미널에 ^D(EOF) 보내기', icon: 'terminal', run: () => { const leaf = findLeaf(activePane(), refs.focus.current); if (leaf && isTerminal(leaf)) send({ type: 'terminal/input', id: leaf.id, data: '' }); } },
@@ -1214,6 +1218,8 @@ ${where}`, [
       if ((document.querySelector('dialog[open]') || document.querySelector('.quick')) && command.id !== 'feedbackCapture') return;
       // In a terminal, plain Ctrl+key stays with the shell unless the key is meant to work there or the user said so (settings.termKeys, per key).
       if (inTerminal && !appKeyInTerminal(settingsRef.current, command.id, event)) return;
+      // In the editor (and in any text field on macOS) a plain Ctrl+letter is the field's own key, e.g. Monaco's Ctrl+D.
+      if (!inTerminal && keyBelongsToField(event, keyPlace(event.target), mac)) return;
       event.preventDefault(); event.stopPropagation(); run(async () => command.run());
     };
     window.addEventListener('keydown', handler, true);
@@ -1226,6 +1232,9 @@ ${where}`, [
   // Git 저장소가 없는 프로젝트에서 흐린 Git 버튼을 누르면 이유를 잠깐 보여 준다(툴팁은 올려 둬야만 보인다).
   const [gitNote, setGitNote] = useState(false);
   useEffect(() => { if (!gitNote) return; const timer = setTimeout(() => setGitNote(false), 4000); return () => clearTimeout(timer); }, [gitNote]);
+  // 상단 바 줄이기(use-bar-fit.ts): 창 버튼 밑으로 오른쪽 버튼 묶음이 넘치지 않게 한다.
+  const topBar = useRef<HTMLElement>(null);
+  useBarFit(topBar, !mobile, Boolean(project));
   // 상태바 접기: 훅이라 아래의 `!project` 조기 반환보다 위에 둔다(프로젝트가 열려 상태바가 생기면 그때 붙는다).
   const statusBar = useRef<HTMLElement>(null), foldedStatus = useStatusFit(statusBar, statusLayout(settings).right.filter(id => settings.statusItems.includes(id)), Boolean(project));
   // The one-time cards wait their turn (notices.ts) and are drawn in the dock strip below the workspaces (main.tsx): none covers a button or another card.
@@ -1330,7 +1339,7 @@ ${where}`, [
       : <Launchers onModeChange={onModeChange} shell={settings.terminalShell} mode={settings.defaultMode} title="새 탭" autoFocus hidden={hiddenAgents} nudge={settings.chatTipPending} onLaunch={command => run(() => launch(command, 'split'))} />}
   </div>)}</div>;
   return <main className={`app ${settings.dimInactivePanes ? 'dim-inactive' : ''}`} hidden={!active}>
-    <header className="tabbar" data-feedback-region="상단 바">
+    <header className="tabbar" data-feedback-region="상단 바" ref={topBar}>
       {mobile && <IconButton icon="panelLeft" className="bar-icon mobile-menu" label="프로젝트와 탭" tip="header" dot={false} onClick={() => setDrawer(open => !open)} />}
       <div className="split-button">
         <button className="bar-button new-tab" aria-label="새 터미널 탭" onClick={() => run(() => newTab())}><Icon name="plus" /><span>새 탭</span></button>
@@ -1363,7 +1372,7 @@ ${where}`, [
     </header>
     <ErrorToast scope={root} active={active} />
     <div className="workbench">
-      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} expanded={treeExpanded} setExpanded={setTreeExpanded}
+      <ProjectTree key={project.root} projectId={project.id} root={project.root} visible={active} open={treeOpen} gitColors={settings.treeGitColors} expanded={treeExpanded} setExpanded={setTreeExpanded}
         onClose={() => setTreeOpen(false)} call={call} watch={watchFiles} onOpen={openProjectFile} host={treeHost} />
       {center}{rightOpen && rightPanel}{!settings.gitLogDock && gitDrawer}
     </div>

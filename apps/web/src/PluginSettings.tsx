@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import { isRemote } from './transport';
 import qrcode from 'qrcode-generator';
 import { Icon, IconButton, type IconName } from './Icon';
@@ -158,14 +158,17 @@ function StatusLine({ status }: { status: { tone: Tone; text: string } }) {
 // A header plugin's panel (opened from its top-bar button, in the right-panel slot): the plugin's view, drawn like its settings.
 // Its buttons sit in a bar along the bottom like the other right panels', the main one at the right.
 export function PluginPanel({ plugin, wide, toggleWide, onSettings, onClose }: { plugin: PluginInfo; wide: boolean; toggleWide(): void; onSettings(): void; onClose(): void }) {
-  const bridge = pluginsBridge(), view = plugin.view?.panel ?? plugin.view;
-  const [values, setValue] = useFieldValues(view), [busy, setBusy] = useState(''), [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const bridge = pluginsBridge(), shown = useLastView(plugin), view = shown.view?.panel ?? shown.view;
+  const [values, setValue] = useFieldValues(view), [running, setBusy] = useState(''), [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   if (!bridge || !view || !plugin.id) return null;
+  // While the plugin starts again its last view stays, its buttons held until it runs.
+  const busy = running || (shown.stale ? 'starting' : '');
   const act = (action: string, item?: string) => {
     if (busy) return;
     const submitted = { ...values };
     for (const field of view.fields) if (field.type === 'password') setValue(field.key, '');
-    setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`); setNotice(null);
+    // The previous result stays until this one arrives, so nothing jumps while it runs.
+    setBusy(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`);
     void bridge.action(plugin.id!, action, submitted, item).then(result => setNotice(result.message ? { text: result.message, error: false } : null), error => setNotice({ text: errorText(error), error: true })).finally(() => setBusy(''));
   };
   const actions = [...view.actions.filter(action => !action.primary), ...view.actions.filter(action => action.primary)];
@@ -178,7 +181,7 @@ export function PluginPanel({ plugin, wide, toggleWide, onSettings, onClose }: {
     </header>
     <div className="plugin-panel-body">
       {view.status && <StatusLine status={view.status} />}
-      {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
+      {notice && !repeats(view, notice.text) && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
       <SettingsSection view={view} hide={null} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} standalone />
       {view.document && <section className="plugin-document"><h3><Icon name="book" size={14} />{view.document.title}</h3><pre>{view.document.text}</pre></section>}
     </div>
@@ -236,16 +239,21 @@ export function pluginUpdateCount(state: PluginsState | null | undefined) {
 }
 export const usePluginUpdateCount = () => pluginUpdateCount(usePluginsState());
 // Plugins that need the user come first; the rest keep the folder order.
-const needsUser = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid', 'incompatible'].includes(plugin.state) || plugin.apiStatus === 'deprecated' || Boolean(plugin.update?.available) || setupLeft(plugin) > 0;
+// "Needs the user" here is what the plugin itself is waiting for (approval, a failure, setup). An available update is not part of it: the list must not reorder when one is installed.
+const needsAction = (plugin: PluginInfo) => ['new', 'changed', 'error', 'invalid', 'incompatible'].includes(plugin.state) || plugin.apiStatus === 'deprecated' || setupLeft(plugin) > 0;
+const needsUser = (plugin: PluginInfo) => needsAction(plugin) || Boolean(plugin.update?.available);
 
 // ---- the setup guide ---------------------------------------------------------------------------------------------
 // One list from what MoonerADE knows (approved, running) and what the plugin declared (plugin.json `setup`) and reports
 // (view.setup). `pending`: the plugin is not running, so how far its own steps got is not known yet.
 type GuideStatus = SetupStatus | 'pending';
 type AdeStep = 'approve' | 'enable' | 'start' | 'restart' | 'builtin';
-type GuideStep = { id: string; label: string; detail: string; status: GuideStatus; optional: boolean; view?: ViewStep; ade?: AdeStep };
-export function guideSteps(plugin: PluginInfo): GuideStep[] {
-  const steps: GuideStep[] = [], state = plugin.state, running = state === 'running';
+// `background`: a restart of a plugin that was running; shown with its spinner but never made the step to do now.
+type GuideStep = { id: string; label: string; detail: string; status: GuideStatus; optional: boolean; view?: ViewStep; ade?: AdeStep; background?: boolean };
+// `stale`: the view the plugin showed before it started again. While it starts, its own steps keep what that view said instead of
+// going back to "실행 후 확인" for a moment.
+export function guideSteps(plugin: PluginInfo, stale: PluginView | null = null): GuideStep[] {
+  const steps: GuideStep[] = [], state = plugin.state, running = state === 'running', live = running || (state === 'starting' && stale !== null);
   if (plugin.builtin) {
     const on = plugin.builtinEnabled !== false;
     steps.push({ id: 'ade-on', label: '켜기', detail: on ? '켜져 있습니다. 내장 플러그인이라 승인은 필요 없습니다.' : '꺼져 있습니다. 켜면 바로 실행됩니다.', status: on ? 'done' : 'todo', optional: false, ...(!on && { ade: 'builtin' as const }) });
@@ -262,17 +270,17 @@ export function guideSteps(plugin: PluginInfo): GuideStep[] {
   }
   const run: GuideStep = { id: 'ade-run', label: '실행', optional: false, status: 'todo', detail: '승인하면 바로 실행됩니다.' };
   if (running) Object.assign(run, { status: 'done', detail: '실행 중입니다.' });
-  else if (state === 'starting') Object.assign(run, { status: 'active', detail: '시작하는 중입니다…' });
+  else if (state === 'starting') Object.assign(run, { status: 'active', detail: live ? '다시 시작하는 중입니다…' : '시작하는 중입니다…', background: live });
   else if (state === 'error') Object.assign(run, { status: 'error', detail: plugin.error ?? '플러그인이 멈췄습니다.', ade: 'restart' });
   else if (state === 'off' && !plugin.builtin) Object.assign(run, { detail: '플러그인 사용이 꺼져 있어 실행하지 않습니다. 켜면 승인한 플러그인이 바로 실행됩니다.', ade: 'enable' });
   else if (state === 'stopped') Object.assign(run, { detail: '실행하고 있지 않습니다.', ade: 'start' });
   else if (state === 'off') run.detail = '켜면 실행됩니다.';
   steps.push(run);
-  const reported = running ? plugin.view?.setup : undefined, byId = new Map((reported ?? []).map(step => [step.id, step]));
+  const reported = running ? plugin.view?.setup : live ? stale?.setup : undefined, byId = new Map((reported ?? []).map(step => [step.id, step]));
   const declared = plugin.setup ?? [];
   for (const step of declared) {
     const view = byId.get(step.id);
-    steps.push({ id: `plugin:${step.id}`, label: view?.label ?? step.label, detail: view?.detail ?? step.detail, status: !running || !reported ? 'pending' : view?.status ?? 'todo', optional: view?.optional ?? step.optional === true, view });
+    steps.push({ id: `plugin:${step.id}`, label: view?.label ?? step.label, detail: view?.detail ?? step.detail, status: !live || !reported ? 'pending' : view?.status ?? 'todo', optional: view?.optional ?? step.optional === true, view });
   }
   for (const view of reported ?? []) if (view.label && !declared.some(step => step.id === view.id)) {
     steps.push({ id: `plugin:${view.id}`, label: view.label, detail: view.detail ?? '', status: view.status, optional: view.optional === true, view });
@@ -286,8 +294,8 @@ function setupLeft(plugin: PluginInfo) {
   return pluginSteps(guideSteps(plugin)).filter(step => !step.optional && step.status !== 'done' && step.status !== 'pending').length;
 }
 const currentStep = (steps: GuideStep[]) => steps.find(step => step.status === 'error')
-  ?? steps.find(step => !step.optional && !['done', 'pending'].includes(step.status))
-  ?? steps.find(step => !step.optional && step.status !== 'done');
+  ?? steps.find(step => !step.optional && !step.background && !['done', 'pending'].includes(step.status))
+  ?? steps.find(step => !step.optional && !step.background && step.status !== 'done');
 const stepStateLabel = (step: GuideStep, current: boolean): string => step.status === 'done' ? '완료' : step.status === 'active' ? '진행 중' : step.status === 'error' ? '확인 필요'
   : step.status === 'pending' ? '실행 후 확인' : current ? '지금 할 일' : step.optional ? '선택' : '대기';
 // `step` is the button that ran: a plugin's own form shows its result next to its buttons, everything else at the top.
@@ -315,7 +323,8 @@ function Row({ title, hint, query = '', children }: { title: ReactNode; hint?: R
 
 export function PluginSettings({ query = '' }: { query?: string }) {
   const bridge = pluginsBridge();
-  const [state, setState] = useState<PluginsState | null>(null);
+  // The last state any part of the app received, so reopening the page does not flash "불러오는 중…".
+  const [state, setState] = useState<PluginsState | null>(pluginsShared);
   const [busy, setBusy] = useState(''), [notice, setNotice] = useState<(Notice & { where: string }) | null>(null);
   const [dropOver, setDropOver] = useState(false);
   // Which list the tabs show; null until the user picks one (then installed plugins if there are any, else built-in ones).
@@ -331,6 +340,12 @@ export function PluginSettings({ query = '' }: { query?: string }) {
     const off = bridge.onState(value => setState(value));
     return () => { live = false; off(); };
   }, [bridge]);
+  // The "updated" mark on a row is a moment's confirmation, not something to leave standing.
+  useEffect(() => {
+    if (!notice || notice.error || notice.step !== 'update') return;
+    const timer = setTimeout(() => setNotice(current => current === notice ? null : current), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   // Searching shows the matching plugins, not a detail page left open.
   useEffect(() => { if (query.trim()) setSelected(null); }, [query]);
   // Going to a detail page or back starts at the top of the scrolling settings body (not on the first render).
@@ -357,20 +372,21 @@ export function PluginSettings({ query = '' }: { query?: string }) {
 
   const run: Run = (key, step) => {
     const where = key.slice(0, key.lastIndexOf(':')), stepName = key.slice(key.lastIndexOf(':') + 1);
-    setBusy(key); setNotice(null);
+    // A result shown where this runs stays until the new one replaces it (clearing it first made the page jump twice).
+    setBusy(key); setNotice(current => current?.where === where ? current : null);
     // A plugin that cannot connect may be blocked by a TLS-inspecting network; the app checks and, if the OS certificate setting would fix it, asks once.
     const offerCa = (text: string) => { if (/fetch failed|연결하지 못했습니다/.test(text)) void (window as unknown as { adeDesktop?: { offerSystemCa?(): Promise<boolean> } }).adeDesktop?.offerSystemCa?.().catch(() => {}); };
-    void step().then(value => { setState(value); if (value.message) { setNotice({ where, step: stepName, text: value.message, error: false }); offerCa(value.message); } },
+    void step().then(value => { setState(value); if (value.message) { setNotice({ where, step: stepName, text: value.message, error: false }); offerCa(value.message); } else setNotice(current => current?.where === where ? null : current); },
       (error: Error) => { const text = errorText(error); setNotice({ where, step: stepName, text, error: true }); offerCa(text); }).finally(() => setBusy(''));
   };
   const noticeFor = (where: string) => notice?.where === where ? notice : null;
   const open = selected === null ? null : state.plugins.find(plugin => plugin.folder === selected) ?? null;
   if (open) return <div className="plugins plugin-page" ref={rootRef}>
-    <PluginDetail plugin={open} enabled={state.enabled} busy={busy} notice={noticeFor(open.folder)} run={run} bridge={bridge} onBack={() => setSelected(null)} />
+    <PluginDetail key={open.folder} plugin={open} enabled={state.enabled} busy={busy} notice={noticeFor(open.folder)} run={run} bridge={bridge} onBack={() => setSelected(null)} />
   </div>;
 
   const global = noticeFor('global');
-  const plugins = [...state.plugins].sort((a, b) => Number(needsUser(b)) - Number(needsUser(a)));
+  const plugins = [...state.plugins].sort((a, b) => Number(needsAction(b)) - Number(needsAction(a)));
   const shown = plugins.filter(plugin => matches([plugin.name, plugin.description, ...(plugin.commands ?? []), plugin.mcp ?? '', ...(plugin.tools?.list ?? []).map(tool => `${tool.name} ${tool.title}`)].join(' ')));
   const filtering = query.trim() !== '';
   const working = Boolean(busy);
@@ -410,9 +426,10 @@ export function PluginSettings({ query = '' }: { query?: string }) {
   const shownTab = tab === 'market' && !hub ? 'installed' : tab ?? (installed.length || !builtins.length ? 'installed' : 'builtin');
   const list = (items: PluginInfo[]) => <ul className="plugin-list">{items.map(plugin => {
     const result = noticeFor(plugin.folder);
+    const updated = result?.step === 'update' && !result.error;
     return <li key={plugin.folder}>
-      <PluginRow plugin={plugin} busy={busy} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!, plugin.update?.sha256 && plugin.update.latest ? { version: plugin.update.latest, apiVersion: plugin.update.apiVersion, sha256: plugin.update.sha256 } : undefined))} />
-      {result?.step === 'update' && <Callout tone={result.error ? 'error' : 'ok'}>{result.text}</Callout>}
+      <PluginRow plugin={plugin} busy={busy} updated={updated} onOpen={() => setSelected(plugin.folder)} onUpdate={() => run(`${plugin.folder}:update`, () => bridge.installUpdate!(plugin.id!, plugin.update?.sha256 && plugin.update.latest ? { version: plugin.update.latest, apiVersion: plugin.update.apiVersion, sha256: plugin.update.sha256 } : undefined))} />
+      {result?.step === 'update' && result.error && <Callout tone="error">{result.text}</Callout>}
     </li>;
   })}</ul>;
 
@@ -484,7 +501,7 @@ function StatePill({ state, label }: { state: State; label?: string }) {
 }
 
 // One line per plugin in the list: what it is, what it adds and whether it runs. Everything else is on its detail page.
-function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; onOpen(): void; onUpdate(): void }) {
+function PluginRow({ plugin, busy, updated, onOpen, onUpdate }: { plugin: PluginInfo; busy: string; updated: boolean; onOpen(): void; onUpdate(): void }) {
   const left = plugin.state === 'incompatible' ? 0 : setupLeft(plugin), canUpdate = hasUpdate(plugin) && Boolean(plugin.id) && Boolean(plugin.update!.source) && plugin.update!.status !== 'needs-login';
   const updateStatus = plugin.update?.status;
   const updating = busy === `${plugin.folder}:update` || updateStatus === 'downloading' || updateStatus === 'installing';
@@ -504,6 +521,7 @@ function PluginRow({ plugin, busy, onOpen, onUpdate }: { plugin: PluginInfo; bus
     {canUpdate && <span className="plugin-row-update" onClick={event => event.stopPropagation()}>
       <BusyButton className="primary" busy={Boolean(busy) || updating || updateStatus === 'checking'} running={updating} icon="download" onClick={onUpdate}>업데이트 v{plugin.update!.latest}</BusyButton>
     </span>}
+    {updated && <span className="plugin-row-updated" role="status"><Icon name="check" size={14} />업데이트 완료</span>}
     <StatePill state={plugin.state} label={plugin.state === 'incompatible' ? apiStatusLabel(plugin.apiStatus) : undefined} />
     <Icon name="chevronRight" size={16} />
   </div>;
@@ -547,16 +565,35 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     return button('restart', step === 'start' ? '시작' : '다시 시작', () => bridge.restart(id), { icon: 'refresh' });
   };
 
-  const view = plugin.view && id && hasContent(plugin.view) ? plugin.view : null;
+  // While the plugin starts again (switched on, restarted, updated) its last view stays with its buttons held, instead of the
+  // settings disappearing and coming back a moment later.
+  const shown = useLastView(plugin), stale = shown.stale ? shown.view : null;
+  const view = shown.view && id && hasContent(shown.view) ? shown.view : null;
+  const held = busy || (stale ? `${plugin.folder}:starting` : '');
   const [values, setValue] = useFieldValues(view);
   const act = (action: string, item?: string) => {
+    if (held) return;
     const submitted = { ...values };
     for (const field of view?.fields ?? []) if (field.type === 'password') setValue(field.key, '');
     if (id) run(`${plugin.folder}:action-${action}${item ? `-${item}` : ''}`, () => bridge.action(id, action, submitted, item));
   };
   const blocked = ['invalid', 'incompatible'].includes(plugin.state);
-  const steps = blocked ? [] : guideSteps(plugin);
-  const complete = steps.every(step => step.optional || step.status === 'done');
+  const steps = blocked ? [] : guideSteps(plugin, stale);
+  // Starting again does not undo a finished setup: the guide stays folded while it comes up.
+  const complete = steps.every(step => step.optional || step.background || step.status === 'done');
+  // A plugin action's result is drawn under the buttons that ran it (ViewParts claims it); anything else, or one whose buttons are not
+  // on screen, at the top. One the plugin already shows in its status line or a step is not repeated.
+  const [claims, setClaims] = useState(0);
+  const result = notice && !(view && repeats(view, notice.text)) ? notice : null;
+  const slot = useMemo(() => ({ notice: result, claim: (by: number) => setClaims(count => count + by) }), [result]);
+  // Not drawn under its buttons: floats at the bottom. A success goes by itself after a while, an error stays until closed or replaced.
+  const [dismissed, setDismissed] = useState<Notice | null>(null);
+  const floating = result && result !== dismissed && !(claims > 0 && result.step?.startsWith('action-')) ? result : null;
+  useEffect(() => {
+    if (!floating || floating.error) return;
+    const timer = setTimeout(() => setDismissed(floating), 6000);
+    return () => clearTimeout(timer);
+  }, [floating]);
   // While setting up, what a step names is drawn inside that step; once everything is done it is all ordinary settings.
   const inSteps = complete ? null : stepParts(steps);
 
@@ -579,13 +616,14 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
     {plugin.state === 'invalid' && <Callout tone="error">{plugin.error ?? '플러그인을 읽을 수 없습니다.'}<small>plugin.json과 폴더 구성을 고친 뒤 목록의 다시 읽기를 누르세요.</small></Callout>}
     {plugin.state === 'incompatible' && <Callout tone="error">{plugin.error}</Callout>}
     {plugin.apiStatus === 'deprecated' && <Callout tone="warn">플러그인 API v{plugin.apiVersion} 지원이 종료될 예정입니다. 호환되는 새 버전이 있으면 업데이트하세요.</Callout>}
-    {notice && <Callout tone={notice.error ? 'error' : 'ok'}>{notice.text}</Callout>}
     {view?.status && <StatusLine status={view.status} />}
 
-    {steps.length > 0 && <SetupGuide key={plugin.folder} steps={steps} complete={complete} adeButton={adeButton}
-      content={step => step.view && view ? <ViewParts view={view} parts={step.view} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} /> : null} />}
+    <ResultSlot.Provider value={slot}>
+      {steps.length > 0 && <SetupGuide key={plugin.folder} steps={steps} complete={complete} adeButton={adeButton}
+        content={step => step.view && view ? <ViewParts view={view} parts={step.view} values={values} setValue={setValue} busy={held} where={plugin.folder} act={act} /> : null} />}
 
-    {view && id && <SettingsSection view={view} hide={inSteps} values={values} setValue={setValue} busy={busy} where={plugin.folder} act={act} />}
+      {view && id && <SettingsSection view={view} hide={inSteps} values={values} setValue={setValue} busy={held} where={plugin.folder} act={act} />}
+    </ResultSlot.Provider>
     {!view && id && ['off', 'stopped', 'error'].includes(plugin.state) && <Section title="설정">
       <p className="plugin-muted">플러그인이 실행 중일 때 바꿀 수 있는 설정이 여기에 나옵니다.</p>
     </Section>}
@@ -598,9 +636,24 @@ function PluginDetail({ plugin, enabled, busy, notice, run, bridge, onBack }: { 
       <summary><Icon name="chevronRight" size={14} />자세한 정보</summary>
       <PluginFacts plugin={plugin} />
     </details>
+    {/* Last in the page and held to the bottom of the view: wherever the page is scrolled it is seen, and it pushes nothing aside. */}
+    {floating && <div className="plugin-float" key={`${floating.step}:${floating.text}`}><Callout tone={floating.error ? 'error' : 'ok'}
+      action={<IconButton icon="x" tip="none" label="닫기" onClick={() => setDismissed(floating)} />}>{floating.text}</Callout></div>}
   </>;
 }
 
+// The view to draw: the live one, or while the plugin starts again the one it showed last (`stale`).
+function useLastView(plugin: PluginInfo): { view: PluginView | null; stale: boolean } {
+  const last = useRef<PluginView | null>(null);
+  if (plugin.state === 'running' && plugin.view) last.current = plugin.view;
+  else if (plugin.state !== 'starting') last.current = null;
+  if (plugin.view) return { view: plugin.view, stale: false };
+  return plugin.state === 'starting' && last.current ? { view: last.current, stale: true } : { view: null, stale: false };
+}
+// The plugin's status line or one of its steps already says this.
+const repeats = (view: PluginView, text: string) => Boolean(text) && (Boolean(view.status?.text.includes(text)) || (view.setup ?? []).some(step => Boolean(step.detail?.includes(text))));
+// Where a plugin action's result goes: the ViewParts holding that action's button draws it and tells PluginDetail so.
+const ResultSlot = createContext<{ notice: Notice | null; claim(by: number): void } | null>(null);
 const hasContent = (view: PluginView) => Boolean(view.status || view.qr || view.info.length || view.fields.length || view.actions.length || view.setup?.length || view.lists?.length);
 type Parts = { fields: Set<string>; info: Set<string>; actions: Set<string>; qr: boolean };
 // Everything the plugin's steps draw themselves.
@@ -613,11 +666,14 @@ function stepParts(steps: GuideStep[]): Parts {
   return parts;
 }
 // Field values start from what the plugin reports and keep the user's edits until the plugin sends a new value.
+// Taken over while rendering (not in an effect), so no frame shows the old values next to the new view.
 function useFieldValues(view: PluginView | null): [Record<string, string>, (key: string, value: string) => void] {
-  const [values, setValues] = useState<Record<string, string>>({});
   const reported = JSON.stringify([view?.formId, (view?.fields ?? []).map(field => [field.key, field.value])]);
-  useEffect(() => { setValues(Object.fromEntries((view?.fields ?? []).map(field => [field.key, field.value]))); }, [reported]);
-  return [values, (key, value) => setValues(current => ({ ...current, [key]: value }))];
+  const fresh = () => Object.fromEntries((view?.fields ?? []).map(field => [field.key, field.value]));
+  const [form, setForm] = useState(() => ({ reported, values: fresh() }));
+  if (form.reported !== reported) setForm({ reported, values: fresh() });
+  const values = form.reported === reported ? form.values : fresh();
+  return [values, (key, value) => setForm(current => ({ ...current, values: { ...current.values, [key]: value } }))];
 }
 
 // "시작하기": every step from installing to the plugin's own setup, the one to do now open. Once done it folds into one
@@ -626,8 +682,9 @@ function SetupGuide({ steps, complete, adeButton, content }: { steps: GuideStep[
   const current = currentStep(steps);
   const [open, setOpen] = useState<string | null>(null);
   const [shown, setShown] = useState(false);
-  // The step to do now opens by itself as the plugin moves on.
-  useEffect(() => { setOpen(null); }, [current?.id, current?.status]);
+  // The step to do now opens by itself as the plugin moves on (decided while rendering, so the old step never shows open for a frame).
+  const at = `${current?.id}:${current?.status}`, [seen, setSeen] = useState(at);
+  if (seen !== at) { setSeen(at); setOpen(null); }
   const own = pluginSteps(steps);
   if (complete && own.length === 0) return null;
   const required = steps.filter(step => !step.optional), done = required.filter(step => step.status === 'done').length;
@@ -687,6 +744,9 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act, noAc
   const fields = pick(view.fields, field => field.key, 'fields'), info = pick(view.info, item => item.key, 'info'), actions = pick(view.actions, item => item.id, 'actions');
   const qr = view.qr && (parts ? parts.qr === true : !hide?.qr) ? view.qr : null;
   const primary = actions.filter(action => action.primary), buttons = noActions ? [] : actions;
+  const slot = useContext(ResultSlot), mine = slot?.notice && buttons.some(action => slot.notice!.step === `action-${action.id}`) ? slot.notice : null;
+  // Before paint, so the copy at the top never shows.
+  useLayoutEffect(() => { if (!mine || !slot) return; slot.claim(1); return () => slot.claim(-1); }, [mine, slot]);
   if (!fields.length && !info.length && !buttons.length && !qr) return null;
   return <div className="plugin-parts">
     {qr && <div className="plugin-qr-row"><QrCode text={qr.value} label={qr.label} size={168} />{qr.label && <p>{qr.label}</p>}</div>}
@@ -718,6 +778,7 @@ function ViewParts({ view, parts, hide, values, setValue, busy, where, act, noAc
       {buttons.length > 0 && <div className="plugin-actions">
         {buttons.map(action => <BusyButton key={action.id} className={actionClass(action)} busy={Boolean(busy)} running={busy === `${where}:action-${action.id}`} onClick={() => act(action.id)}>{action.label}</BusyButton>)}
       </div>}
+      {mine && <p className="plugin-result" data-tone={mine.error ? 'error' : 'ok'} role={mine.error ? 'alert' : 'status'}><Icon name={mine.error ? 'alert' : 'check'} size={14} /><span>{mine.text}</span></p>}
     </form>}
   </div>;
 }

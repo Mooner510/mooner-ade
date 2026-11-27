@@ -1,8 +1,9 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { api } from './api';
 import { compact, dollars, turnTokenRows, type Item, type Tokens, type UsageSnap } from './chat-model';
 import { Icon, IconButton } from './Icon';
 import { Markdown } from './Markdown';
+import { placeDonePop } from './popover-place';
 import { untilReset, usageHueStyle, type Usage, type UsageWindow } from './Usage';
 import './chat-cards.css';
 
@@ -99,12 +100,12 @@ export function UsageCard({ snap, projectId, colors, showSession }: { snap: Usag
 
 // The model's tokens and cost for one answer: an info icon at the card's foot, the figures on hover or focus (the same as the turn-end icon in the thread).
 function BtwUsage({ tokens, costUsd }: { tokens?: Tokens; costUsd?: number | null }) {
-  const rows = turnTokenRows({ at: 0, ms: null, tokens });
+  const rows = turnTokenRows({ at: 0, ms: null, tokens }), pop = useRef<HTMLSpanElement>(null);
   if (!rows.length && costUsd == null) return null;
   const glyph = (name: string, size: number) => <span className="icon material-symbols-outlined" style={{ fontSize: size }} aria-hidden="true">{name}</span>;
-  return <span className="chat-done-tip bc-usage">
+  return <span className="chat-done-tip bc-usage" onMouseEnter={() => placeDonePop(pop.current)} onFocus={() => placeDonePop(pop.current)}>
     <IconButton icon="info" tip="none" label="토큰과 비용" size={13} />
-    <span className="chat-done-pop" role="tooltip">{rows.map(row => <span key={row.icon} className="chat-done-row">
+    <span className="chat-done-pop" role="tooltip" ref={pop}>{rows.map(row => <span key={row.icon} className="chat-done-row">
       {glyph(row.icon, 14)}<b>{row.label}</b>
       <span>{glyph('arrow_upward', 12)}{row.up.value}</span><span>{glyph('arrow_downward', 12)}{row.down.value}</span>
     </span>)}{costUsd != null && <span className="chat-done-row">{glyph('payments', 14)}<b>비용</b><span>${dollars(costUsd)}</span></span>}</span>

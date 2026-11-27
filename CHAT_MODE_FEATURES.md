@@ -1,8 +1,7 @@
 # Chat 모드 기능 정리
 
-> 기준: `feat/ui-frame` 브랜치(`master` 커밋 `1646d18`에서 갈라짐, 2026-11-12 시점). master에 이미 있던 기능에 더해, master에 없는 이 브랜치의 기능(인터랙티브 UI, 피드백 요청, 서브에이전트 카드, `@` 파일 언급, 이미지 미리보기, Artifact 켜기 등)을 포함합니다. 일부는 커밋 전 작업 트리 기준입니다(Provider 전환 잠금, §3).
-> 이전 기준(`feat/chat-mode-on-master`, 2026-11-11)에서 master에 들어온 변경(질문 카드, 세션 통계, 캐시 타이머, 사용량 기여도, Claude 기본값, 에이전트 버스, 플러그인 도구 제어)도 반영했습니다.
-> 세부 값은 코드와 다를 수 있으니, 수치나 동작을 인용하기 전에 해당 파일을 다시 확인하세요. 이 브랜치에 아직 없는 작업은 §26을 보세요.
+> 기준: `master`(2026-11-12에 `feat/ui-frame` 브랜치 기준으로 쓴 뒤 master에 모두 합쳐졌고, 그 뒤의 변경은 부분적으로만 반영했습니다). 인터랙티브 UI, 피드백 요청, 서브에이전트 카드, `@` 파일 언급, 이미지 미리보기, Artifact 켜기, 질문 카드, 세션 통계, 캐시 타이머, 사용량 기여도, Claude 기본값, 에이전트 버스, 플러그인 도구 제어를 다룹니다.
+> 세부 값은 코드와 다를 수 있으니, 수치나 동작을 인용하기 전에 해당 파일을 다시 확인하세요. 브랜치와 master의 차이를 적던 §26은 정리했습니다.
 
 ---
 
@@ -278,7 +277,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - **대화 중 모델 변경 경고**: 프롬프트 캐시는 모델별이라, 지금까지 주고받은 메시지가 있는 채팅(`/clear` 직후 제외)에서 다른 모델을 고르면 확인 창이 뜹니다. "다음 메시지에서 지금까지의 컨텍스트 전체를 캐시 없이 다시 읽어 사용량이 늘 수 있습니다." 선택지는 "모델 변경" · "취소"이고, 채팅이 `/compact`를 지원하면(`available`에 `compact`가 있을 때) "압축(/compact)하고 전환"이 더해집니다. 압축을 고르면 지금 모델로 `/compact`를 먼저 보내고, 압축 구분선이 생긴 직후 새 모델로 바꾼 뒤 "압축을 마치고 모델을 …(으)로 바꿨습니다" 안내를 남깁니다. 압축이 끝나지 않으면 모델을 바꾸지 않고 안내만 남기며, 응답 중이거나 대기열이 있을 때는 압축을 시작하지 않고 안내만 합니다. 이 확인은 `ChatPane.tsx`의 `setChat` 한 곳에 있습니다(에이전트 구분은 없음).
 
 ### Effort
-- Claude: low · medium · high · xhigh · max. 드롭다운과 `/effort`, 단축키(Shift+↑/↓)로 바꿉니다.
+- Claude: low · medium · high · xhigh · max. 드롭다운과 `/effort`, 단축키(기본 Ctrl+Alt+↑/↓, 채팅 입력창에서)로 바꿉니다.
 - Effort는 시작 옵션이라 바꾸면 자식 프로세스를 다시 띄웁니다. 응답 중이면 응답이 끝난 뒤 적용합니다.
 - 고르지 않았으면 CLI 설정(`effortLevel`, `CLAUDE_CODE_EFFORT_LEVEL`)을 따릅니다(기본 "자동 · CLI 설정 따름").
 - 최고 단계(xhigh·max)는 색과 불꽃 효과로 강조됩니다.
@@ -287,7 +286,7 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 - 켜기·끄기 스위치(Fast 등), MAX 토글(최대 컨텍스트 또는 MAX 모드), 컨텍스트 창 선택, 그 밖의 config option 드롭다운이 입력창 아래에 나옵니다.
 
 ### 모델 관련 단축키
-- `Shift+→` / `Shift+←`: 다음·이전 모델로 전환(채팅 입력창에서).
+- `Ctrl+Alt+→` / `Ctrl+Alt+←`: 다음·이전 모델로 전환(채팅 입력창에서). 기본값은 `apps/web/src/chat-model.ts`의 `chatKeyDefs`이고 설정 › 단축키에서 바꿀 수 있습니다(§18).
 
 ---
 
@@ -496,10 +495,10 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 | 동작 | 기본 키 | 설정 키 |
 |---|---|---|
-| Effort 올리기 | Shift+↑ | `effortUp` |
-| Effort 내리기 | Shift+↓ | `effortDown` |
-| 다음 모델로 전환 | Shift+→ | `modelNext` |
-| 이전 모델로 전환 | Shift+← | `modelPrev` |
+| Effort 올리기 | Ctrl+Alt+↑ | `effortUp` |
+| Effort 내리기 | Ctrl+Alt+↓ | `effortDown` |
+| 다음 모델로 전환 | Ctrl+Alt+→ | `modelNext` |
+| 이전 모델로 전환 | Ctrl+Alt+← | `modelPrev` |
 | 입력 임시 보관 / 복원 | Ctrl+S | `stash` |
 | 권한 모드 순환 | Shift+Tab | (고정) |
 | 메뉴 항목 선택 | Tab / Enter | (고정) |
@@ -615,15 +614,12 @@ API 키는 설정 › AI 툴 › Claude Code·Codex·Cursor CLI 탭에서 한 �
 
 ---
 
-## 26. 이 브랜치에 없는 작업과 master와의 차이
+## 26. 브랜치 기준이던 때의 차이 (정리됨)
 
-이 문서는 `feat/ui-frame` 브랜치를 기준으로 합니다. 아래는 이 브랜치에 들어오지 않은 작업이고, 마지막 항목은 이 브랜치와 master의 차이입니다(2026-11-12 확인).
+이 절은 2026-11-12에 `feat/ui-frame` 브랜치와 master의 차이를 적던 곳입니다. 2026-11-27에 코드로 다시 확인해 정리했습니다.
 
-- **`origin/feat/feedback-inbox`**: 이 브랜치에 이미 머지됐습니다(머지 커밋 `0947366`). 다만 master에는 아직 없습니다. 피드백 요청(캡처·AI 정리·Hub 전송)과, 채팅과 관련된 부분(채팅 탭의 피드백 캡처 영역 `data-feedback-region`, 설정 `feedbackAgentTool`·`feedbackAiContext`와 이어서 생긴 `feedbackAiModel`·`feedbackAiEffort`, §17)이 여기에 속합니다.
-- **로컬 `fix/mac-ctrl-shortcuts`** (2026-10-25, 이 브랜치에도 master에도 없음, 원격 없음): 커밋 제목 기준 "macOS에서 Ctrl 단축키를 Cmd로 바꾸지 않고 Ctrl로 유지". §18 단축키 설명과 관련이 있습니다. 커밋은 두 개이며 모두 이 브랜치에 없습니다: 단축키 수정(`7ad95c0`)과, 단축키와 무관한 CI 러너 변경(`fadfe8c`, "run checks on GitHub-hosted runners"). 그대로 머지하면 CI 설정이 바뀝니다. 오래된 브랜치라 충돌할 수 있습니다. 이 브랜치의 터미널 셸 히스토리 수정(`9d6f979`)은 `fix/mac-ctrl-shortcuts`에서 가져온 것이라고 커밋 메시지에 적혀 있습니다.
-- **`chat/pc-talk`** (로컬과 `origin/chat/pc-talk`, 이 브랜치에도 master에도 없음): 채팅 기능과 무관한 `PC-TALK.md`·`pc-talk.sh`만 있는 초기화 커밋입니다.
-- 이미 master에 들어온 브랜치: `feat/agent-bus`, `feat/chat-mode`, `feat/chat-mode-on-master`(정리 가능).
-- **master에 없는 이 브랜치의 변경**: 인터랙티브 UI, 피드백 요청, 서브에이전트 카드, `@` 파일 언급, 이미지 미리보기, Artifact 켜기 등. master에 합쳐지기 전에는 master 기준 설명과 다를 수 있습니다.
+- 그때 "master에 없다"고 적은 기능은 모두 master에 있습니다. 확인한 것: 피드백 요청의 채팅 캡처 영역(`data-feedback-region`), 설정 `feedbackAgentTool`, 인터랙티브 UI(`ade-ui`). 피드백 처리 상태는 [FEEDBACK_STATUS](docs/FEEDBACK_STATUS.md)를 보세요.
+- 그때 나열한 브랜치(`feat/ui-frame`, `origin/feat/feedback-inbox`, `fix/mac-ctrl-shortcuts`, `chat/pc-talk`)는 저장소에 더 이상 없습니다. macOS의 Ctrl 단축키 동작은 §18과 `apps/web/src/shortcuts.ts`를 기준으로 하세요. `fix/mac-ctrl-shortcuts`가 master에 들어갔는지는 확인하지 못했습니다.
 
 ---
 
