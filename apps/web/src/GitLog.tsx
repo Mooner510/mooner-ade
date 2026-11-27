@@ -675,7 +675,7 @@ export function GitLog(props: GitLogProps) {
       </>}
       <div className="git-log">
         {toolbar}
-        <div className="git-table" ref={table} tabIndex={0} role="grid" aria-label="커밋 기록" aria-rowcount={layout?.rows ?? 0} onKeyDown={onTableKey} onScroll={event => setScroll(event.currentTarget.scrollTop)} onMouseLeave={() => setHover(null)}
+        <div className="git-table" ref={table} tabIndex={0} role="grid" aria-label="커밋 기록" aria-rowcount={layout?.rows ?? 0} onKeyDown={onTableKey} onScroll={event => { const top = event.currentTarget.scrollTop; setScroll(previous => Math.floor(previous / ROW) === Math.floor(top / ROW) ? previous : top); }} onMouseLeave={() => setHover(null)}
           style={{ '--git-cols': `minmax(0, 1fr)${columns.includes('author') ? ' 140px' : ''}${columns.includes('date') ? ' 128px' : ''}${columns.includes('hash') ? ' 76px' : ''}` } as React.CSSProperties}>
           <div className="git-rows" style={{ height: (layout?.rows ?? 0) * ROW + (data.truncated ? 32 : 0) }}>
             {rows}

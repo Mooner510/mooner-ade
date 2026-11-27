@@ -58,7 +58,9 @@ export class FileBuffer {
   }
 
   refresh = () => this.run(async () => {
-    const { file } = await this.call<{ file: FileVersion | null }>('files/read', { path: this.path });
+    // With the revision it holds, so an unchanged file comes back without its text (only when nothing needs the text: no error to recover from).
+    const known = this.state.file && !this.state.error ? this.state.file.revision : undefined;
+    const { file } = await this.call<{ file: FileVersion | null }>('files/read', { path: this.path, ...(known && { revision: known }) });
     if (this.state.conflict) return;
     if (this.dirty && file?.content !== this.state.draft) {
       if (file?.revision !== this.state.file?.revision) this.update({ conflict: { file }, error: undefined });

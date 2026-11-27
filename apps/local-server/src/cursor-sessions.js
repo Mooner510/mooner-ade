@@ -8,6 +8,10 @@ import { fault } from './files.js';
 export const cursorConfigDir = (env = process.env) => env.CURSOR_CONFIG_DIR || path.join(os.homedir(), '.cursor');
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
+// Opening a SQLite store is synchronous (the whole server waits, terminals included), so a session is read again only when its file changed. A write may sit in the
+// `-wal` file while store.db itself is untouched, so that file's stamp is part of the key.
+const sessionMetas = new Map();
+const stamp = async file => { const [db, wal] = await Promise.all([fs.stat(file), fs.stat(`${file}-wal`).catch(() => null)]); return { updatedAt: db.mtimeMs, key: `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}` }; };
 export async function listCursorSessions({ cwd, configDir = cursorConfigDir() }) {
   const hash = createHash('md5').update(path.resolve(cwd)).digest('hex'), root = path.join(configDir, 'chats', hash);
   const { DatabaseSync } = await import('node:sqlite');
@@ -15,15 +19,21 @@ export async function listCursorSessions({ cwd, configDir = cursorConfigDir() })
   for (const name of await fs.readdir(root).catch(error => { if (error.code === 'ENOENT') return []; throw error; })) {
     if (!uuid.test(name)) continue;
     const file = path.join(root, name, 'store.db');
-    let db;
+    let seen;
+    try { seen = await stamp(file); } catch { continue; }
+    const held = sessionMetas.get(file);
+    if (held?.key === seen.key) { if (held.session) sessions.push(held.session); continue; }
+    let db, session = null;
     try {
       db = new DatabaseSync(file, { readOnly: true, timeout: 1000 });
       const raw = db.prepare("SELECT value FROM meta WHERE key='0'").get();
       const meta = JSON.parse(Buffer.from(raw?.value ?? '', 'hex').toString('utf8'));
-      if (meta.agentId !== name) continue;
-      sessions.push({ sessionId: name, title: typeof meta.name === 'string' && meta.name.trim() ? meta.name.slice(0, 120) : name.slice(0, 8), updatedAt: (await fs.stat(file)).mtimeMs, file });
+      if (meta.agentId === name) session = { sessionId: name, title: typeof meta.name === 'string' && meta.name.trim() ? meta.name.slice(0, 120) : name.slice(0, 8), updatedAt: seen.updatedAt, file };
     } catch { /* unreadable or newer format: never guess which conversation to take */ }
     finally { db?.close(); }
+    sessionMetas.set(file, { key: seen.key, session });
+    if (session) sessions.push(session);
+    await new Promise(resolve => setImmediate(resolve)); // let terminal output and requests through between two stores
   }
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
 }

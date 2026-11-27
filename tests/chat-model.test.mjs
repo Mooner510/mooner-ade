@@ -954,3 +954,19 @@ test('fromReplay fills results in place but ends with the same view as reducing 
   const next = reduce(fast, { seq: 501, kind: 'tool_result', toolUseId: 'tl', content: 'x' });
   assert.notEqual(next.results, fast.results); assert.equal(fast.results.tl, undefined);
 });
+
+test('fromReplay: filling items in place gives the same view as reducing event by event', async () => {
+  const { fromReplay, reduce, emptyView } = await import('../apps/web/src/chat-model.ts');
+  const events = [];
+  for (let n = 0; n < 2100; n++) {
+    events.push({ seq: events.length + 1, kind: 'user', text: `q${n}`, images: 0 });
+    events.push({ seq: events.length + 1, kind: 'message', role: 'assistant', id: `a${n}`, uuid: `u${n}`, blocks: [{ type: 'text', text: `answer ${n}` }] });
+  }
+  let step = emptyView();
+  for (const event of events) step = reduce(step, event);
+  const replayed = fromReplay({ events, seq: events.length });
+  assert.equal(replayed.items.length, step.items.length);
+  assert.deepEqual(replayed.items, step.items);
+  assert.equal(replayed.items.length, 2000);
+  assert.notEqual(replayed.items, fromReplay({ events, seq: events.length }).items);
+});

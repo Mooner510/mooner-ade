@@ -21,12 +21,13 @@ export function UserMessageBubble({ text, className = '', markdown = true, child
     const bubble = bubbleRef.current;
     if (!bubble) return;
     const sync = () => setLong(userMessageExceedsClipHeight(measureBubbleHeight(bubble)));
-    sync();
+    // No measuring here: that forced a layout of every bubble at commit (30 on opening a chat, inside turns the browser had skipped). The observer reports the size
+    // before the first paint, and again whenever the content changes size (so `children` need not be a dependency: it is a new element on every render).
     const preview = bubble.querySelector('.chat-bubble-preview');
     const observer = new ResizeObserver(sync);
     if (preview) observer.observe(preview);
     return () => observer.disconnect();
-  }, [text, children, markdown]);
+  }, [text, markdown]);
 
   const content = children ?? (markdown ? <Markdown text={text} /> : <span className="chat-bubble-plain">{text}</span>);
   const clipped = long && !expanded;

@@ -1,3 +1,4 @@
+import { slimEvents } from './chat-replay.js';
 import { spawn } from 'node:child_process';
 import { existsSync, promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -1280,7 +1281,7 @@ export async function openChatSession({ directory, id, projectId, cwd, agent = '
     // The API key (or the choice to use one) changed: a running child still has the old one in its environment, so it is replaced (same session)
     // right away when idle, or once the running turn ends. The next message starts a child with the new key.
     relaunch() { if (child) { restartWhenQuiet(); } },
-    replay: since => ({ events: events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0)), seq, state: shown(),
+    replay: (since, { slim = false } = {}) => ({ events: ((list) => slim ? slimEvents(list) : list)(events.filter(event => event.seq > (Number.isSafeInteger(since) ? since : 0))), seq, state: shown(),
       approvals: [...approvals.values()] }),
     // `steer` sends into the running turn: the CLI folds the line into that turn (one `result` for both; checked with claude 2.1.322),
     // so turn state is left alone. ponytail: a steer racing the turn's last event may open a second turn, status then flickers idle once.
@@ -1745,14 +1746,17 @@ export async function listChatSessions({ directory, agent, exclude }) {
   if (!chatAgents.includes(agent)) throw fault('INVALID_INPUT', '잘못된 에이전트입니다.');
   const root = path.join(directory, 'chat');
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
-  const sessions = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !ID.test(entry.name) || entry.name === exclude) continue;
-    try {
-      const file = path.join(root, entry.name, 'meta.json'), meta = JSON.parse(await fs.readFile(file, 'utf8'));
-      if (!meta || (meta.agent ?? 'claude') !== agent || typeof meta.sessionId !== 'string' || !meta.sessionId) continue;
-      sessions.push({ id: entry.name, sessionId: meta.sessionId, title: typeof meta.title === 'string' && meta.title ? meta.title : `대화 ${String(meta.sessionId).slice(0, 8)}`, model: [meta.lastModel, meta.model].find(value => typeof value === 'string' && value) ?? null, updatedAt: (await fs.stat(file)).mtimeMs });
-    } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+  const sessions = [], listed = entries.filter(entry => entry.isDirectory() && ID.test(entry.name) && entry.name !== exclude);
+  // 32 at a time: each folder was read and parsed one after another, which a long history made seconds of waiting.
+  for (let at = 0; at < listed.length; at += 32) {
+    const found = await Promise.all(listed.slice(at, at + 32).map(async entry => {
+      try {
+        const file = path.join(root, entry.name, 'meta.json'), meta = JSON.parse(await fs.readFile(file, 'utf8'));
+        if (!meta || (meta.agent ?? 'claude') !== agent || typeof meta.sessionId !== 'string' || !meta.sessionId) return null;
+        return { id: entry.name, sessionId: meta.sessionId, title: typeof meta.title === 'string' && meta.title ? meta.title : `대화 ${String(meta.sessionId).slice(0, 8)}`, model: [meta.lastModel, meta.model].find(value => typeof value === 'string' && value) ?? null, updatedAt: (await fs.stat(file)).mtimeMs };
+      } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; return null; }
+    }));
+    for (const session of found) if (session) sessions.push(session);
   }
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
 }

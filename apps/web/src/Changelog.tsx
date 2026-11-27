@@ -41,7 +41,7 @@ const playsThrough = (version: string, opened: string[]) => playsIntro(version) 
 export { syncChangelogVersion };
 export { changelogDue, setChangelogDue } from './changelog-state';
 // Same rule as the red dots in the window: some version of the latest update has never been opened (the sidebar button shows a dot for it).
-export const hasUnreadChangelog = () => hasUnreadChangelogVersions(entries.map(item => item.version));
+export { hasUnreadChangelog } from './changelog-meta';
 
 // The version as one box per character: the intro animates them in one after another, the header copy lays out the same boxes so the intro lands exactly on it.
 const Letters = ({ text }: { text: string }) => <>{[...text].map((char, index) => <span key={index} style={{ '--i': index } as CSSProperties}>{char}</span>)}</>;

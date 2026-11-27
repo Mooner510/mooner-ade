@@ -2,7 +2,7 @@ import { AppKeysContext, appKey, keyBelongsToField, keyPlace, matches, showAppKe
 import { QuickInput, type QuickRequest } from './QuickInput';
 import { installTooltips } from './tooltip';
 import { dragStartsOnButton, notePress } from './drag-guard';
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { useExit, useNotice, useTipNotice } from './use-notice';
@@ -11,12 +11,12 @@ import { BgAnimTip } from './BgAnimTip';
 import { api, basename, chooseFolder } from './api';
 import { RemotePcDialog, remoteBridge } from './RemotePc';
 import { closeRemote, isRemote, onRemoteBack, openEvents, remoteClient, type Events } from './transport';
-import { setDrawer, useDrawer, useMobile } from './mobile';
+import { setDrawer, useDrawer, useMobile, useSwipeClose, closeDrawer } from './mobile';
 import { agentNames, defaultSettings, migrateSettings, syncMonacoTheme, TOUR_VERSION, type Settings } from './Editor';
 import { installThemes, nextTheme, themeById } from './themes';
 import { playSound } from './sound';
 import { Icon, IconButton, type IconName } from './Icon';
-import { SettingsModal, settingsSections, type Section } from './Settings';
+import { settingsSections, type Section } from './settings-sections';
 import { KeyGuide } from './KeyGuide';
 import { bindKeyGuide, bindSettingsSection, openKeyGuide, openSettingsSection } from './app-events';
 import { attentionTargets, nextAttention } from './attention-nav';
@@ -28,11 +28,9 @@ import { AppUpdate } from './AppUpdate';
 import { onPluginsOpen } from './PluginSettings';
 import { AppVersion, Modal } from './views';
 import { CacheTimer } from './Panes';
-import { Tutorial } from './Tutorial';
 import { Splash } from './Splash';
 import { Hint } from './Hint';
-import { Changelog, changelogDue, entries as changelogEntries, hasUnreadChangelog, setChangelogDue, syncChangelogVersion } from './Changelog';
-import { UsageReview } from './UsageReview';
+import { changelogDue, changelogVersions, hasUnreadChangelog, setChangelogDue, syncChangelogVersion } from './changelog-meta';
 import { bindUsageReview } from './usage-review-open';
 import { syncUsageLedger } from './usage-sync';
 import { LEGACY_CHANGELOG_VERSION } from './changelog-state';
@@ -60,6 +58,11 @@ addEventListener('focus', syncFocus); addEventListener('blur', () => setTimeout(
 import './style.css';
 import './mobile.css';
 import { WorktreeRowMark } from './ChatWorktree';
+// Opened on demand, so they are loaded then and not with the first screen (a phone gets every file over a slow link).
+const SettingsModal = lazy(() => import('./Settings').then(module => ({ default: module.SettingsModal })));
+const Tutorial = lazy(() => import('./Tutorial').then(module => ({ default: module.Tutorial })));
+const Changelog = lazy(() => import('./Changelog').then(module => ({ default: module.Changelog })));
+const UsageReview = lazy(() => import('./UsageReview').then(module => ({ default: module.UsageReview })));
 installThemes();
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -339,7 +342,7 @@ function Shell() {
   const checkChangelog = useCallback((existingUser: boolean) => {
     const desktop = (window as unknown as { adeDesktop?: { appInfo?(): Promise<{ version: string }> } }).adeDesktop;
     void (desktop?.appInfo?.().then(info => info.version, () => undefined) ?? Promise.resolve(undefined)).then(version => {
-      const updated = syncChangelogVersion(version ?? changelogEntries[0]?.version ?? '0.0.0', undefined, existingUser ? LEGACY_CHANGELOG_VERSION : undefined);
+      const updated = syncChangelogVersion(version ?? changelogVersions[0] ?? '0.0.0', undefined, existingUser ? LEGACY_CHANGELOG_VERSION : undefined);
       const unread = hasUnreadChangelog();
       setChangelogUnread(unread);
       // `changelogDue`: this start is not the update itself, but an earlier start that did not get to show the notes (closed during the tour) left them due.
@@ -352,6 +355,7 @@ function Shell() {
   // On a phone the sidebar is a drawer over the workspace, always drawn full (the narrow strip of initials is a desktop choice).
   const mobile = useMobile(), drawer = useDrawer();
   const drawerRef = useRef(drawer); drawerRef.current = drawer;
+  useSwipeClose(shell, mobile && drawer, closeDrawer);
   // On a phone the back gesture closes the dialog on top, then the drawer; with nothing open the app goes back to its PC list.
   useEffect(() => onRemoteBack(() => {
     const dialogs = document.querySelectorAll('dialog[open]'), top = dialogs[dialogs.length - 1];
@@ -599,6 +603,8 @@ function Shell() {
   const paletteHost = useMemo<PaletteHost>(() => ({ entries: () => paletteEntries.current() }), []);
   // "(2) 무너에이드" and the taskbar while tabs need you (window-attention.ts).
   useWindowAttention(Object.values(status).reduce((sum, item) => sum + item.attention, 0), settings.attentionBadge);
+  // Stable, like the others: an inline arrow was new on every render and made every project's memo(Workspace) render again.
+  const openUsage = useCallback(() => setUsageOpen(true), []), openRemotePc = useCallback(() => setRemotePcOpen(true), []);
   useEffect(() => onPluginsOpen(onOpenPlugins), [onOpenPlugins]);
 
   // Dragging only moves a CSS variable; the width is committed to the settings (and saved) once the pointer is released.
@@ -625,13 +631,13 @@ function Shell() {
   const animCardLife = useExit(Boolean(useTipNotice('bg-anim', [['bganim', animTip && settings.tips && !settings.animateInBackground]])));
   const animCard = <BgAnimTip closing={animCardLife.closing} onOpenSettings={() => { setAnimTip(false); setSettingsOpen('default'); }} onDone={() => setAnimTip(false)} />;
   const animTipCard = animCardLife.mounted && <>{<Spotlight target='button[aria-label="설정"]' closing={animCardLife.closing} />}{createPortal(animCard, document.body)}</>;
-  const settingsModal = settingsOpen && <SettingsModal key={`${settingsOpen}:${settingsAt ?? ''}`} initialSection={settingsAt ? settingsAt : settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => { setSettingsOpen(false); setSettingsAt(undefined); }} />;
+  const settingsModal = settingsOpen && <Suspense fallback={null}><SettingsModal key={`${settingsOpen}:${settingsAt ?? ''}`} initialSection={settingsAt ? settingsAt : settingsOpen === 'plugins' ? 'plugins' : settingsOpen === 'default' ? undefined : 'ai'} initialAiTab={settingsOpen === 'claude' || settingsOpen === 'codex' || settingsOpen === 'cursor' ? settingsOpen : undefined} settings={settings} onChange={setSettings} onClose={() => { setSettingsOpen(false); setSettingsAt(undefined); }} /></Suspense>;
   const keyGuideModal = keyGuideOpen && <KeyGuide settings={settings} onClose={() => setKeyGuideOpen(false)} onSettings={() => { setKeyGuideOpen(false); openSettingsSection('keys'); }} />;
   // "다른 PC에 접속" is the desktop app's: a phone's window and a plain browser have no `adeDesktop.remote`.
   const canRemotePc = !isRemote && Boolean(remoteBridge());
   const remotePcModal = remotePcOpen && canRemotePc && <RemotePcDialog onClose={() => setRemotePcOpen(false)} />;
-  const changelogModal = changelogOpen && <Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} />;
-  const usageModal = usageOpen && <UsageReview onClose={() => setUsageOpen(false)} />;
+  const changelogModal = changelogOpen && <Suspense fallback={null}><Changelog onClose={() => { setChangelogOpen(false); setChangelogUnread(hasUnreadChangelog()); }} /></Suspense>;
+  const usageModal = usageOpen && <Suspense fallback={null}><UsageReview onClose={() => setUsageOpen(false)} /></Suspense>;
   useEffect(() => bindUsageReview(() => setUsageOpen(true)), []);
   useEffect(() => {
     const run = () => { void syncUsageLedger().catch(() => {}); };
@@ -652,7 +658,7 @@ function Shell() {
   }, [changelogPending, booted, touring, splash]);
   // Seeing the tour to its end means seeing its Git graph step, which is what the one-time Git card says; skipping it does not (the card stays for that person).
   const finishTour = (skipped?: boolean) => { if (skipped) setSkippedTour(true); setSplash(true); setTimeout(() => setSettings(previous => ({ ...previous, onboarded: true, tourVersion: TOUR_VERSION, ...(skipped ? {} : { gitTipPending: false }) })), 450); };
-  const tutorial = <>{touring && <Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} />}{splash && <Splash onDone={() => setSplash(false)} />}</>;
+  const tutorial = <>{touring && <Suspense fallback={null}><Tutorial settings={settings} onSettings={setSettings} setup={!onboardedOnce.current} onDone={finishTour} /></Suspense>}{splash && <Splash onDone={() => setSplash(false)} />}</>;
   // Keys on the screen with no project: no Workspace is mounted to listen, so this one runs the keys that need no project (and its palette lists only those).
   const [welcomeFeedback, setWelcomeFeedback] = useState(false), [welcomeQuick, setWelcomeQuick] = useState<{ key: number; request: QuickRequest } | null>(null);
   const welcomeCommands = useRef<Command[]>([]);
@@ -894,7 +900,7 @@ function Shell() {
         root={entry.root} projectId={entry.id} active={entry.root === current} hub={hub} connection={connection} settings={settings} setSettings={setSettings} projectCommands={projectCommands}
         requestedFile={requestedFile?.root === entry.root ? requestedFile : undefined} onOpenExternalFile={openExternalFile}
         onFileOpened={clearFileRequest}
-        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenUsage={() => setUsageOpen(true)} onOpenRemotePc={canRemotePc ? () => setRemotePcOpen(true) : undefined} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} paletteHost={paletteHost} />)}
+        onLegacySettings={onLegacySettings} onStatus={onStatus} onFailed={onFailed} onOpenSettings={onOpenSettings} onOpenUsage={openUsage} onOpenRemotePc={canRemotePc ? openRemotePc : undefined} onOpenPlugins={onOpenPlugins} onAgentAlert={onAgentAlert} paletteHost={paletteHost} />)}
     </div>
     {projectMenu && <ProjectMenu target={projectMenu} handle={handles.current.get(projectMenu.root)} onPickFile={() => { setActiveRoot(projectMenu.root); handles.current.get(projectMenu.root)?.pickFile(); }} onClose={() => setProjectMenu(null)} />}
     {menu && <TabMenu target={menu} tabs={status[menu.root]?.tabs ?? []} handle={handles.current.get(menu.root)} onClose={() => setMenu(null)} />}
@@ -909,6 +915,7 @@ function Shell() {
 }
 // xterm and Monaco measure glyphs once when they are created, so the bundled fonts are loaded (local files, so quick) before the first render.
 // The phone app skips the Korean web font: it would come over the slow link, and the system font is the same Noto Sans (mobile.css).
+// It also waits less (600 ms): the files are in its cache after the first launch, and a first launch should not hold the screen back for a slow link.
 const fontsReady = Promise.all([['Inter Variable', 'Aa'], ...(remoteClient === 'phone' ? [] : [['Noto Sans KR Variable', '가']]), ['JetBrains Mono Variable', 'Aa']].map(([font, sample]) => document.fonts.load(`13px "${font}"`, sample).catch(() => [])));
 installTooltips();
-void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, 1500))]).then(() => createRoot(document.getElementById('root')!).render(<ErrorBoundary><Shell /></ErrorBoundary>));
+void Promise.race([fontsReady, new Promise(resolve => setTimeout(resolve, remoteClient === 'phone' ? 600 : 1500))]).then(() => createRoot(document.getElementById('root')!).render(<ErrorBoundary><Shell /></ErrorBoundary>));

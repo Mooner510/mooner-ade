@@ -80,22 +80,8 @@ function AboutSettings() {
   </>;
 }
 
-export type Section = 'appearance' | 'terminal' | 'ai' | 'chat' | 'status' | 'git' | 'wakatime' | 'plugins' | 'feedback' | 'keys' | 'about';
-const sections: { id: Section; label: string; icon: IconName }[] = [
-  { id: 'appearance', label: '외관', icon: 'panelLeft' },
-  { id: 'terminal', label: '터미널', icon: 'terminal' },
-  { id: 'ai', label: 'AI 툴', icon: 'claude' },
-  { id: 'chat', label: '채팅', icon: 'chat' },
-  { id: 'status', label: '상태바', icon: 'statusBar' },
-  { id: 'git', label: 'Git', icon: 'graph' },
-  { id: 'wakatime', label: 'WakaTime', icon: 'clock' },
-  { id: 'plugins', label: '플러그인', icon: 'plugin' },
-  { id: 'feedback', label: '피드백', icon: 'feedback' },
-  { id: 'keys', label: '단축키', icon: 'code' },
-  { id: 'about', label: '정보', icon: 'info' }
-];
-// The command palette's `,` search opens these (palette entries in main.tsx).
-export const settingsSections: readonly { id: Section; label: string; icon: IconName }[] = sections;
+import { sections, settingsSections, type Section } from './settings-sections';
+export { settingsSections, type Section };
 type AiTab = 'common' | 'claude' | 'codex' | 'cursor';
 const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
   { id: 'common', label: '공용', icon: 'settings' },
@@ -103,10 +89,8 @@ const aiTabs: { id: AiTab; label: string; icon: IconName }[] = [
   { id: 'codex', label: agentNames.codex, icon: 'codex' },
   { id: 'cursor', label: agentNames.cursor, icon: 'cursor' }
 ];
-export const statusLabels: Record<string, string> = {
-  connection: '연결 상태', path: '프로젝트 경로', branch: '브랜치', cpu: 'CPU 사용률', memory: '메모리 사용량',
-  claudeusage: 'Claude Code 사용량', codexusage: 'Codex 사용량', cursorusage: 'Cursor 사용량', clock: '시계', wakatime: 'WakaTime 오늘 기록', readiness: '에이전트 준비 상태'
-};
+import { statusLabels } from './status-labels';
+export { statusLabels };
 const statusHints: Record<string, string> = {
   claudeusage: '5시간/주간 한도 사용률. Claude Code 로그인 정보로 조회합니다.',
   codexusage: '5시간/주간 한도 사용률. Codex ChatGPT 로그인 또는 최근 세션 기록으로 조회합니다.',

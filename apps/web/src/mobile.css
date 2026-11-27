@@ -46,6 +46,7 @@
   .shell.mobile .projects-head .icon-btn[aria-label^="사이드바"] { display: none; }
   .shell.mobile > .projects { position: fixed; z-index: 60; top: 0; bottom: 0; left: 0; width: var(--rail-w); box-shadow: var(--shadow); transform: translateX(-102%); transition: transform .22s var(--ease-out, ease-out); padding-top: env(safe-area-inset-top, 0px); }
   .shell.mobile.drawer-open > .projects { transform: none; }
+  .shell.mobile.drawer-open { touch-action: pan-y; } /* a sideways swipe is the page's (useSwipeClose), not the browser's */
   /* A desktop window this narrow still has the window controls (macOS traffic lights over the drawer's corner): --win-top is 0 on a phone. */
   .shell.mobile > .projects::before { height: max(8px, var(--win-top)); }
   .shell.mobile .projects-resizer { display: none; }
@@ -171,3 +172,6 @@
 
 /* A phone paired for viewing (transport.ts readOnly): everything stays visible and live, the controls that change something are gone. */
 [data-remote="view"] :is(.chat-dock, .plan-actions, .chat-approval footer, .chat-q-options, .chat-q-input, .term-keys, .split-button, .pane-actions, .folder-actions, .ptab-close, .chat-msg-actions) { display: none !important; }
+
+/* A phone's chat rows come in without animating their height and padding: those are layout properties, so every new row cost a layout per frame. */
+html[data-remote-client="phone"] .chat-thread .chat-row[data-enter], html[data-remote-client="phone"] .chat-thread .chat-row[data-enter] > div { animation: none; }

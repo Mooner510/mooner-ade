@@ -5,7 +5,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { fault } from './files.js';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8', '.wasm': 'application/wasm' };
@@ -20,6 +21,12 @@ const SQUEEZE = /^(text\/|application\/(json|javascript|wasm)|image\/svg)/;
 function encode(content, type, input) {
   if (input?.encoding !== 'gzip' || !SQUEEZE.test(type) || content.length < 1024) return { data: content.toString('base64') };
   return { encoding: 'gzip', data: gzipSync(content, { level: 6 }).toString('base64') };
+}
+
+// A reply the phone asked for as `encoding: 'gzip'` (a chat's whole replay is megabytes of JSON; the link is slow): {encoding, data} for gunzipReply in web/src/transport.ts.
+export async function gzipReply(value, input) {
+  if (input?.encoding !== 'gzip') return value;
+  return { encoding: 'gzip', data: (await promisify(gzip)(Buffer.from(JSON.stringify(value)))).toString('base64') };
 }
 
 // What the first screen needs, so the phone can ask for all of it at once instead of finding it one step at a time (page → its
@@ -81,6 +88,7 @@ export function createRemoteUi({ webRoot, frame, feedbackFile }) {
     cached = { key, value };
     return value;
   }
+  const replies = new Map(); // ponytail: 64 newest files, first in first out; the bundle is a few hundred files and a launch asks for the first screen's
   async function file(input) {
     const wanted = typeof input?.path === 'string' ? input.path : '';
     if (!wanted.startsWith('/') || wanted.length > 1024 || wanted.includes('\0')) throw fault('INVALID_PATH', '잘못된 경로입니다.', 403);
@@ -96,9 +104,14 @@ export function createRemoteUi({ webRoot, frame, feedbackFile }) {
     const stat = await fs.stat(target).catch(() => null);
     if (!stat?.isFile()) throw fault('NOT_FOUND', '파일이 없습니다.', 404);
     if (stat.size > MAX_FILE) throw fault('PAYLOAD_TOO_LARGE', '파일이 너무 큽니다.', 413);
+    // The same file is asked for by every phone launch (and by each window of another PC): its hash and gzip are made once per version of the file, not per request.
+    const key = `${target}:${stat.size}:${stat.mtimeMs}:${input?.encoding === 'gzip'}`, held = replies.get(key);
+    if (held) return { path: wanted, ...held };
     const content = await fs.readFile(target);
     const type = TYPES[path.extname(target)] || 'application/octet-stream';
-    return { path: wanted, type, ...(target.endsWith('index.html') ? { csp: REMOTE_PAGE_CSP } : {}), cache: 'immutable', hash: sha(content), ...encode(content, type, input) };
+    const reply = { type, ...(target.endsWith('index.html') ? { csp: REMOTE_PAGE_CSP } : {}), cache: 'immutable', hash: sha(content), ...encode(content, type, input) };
+    replies.set(key, reply); if (replies.size > 64) replies.delete(replies.keys().next().value);
+    return { path: wanted, ...reply };
   }
   return { manifest, file };
 }

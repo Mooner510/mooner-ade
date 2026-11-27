@@ -8,6 +8,7 @@ import { copyText } from './toast';
 import { recordCopy, registerSendSource, requestSendToChat } from './send-to-chat';
 import type { SendPayload } from './chat-send';
 import { useActionKeys } from './shortcuts';
+import { isRemote } from './transport';
 
 type Entry = { name: string; folder: boolean };
 type Move = { from: string; to: string };
@@ -110,7 +111,7 @@ function Directory({ path, depth, ctx }: { path: string; depth: number; ctx: Tre
     const unsubscribe = watch(paths => {
       if (!paths.length || paths.some(changed => changed === path || parentOf(changed) === path || path.startsWith(`${changed}/`))) void load();
     });
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, 5000);
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, isRemote ? 30_000 : 5000); // fs events already reload it; the poll is a safety net
     return () => { live = false; unsubscribe(); clearInterval(timer); };
   }, [path, visible, watch, call, prefetched]);
   return <div role="group">
@@ -169,7 +170,7 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
     };
     void load();
     const unsubscribe = watch(() => void load());
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, 5000);
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, isRemote ? 30_000 : 5000); // fs events already reload it; the poll is a safety net
     return () => { live = false; unsubscribe(); clearInterval(timer); };
   }, [visible, open, gitColors, call, watch]);
   const toggle = (path: string) => {
@@ -200,16 +201,21 @@ export function ProjectTree({ projectId, root, visible, open, expanded, setExpan
     const folders = [scope];
     const listings = new Map<string, Entry[]>();
     try {
-      for (const path of folders) {
+      // One depth at a time, a level's folders together: each folder was a round trip of its own, one after another (slow over a phone's link).
+      for (let level = [scope]; level.length;) {
         if (controller.signal.aborted) return;
-        try {
-          const { entries } = await call<{ entries: Entry[] }>('files/directory', { path });
-          if (!expanded.has(path)) listings.set(path, entries);
-          for (const entry of entries) if (entry.folder) folders.push(childPath(path, entry.name));
-        } catch (cause) {
-          // A descendant can disappear or become unreadable while the other branches are being expanded.
-          if (path === scope) throw cause;
-        }
+        const next: string[] = [];
+        await Promise.all(level.map(async path => {
+          try {
+            const { entries } = await call<{ entries: Entry[] }>('files/directory', { path });
+            if (!expanded.has(path)) listings.set(path, entries);
+            for (const entry of entries) if (entry.folder) next.push(childPath(path, entry.name));
+          } catch (cause) {
+            // A descendant can disappear or become unreadable while the other branches are being expanded.
+            if (path === scope) throw cause;
+          }
+        }));
+        folders.push(...next); level = next;
       }
       if (controller.signal.aborted) return;
       for (const [path, entries] of listings) prefetched.current.set(path, entries);

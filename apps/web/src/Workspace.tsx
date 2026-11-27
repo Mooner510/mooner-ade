@@ -36,9 +36,9 @@ import { FeedbackPanel } from './FeedbackPanel';
 import { FeedbackCapture } from './FeedbackCapture';
 import { StatusMore, StatusSlot, useStatusFit } from './StatusFit';
 import { useBarFit } from './use-bar-fit';
-import { statusLabels } from './Settings';
+import { statusLabels } from './status-labels';
 import { aiContext, bytesToBase64, pendingReviewCount, progressNews } from './feedback-model';
-import { can, isRemote, readOnly } from './transport';
+import { can, isRemote, readOnly, remoteClient } from './transport';
 import { openUsageReview } from './usage-review-open';
 import { setDrawer, useMobile } from './mobile';
 import { canCapture, endCapture, ensureDraft, feedbackCall, openFeedback, requestCapture, useFeedback } from './feedback-store';
@@ -74,7 +74,7 @@ type WorkspaceProps = {
 };
 
 type Repository = { id: string; name: string; path: string; worktreeEnabled: boolean; worktreePath: string | null; branch: string | null };
-type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Repository[]; terminals: { id: string; exited: boolean; cwd?: string }[]; ui: any };
+type Snapshot = { id: string; root: string; multiRepo: boolean; repositories: Repository[]; terminals: { id: string; exited: boolean; cwd?: string }[]; chats?: { id: string; state?: { status?: string } }[]; ui: any };
 // A Warp-style tab: one pane tree of terminals (and editor panes opened next to them).
 type PaneTab = { id: string; title?: string; pane: Pane | null; focus?: string };
 // This window's name on the server's layout broadcasts, so it skips its own echo (`ui/changed.from`).
@@ -117,7 +117,7 @@ const WakaTimeStat = memo(function WakaTimeStat() {
     let live = true;
     // The server refreshes today's total at most once a minute, so polling faster would show nothing new.
     const load = () => api<{ today: string; lastSent: number; lastError: string | null }>('wakatime/status').then(value => { if (live) setStatus(value); }, () => {});
-    void load(); const timer = setInterval(load, 60000);
+    void load(); const timer = setInterval(() => { if (!document.hidden) void load(); }, 60000);
     return () => { live = false; clearInterval(timer); };
   }, []);
   if (!status) return null;
@@ -278,7 +278,8 @@ export const Workspace = memo(forwardRef<WorkspaceHandle, WorkspaceProps>(functi
   useEffect(() => setSystemRefresh(settings.systemRefresh), [settings.systemRefresh]);
   // Monaco is several MB to parse; reading it while the app is idle keeps that cost out of the moment a diff opens.
   useEffect(() => {
-    if (!('requestIdleCallback' in window)) return;
+    // Not on a phone: 3 MB of editor over its slow link, for diffs it opens one at a time (the file is fetched when it is opened).
+    if (remoteClient === 'phone' || !('requestIdleCallback' in window)) return;
     const id = requestIdleCallback(preloadMonaco, { timeout: 8000 }); return () => cancelIdleCallback(id);
   }, []);
   const refs = {
@@ -667,6 +668,8 @@ ${where}`, [
     const state = readOnly && projectId ? await api<Snapshot>('snapshot', { projectId }) : await api<Snapshot>('project/open', { path: root });
     setRestoring(true); refs.snapshotSeen.current = false;
     refs.project.current = state; setProject(state); bus.current.buffers.clear(); setProcessAgents({}); setLaunched({}); setWorking(new Set()); setAttention({}); setSshSet(new Set()); setTitles({});
+    // A phone opens a chat's replay only when its pane is shown (ChatPane), so the sidebar's working dots come from the snapshot until then.
+    if (isRemote) for (const chat of state.chats ?? []) paneProps.onAgentWorking(chat.id, chat.state?.status === 'working' || chat.state?.status === 'attention');
     const ui = state.ui || {};
     const nextRepoId = state.repositories.some(repo => repo.id === ui.gitRepositoryId) ? ui.gitRepositoryId : state.repositories[0]?.id || '';
     refs.repository.current = nextRepoId; setGitRepositoryId(nextRepoId);

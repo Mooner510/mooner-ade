@@ -41,6 +41,15 @@ export const readOnly = Boolean(hello && hello.scope !== 'control');
 // The stylesheet hides what such a phone could only be refused (mobile.css, [data-remote]).
 if (hello && typeof document !== 'undefined') { document.documentElement.dataset.remote = hello.scope; if (remoteClient) document.documentElement.dataset.remoteClient = remoteClient; }
 
+// The other end of gzipReply (apps/local-server/src/remote-ui.js): a reply that came as {encoding: 'gzip', data: base64} is unpacked; anything else is returned as it is.
+export const canGunzip = typeof DecompressionStream === 'function';
+export async function gunzipReply<T>(reply: unknown): Promise<T> {
+  const packed = reply as { encoding?: string; data?: string } | null;
+  if (packed?.encoding !== 'gzip' || typeof packed.data !== 'string') return reply as T;
+  const bytes = Uint8Array.from(atob(packed.data), char => char.charCodeAt(0));
+  return JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+}
+
 const post = (value: object) => native!.postMessage(JSON.stringify(value));
 const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
 let listeners: { message(text: string): void; state(open: boolean): void } | null = null;
@@ -69,13 +78,16 @@ if (native && hello) native.addEventListener('message', event => {
 });
 
 let sequence = 0;
+const GZIPPED = new Set(['chat/open', 'chat/sessions', 'files/list', 'files/read', 'git/log']);
 export async function call<T = any>(action: string, input: object = {}): Promise<T> {
   if (isRemote) {
     if (!can(action)) { console.warn('[remote] not allowed on this device:', action); throw new ApiError('REMOTE_FORBIDDEN', '이 기기에서는 할 수 없는 작업입니다.'); }
     const id = `r${++sequence}`;
+    // The big replies cross the phone's slow link gzipped (the app and the PC pass `encoding` on; an older PC answers plain, which gunzipReply leaves as it is).
+    const wire = canGunzip && GZIPPED.has(action) ? { ...input, encoding: 'gzip' } : input;
     return new Promise<T>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      try { post({ k: 'call', id, action, input }); } catch (cause) { pending.delete(id); reject(cause instanceof Error ? cause : new Error(String(cause))); }
+      pending.set(id, { resolve: value => gunzipReply<T>(value).then(resolve, reject), reject });
+      try { post({ k: 'call', id, action, input: wire }); } catch (cause) { pending.delete(id); reject(cause instanceof Error ? cause : new Error(String(cause))); }
     });
   }
   const response = await fetch(`/api/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });

@@ -82,8 +82,9 @@ export async function repoState(runtime) {
   const dir = await gitDir(runtime);
   const has = name => fs.stat(path.join(dir, name)).then(() => true, () => false);
   const op = (await has('rebase-merge')) || (await has('rebase-apply')) ? 'rebase' : await has('MERGE_HEAD') ? 'merge' : await has('CHERRY_PICK_HEAD') ? 'cherry-pick' : await has('REVERT_HEAD') ? 'revert' : null;
-  const unmerged = await git(runtime, ['diff', '--name-only', '--diff-filter=U', '-z'], { ok: false });
-  const conflicts = unmerged.exitCode === 0 ? [...new Set(unmerged.stdout.split('\0').filter(Boolean))] : [];
+  // The index lists its unmerged entries (`<mode> <object> <stage>\t<path>`) without comparing every tracked file to the working tree as `git diff` does; this runs on each poll of the graph.
+  const unmerged = await git(runtime, ['ls-files', '-u', '-z'], { ok: false });
+  const conflicts = unmerged.exitCode === 0 ? [...new Set(unmerged.stdout.split('\0').filter(Boolean).map(entry => entry.slice(entry.indexOf('\t') + 1)))] : [];
   let onto = '';
   if (op === 'rebase') {
     const head = await fs.readFile(path.join(dir, 'rebase-merge', 'head-name'), 'utf8').catch(() => fs.readFile(path.join(dir, 'rebase-apply', 'head-name'), 'utf8').catch(() => ''));
@@ -128,9 +129,9 @@ export function parseLog(output) {
 // The whole graph is read again only when a ref or HEAD moved (or the limit changed): the client sends the signature it holds.
 export async function readLog(runtime, input = {}) {
   const limit = Number.isSafeInteger(input.limit) ? Math.max(100, Math.min(LOG_LIMIT_MAX, input.limit)) : 5000;
-  const refsOutput = (await git(runtime, ['for-each-ref', `--format=%(refname)%1f%(objectname)%1f%(*objectname)%1f%(upstream)%1f%(upstream:track,nobracket)%1f%(HEAD)`, 'refs/heads', 'refs/remotes', 'refs/tags'])).stdout;
-  const head = await headHash(runtime), branch = head || refsOutput ? await currentBranchName(runtime) : null;
-  const state = await repoState(runtime);
+  const [refsResult, head] = await Promise.all([git(runtime, ['for-each-ref', `--format=%(refname)%1f%(objectname)%1f%(*objectname)%1f%(upstream)%1f%(upstream:track,nobracket)%1f%(HEAD)`, 'refs/heads', 'refs/remotes', 'refs/tags']), headHash(runtime)]);
+  const refsOutput = refsResult.stdout;
+  const [branch, state] = await Promise.all([head || refsOutput ? currentBranchName(runtime) : null, repoState(runtime)]);
   const signature = createHash('sha1').update(`${limit}\n${head}\n${branch}\n${refsOutput}`).digest('hex');
   if (input.signature === signature) return { unchanged: true, signature, state };
   const refs = parseRefs(refsOutput);

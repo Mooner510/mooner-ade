@@ -36,7 +36,10 @@ export function detectShells({ platform = process.platform, env = process.env, i
 }
 
 // '' (or a shell that is no longer installed) means automatic: PowerShell 7 when present on Windows, otherwise the login shell.
-export function resolveShell(preferred, shells = detectShells(), { platform = process.platform, env = process.env } = {}) {
+// Every terminal and chat shell asks for the list: it is a scan of /etc/shells and (on Windows) of PATH, with a stat per entry; a shell installed now shows within 30 s.
+let shellCache = null;
+const shellsNow = () => (shellCache && Date.now() - shellCache.at < 30_000 ? shellCache : shellCache = { at: Date.now(), list: detectShells() }).list;
+export function resolveShell(preferred, shells = shellsNow(), { platform = process.platform, env = process.env } = {}) {
   const chosen = typeof preferred === 'string' && preferred ? shells.find(item => item.id === preferred) : undefined;
   if (chosen) return chosen;
   if (platform === 'win32') return shells.find(item => item.id === 'pwsh') || shells.find(item => item.id === 'powershell') || { id: 'powershell', label: 'Windows PowerShell 5.1', path: 'powershell.exe' };

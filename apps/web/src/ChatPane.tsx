@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
+import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react';
 import { basename, type Leaf } from './api';
 import { DiffView, usageHue, type DiffLayoutChoice, type McpTrust, type Settings } from './Editor';
 import { addTrust } from './mcp-trust';
@@ -31,7 +31,7 @@ import { caretEdges } from './caret-lines';
 import { modeIcons as MODE_ICONS, type BlockedAction, agentsOf, keepAgents, isAgentTool, planSections, type AgentStatus, type SubAgent, autoDenial, chatKey, processGroups, toolRuns, type ProcessGroup, type ToolRun, ro, withSettingChange, pickGreeting, comboOf, showCombo, compact, contextEnds, contextGauge, contextPendingText, contextPercent, contextReported, contextWindow, cursorSettingName, effortLabel, effortLevel, effortStyle, efforts, emptyView, enqueueSendNow, fromReplay, cursorModelGroups, displayModel, isChatSlashCommand, isCursorEffort, isCursorMax, isCursorSwitch, lastIndexWhere, maxOffValue, maxOnValue, maxSelected, modelProvider, modelAppearance, modelQuickDefaults, modelQuickRows, modelRows, modelValue, parseChatSlashCommand, permissionLabel, permissionModeColor, reduce, shortModel, dollars, duration, briefDuration,toolLabel, toolSummary, toolInputFields, awaitingTools, webSearchResult, lineChanges, relativePath, mcpTool, artifactsOf, turnAllowsMessageActions, turnDoneParts, turnTokenRows, type TurnDone, type Tokens, type Approval, type AssistantItem, type Block, type CatalogModel, type ChatState, type ChatView, type Item, type SettingsChange, type Tone, type UsageSnap, planFile, planVerdict, approvalAgents } from './chat-model';
 import { dropOptimistic, mergeOptimistic, optimisticKeys, optimisticPatch, optimisticSettled, withOptimistic, type Optimistic } from './chat-optimistic';
 import { copyText, toastAttached } from './toast';
-import { MAX_CHAT_IMAGES, prepareChatImage } from './image-fit';
+import { MAX_CHAT_IMAGES, REMOTE_IMAGE_BYTES, prepareChatImage } from './image-fit';
 import { UserMessageBubble } from './user-message-bubble';
 import { Dropdown, Modal, ModelLabel } from './views';
 import { useHiddenAgents } from './installed-agents';
@@ -42,7 +42,7 @@ import { filePaths } from './upload';
 import { useChatPasteRefs, useChatSendTarget } from './chat-send-ui';
 import { joinPath } from './chat-send';
 import { FilePlanDialog, FileRewindRow, rewindChanges, TurnChangesCard, turnChangesIn, TurnFilesContext } from './TurnChanges';
-import { can, isRemote } from './transport';
+import { can, isRemote, remoteClient } from './transport';
 import { useChatWorktree } from './ChatWorktree';
 import { pendingAsyncQuestions, compactLabel, idleCompactNote, type IdleCompactInfo } from './chat-model';
 import { CardKey, ChatDiscover, GuideTextView, useCardBinding, useCardLabels, useKeyName, usePaneKeys, type CardActions, type CardKeyBinding, type CardKeyLabels } from './ChatKeys';
@@ -99,6 +99,8 @@ const cursorSandboxOptions = [
 ];
 const sandboxKey = (sandbox?: string | null, network?: boolean) => !sandbox ? 'follow' : sandbox === 'workspace-write' && network ? 'workspace-write+network' : sandbox;
 const sandboxFromKey = (key: string): [string | null, boolean] => key === 'follow' ? [null, false] : key === 'workspace-write+network' ? ['workspace-write', true] : [key, false];
+// 폰(Android WebView·모바일 브라우저)은 붙여넣은 그림을 `files`가 아니라 `items`에만 담는 일이 있어 둘 다 본다.
+const clipboardFiles = (data: DataTransfer | null) => { const files = [...(data?.files ?? [])]; return files.length ? files : [...(data?.items ?? [])].flatMap(item => item.kind === 'file' ? item.getAsFile() ?? [] : []); };
 const cycleMode = (modes: string[], mode: string) => { const ring = modes.filter(item => item !== 'bypassPermissions'); return ring[(ring.indexOf(mode) + 1) % ring.length]; };
 // Shift+Tab cycles like Claude Code: default -> accept edits -> plan -> auto. Bypass is dropdown-only.
 const nextMode = (mode: string) => ({ default: 'acceptEdits', acceptEdits: 'plan', plan: 'auto', auto: 'default' } as Record<string, string>)[mode] ?? 'default';
@@ -234,6 +236,7 @@ const LOCAL: CommandInfo[] = [
 // Shell tools show their command as code (coloured in the shell's language), with the model's one-line description above it on approval cards.
 const SHELLS: Record<string, string> = { Bash: 'bash', PowerShell: 'powershell', Monitor: 'shell' };
 const TOOL_ICONS: Record<string, string> = { Monitor: 'monitor_heart', CronCreate: 'schedule', CronList: 'schedule', CronDelete: 'schedule', ListAgents: 'groups', NotebookEdit: 'edit_note', TaskStop: 'stop_circle', SendMessage: 'send', Skill: 'bolt', EnterPlanMode: 'assignment', ExitPlanMode: 'assignment', ToolSearch: 'manage_search', EnterWorktree: 'account_tree', ExitWorktree: 'account_tree', AskUserQuestion: 'help', Bash: 'terminal', PowerShell: 'terminal', Read: 'description', Write: 'edit_document', Edit: 'edit', MultiEdit: 'edit', Glob: 'search', Grep: 'search', WebFetch: 'language', WebSearch: 'travel_explore', webSearch: 'travel_explore', Task: 'account_tree', Agent: 'account_tree', TodoWrite: 'checklist', SubagentHandback: 'flag' };
+const fileListCache = new Map<string, { files: string[]; at: number }>();
 const DRAWER_DOCK = 760, TURN_PAGE = 30, TURN_REACH = 1200;
 
 type ChatScrollPosition = { top: number; anchor?: Element; offset: number };
@@ -380,7 +383,8 @@ const ToolCard = memo(function ToolCard({ block, result, settings, running }: { 
 // Reduced-motion users (and the "smooth streaming" setting off) get the text as it comes.
 const calm = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 function useReveal(text: string, live: boolean, smooth: boolean) {
-  const animate = smooth && !calm();
+  // Not on a phone: the reply was re-rendered (and its Markdown parsed again) every ~15 ms, which a phone's CPU cannot keep up with; its text arrives as it comes.
+  const animate = smooth && !calm() && remoteClient !== 'phone';
   const [shown, setShown] = useState(() => live && animate ? 0 : text.length);
   const goal = useRef(text.length), streaming = useRef(live); goal.current = text.length; streaming.current = live;
   const behind = animate && shown < text.length;
@@ -736,6 +740,8 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
     runStart.set(flat[run.start].key, run); for (let i = run.start; i < run.end; i++) inRun.add(flat[i].key);
   }
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  // A folded "과정" is drawn empty until it is first opened (and stays drawn after): a long chat parsed the Markdown and mounted the cards of every closed process up front.
+  const opened = useRef(new Set<string>()).current;
   const idOf = (group: ProcessGroup) => flat[group.start].key, foldedOf = (group: ProcessGroup) => settled && (overrides[idOf(group)] ?? group.answered);
   const finalAt = settled ? lastIndexWhere(body, item => item.kind === 'assistant' && !item.sub) : -1, finalItem = finalAt >= 0 ? body[finalAt] as AssistantItem : undefined;
   const answer = flat.slice(cut).map(part => part.block).filter((block): block is Extract<Block, { type: 'text' }> => block.type === 'text').map(block => block.text).join('\n\n')
@@ -752,18 +758,20 @@ const Turn = memo(function Turn({ items, agentIds, settled, working, results, se
       <span className="chat-process-summary">{group.tools ? `도구 ${group.tools}개` : '생각'}</span>
       <Icon name={folded ? 'chevronRight' : 'chevronDown'} size={14} />
     </button>);
+    if (group && settled && !folded) opened.add(idOf(group));
+    const lazy = Boolean(group && settled && folded && !opened.has(idOf(group)));
     const run = runStart.get(part.key);
     if (inRun.has(part.key) && !run) continue;
     if (run) {
       const members = flat.slice(run.start, run.end), lastOfGroup = group && flat[run.end - 1].key === flat[group.end - 1].key;
       rows.push(<div key={`bundle:${part.key}`} className={`chat-row${group ? ' in-process' : ''}${lastOfGroup ? ' process-last' : ''}`} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
-        <div><ToolBundle parts={members} results={results} settings={settings} running={working && !settled} plainThinking={plainThinking} flat={settled && run.tools < FLAT_RUN_MAX} /></div>
+        {!lazy && <div><ToolBundle parts={members} results={results} settings={settings} running={working && !settled} plainThinking={plainThinking} flat={settled && run.tools < FLAT_RUN_MAX} /></div>}
       </div>);
       answerEnd = rows.length;
       continue;
     }
     rows.push(<div key={part.key} className={`chat-row${group ? ' in-process' : ''}${group && part.key === flat[group.end - 1].key ? ' process-last' : ''}${part.item.sub ? ' sub' : ''}`} data-tool={(part.block.type === 'tool_use' && !(isAgentTool(part.block.name) && agentIds.has(part.block.id))) || undefined} data-enter={part.item.fresh || undefined} data-boxed={group && settled || undefined} data-folded={folded || undefined} inert={folded || undefined}>
-      <div><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={working && !settled} plainThinking={plainThinking} enter={part.item.fresh} /></div>
+      {!lazy && <div><BlockView block={part.block} result={part.block.type === 'tool_use' ? results[part.block.id] : undefined} settings={settings} running={working && !settled} plainThinking={plainThinking} enter={part.item.fresh} /></div>}
     </div>);
     answerEnd = rows.length;
   }
@@ -1211,10 +1219,14 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   const [providerSwap, setProviderSwap] = useState(false);
 
   // Attach to the server's session: subscribe first, then ask for the stored events; whatever arrived in between is applied after the replay (seq makes that safe).
+  const [wanted, setWanted] = useState(!isRemote || visible);
+  useEffect(() => { if (visible) setWanted(true); }, [visible]);
   useEffect(() => {
     viewRef.current = emptyView();
     setView(emptyView());
     inbox.current = [];
+    // On a phone a chat nobody has looked at yet is not replayed (megabytes over the slow link per hidden tab); only its status reaches the sidebar.
+    if (!wanted) return ctx.subscribe(id, message => { if (message.type === 'chat/state') ctxRef.current.onState(id, message.state); });
     let alive = true, opened = false; const early: any[] = [];
     const handle = (message: any) => {
       if (message.type === 'chat/event') {
@@ -1235,7 +1247,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
       }
       else if (message.type === 'chat/state') { enqueue(message); ctxRef.current.onState(id, message.state); }
     };
-    const open = () => ctxRef.current.call('chat/open', { id, agent, ...(leaf.cwd ? { path: leaf.cwd } : {}), defaults: { ...(ctxRef.current.settings.chatDefaultPermission !== 'cli' ? { permissionMode: ctxRef.current.settings.chatDefaultPermission } : {}), ...(ctxRef.current.settings.chatDefaultEffort !== 'auto' ? { effort: ctxRef.current.settings.chatDefaultEffort } : {}) }, since: viewRef.current.ready ? viewRef.current.seq : 0 }).then(replay => {
+    const open = () => ctxRef.current.call('chat/open', { id, agent, ...(leaf.cwd ? { path: leaf.cwd } : {}), defaults: { ...(ctxRef.current.settings.chatDefaultPermission !== 'cli' ? { permissionMode: ctxRef.current.settings.chatDefaultPermission } : {}), ...(ctxRef.current.settings.chatDefaultEffort !== 'auto' ? { effort: ctxRef.current.settings.chatDefaultEffort } : {}) }, since: viewRef.current.ready ? viewRef.current.seq : 0, ...(isRemote && { slim: true }) }).then(replay => {
       if (!alive) return; setProviderSwap(false); setOpenError(''); if (typeof replay.user === 'string') setUser(replay.user);
       if (!viewRef.current.ready) apply(() => fromReplay(replay));
       else apply(view => {
@@ -1247,7 +1259,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const stop = ctx.subscribe(id, message => { if (message.type === 'reconnect') { opened = false; void open(); } else if (opened) handle(message); else early.push(message); });
     void open();
     return () => { alive = false; stop(); };
-  }, [id, agent, leaf.cwd]);
+  }, [id, agent, leaf.cwd, wanted]);
 
   // One ask per command list, after the replay: a stored chat already knows its CLI's commands, and asking before that (with no names) made the server
   // start a `claude -p` probe and then raced the second, named answer. Keyed by content: `state.slashCommands` is a fresh array on every state message.
@@ -1279,7 +1291,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // Asked only when there is something to re-read (user/assistant messages or a compact summary since the last /clear; notes and command output are not context). Resolves false when the user cancels
   // or picks "compact first": then /compact runs on the current model and the effect below switches once it finished.
   const compactThenSwitch = useRef<{ model: string; compacts: number; started: boolean } | null>(null);
-  const compactCount = view.items.filter(item => item.kind === 'compact').length;
+  const compactCount = useMemo(() => view.items.filter(item => item.kind === 'compact').length, [view.items]);
   async function setChat(input: any, confirmed = false) {
     if (!confirmed && input.model && input.model !== resolvedModelValue && input.model !== selectedModel && shown.some(item => item.kind === 'user' || item.kind === 'assistant' || item.kind === 'compact')) {
       const canCompact = available.some(item => item.name === 'compact');
@@ -1588,6 +1600,8 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     return [...names.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [commands, state.slashCommands, state.commandInfo, effortOptions, modes]);
   // A complete command name at the start of the composer (`/btw …`, only a name this chat knows) is drawn in the provider's colour, by a mirror behind the textarea.
+  const namesKey = available.map(item => item.name).join('\n');
+  const knownNames = useMemo(() => new Set(namesKey ? namesKey.split('\n') : []), [namesKey]); // keyed by content: `available` is a new array on every state message
   const commandHead = (() => { const head = /^\/[\w:-]+(?=\s|$)/.exec(text)?.[0] ?? ''; return head && available.some(item => item.name === head.slice(1)) ? head : ''; })(), inputMirror = useRef<HTMLDivElement>(null);
   const slashQuery = /^\/([^\s/]*)$/.exec(text), [slashOff, setSlashOff] = useState(false);
   // Escape dismisses the slash menu without deleting the draft; typing away from `/…` opens it again.
@@ -1612,15 +1626,21 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   useEffect(() => {
     if (!mentionOpen) return;
     let alive = true;
-    void ctxRef.current.call<{ files: string[] }>('files/list', leaf.cwd ? { path: leaf.cwd } : {}).then(result => { if (alive) setFiles(result.files); }, () => {});
+    // The list of a big repository is megabytes (a phone's slow link, a `git ls-files` on the PC): the last one is shown at once and only asked again when it is older than a few seconds.
+    const key = `${ctx.projectId}|${leaf.cwd ?? ''}`, held = fileListCache.get(key);
+    if (held) setFiles(held.files);
+    if (held && Date.now() - held.at < 15_000) return;
+    void ctxRef.current.call<{ files: string[] }>('files/list', leaf.cwd ? { path: leaf.cwd } : {}).then(result => { fileListCache.set(key, { files: result.files, at: Date.now() }); if (alive) setFiles(result.files); }, () => {});
     return () => { alive = false; };
   }, [mentionOpen, leaf.cwd]);
+  // The filter walks every path of the repository: typing stays first, the list follows.
+  const deferredQuery = useDeferredValue(mention?.[1] ?? '');
   const mentions = useMemo(() => {
     if (!mentionOpen || !files) return [];
-    const query = mention![1].toLowerCase(), base = (file: string) => file.replace(/\/$/, '').split('/').pop()!.toLowerCase();
+    const query = deferredQuery.toLowerCase(), base = (file: string) => file.replace(/\/$/, '').split('/').pop()!.toLowerCase();
     const hits = query ? files.filter(file => file.toLowerCase().includes(query)) : files.filter(file => !file.slice(0, -1).includes('/'));
     return hits.map(file => ({ file, rank: base(file).startsWith(query) ? 0 : base(file).includes(query) ? 1 : 2 })).sort((a, b) => a.rank - b.rank || a.file.length - b.file.length).slice(0, 16).map(item => item.file);
-  }, [mentionOpen, files, mention?.[1]]);
+  }, [mentionOpen, files, deferredQuery]);
   const pickMention = (file: string) => {
     const before = text.slice(0, mentionAt) + `@${file}` + (file.endsWith('/') ? '' : ' '), next = before + text.slice(caret);
     setText(next); setCaret(before.length);
@@ -1673,7 +1693,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
   // The cards sit in memoised rows, so they reach these through a ref that always holds this render's functions.
   const btwApi = useRef({ closeBtw, retryBtw }); btwApi.current = { closeBtw, retryBtw };
   // The "will be sent with your next message" note is drawn once, under the newest `!` card (several waiting cards share it), not under every card.
-  const shellNote = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return { lastId: shells[shells.length - 1]?.id ?? '', pending: shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length }; }, [view.items]);
+  // Primitives first: `view.items` is new on every streamed delta, and a new `shellNote` object re-rendered every card that reads LocalCardsContext.
+  const [shellLastId, shellPending] = useMemo(() => { const shells = view.items.filter((item): item is Extract<Item, { kind: 'shell' }> => item.kind === 'shell'); return [shells[shells.length - 1]?.id ?? '', shells.filter(item => !item.sent && !item.skipped && item.status !== 'running' && item.status !== 'error').length] as const; }, [view.items]);
+  const shellNote = useMemo(() => ({ lastId: shellLastId, pending: shellPending }), [shellLastId, shellPending]);
   const localCards = useMemo<LocalCards>(() => ({ projectId: ctx.projectId, colors: ctx.settings.usageColors, showSession: ctx.settings.claudeSession, closeBtw: key => btwApi.current.closeBtw(key), retryBtw: key => btwApi.current.retryBtw(key), shellNote, mcpCall: input => ctxRef.current.call('chat/mcp', { id, ...input }), stopShell: runId => { void ctxRef.current.call('chat/shell-stop', { id, runId }).catch(() => {}); }, skipShell: (runId, on) => { void ctxRef.current.call('chat/shell-skip', { id, runId, on }).catch(() => {}); } }), [ctx.projectId, ctx.settings.usageColors, ctx.settings.claudeSession, shellNote]);
   // The model, Effort and mode pickers (menus, models window, shortcuts) and the /model, /effort, /permissions commands all end here, so each leaves the same 변경 line in the chat.
   async function chooseModel(value: string) {
@@ -1876,9 +1898,9 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
     const accepted = files.filter(isImage);
     if (!accepted.length) return;
     // 5MB가 넘는 그림은 줄이는 데 몇 초 걸릴 수 있어, 그동안 "줄이는 중"을 보여 준다(조용히 멈춘 것처럼 보이지 않게).
-    const large = accepted.filter(file => file.size > 4_500_000).length; if (large) setShrinking(count => count + large);
+    const large = accepted.filter(file => file.size > (isRemote ? REMOTE_IMAGE_BYTES : 4_500_000)).length; if (large) setShrinking(count => count + large);
     try {
-      const next = [...images, ...(await Promise.all(accepted.map(prepareChatImage)))].slice(0, MAX_CHAT_IMAGES);
+      const next = [...images, ...(await Promise.all(accepted.map(file => prepareChatImage(file, isRemote ? REMOTE_IMAGE_BYTES : undefined))))].slice(0, MAX_CHAT_IMAGES);
       setImages(next); toastAttached(next.length - images.length || accepted.length);
     } catch (cause) { ctx.fail(cause); } finally { if (large) setShrinking(count => Math.max(0, count - large)); }
   }
@@ -2161,7 +2183,7 @@ export function ChatPane({ leaf, focused, zoomed, visible, ctx, onFocus, onZoom,
         <textarea ref={box} rows={1} value={shownDraft(text)} onScroll={event => { if (inputMirror.current) inputMirror.current.scrollTop = event.currentTarget.scrollTop; }} placeholder={composerPlaceholder({ oneLine, busy, stash: Boolean(stash), foldIn, agent, modSend: ctx.settings.chatSendKey === 'mod-enter', tips: ctx.settings.tips, turns: turns.length }, keyName)} aria-label="메시지 입력" disabled={!view.ready && !openError}
           onFocus={() => { if (!autoFocus.current) setCompact(false); }} onBlur={compactLater} onPointerDown={() => setCompact(false)}
           onChange={event => { const next = shellBang(text) + event.target.value; if (!stash && text.trim().length >= 20 && !event.target.value.trim()) setPicked('keystash'); setText(next); setCaret(event.target.selectionStart + shellBang(next).length); }} onSelect={event => setCaret(event.currentTarget.selectionStart + shellBang(text).length)}
-          onPaste={event => { const files = [...event.clipboardData.files]; if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } pasteRefs.onPaste(event); }}
+          onPaste={event => { const files = clipboardFiles(event.clipboardData); if (files.some(file => file.type.startsWith('image/'))) { event.preventDefault(); void attach(files); } pasteRefs.onPaste(event); }}
           onKeyDown={event => {
             if (event.nativeEvent.isComposing) return;
             if (pasteRefs.onKeyDown(event)) return;

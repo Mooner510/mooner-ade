@@ -61,7 +61,7 @@ export function useUsage(provider: Usage['provider'], projectId: string, active:
   useEffect(() => {
     if (!active) return;
     let live = true;
-    const tick = () => { if (live) void load(); };
+    const tick = () => { if (live && !document.hidden) void load(); };
     // The server reuses a reading for 3 minutes whatever the interval, so polling often is cheap; what it buys is that an account switch
     // (`direnv allow`, a new .envrc) shows up within seconds instead of after the whole refresh period.
     tick(); const timer = setInterval(tick, Math.min(refresh, 15) * 1000);
