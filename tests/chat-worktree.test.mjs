@@ -12,7 +12,7 @@ const git = (cwd, ...args) => run('git', args, { cwd }).then(result => result.st
 const exists = file => stat(file).then(() => true, () => false);
 
 async function repo(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'ade-wt-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ade-wt-'))); // macOS: /var is /private/var
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const origin = path.join(root, 'repo'), data = path.join(root, 'data');
   await mkdir(path.join(origin, 'src'), { recursive: true }); await mkdir(data);

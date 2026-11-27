@@ -10,6 +10,8 @@ import { swapLeaves, tabStep, treeKey } from '../apps/web/src/tree-nav.ts';
 import { fuzzy, parsePaletteQuery, rankPalette, rememberUse, MRU_LIMIT } from '../apps/web/src/palette-model.ts';
 import { attentionCount, dotBitmap, setupAttention } from '../apps/desktop/src/attention.js';
 import { validateAppState } from '../apps/local-server/src/ui-state.js';
+// The key labels below are the Windows/Linux ones; shortcuts.ts reads navigator.platform, so pin it (macOS would print ⌃⌥K).
+Object.defineProperty(globalThis, 'navigator', { value: { platform: 'Win32' }, configurable: true });
 
 const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('vite', { paths: ['apps/web'] }))('esbuild');

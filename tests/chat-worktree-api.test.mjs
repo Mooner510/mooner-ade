@@ -10,7 +10,7 @@ const git = (cwd, ...args) => new Promise((resolve, reject) => { let out = ''; c
 const exists = file => stat(file).then(() => true, () => false);
 
 async function boot(t) {
-  const data = await mkdtemp(join(tmpdir(), 'ade-data-')), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo-')));
+  const data = await realpath(await mkdtemp(join(tmpdir(), 'ade-data-'))), repo = await realpath(await mkdtemp(join(tmpdir(), 'ade-repo-')));
   const child = spawn(process.execPath, ['apps/local-server/src/index.js'], { env: { ...process.env, ADE_PORT: '0', ADE_DATA_DIR: data, ADE_PTY_ENDPOINT: '', ADE_PTY_TOKEN: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGTERM'); await exited; }

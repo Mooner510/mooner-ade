@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { applyRestore, createTurnSnapshots, diffSnapshots, restorePlan, skippedOf, SNAP_ROOT, snapshotFile, takeSnapshot } from '../apps/local-server/src/chat-snapshots.js';
@@ -10,7 +10,7 @@ import { applyRestore, createTurnSnapshots, diffSnapshots, restorePlan, skippedO
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 const read = file => readFile(file, 'utf8');
 async function repo(t) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'ade-snap-'));
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'ade-snap-'))); // macOS: /var is /private/var, and git reports the real path
   t.after(() => rm(dir, { recursive: true, force: true }));
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'core.autocrlf', 'false');
